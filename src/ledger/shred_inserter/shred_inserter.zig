@@ -1389,7 +1389,8 @@ test "merkle root metas coding" {
     var state = try ShredInserterTestState.initWithLogger(std.testing.allocator, @src(), .noop);
     defer state.deinit();
     const allocator = state.allocator();
-    const metrics = try sig.prometheus.globalRegistry().initStruct(BlockstoreInsertionMetrics);
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    const metrics = try registry.initStruct(BlockstoreInsertionMetrics);
 
     const slot = 1;
     const start_index = 0;

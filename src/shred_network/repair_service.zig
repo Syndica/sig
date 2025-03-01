@@ -567,7 +567,7 @@ pub const RepairPeerProvider = struct {
 
 test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
-    const registry = sig.prometheus.globalRegistry();
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
     var prng = std.rand.DefaultPrng.init(4328095);
     const random = prng.random();
     const TestLogger = sig.trace.DirectPrintLogger;
@@ -616,27 +616,20 @@ test "RepairService sends repair request to gossip peer" {
     const peers = try RepairPeerProvider.init(
         allocator,
         random,
-        registry,
+        &registry,
         &gossip_mux,
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
 
-    var tracker = try BasicShredTracker.init(13579, .noop, registry);
+    var tracker = try BasicShredTracker.init(13579, .noop, &registry);
     var service = try RepairService.init(
         allocator,
         logger,
         &exit,
-        registry,
-        try RepairRequester.init(
-            allocator,
-            logger,
-            random,
-            registry,
-            &keypair,
-            repair_socket,
-            &exit,
-        ),
+        &registry,
+        try RepairRequester
+            .init(allocator, logger, random, &registry, &keypair, repair_socket, &exit),
         peers,
         &tracker,
     );
@@ -687,10 +680,11 @@ test "RepairPeerProvider selects correct peers" {
 
     // init test subject
     var gossip_mux = RwMux(GossipTable).init(gossip);
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
     var peers = try RepairPeerProvider.init(
         allocator,
         random,
-        sig.prometheus.globalRegistry(),
+        &registry,
         &gossip_mux,
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
