@@ -7,6 +7,8 @@ const vote_instruction = vote_program.vote_instruction;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
+const VoteAuthorize = vote_program.state.VoteAuthorize;
+const VoteStateVersions = vote_program.state.VoteStateVersions;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -45,6 +47,13 @@ pub fn execute(
             args.authorized_voter,
             args.authorized_withdrawer,
             args.commission,
+        ),
+        .authorize => |args| try executeAuthorize(
+            allocator,
+            ic,
+            &vote_account,
+            args.pubkey,
+            args.vote_authorize,
         ),
         else => @panic("TODO: Unsupported instruction"),
     };
@@ -132,6 +141,45 @@ fn intializeAccount(
     );
     defer vote_state.deinit();
     try vote_account.serializeIntoAccountData(vote_state);
+}
+
+fn executeAuthorize(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    pubkey: Pubkey,
+    vote_authorize: VoteAuthorize,
+) InstructionError!void {
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        vote_instruction.IntializeAccount.accountIndex(.clock_sysvar),
+    );
+
+    try authorize(
+        allocator,
+        ic,
+        vote_account,
+        pubkey,
+        vote_authorize,
+        clock,
+    );
+}
+
+fn authorize(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    pubkey: Pubkey,
+    vote_authorize: VoteAuthorize,
+    clock: Clock,
+) InstructionError!void {
+    allocator = &allocator;
+    ic = &ic;
+    vote_account = &vote_account;
+    pubkey = &pubkey;
+    vote_authorize = &vote_authorize;
+    clock = &clock;
+    @panic("TODO: Unsupported instruction");
 }
 
 test "executeIntializeAccount" {
