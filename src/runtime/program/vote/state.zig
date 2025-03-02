@@ -67,6 +67,95 @@ pub const AuthorizedVoters = struct {
     pub fn count(self: *const AuthorizedVoters) usize {
         return self.authorized_voters.count();
     }
+
+    pub fn getAuthorizedVoter(
+        self: *const AuthorizedVoters,
+        epoch: Epoch,
+    ) ?Pubkey {
+        if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
+            return entry.pubkey;
+        }
+        return null;
+    }
+
+    pub fn getAndCacheAuthorizedVoterForEpoch(self: *AuthorizedVoters, epoch: Epoch) !?Pubkey {
+        if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
+            const pubkey, const existed = entry;
+            if (!existed) {
+                try self.authorized_voters.put(epoch, pubkey);
+            }
+            return pubkey;
+        }
+        return null;
+    }
+
+    pub fn insert(self: *AuthorizedVoters, epoch: Epoch, authorizedVoter: Pubkey) !void {
+        try self.authorized_voters.put(epoch, authorizedVoter);
+    }
+
+    pub fn purgeAuthorizedVoters(self: *AuthorizedVoters, allocator: std.mem.Allocator, currentEpoch: Epoch) bool {
+        var expired_keys = std.ArrayList(Epoch).init(allocator);
+        defer expired_keys.deinit();
+
+        var voter_iter = self.authorized_voters.iterator();
+        while (voter_iter.next()) |entry| {
+            if (entry.key_ptr.* < currentEpoch) {
+                expired_keys.append(entry.key_ptr.*) catch unreachable;
+            }
+        }
+
+        for (expired_keys.items) |key| {
+            _ = self.authorized_voters.remove(key);
+        }
+
+        std.debug.assert(!self.authorized_voters.isEmpty());
+        return true;
+    }
+
+    pub fn isEmpty(self: *const AuthorizedVoters) bool {
+        return self.authorized_voters.count() == 0;
+    }
+
+    pub fn first(self: *const AuthorizedVoters) ?struct { epoch: Epoch, pubkey: Pubkey } {
+        var voter_iter = self.authorized_voters.iterator();
+        if (voter_iter.next()) |entry| {
+            return .{ .epoch = entry.key_ptr.*, .pubkey = entry.value_ptr.* };
+        }
+
+        return null;
+    }
+
+    pub fn last(self: *const AuthorizedVoters) ?struct { epoch: Epoch, pubkey: Pubkey } {
+        const last_epoch = self.authorized_voters.max orelse return null;
+        if (self.authorized_voters.get(last_epoch)) |last_pubkey| {
+            return .{ .epoch = last_epoch, .pubkey = last_pubkey };
+        }
+        return null;
+    }
+
+    pub fn len(self: *const AuthorizedVoters) usize {
+        return self.authorized_voters.count();
+    }
+
+    pub fn contains(self: *const AuthorizedVoters, epoch: Epoch) bool {
+        return self.authorized_voters.contains(epoch);
+    }
+
+    // TODO Add method that returns iterator over authorized_voters
+
+    fn getOrCalculateAuthorizedVoterForEpoch(self: AuthorizedVoters, epoch: Epoch) ?struct { Pubkey, bool } {
+        if (self.authorized_voters.get(epoch)) |pubkey| {
+            return .{ pubkey, true };
+        } else {
+            var voter_iter = self.authorized_voters.iterator();
+            while (voter_iter.next()) |entry| {
+                if (entry.key_ptr.* < epoch) {
+                    return .{ .pubkey = entry.value_ptr.*, .existed = false };
+                }
+            }
+            return null;
+        }
+    }
 };
 
 pub const VoteStateVersions = union(enum) {
