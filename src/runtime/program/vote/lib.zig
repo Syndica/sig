@@ -12,5 +12,6 @@ pub const COMPUTE_UNITS = 2_100;
 
 pub const vote_instruction = @import("instruction.zig");
 
+pub const VoteError = @import("error.zig").VoteError;
 pub const VoteAuthorize = state.VoteAuthorize;
 pub const execute = @import("execute.zig").execute;
