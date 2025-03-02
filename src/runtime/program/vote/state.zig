@@ -51,6 +51,24 @@ pub const EpochCredit = struct {
     prev_credits: u64,
 };
 
+pub const AuthorizedVoters = struct {
+    authorized_voters: SortedMap(Epoch, Pubkey),
+
+    pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
+        var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
+        try authorized_voters.put(epoch, pubkey);
+        return AuthorizedVoters{ .authorized_voters = authorized_voters };
+    }
+
+    pub fn deinit(self: AuthorizedVoters) void {
+        self.authorized_voters.deinit();
+    }
+
+    pub fn count(self: *const AuthorizedVoters) usize {
+        return self.authorized_voters.count();
+    }
+};
+
 pub const VoteStateVersions = union(enum) {
     v0_23_5: VoteState0_23_5,
     v1_14_11: VoteState1_14_11,
@@ -171,7 +189,7 @@ pub const VoteState1_14_11 = struct {
     root_slot: ?Slot,
 
     /// the signer for vote transactions
-    authorized_voters: SortedMap(Epoch, Pubkey),
+    authorized_voters: AuthorizedVoters,
 
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
@@ -193,12 +211,11 @@ pub const VoteState1_14_11 = struct {
         commission: u8,
         clock: Clock,
     ) !VoteState1_14_11 {
-        var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
-        errdefer authorized_voters.deinit();
-
-        authorized_voters.put(clock.epoch, authorized_voter) catch {
-            return InstructionError.Custom;
-        };
+        const authorized_voters = try AuthorizedVoters.init(
+            allocator,
+            clock.epoch,
+            authorized_voter,
+        );
 
         return .{
             .node_pubkey = node_pubkey,
@@ -251,7 +268,7 @@ pub const VoteState = struct {
     root_slot: ?Slot,
 
     /// the signer for vote transactions
-    authorized_voters: SortedMap(Epoch, Pubkey),
+    authorized_voters: AuthorizedVoters,
 
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
@@ -273,10 +290,11 @@ pub const VoteState = struct {
         commission: u8,
         clock: Clock,
     ) !VoteState {
-        var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
-        errdefer authorized_voters.deinit();
-
-        authorized_voters.put(clock.epoch, authorized_voter) catch {
+        const authorized_voters = AuthorizedVoters.init(
+            allocator,
+            clock.epoch,
+            authorized_voter,
+        ) catch {
             return InstructionError.Custom;
         };
 
@@ -318,4 +336,3 @@ pub const VoteAuthorize = enum {
     Withdrawer,
     Voter,
 };
-
