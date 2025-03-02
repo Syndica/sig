@@ -2,10 +2,6 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
-const VoteAuthorize = sig.runtime.program.vote_program.VoteAuthorize;
-const VoteAuthorizeWithSeedArgs = sig.runtime.program.vote_program.VoteAuthorizeWithSeedArgs;
-const VoteAuthorizeCheckedWithSeedArgs =
-    sig.runtime.program.vote_program.VoteAuthorizeCheckedWithSeedArgs;
 
 pub const IntializeAccount = struct {
     node_pubkey: Pubkey,
@@ -30,6 +26,69 @@ pub const IntializeAccount = struct {
     };
 };
 
+pub const Authorize = struct {
+    pubkey: Pubkey,
+    vote_authorize: sig.runtime.program.vote_program.state.VoteAuthorize,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to be updated with the Pubkey for authorization
+        account = 0,
+        /// `[]` Clock sysvar
+        clock_sysvar = 1,
+        /// `[SIGNER]` Vote or withdraw authority
+        signer = 3,
+    };
+};
+
+pub const VoteAuthorizeWithSeedArgs = struct {
+    authorization_type: sig.runtime.program.vote_program.state.VoteAuthorize,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+    new_authority: Pubkey,
+
+    const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to be updated
+        account = 0,
+        /// `[]` Clock sysvar
+        clock_sysvar = 1,
+        /// `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
+        signer = 3,
+    };
+};
+
+pub const VoteAuthorizeCheckedWithSeedArgs = struct {
+    authorization_type: sig.runtime.program.vote_program.state.VoteAuthorize,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+
+    const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated
+        account = 0,
+        /// `[]` Clock sysvar
+        clock_sysvar = 1,
+        ///  `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
+        current_signer = 3,
+        /// `[SIGNER]` New vote or withdraw authority
+        new_signer = 4,
+    };
+};
+
+pub const VoteAuthorize = enum {
+    Withdrawer,
+    Voter,
+
+    const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated with the Pubkey for authorization
+        account = 0,
+        /// `[]` Clock sysvar
+        clock_sysvar = 1,
+        ///  `[SIGNER]` Vote or withdraw authority
+        current_signer = 3,
+        /// `[SIGNER]` New vote or withdraw authority
+        new_signer = 4,
+    };
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum) {
     /// Initialize a vote account
@@ -47,10 +106,7 @@ pub const Instruction = union(enum) {
     ///   0. `[WRITE]` Vote account to be updated with the Pubkey for authorization
     ///   1. `[]` Clock sysvar
     ///   2. `[SIGNER]` Vote or withdraw authority
-    authorize: struct {
-        new_authorized_pubkey: Pubkey,
-        vote_authorize: VoteAuthorize,
-    },
+    authorize: Authorize,
 
     /// Given that the current Voter or Withdrawer authority is a derived key,
     /// this instruction allows someone who can sign for that derived key's

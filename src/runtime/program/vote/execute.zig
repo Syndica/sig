@@ -152,7 +152,7 @@ fn executeAuthorize(
 ) InstructionError!void {
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
-        vote_instruction.IntializeAccount.accountIndex(.clock_sysvar),
+        @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
     try authorize(
@@ -173,12 +173,12 @@ fn authorize(
     vote_authorize: VoteAuthorize,
     clock: Clock,
 ) InstructionError!void {
-    allocator = &allocator;
-    ic = &ic;
-    vote_account = &vote_account;
-    pubkey = &pubkey;
-    vote_authorize = &vote_authorize;
-    clock = &clock;
+    _ = &allocator;
+    _ = &ic;
+    _ = &vote_account;
+    _ = &pubkey;
+    _ = &vote_authorize;
+    _ = &clock;
     @panic("TODO: Unsupported instruction");
 }
 

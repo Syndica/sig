@@ -142,15 +142,3 @@ pub const VoteAuthorize = enum {
     Voter,
 };
 
-pub const VoteAuthorizeWithSeedArgs = struct {
-    authorization_type: VoteAuthorize,
-    current_authority_derived_key_owner: Pubkey,
-    current_authority_derived_key_seed: []const u8,
-    new_authority: Pubkey,
-};
-
-pub const VoteAuthorizeCheckedWithSeedArgs = struct {
-    authorization_type: VoteAuthorize,
-    current_authority_derived_key_owner: Pubkey,
-    urrent_authority_derived_key_seed: []const u8,
-};
