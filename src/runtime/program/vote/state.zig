@@ -3,11 +3,13 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const InstructionError = sig.core.instruction.InstructionError;
+const VoteError = sig.runtime.program.vote_program.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const RingBuffer = sig.utils.collections.RingBuffer;
+const InstructionContext = sig.runtime.InstructionContext;
 
 const Clock = sig.runtime.sysvar.Clock;
 
@@ -93,7 +95,11 @@ pub const AuthorizedVoters = struct {
         try self.authorized_voters.put(epoch, authorizedVoter);
     }
 
-    pub fn purgeAuthorizedVoters(self: *AuthorizedVoters, allocator: std.mem.Allocator, currentEpoch: Epoch) bool {
+    pub fn purgeAuthorizedVoters(
+        self: *AuthorizedVoters,
+        allocator: std.mem.Allocator,
+        currentEpoch: Epoch,
+    ) bool {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
         defer expired_keys.deinit();
 
@@ -108,7 +114,7 @@ pub const AuthorizedVoters = struct {
             _ = self.authorized_voters.remove(key);
         }
 
-        std.debug.assert(!self.authorized_voters.isEmpty());
+        std.debug.assert(self.authorized_voters.count() != 0);
         return true;
     }
 
@@ -125,10 +131,10 @@ pub const AuthorizedVoters = struct {
         return null;
     }
 
-    pub fn last(self: *const AuthorizedVoters) ?struct { epoch: Epoch, pubkey: Pubkey } {
+    pub fn last(self: *const AuthorizedVoters) ?struct { Epoch, Pubkey } {
         const last_epoch = self.authorized_voters.max orelse return null;
         if (self.authorized_voters.get(last_epoch)) |last_pubkey| {
-            return .{ .epoch = last_epoch, .pubkey = last_pubkey };
+            return .{ last_epoch, last_pubkey };
         }
         return null;
     }
@@ -143,17 +149,19 @@ pub const AuthorizedVoters = struct {
 
     // TODO Add method that returns iterator over authorized_voters
 
-    fn getOrCalculateAuthorizedVoterForEpoch(self: AuthorizedVoters, epoch: Epoch) ?struct { Pubkey, bool } {
+    fn getOrCalculateAuthorizedVoterForEpoch(
+        self: *AuthorizedVoters,
+        epoch: Epoch,
+    ) ?struct { Pubkey, bool } {
         if (self.authorized_voters.get(epoch)) |pubkey| {
             return .{ pubkey, true };
         } else {
-            var voter_iter = self.authorized_voters.iterator();
-            while (voter_iter.next()) |entry| {
-                if (entry.key_ptr.* < epoch) {
-                    return .{ .pubkey = entry.value_ptr.*, .existed = false };
-                }
+            _, const values = self.authorized_voters.range(0, epoch);
+            if (values.len == 0) {
+                return null;
             }
-            return null;
+            const last_voter = values[values.len - 1];
+            return .{ last_voter, false };
         }
     }
 };
@@ -163,7 +171,10 @@ pub const VoteStateVersions = union(enum) {
     v1_14_11: VoteState1_14_11,
     current: VoteState,
 
-    fn landedVotesFromLockouts(allocator: std.mem.Allocator, lockouts: std.ArrayList(Lockout)) std.ArrayList(LandedVote) {
+    fn landedVotesFromLockouts(
+        allocator: std.mem.Allocator,
+        lockouts: std.ArrayList(Lockout),
+    ) std.ArrayList(LandedVote) {
         var landedVotes = std.ArrayList(LandedVote).init(allocator);
         errdefer landedVotes.deinit();
 
@@ -416,12 +427,80 @@ pub const VoteState = struct {
         return 3762;
     }
 
+    pub fn setNewAuthorizedVoter(
+        self: *VoteState,
+        allocator: std.mem.Allocator,
+        authorized_pubkey: Pubkey,
+        current_epoch: Epoch,
+        target_epoch: Epoch,
+        authorized_withdrawer_signer: bool,
+        ic: *InstructionContext,
+    ) InstructionError!void {
+        const epoch_authorized_voter = try self.getAndUpdateAuthorizedVoter(
+            allocator,
+            current_epoch,
+        );
+        if (!authorized_withdrawer_signer and !ic.isPubkeySigner(epoch_authorized_voter)) {
+            return InstructionError.MissingRequiredSignature;
+        }
+
+        // The offset in slots `n` on which the target_epoch
+        // (default value `DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET`) is
+        // calculated is the number of slots available from the
+        // first slot `S` of an epoch in which to set a new voter for
+        // the epoch at `S` + `n`
+        if (self.authorized_voters.contains(target_epoch)) {
+            return VoteError.too_soon_to_reauthorize.toInstructionError();
+        }
+
+        const epoch, const pubkey = self.authorized_voters.last() orelse
+            return InstructionError.InvalidAccountData;
+
+        if (!pubkey.equals(&authorized_pubkey)) {
+            const epoch_of_last_authorized_switch = if (self.prior_voters.last()) |prior_voter|
+                prior_voter.end
+            else
+                0;
+
+            if (target_epoch <= epoch) {
+                return InstructionError.InvalidAccountData;
+            }
+
+            self.prior_voters.append(PriorVote{
+                .key = pubkey,
+                .start = epoch_of_last_authorized_switch,
+                .end = target_epoch,
+            });
+        }
+
+        self.authorized_voters.insert(target_epoch, authorized_pubkey) catch
+        // TODO: Is it okay to convert out of memory to InvalidAccountData?
+            return InstructionError.InvalidAccountData;
+    }
+
+    pub fn getAndUpdateAuthorizedVoter(
+        self: *VoteState,
+        allocator: std.mem.Allocator,
+        current_epoch: Epoch,
+    ) InstructionError!Pubkey {
+        const pubkey = self.authorized_voters
+            .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch |err| {
+            return switch (err) {
+                // TODO: Okay to convert out of memory to InvalidAccountData?
+                error.OutOfMemory => InstructionError.InvalidAccountData,
+            };
+        } orelse return InstructionError.InvalidAccountData;
+        _ = self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
+        return pubkey;
+    }
+
+    // For bincode.
     pub fn serializedSize(self: VoteState) !usize {
         return sig.bincode.sizeOf(self, .{});
     }
 };
 
 pub const VoteAuthorize = enum {
-    Withdrawer,
-    Voter,
+    withdrawer,
+    voter,
 };

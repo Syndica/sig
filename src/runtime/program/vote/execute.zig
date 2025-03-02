@@ -8,7 +8,6 @@ const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
-const VoteStateVersions = vote_program.state.VoteStateVersions;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -169,17 +168,35 @@ fn authorize(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    pubkey: Pubkey,
+    authorized: Pubkey,
     vote_authorize: VoteAuthorize,
     clock: Clock,
 ) InstructionError!void {
-    _ = &allocator;
-    _ = &ic;
-    _ = &vote_account;
-    _ = &pubkey;
-    _ = &vote_authorize;
-    _ = &clock;
-    @panic("TODO: Unsupported instruction");
+    // TODO Support deserialising into VersionedVoteState and converting to current.
+    var vote_state = try vote_account.deserializeFromAccountData(allocator, VoteState);
+    switch (vote_authorize) {
+        .voter => {
+            const authorized_withdrawer_signer = ic.isPubkeySigner(
+                vote_state.authorized_withdrawer,
+            );
+
+            try vote_state.setNewAuthorizedVoter(
+                allocator,
+                authorized,
+                clock.epoch,
+                (clock.leader_schedule_epoch +| 1),
+                authorized_withdrawer_signer,
+                ic,
+            );
+        },
+        .withdrawer => {
+            if (!ic.isPubkeySigner(vote_state.authorized_withdrawer)) {
+                return InstructionError.MissingRequiredSignature;
+            }
+            vote_state.authorized_withdrawer = authorized;
+        },
+    }
+    try vote_account.serializeIntoAccountData(vote_state);
 }
 
 test "executeIntializeAccount" {
