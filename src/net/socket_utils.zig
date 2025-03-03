@@ -79,7 +79,6 @@ const XevThread = struct {
 
         // Create a node for the SocketThread
         const node = try st.allocator.create(List.Node);
-        defer st.allocator.destroy(node);
         node.* = .{
             .data = .{
                 .allocator = st.allocator,
@@ -407,11 +406,28 @@ const PerThread = struct {
         while (true) {
             st.channel.waitToReceive(st.exit) catch break;
 
-            while (st.channel.tryReceive()) |p| {
+            next_packet: while (st.channel.tryReceive()) |p| {
                 if (st.exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
-                const bytes_sent = st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
-                    logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
-                    continue; // on error, skip this packet and try to send another.
+                const bytes_sent = while (true) { // loop on error.SystemResources below.
+                    break st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| switch (e) {
+                        // on macOS, sendto() returns ENOBUFS on full buffer instead of blocking.
+                        // Wait for the socket to be writable (buffer has room) and retry.
+                        error.SystemResources => {
+                            var fds = [_]std.posix.pollfd{.{
+                                .fd = st.socket.internal,
+                                .events = std.posix.POLL.OUT,
+                                .revents = 0,
+                            }};
+                            const ready = try std.posix.poll(&fds, -1);
+                            std.debug.assert(ready > 0);
+                            std.debug.assert(fds[0].revents & std.posix.POLL.OUT > 0);
+                            continue;
+                        },
+                        else => {
+                            logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
+                            continue :next_packet; // on error, skip this packet and send another.
+                        },
+                    };
                 };
                 std.debug.assert(bytes_sent == p.size);
             }
@@ -420,14 +436,7 @@ const PerThread = struct {
 };
 
 // TODO: Evaluate when XevThread socket backend is beneficial.
-const SocketBackend = switch (builtin.os.tag) {
-    // BSD doesn't have a blocking `sendto`, which means that if our
-    // send_channel gets ovesatured we end up either dropping packets
-    // through NOBUFS. Using an event loop allows us to block and throttle
-    // the throughput, ensuring that no packets are lost.
-    .macos => XevThread,
-    else => PerThread,
-};
+const SocketBackend = PerThread;
 
 pub const SocketThread = struct {
     allocator: Allocator,
