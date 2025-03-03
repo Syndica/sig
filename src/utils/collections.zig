@@ -296,8 +296,8 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
             try self.map.put(item, {});
         }
 
-        pub fn remove(self: *Self, item: T) bool {
-            return self.map.remove(item);
+        pub fn orderedRemove(self: *Self, item: T) bool {
+            return self.map.orderedRemove(item);
         }
 
         pub fn contains(self: Self, item: T) bool {
@@ -394,7 +394,9 @@ pub fn SortedMapCustom(
 
         pub fn fetchSwapRemove(self: *Self, key: K) ?Inner.KV {
             const item = self.inner.fetchSwapRemove(key);
-            self.resetMaxOnRemove(key);
+            if (item != null and !self.resetMaxOnRemove(key)) {
+                self.is_sorted = false;
+            }
             return item;
         }
 
@@ -417,21 +419,27 @@ pub fn SortedMapCustom(
             }
         }
 
-        pub fn remove(self: *Self, key: K) bool {
-            const item = self.inner.orderedRemove(key);
-            self.resetMaxOnRemove(key);
-            return item;
+        pub fn orderedRemove(self: *Self, key: K) bool {
+            const was_removed = self.inner.orderedRemove(key);
+            if (was_removed) _ = self.resetMaxOnRemove(key);
+            return was_removed;
         }
 
-        fn resetMaxOnRemove(self: *Self, removed_key: K) void {
-            if (self.max) |max| {
-                if (self.count() == 0) {
-                    self.max = null;
-                } else if (order(removed_key, max) == .eq) {
-                    self.sort();
+        /// - returns whether the key was the prior max.
+        /// - don't call this unless an item was definitely removed.
+        fn resetMaxOnRemove(self: *Self, removed_key: K) bool {
+            std.debug.assert(self.max != null);
+            if (self.count() == 0) {
+                self.max = null;
+                return true;
+            } else switch (order(removed_key, self.max.?)) {
+                .eq => {
                     const sorted_keys = self.keys();
                     self.max = sorted_keys[sorted_keys.len - 1];
-                }
+                    return true;
+                },
+                .gt => unreachable,
+                .lt => return false,
             }
         }
 
@@ -816,9 +824,9 @@ test SortedSet {
     try set.put(5);
 
     // remove
-    try expect(set.remove(5));
+    try expect(set.orderedRemove(5));
     try expect(!set.contains(5));
-    try expect(!set.remove(5));
+    try expect(!set.orderedRemove(5));
     try set.put(5);
     try expect(set.contains(5));
 

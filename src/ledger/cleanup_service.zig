@@ -417,6 +417,7 @@ test cleanBlockstore {
 
     // insert data
     var batch = try db.initWriteBatch();
+    defer batch.deinit();
     for (0..1_000) |i| {
         for (0..10) |j| try batch.put(ledger.schema.schema.data_shred, .{ i, j }, &.{});
         try batch.put(ledger.schema.schema.slot_meta, i, undefined);
