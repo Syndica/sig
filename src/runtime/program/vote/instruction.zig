@@ -75,10 +75,11 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
 };
 
 pub const VoteAuthorize = enum {
+    // TODO lowercase
     Withdrawer,
     Voter,
 
-    const AccountIndex = enum(u8) {
+    pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated with the Pubkey for authorization
         account = 0,
         /// `[]` Clock sysvar

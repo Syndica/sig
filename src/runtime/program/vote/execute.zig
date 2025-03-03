@@ -72,7 +72,12 @@ pub fn execute(
             args.current_authority_derived_key_owner,
             args.current_authority_derived_key_seed,
         ),
-        else => @panic("TODO: Unsupported instruction"),
+        .authorize_checked => |args| try executeAuthorizeChecked(
+            allocator,
+            ic,
+            &vote_account,
+            args,
+        ),
     };
 }
 
@@ -318,6 +323,43 @@ fn executeAuthorizeCheckedWithSeed(
         authorization_type,
         current_authority_derived_key_owner,
         current_authority_derived_key_seed,
+    );
+}
+
+fn executeAuthorizeChecked(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote_authorize: vote_instruction.VoteAuthorize,
+) InstructionError!void {
+    try ic.checkNumberOfAccounts(4);
+
+    const new_authority = try ic.borrowInstructionAccount(
+        @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_signer),
+    );
+
+    if (!ic.isPubkeySigner(new_authority.pubkey)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.clock_sysvar),
+    );
+
+    const autorize = switch (vote_authorize) {
+        .Voter => VoteAuthorize.voter,
+        .Withdrawer => VoteAuthorize.withdrawer,
+    };
+
+    try authorize(
+        allocator,
+        ic,
+        vote_account,
+        new_authority.pubkey,
+        autorize,
+        clock,
+        null,
     );
 }
 
