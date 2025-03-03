@@ -4,6 +4,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 /// Builtin return values occupy the upper 32 bits
 const BUILTIN_BIT_SHIFT: usize = 32;
 
+// TODO this should be an error set and not an enum.
 pub const VoteError = enum {
     vote_too_old,
     slots_mismatch,
