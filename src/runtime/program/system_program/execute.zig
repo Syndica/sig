@@ -28,7 +28,7 @@ pub fn execute(
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
-    const instruction = try ic.deserializeInstruction(allocator, SystemProgramInstruction);
+    const instruction = try ic.info.deserializeInstruction(allocator, SystemProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -115,7 +115,7 @@ fn executeCreateAccount(
     space: u64,
     owner: Pubkey,
 ) !void {
-    try ic.checkNumberOfAccounts(2);
+    try ic.info.checkNumberOfAccounts(2);
     try createAccount(
         allocator,
         ic,
@@ -124,7 +124,7 @@ fn executeCreateAccount(
         lamports,
         space,
         owner,
-        ic.accounts[1].pubkey,
+        ic.info.account_metas.buffer[1].pubkey,
     );
 }
 
@@ -133,7 +133,7 @@ fn executeAssign(
     ic: *InstructionContext,
     owner: Pubkey,
 ) !void {
-    try ic.checkNumberOfAccounts(1);
+    try ic.info.checkNumberOfAccounts(1);
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
     try assign(
@@ -149,7 +149,7 @@ fn executeTransfer(
     ic: *InstructionContext,
     lamports: u64,
 ) !void {
-    try ic.checkNumberOfAccounts(2);
+    try ic.info.checkNumberOfAccounts(2);
     try transfer(
         ic,
         0,
@@ -168,10 +168,10 @@ fn executeCreateAccountWithSeed(
     space: u64,
     owner: Pubkey,
 ) !void {
-    try ic.checkNumberOfAccounts(2);
+    try ic.info.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
-        ic.accounts[1].pubkey,
+        ic.info.account_metas.buffer[1].pubkey,
         base,
         owner,
         seed,
@@ -194,7 +194,8 @@ fn executeAdvanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
-    try ic.checkNumberOfAccounts(1);
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
@@ -214,7 +215,7 @@ fn executeWithdrawNonceAccount(
     ic: *InstructionContext,
     lamports: u64,
 ) !void {
-    try ic.checkNumberOfAccounts(2);
+    try ic.info.checkNumberOfAccounts(2);
 
     // TODO: Is this sysvar call required for consensus despite being unused?
     _ = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
@@ -230,7 +231,8 @@ fn executeInitializeNonceAccount(
     ic: *InstructionContext,
     authority: Pubkey,
 ) !void {
-    try ic.checkNumberOfAccounts(1);
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
@@ -258,9 +260,11 @@ fn executeAuthorizeNonceAccount(
     ic: *InstructionContext,
     authority: Pubkey,
 ) !void {
-    try ic.checkNumberOfAccounts(1);
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
+
     return authorizeNonceAccount(
         allocator,
         ic,
@@ -275,9 +279,11 @@ fn executeAllocate(
     ic: *InstructionContext,
     space: u64,
 ) !void {
-    try ic.checkNumberOfAccounts(1);
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
+
     try allocate(allocator, ic, &account, space, account.pubkey);
 }
 
@@ -290,9 +296,11 @@ fn executeAllocateWithSeed(
     space: u64,
     owner: Pubkey,
 ) !void {
-    try ic.checkNumberOfAccounts(1);
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
+
     try checkSeedAddress(
         ic,
         account.pubkey,
@@ -301,6 +309,7 @@ fn executeAllocateWithSeed(
         seed,
         "Create: address {} does not match derived address {}",
     );
+
     try allocate(allocator, ic, &account, space, base);
     try assign(ic, &account, owner, base);
 }
@@ -312,9 +321,11 @@ fn executeAssignWithSeed(
     seed: []const u8,
     owner: Pubkey,
 ) !void {
-    try ic.checkNumberOfAccounts(1);
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
+
     try checkSeedAddress(
         ic,
         account.pubkey,
@@ -323,6 +334,7 @@ fn executeAssignWithSeed(
         seed,
         "Create: address {} does not match derived address {}",
     );
+
     try assign(ic, &account, owner, base);
 }
 
@@ -333,16 +345,16 @@ fn executeTransferWithSeed(
     from_seed: []const u8,
     from_owner: Pubkey,
 ) !void {
-    try ic.checkNumberOfAccounts(3);
+    try ic.info.checkNumberOfAccounts(3);
 
     const from_index = 0;
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.accounts[from_base_index].pubkey;
-    const from_pubkey = ic.accounts[from_index].pubkey;
+    const from_base_pubkey = ic.info.account_metas.buffer[from_base_index].pubkey;
+    const from_pubkey = ic.info.account_metas.buffer[from_index].pubkey;
 
-    if (!try ic.isIndexSigner(from_base_index)) {
+    if (!try ic.info.isIndexSigner(from_base_index)) {
         try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -369,7 +381,7 @@ fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
-    try ic.checkNumberOfAccounts(1);
+    try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -400,7 +412,7 @@ fn allocate(
     space: u64,
     authority: Pubkey,
 ) InstructionError!void {
-    if (!ic.isPubkeySigner(authority)) {
+    if (!ic.info.isPubkeySigner(authority)) {
         try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -432,7 +444,7 @@ fn assign(
 ) InstructionError!void {
     if (account.account.owner.equals(&owner)) return;
 
-    if (!ic.isPubkeySigner(authority)) {
+    if (!ic.info.isPubkeySigner(authority)) {
         try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -480,10 +492,10 @@ fn transfer(
     to_index: u16,
     lamports: u64,
 ) !void {
-    if (!try ic.isIndexSigner(from_index)) {
+    if (!try ic.info.isIndexSigner(from_index)) {
         try ic.tc.log(
             "Transfer: `from` account {} must sign",
-            .{ic.accounts[from_index].pubkey},
+            .{ic.info.account_metas.buffer[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
     }
@@ -555,7 +567,7 @@ fn advanceNonceAccount(
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| {
-            if (!ic.isPubkeySigner(data.authority)) {
+            if (!ic.info.isPubkeySigner(data.authority)) {
                 try ic.tc.log(
                     "Advance nonce account: Account {} must be a signer",
                     .{data.authority},
@@ -654,7 +666,7 @@ fn withdrawNonceAccount(
             },
         };
 
-        if (!ic.isPubkeySigner(authority)) {
+        if (!ic.info.isPubkeySigner(authority)) {
             try ic.tc.log("Withdraw nonce account: Account {} must sign", .{authority});
             return InstructionError.MissingRequiredSignature;
         }
@@ -740,7 +752,7 @@ pub fn authorizeNonceAccount(
         .initialized => |data| data,
     };
 
-    if (!ic.isPubkeySigner(nonce_data.authority)) {
+    if (!ic.info.isPubkeySigner(nonce_data.authority)) {
         try ic.tc.log("Authorize nonce account: Account {} must sign", .{nonce_data.authority});
         return InstructionError.MissingRequiredSignature;
     }

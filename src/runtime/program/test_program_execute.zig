@@ -5,16 +5,17 @@ const bincode = sig.bincode;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
+const Transaction = sig.core.Transaction;
 
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionContext = sig.runtime.InstructionContext;
-const InstructionAccountInfo = sig.runtime.InstructionAccountInfo;
+const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
 const TransactionContext = sig.runtime.TransactionContext;
-const TransactionAccount = sig.runtime.TransactionAccount;
+const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 
-const TransactionAccountParams = struct {
+const TransactionContextAccountParams = struct {
     pubkey: Pubkey,
     lamports: u64 = 0,
     data: []const u8 = &.{},
@@ -24,7 +25,7 @@ const TransactionAccountParams = struct {
 };
 
 const TransactionContextParams = struct {
-    accounts: []const TransactionAccountParams,
+    accounts: []const TransactionContextAccountParams,
     accounts_resize_delta: i64 = 0,
     compute_meter: u64 = 0,
     custom_error: ?u32 = null,
@@ -35,21 +36,32 @@ const TransactionContextParams = struct {
     feature_set: FeatureSet = FeatureSet.EMPTY,
 };
 
+const InstructionContextAccountMetaParams = struct {
+    index_in_transaction: u16 = 0,
+    index_in_caller: ?u16 = null,
+    index_in_callee: ?u16 = null,
+    is_signer: bool = false,
+    is_writable: bool = false,
+};
+
 pub fn createTransactionContext(
     allocator: std.mem.Allocator,
     params: TransactionContextParams,
 ) !TransactionContext {
-    var accounts = std.ArrayList(TransactionAccount).init(allocator);
-    for (params.accounts) |account_params|
-        try accounts.append(TransactionAccount.init(account_params.pubkey, .{
+    var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
+    for (params.accounts) |account_params| {
+        try accounts.append(TransactionContextAccount.init(account_params.pubkey, .{
             .lamports = account_params.lamports,
             .data = try allocator.dupe(u8, account_params.data),
             .owner = account_params.owner,
             .executable = account_params.executable,
             .rent_epoch = account_params.rent_epoch,
         }));
+    }
+
     return .{
         .accounts = try accounts.toOwnedSlice(),
+        .return_data = .{},
         .accounts_resize_delta = params.accounts_resize_delta,
         .compute_meter = params.compute_meter,
         .custom_error = params.custom_error,
@@ -62,51 +74,65 @@ pub fn createTransactionContext(
 }
 
 pub fn createInstructionContext(
-    allocator: std.mem.Allocator,
     tc: *TransactionContext,
-    program: anytype,
-    instruction: anytype,
-    accounts_params: []const InstructionAccountInfoParams,
+    program_pubkey: Pubkey,
+    instruction_data: []const u8,
+    accounts_params: []const InstructionContextAccountMetaParams,
 ) !InstructionContext {
     const program_index = blk: {
-        for (tc.accounts, 0..) |account, index|
-            if (account.pubkey.equals(&program.ID))
-                break :blk index;
+        for (tc.accounts, 0..) |account, index| {
+            if (account.pubkey.equals(&program_pubkey)) break :blk index;
+        }
         return error.CoulfNotFindProgramAccount;
     };
 
-    var accounts = std.ArrayList(InstructionAccountInfo).init(allocator);
-    for (accounts_params) |account_params| {
-        if (account_params.index_in_transaction >= tc.accounts.len)
+    var account_metas = InstructionInfo.AccountMetas{};
+    for (accounts_params, 0..) |account_params, index| {
+        if (account_params.index_in_transaction >= tc.accounts.len) {
             return error.AccountIndexOutOfBounds;
-        try accounts.append(.{
+        }
+
+        const index_in_callee = blk: {
+            for (0..index) |i| {
+                if (account_params.index_in_transaction ==
+                    accounts_params[i].index_in_transaction)
+                {
+                    break :blk i;
+                }
+            }
+            break :blk index;
+        };
+
+        try account_metas.append(.{
             .pubkey = tc.accounts[account_params.index_in_transaction].pubkey,
+            .index_in_transaction = account_params.index_in_transaction,
+            .index_in_caller = account_params.index_in_caller orelse account_params.index_in_transaction,
+            .index_in_callee = account_params.index_in_callee orelse @intCast(index_in_callee),
             .is_signer = account_params.is_signer,
             .is_writable = account_params.is_writable,
-            .index_in_transaction = account_params.index_in_transaction,
         });
     }
 
     return .{
         .tc = tc,
-        .program_id = program.ID,
-        .program_index = @intCast(program_index),
-        .instruction = try bincode.writeAlloc(allocator, instruction, .{}),
-        .accounts = try accounts.toOwnedSlice(),
+        .parent = null,
+        .info = .{
+            .program_meta = .{
+                .pubkey = program_pubkey,
+                .index_in_transaction = @intCast(program_index),
+            },
+            .account_metas = account_metas,
+            .instruction_data = instruction_data,
+            .initial_account_lamports = tc.sumAccountLamports(account_metas.constSlice()),
+        },
     };
 }
-
-const InstructionAccountInfoParams = struct {
-    is_signer: bool = false,
-    is_writable: bool = false,
-    index_in_transaction: u16 = 0,
-};
 
 pub fn expectProgramExecuteResult(
     allocator: std.mem.Allocator,
     program: anytype,
     instruction: anytype,
-    instruction_accounts_params: []const InstructionAccountInfoParams,
+    instruction_accounts_params: []const InstructionContextAccountMetaParams,
     transaction_context_params: TransactionContextParams,
     expected_transaction_context_params: TransactionContextParams,
 ) !void {
@@ -114,23 +140,24 @@ pub fn expectProgramExecuteResult(
         allocator,
         transaction_context_params,
     );
-    defer {
-        for (transaction_context.accounts) |account|
-            allocator.free(account.account.data);
-        allocator.free(transaction_context.accounts);
-    }
+    defer transaction_context.deinit(allocator);
 
-    var instruction_context = try createInstructionContext(
-        allocator,
-        &transaction_context,
-        program,
-        instruction,
-        instruction_accounts_params,
-    );
-    defer {
-        allocator.free(instruction_context.instruction);
-        allocator.free(instruction_context.accounts);
-    }
+    var instruction_context = blk: {
+        const instruction_data = try bincode.writeAlloc(
+            allocator,
+            instruction,
+            .{},
+        );
+        errdefer allocator.free(instruction_data);
+
+        break :blk try createInstructionContext(
+            &transaction_context,
+            program.ID,
+            instruction_data,
+            instruction_accounts_params,
+        );
+    };
+    defer instruction_context.deinit(allocator);
 
     try program.execute(allocator, &instruction_context);
 
@@ -138,29 +165,31 @@ pub fn expectProgramExecuteResult(
         allocator,
         expected_transaction_context_params,
     );
-    defer {
-        for (expected_transaction_context.accounts) |account|
-            allocator.free(account.account.data);
-        allocator.free(expected_transaction_context.accounts);
-    }
+    defer expected_transaction_context.deinit(allocator);
 
     try expectTransactionContextEqual(expected_transaction_context, transaction_context);
 }
 
 pub fn expectTransactionAccountEqual(
-    expected: TransactionAccount,
-    actual: TransactionAccount,
+    expected: TransactionContextAccount,
+    actual: TransactionContextAccount,
 ) !void {
     if (!expected.pubkey.equals(&actual.pubkey))
         return error.PubkeyMismatch;
     if (expected.account.lamports != actual.account.lamports)
         return error.LamportsMismatch;
-    if (!std.mem.eql(u8, expected.account.data, actual.account.data))
+    if (!std.mem.eql(u8, expected.account.data, actual.account.data)) {
+        std.debug.print("\nexpected: {any}", .{expected.account.data});
+        std.debug.print("\nactual:   {any}\n", .{actual.account.data});
         return error.DataMismatch;
+    }
     if (!expected.account.owner.equals(&actual.account.owner))
         return error.OwnerMismatch;
-    if (expected.account.executable != actual.account.executable)
+    if (expected.account.executable != actual.account.executable) {
+        std.debug.print("\nexpected: {any}", .{expected.account.executable});
+        std.debug.print("\nactual:   {any}\n", .{actual.account.executable});
         return error.ExecutableMismatch;
+    }
     if (expected.account.rent_epoch != actual.account.rent_epoch)
         return error.RentEpochMismatch;
     if (expected.read_refs != actual.read_refs)
@@ -178,12 +207,17 @@ pub fn expectTransactionContextEqual(
 
     for (expected.accounts, 0..) |expected_account, index| {
         const actual_account = actual.accounts[index];
-        expectTransactionAccountEqual(expected_account, actual_account) catch
+        expectTransactionAccountEqual(expected_account, actual_account) catch {
+            std.debug.print("account_index={}\n", .{index});
             return error.AccountMismatch;
+        };
     }
 
-    if (expected.accounts_resize_delta != actual.accounts_resize_delta)
+    if (expected.accounts_resize_delta != actual.accounts_resize_delta) {
+        std.debug.print("\nexpected: {}", .{expected.accounts_resize_delta});
+        std.debug.print("\nactual:   {}\n", .{actual.accounts_resize_delta});
         return error.AccountsResizeDeltaMismatch;
+    }
 
     if (expected.compute_meter != actual.compute_meter)
         return error.ComputeMeterMismatch;

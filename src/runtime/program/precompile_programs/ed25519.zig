@@ -133,8 +133,8 @@ pub fn newInstruction(
     instruction_data.appendSliceAssumeCapacity(message);
 
     return .{
-        .program_id = sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID,
-        .accounts = &.{},
+        .program_pubkey = sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID,
+        .account_metas = &.{},
         .data = try instruction_data.toOwnedSlice(),
     };
 }

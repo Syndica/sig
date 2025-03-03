@@ -7,6 +7,9 @@ const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 
+pub const NATIVE_LOADER_ID =
+    Pubkey.parseBase58String("NativeLoader1111111111111111111111111111111") catch unreachable;
+
 pub const SYSVAR_INSTRUCTIONS_ID =
     Pubkey.parseBase58String("Sysvar1nstructions1111111111111111111111111") catch unreachable;
 

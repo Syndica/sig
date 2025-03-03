@@ -32,7 +32,7 @@ pub fn execute(
         return InstructionError.InvalidAccountOwner;
     }
 
-    const instruction = try ic.deserializeInstruction(allocator, VoteProgramInstruction);
+    const instruction = try ic.info.deserializeInstruction(allocator, VoteProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -115,7 +115,7 @@ fn intializeAccount(
     }
 
     // node must agree to accept this vote account
-    if (!ic.isPubkeySigner(node_pubkey)) {
+    if (!ic.info.isPubkeySigner(node_pubkey)) {
         try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
