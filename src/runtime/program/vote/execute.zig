@@ -136,7 +136,7 @@ fn intializeAccount(
 
 test "executeIntializeAccount" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);

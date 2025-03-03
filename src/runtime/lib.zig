@@ -11,6 +11,7 @@ pub const pubkey_utils = @import("pubkey_utils.zig");
 pub const stable_log = @import("stable_log.zig");
 pub const sysvar = @import("sysvar/lib.zig");
 pub const sysvar_cache = @import("sysvar_cache.zig");
+pub const testing = @import("testing.zig");
 pub const tmp_utils = @import("tmp_utils.zig");
 pub const transaction_context = @import("transaction_context.zig");
 

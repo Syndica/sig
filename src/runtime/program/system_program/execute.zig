@@ -791,7 +791,7 @@ fn checkSeedAddress(
 
 test "executeCreateAccount" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -837,7 +837,7 @@ test "executeCreateAccount" {
 
 test "executeAssign" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -873,7 +873,7 @@ test "executeAssign" {
 
 test "executeTransfer" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -912,7 +912,7 @@ test "executeTransfer" {
 
 test "executeCreateAccountWithSeed" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -962,7 +962,7 @@ test "executeCreateAccountWithSeed" {
 test "executeAdvanceNonceAccount" {
     const Hash = sig.core.Hash;
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1051,7 +1051,7 @@ test "executeAdvanceNonceAccount" {
 test "executeWithdrawNonceAccount" {
     const Hash = sig.core.Hash;
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1134,7 +1134,7 @@ test "executeWithdrawNonceAccount" {
 test "executeInitializeNonceAccount" {
     const Hash = sig.core.Hash;
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1229,7 +1229,7 @@ test "executeInitializeNonceAccount" {
 test "executeAuthorizeNonceAccount" {
     const Hash = sig.core.Hash;
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1289,7 +1289,7 @@ test "executeAuthorizeNonceAccount" {
 
 test "executeAllocate" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1327,7 +1327,7 @@ test "executeAllocate" {
 
 test "executeAllocateWithSeed" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1373,7 +1373,7 @@ test "executeAllocateWithSeed" {
 
 test "executeAssignWithSeed" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1417,7 +1417,7 @@ test "executeAssignWithSeed" {
 
 test "executeTransferWithSeed" {
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1466,7 +1466,7 @@ test "executeTransferWithSeed" {
 test "executeUpgradeNonceAccount" {
     const Hash = sig.core.Hash;
     const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+        sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);

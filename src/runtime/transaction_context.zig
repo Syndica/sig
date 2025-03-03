@@ -19,9 +19,6 @@ const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 
-const MAX_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
-    sig.runtime.program.system_program.MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION;
-
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH: usize = 64;
 
@@ -35,13 +32,10 @@ pub const TransactionContext = struct {
     accounts: []TransactionContextAccount,
 
     /// Instruction stack
-    instruction_stack: std.BoundedArray(InstructionContext, MAX_INSTRUCTION_STACK_DEPTH) = .{},
+    instruction_stack: InstructionStack,
 
     /// Instruction trace
-    instruction_trace: std.BoundedArray(struct {
-        instruction_info: InstructionInfo,
-        stack_height: usize,
-    }, MAX_INSTRUCTION_TRACE_LENGTH) = .{},
+    instruction_trace: InstructionTrace,
 
     /// Return data
     return_data: TransactionReturnData,
@@ -68,6 +62,16 @@ pub const TransactionContext = struct {
     last_blockhash: Hash,
     feature_set: FeatureSet,
 
+    pub const InstructionStack = std.BoundedArray(
+        InstructionContext,
+        MAX_INSTRUCTION_STACK_DEPTH,
+    );
+
+    pub const InstructionTrace = std.BoundedArray(struct {
+        instruction_info: InstructionInfo,
+        stack_height: usize,
+    }, MAX_INSTRUCTION_TRACE_LENGTH);
+
     pub fn deinit(self: TransactionContext, allocator: std.mem.Allocator) void {
         for (self.accounts) |account|
             allocator.free(account.account.data);
@@ -89,7 +93,11 @@ pub const TransactionContext = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L646
-    pub fn borrowAccountAtIndex(self: *TransactionContext, index: u16, context: BorrowedAccountContext) InstructionError!BorrowedAccount {
+    pub fn borrowAccountAtIndex(
+        self: *TransactionContext,
+        index: u16,
+        context: BorrowedAccountContext,
+    ) InstructionError!BorrowedAccount {
         const txn_account = self.getAccountAtIndex(index) orelse
             return InstructionError.MissingAccount;
 
