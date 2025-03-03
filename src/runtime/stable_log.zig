@@ -16,7 +16,7 @@ pub fn program_invoke(
     invoke_depth: usize,
 ) !void {
     if (log_collector.* != null) {
-        log_collector.log(
+        try log_collector.*.?.log(
             "Program {} invoke [{}]",
             .{ program_pubkey, invoke_depth },
         );
@@ -34,7 +34,7 @@ pub fn program_invoke(
 /// That is, any program-generated output is guaranteed to be prefixed by "Program log: "
 pub fn program_log(log_collector: *?LogCollector, message: []const u8) !void {
     if (log_collector.* != null) {
-        log_collector.log("Program log: {}", .{message});
+        try log_collector.*.?.log("Program log: {}", .{message});
     }
 }
 
@@ -49,9 +49,9 @@ pub fn program_log(log_collector: *?LogCollector, message: []const u8) !void {
 /// That is, any program-generated output is guaranteed to be prefixed by "Program data: "
 pub fn program_data(log_collector: *?LogCollector, data: []const []const u8) !void {
     if (log_collector.* != null) {
-        log_collector.log(
+        try log_collector.*.?.log(
             log_collector,
-            "Program data: {}",
+            "Program data: {any}",
             .{data}, // TODO: Base64 encode
         );
     }
@@ -73,9 +73,9 @@ pub fn program_return(
     data: []const u8,
 ) !void {
     if (log_collector.* != null) {
-        log_collector.log(
+        try log_collector.*.?.log(
             log_collector,
-            "Program return: {} {}",
+            "Program return: {} {any}",
             .{
                 program_pubkey,
                 data, // TODO: Base64 encode
@@ -93,7 +93,7 @@ pub fn program_return(
 /// ```
 pub fn program_success(log_collector: *?LogCollector, program_pubkey: Pubkey) !void {
     if (log_collector.* != null) {
-        log_collector.log("Program {} success", .{program_pubkey});
+        try log_collector.*.?.log("Program {} success", .{program_pubkey});
     }
 }
 
@@ -110,6 +110,6 @@ pub fn program_failure(
     err: anytype,
 ) !void {
     if (log_collector.* != null) {
-        log_collector.log("Program {} failed: {}", .{ program_pubkey, err });
+        try log_collector.*.?.log("Program {} failed: {any}", .{ program_pubkey, err });
     }
 }

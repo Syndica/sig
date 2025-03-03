@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const bincode = sig.bincode;
+const executor = sig.runtime.executor;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
@@ -73,12 +74,12 @@ pub fn createTransactionContext(
     };
 }
 
-pub fn createInstructionContext(
+pub fn createInstructionInfo(
     tc: *TransactionContext,
     program_pubkey: Pubkey,
     instruction_data: []const u8,
     accounts_params: []const InstructionContextAccountMetaParams,
-) !InstructionContext {
+) !InstructionInfo {
     const program_index = blk: {
         for (tc.accounts, 0..) |account, index| {
             if (account.pubkey.equals(&program_pubkey)) break :blk index;
@@ -114,17 +115,12 @@ pub fn createInstructionContext(
     }
 
     return .{
-        .tc = tc,
-        .parent = null,
-        .info = .{
-            .program_meta = .{
-                .pubkey = program_pubkey,
-                .index_in_transaction = @intCast(program_index),
-            },
-            .account_metas = account_metas,
-            .instruction_data = instruction_data,
-            .initial_account_lamports = tc.sumAccountLamports(account_metas.constSlice()),
+        .program_meta = .{
+            .pubkey = program_pubkey,
+            .index_in_transaction = @intCast(program_index),
         },
+        .account_metas = account_metas,
+        .instruction_data = instruction_data,
     };
 }
 
@@ -142,7 +138,7 @@ pub fn expectProgramExecuteResult(
     );
     defer transaction_context.deinit(allocator);
 
-    var instruction_context = blk: {
+    var instruction_info = blk: {
         const instruction_data = try bincode.writeAlloc(
             allocator,
             instruction,
@@ -150,16 +146,20 @@ pub fn expectProgramExecuteResult(
         );
         errdefer allocator.free(instruction_data);
 
-        break :blk try createInstructionContext(
+        break :blk try createInstructionInfo(
             &transaction_context,
             program.ID,
             instruction_data,
             instruction_accounts_params,
         );
     };
-    defer instruction_context.deinit(allocator);
+    defer instruction_info.deinit(allocator);
 
-    try program.execute(allocator, &instruction_context);
+    try executor.executeInstruction(
+        allocator,
+        &transaction_context,
+        instruction_info,
+    );
 
     const expected_transaction_context = try createTransactionContext(
         allocator,

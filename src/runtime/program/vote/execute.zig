@@ -1,6 +1,8 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
+const ids = sig.runtime.ids;
+
 const vote_program = sig.runtime.program.vote_program;
 const vote_instruction = vote_program.vote_instruction;
 
@@ -197,7 +199,7 @@ test "executeIntializeAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = node_publey },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -216,7 +218,7 @@ test "executeIntializeAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = node_publey },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
             .sysvar_cache = .{

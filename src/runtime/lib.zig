@@ -1,4 +1,5 @@
 pub const borrowed_account = @import("borrowed_account.zig");
+pub const executor = @import("executor.zig");
 pub const feature_set = @import("feature_set.zig");
 pub const ids = @import("ids.zig");
 pub const instruction_context = @import("instruction_context.zig");
