@@ -49,7 +49,7 @@ pub const Version = enum(u32) {
         return version.gte(.v2);
     }
     /// ... SIMD-0173
-    pub fn disableLDDW(version: Version) bool {
+    pub fn disableLddw(version: Version) bool {
         return version.gte(.v2);
     }
     pub fn moveMemoryInstructionClasses(version: Version) bool {
@@ -88,10 +88,21 @@ pub const Version = enum(u32) {
     pub fn gte(version: Version, other: Version) bool {
         return @intFromEnum(version) >= @intFromEnum(other);
     }
+
+    pub fn computeTarget(version: Version, pc: usize, inst: Instruction) u64 {
+        const target_pc: i64 = if (version.enableStaticSyscalls())
+            @as(i64, @intCast(pc)) +| @as(i32, @bitCast(inst.imm)) +| 1
+        else
+            inst.imm;
+        return @bitCast(target_pc);
+    }
 };
 
 pub const Instruction = packed struct(u64) {
     opcode: OpCode,
+    /// TODO: when ptrCasting into Instruction, the `dst` and `src values might
+    /// be out of range. There's safety check for this, so we'll need to check
+    /// it ourselves.
     dst: Register,
     src: Register,
     off: i16,
@@ -354,6 +365,7 @@ pub const Instruction = packed struct(u64) {
 
         /// bpf opcode: `exit` /// `return r0`. /// valid only until sbpfv3
         exit = jmp | exit_code,
+        /// bpf opcode: `return` /// `return r0`. /// Valid only since sbpfv3
         @"return" = jmp | x | exit_code,
         _,
 
@@ -403,35 +415,8 @@ pub const Instruction = packed struct(u64) {
         no_operand,
     };
 
-    /// Denotes at which version the instruction isn't allowed anymore.
-    ///
-    /// Example usage:
-    /// ```zig
-    /// const result = disallowed.get(inst) orelse ...;
-    /// if (current_version.gte(result)) @panic("not allowed")
-    /// ```
-    pub const disallowed = std.StaticStringMap(Version).initComptime(&.{
-        .{ "neg32", .v2 },
-        .{ "neg64", .v2 },
-        .{ "neg", .v2 },
-
-        .{ "mul32", .v2 },
-        .{ "mul64", .v2 },
-        .{ "mul", .v2 },
-
-        .{ "div32", .v2 },
-        .{ "div64", .v2 },
-        .{ "div", .v2 },
-
-        .{ "le32", .v2 },
-        .{ "le64", .v2 },
-        .{ "le16", .v2 },
-
-        .{ "lddw", .v2 },
-    });
-
+    // zig fmt: off
     pub const map = std.StaticStringMap(Entry).initComptime(&.{
-        // zig fmt: off
         .{ "mov"  , .{ .inst = .alu_binary, .opc = mov | alu64  } }, 
         .{ "mov64", .{ .inst = .alu_binary, .opc = mov | alu64  } },
         .{ "mov32", .{ .inst = .alu_binary, .opc = mov | alu32  } },
@@ -556,9 +541,8 @@ pub const Instruction = packed struct(u64) {
         .{ "lddw"  , .{ .inst = .load_dw_imm,      .opc = ld  | imm | dw  } },
         .{ "call"  , .{ .inst = .call_imm,         .opc = jmp | call      } },
         .{ "callx" , .{ .inst = .call_reg,         .opc = jmp | call | x  } },
-
-        // zig fmt: on
     });
+    // zig fmt: on
 
     /// load from immediate
     pub const ld = 0b0000;
@@ -714,6 +698,30 @@ pub const Instruction = packed struct(u64) {
         pc,
     };
 
+    pub fn checkRegisters(
+        inst: Instruction,
+        store: bool,
+        version: Version,
+    ) !void {
+        const src = @intFromEnum(inst.src);
+        const dst = @intFromEnum(inst.dst);
+
+        // Any source registers not within `r[0, 10]` is illegal.
+        if (src > 10) return error.InvalidSourceRegister;
+        // If the destination is within `r[0, 9]`, all combinations are legal.
+        if (dst <= 9) return;
+        if (dst == 10) {
+            // If it's a store instruction and the destination is `r10`, it's legal.
+            if (store) return;
+            // You may add to the `r10` register in SBPFv1 and above.
+            if (version.enableDynamicStackFrames() and inst.opcode == .add64_imm) {
+                return;
+            }
+            return error.CannotWriteR10;
+        }
+        return error.InvalidDestinationRegister;
+    }
+
     pub fn format(
         inst: Instruction,
         comptime fmt: []const u8,
@@ -726,5 +734,5 @@ pub const Instruction = packed struct(u64) {
 };
 
 pub fn hashSymbolName(name: []const u8) u32 {
-   return std.hash.Murmur3_32.hashWithSeed(name, 0);
+    return std.hash.Murmur3_32.hashWithSeed(name, 0);
 }

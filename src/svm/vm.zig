@@ -278,7 +278,7 @@ pub const Vm = struct {
                             break :value shifted;
                         }
                     },
-                    Instruction.hor => if (version.disableLDDW()) value: {
+                    Instruction.hor => if (version.disableLddw()) value: {
                         break :value lhs_large | @as(u64, inst.imm) << 32;
                     } else return error.UnknownInstruction,
                     else => unreachable,
@@ -570,11 +570,8 @@ pub const Vm = struct {
                 }
 
                 if (internal and !resolved) {
-                    const target_pc: i64 = if (version.enableStaticSyscalls())
-                        @as(i64, @intCast(pc)) +| @as(i32, @bitCast(inst.imm)) +| 1
-                    else
-                        inst.imm;
-                    if (self.executable.function_registry.lookupKey(@bitCast(target_pc))) |entry| {
+                    const target_pc = version.computeTarget(pc, inst);
+                    if (self.executable.function_registry.lookupKey(target_pc)) |entry| {
                         resolved = true;
                         try self.pushCallFrame();
                         next_pc = entry.value;
@@ -599,7 +596,7 @@ pub const Vm = struct {
 
             // other instructions
             .ld_dw_imm => {
-                if (version.disableLDDW()) return error.UnknownInstruction;
+                if (version.disableLddw()) return error.UnknownInstruction;
                 const value: u64 = (@as(u64, instructions[next_pc].imm) << 32) | inst.imm;
                 registers.set(inst.dst, value);
                 next_pc += 1;

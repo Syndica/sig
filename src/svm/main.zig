@@ -94,6 +94,8 @@ pub fn main() !void {
     };
     defer executable.deinit(allocator);
 
+    try executable.verify(&loader);
+
     const heap_mem = try allocator.alloc(u8, 0x40000);
     defer allocator.free(heap_mem);
     @memset(heap_mem, 0x00);

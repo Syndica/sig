@@ -830,7 +830,7 @@ pub const Elf = struct {
 
         if (!sbpf_version.enableStaticSyscalls()) {
             const hash = sbpf.hashSymbolName("entrypoint");
-            if (function_registry.map.fetchRemove(hash)) |entry| {
+            if (function_registry.map.fetchOrderedRemove(hash)) |entry| {
                 allocator.free(entry.value.name);
             }
         }
