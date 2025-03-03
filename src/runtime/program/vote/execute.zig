@@ -64,6 +64,14 @@ pub fn execute(
             args.current_authority_derived_key_owner,
             args.current_authority_derived_key_seed,
         ),
+        .authorize_checked_with_seed => |args| try executeAuthorizeCheckedWithSeed(
+            allocator,
+            ic,
+            &vote_account,
+            args.authorization_type,
+            args.current_authority_derived_key_owner,
+            args.current_authority_derived_key_seed,
+        ),
         else => @panic("TODO: Unsupported instruction"),
     };
 }
@@ -284,7 +292,36 @@ fn authorizeWithSeed(
     );
 }
 
-// TODO: Move this to
+fn executeAuthorizeCheckedWithSeed(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    authorization_type: VoteAuthorize,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+) InstructionError!void {
+    try ic.checkNumberOfAccounts(4);
+
+    const new_authority = try ic.borrowInstructionAccount(
+        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
+    );
+
+    if (!ic.isPubkeySigner(new_authority.pubkey)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    try authorizeWithSeed(
+        allocator,
+        ic,
+        vote_account,
+        new_authority.pubkey,
+        authorization_type,
+        current_authority_derived_key_owner,
+        current_authority_derived_key_seed,
+    );
+}
+
+// TODO: Move this to instruction_context.zig
 fn verifyAuthorizedSigner(
     authorized: Pubkey,
     signers: std.AutoHashMap(Pubkey, void),

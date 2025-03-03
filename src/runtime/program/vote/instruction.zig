@@ -36,7 +36,7 @@ pub const Authorize = struct {
         /// `[]` Clock sysvar
         clock_sysvar = 1,
         /// `[SIGNER]` Vote or withdraw authority
-        signer = 3,
+        signer = 2,
     };
 };
 
@@ -61,15 +61,16 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 
-    const AccountIndex = enum(u8) {
+    pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated
         account = 0,
         /// `[]` Clock sysvar
         clock_sysvar = 1,
         ///  `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
-        current_signer = 3,
+        base_key = 2,
         /// `[SIGNER]` New vote or withdraw authority
-        new_signer = 4,
+        // TODO make this uniform.
+        new_authority = 3,
     };
 };
 
@@ -83,9 +84,9 @@ pub const VoteAuthorize = enum {
         /// `[]` Clock sysvar
         clock_sysvar = 1,
         ///  `[SIGNER]` Vote or withdraw authority
-        current_signer = 3,
+        current_signer = 2,
         /// `[SIGNER]` New vote or withdraw authority
-        new_signer = 4,
+        new_signer = 3,
     };
 };
 
