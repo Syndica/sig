@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("sig.zig");
 
 comptime {
+    @setEvalBranchQuota(10_000);
     refAllDeclsRecursive(sig, 2);
     refAllDeclsRecursive(sig.ledger, 2);
     refAllDeclsRecursive(sig.runtime.program, 2);
