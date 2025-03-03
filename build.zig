@@ -1,31 +1,71 @@
 const std = @import("std");
+
+const Allocator = std.mem.Allocator;
 const Build = std.Build;
 
-pub fn build(b: *Build) void {
+pub const Config = struct {
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    filters: ?[]const []const u8,
+    enable_tsan: ?bool,
+    blockstore_db: BlockstoreDB,
+    run: bool,
+    install: bool,
+    ssh_host: ?[]const u8,
+    ssh_install_dir: []const u8,
+    ssh_workdir: []const u8,
+    no_network_tests: bool,
+
+    pub fn fromBuild(b: *Build) !Config {
+        var self = Config{
+            .target = b.standardTargetOptions(.{
+                .default_target = defaultTargetDetectM3() orelse .{},
+            }),
+            .optimize = b.standardOptimizeOption(.{}),
+            .filters = b.option([]const []const u8, "filter", "List of filters, used for example" ++
+                " to filter unit tests by name. specified as a series like `-Dfilter='filter1' " ++
+                "-Dfilter='filter2'`"),
+            .enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite"),
+            .blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse
+                .rocksdb,
+            .run = !(b.option(bool, "no-run",
+                \\Don't run any of the executables implied by the specified steps, only install them.
+                \\Use in conjunction with 'no-bin' to avoid installation as well.
+            ) orelse false),
+            .install = !(b.option(bool, "no-bin",
+                \\Don't install any of the binaries implied by the specified steps, only run them.
+                \\Use in conjunction with 'no-run' to avoid running as well.
+            ) orelse false),
+            .ssh_host = b.option([]const u8, "ssh-host", "Builds will target this remote host," ++
+                " binaries will be installed there, and executables will run there."),
+            .ssh_install_dir = b.option([]const u8, "ssh-installdir", "When using ssh-host, this" ++
+                " configures the directory to install binaries (relative to ssh-workdir)" ++
+                " (default: zig-out/bin).") orelse "zig-out/bin/",
+            .ssh_workdir = b.option([]const u8, "ssh-workdir", "When using ssh-host, this " ++
+                "configures the working directory where executables will run (default: sig).") orelse
+                "sig",
+            .no_network_tests = b.option(bool, "no-network-tests", "Do not run any tests that " ++
+                "depend on the network.") orelse false,
+        };
+
+        if (self.ssh_host) |host| {
+            self.target = try ssh.getHostTarget(b, host);
+        }
+
+        return self;
+    }
+};
+
+pub fn build(b: *Build) !void {
     defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
 
     // CLI options
-    const target = b.standardTargetOptions(.{
-        .default_target = defaultTargetDetectM3() orelse .{},
-    });
-    const optimize = b.standardOptimizeOption(.{});
-    const filters = b.option([]const []const u8, "filter", "List of filters, used for example to filter unit tests by name"); // specified as a series like `-Dfilter="filter1" -Dfilter="filter2"`
-    const enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite");
-    const blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse .rocksdb;
-    const no_run = b.option(bool, "no-run",
-        \\Don't run any of the executables implied by the specified steps, only install them.
-        \\Use in conjunction with 'no-bin' to avoid installation as well.
-    ) orelse false;
-    const no_bin = b.option(bool, "no-bin",
-        \\Don't install any of the binaries implied by the specified steps, only run them.
-        \\Use in conjunction with 'no-run' to avoid running as well.
-    ) orelse false;
-    const no_network_tests = b.option(bool, "no-network-tests", "Do not run any tests that depend on the network.") orelse false;
+    const config = try Config.fromBuild(b);
 
     // Build options
     const build_options = b.addOptions();
-    build_options.addOption(BlockstoreDB, "blockstore_db", blockstore_db);
-    build_options.addOption(bool, "no_network_tests", no_network_tests);
+    build_options.addOption(BlockstoreDB, "blockstore_db", config.blockstore_db);
+    build_options.addOption(bool, "no_network_tests", config.no_network_tests);
 
     // CLI build steps
     const install_step = b.getInstallStep();
@@ -38,7 +78,7 @@ pub fn build(b: *Build) void {
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
 
     // Dependencies
-    const dep_opts = .{ .target = target, .optimize = optimize };
+    const dep_opts = .{ .target = config.target, .optimize = config.optimize };
 
     const base58_dep = b.dependency("base58", dep_opts);
     const base58_mod = base58_dep.module("base58");
@@ -83,7 +123,7 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("zstd", zstd_mod);
     sig_mod.addImport("poseidon", poseidon_mod);
 
-    switch (blockstore_db) {
+    switch (config.blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
@@ -92,9 +132,9 @@ pub fn build(b: *Build) void {
     const sig_exe = b.addExecutable(.{
         .name = "sig",
         .root_source_file = b.path("src/cmd.zig"),
-        .target = target,
-        .optimize = optimize,
-        .sanitize_thread = enable_tsan,
+        .target = config.target,
+        .optimize = config.optimize,
+        .sanitize_thread = config.enable_tsan,
     });
     sig_step.dependOn(&sig_exe.step);
     install_step.dependOn(&sig_exe.step);
@@ -115,30 +155,19 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("lsquic", lsquic_mod);
     sig_exe.root_module.addImport("ssl", ssl_mod);
     sig_exe.root_module.addImport("xev", xev_mod);
-    switch (blockstore_db) {
+    switch (config.blockstore_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-
-    if (!no_bin) {
-        const sig_install = b.addInstallArtifact(sig_exe, .{});
-        sig_step.dependOn(&sig_install.step);
-        install_step.dependOn(&sig_install.step);
-    }
-
-    if (!no_run) {
-        const sig_run = b.addRunArtifact(sig_exe);
-        sig_step.dependOn(&sig_run.step);
-        sig_run.addArgs(b.args orelse &.{});
-    }
+    try addInstallAndRun(b, sig_step, sig_exe, config);
 
     // unit tests
     const unit_tests_exe = b.addTest(.{
         .root_source_file = b.path("src/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .filters = filters orelse &.{},
-        .sanitize_thread = enable_tsan,
+        .target = config.target,
+        .optimize = config.optimize,
+        .sanitize_thread = config.enable_tsan,
+        .filters = config.filters orelse &.{},
     });
     b.installArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe.step);
@@ -152,29 +181,19 @@ pub fn build(b: *Build) void {
     unit_tests_exe.root_module.addImport("zig-network", zig_network_mod);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     unit_tests_exe.root_module.addImport("poseidon", poseidon_mod);
-    switch (blockstore_db) {
+    switch (config.blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-
-    if (!no_bin) {
-        const unit_tests_install = b.addInstallArtifact(unit_tests_exe, .{});
-        test_step.dependOn(&unit_tests_install.step);
-        install_step.dependOn(&unit_tests_install.step);
-    }
-
-    if (!no_run) {
-        const unit_tests_run = b.addRunArtifact(unit_tests_exe);
-        test_step.dependOn(&unit_tests_run.step);
-    }
+    try addInstallAndRun(b, test_step, unit_tests_exe, config);
 
     // fuzz test
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
         .root_source_file = b.path("src/fuzz.zig"),
-        .target = target,
-        .optimize = optimize,
-        .sanitize_thread = enable_tsan,
+        .target = config.target,
+        .optimize = config.optimize,
+        .sanitize_thread = config.enable_tsan,
     });
     fuzz_step.dependOn(&fuzz_exe.step);
     install_step.dependOn(&fuzz_exe.step);
@@ -186,30 +205,19 @@ pub fn build(b: *Build) void {
     fuzz_exe.root_module.addImport("base58", base58_mod);
     fuzz_exe.root_module.addImport("zig-network", zig_network_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
-    switch (blockstore_db) {
+    switch (config.blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-
-    if (!no_bin) {
-        const fuzz_install = b.addInstallArtifact(fuzz_exe, .{});
-        fuzz_step.dependOn(&fuzz_install.step);
-        install_step.dependOn(&fuzz_install.step);
-    }
-
-    if (!no_run) {
-        const fuzz_run = b.addRunArtifact(fuzz_exe);
-        fuzz_step.dependOn(&fuzz_run.step);
-        fuzz_run.addArgs(b.args orelse &.{});
-    }
+    try addInstallAndRun(b, fuzz_step, fuzz_exe, config);
 
     // benchmarks
     const benchmark_exe = b.addExecutable(.{
         .name = "benchmark",
         .root_source_file = b.path("src/benchmarks.zig"),
-        .target = target,
-        .optimize = optimize,
-        .sanitize_thread = enable_tsan,
+        .target = config.target,
+        .optimize = config.optimize,
+        .sanitize_thread = config.enable_tsan,
     });
     benchmark_step.dependOn(&benchmark_exe.step);
     install_step.dependOn(&benchmark_exe.step);
@@ -228,72 +236,39 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
-    switch (blockstore_db) {
+    switch (config.blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-
-    if (!no_bin) {
-        const benchmark_install = b.addInstallArtifact(benchmark_exe, .{});
-        benchmark_step.dependOn(&benchmark_install.step);
-        install_step.dependOn(&benchmark_install.step);
-    }
-
-    if (!no_run) {
-        const benchmark_run = b.addRunArtifact(benchmark_exe);
-        benchmark_step.dependOn(&benchmark_run.step);
-        benchmark_run.addArgs(b.args orelse &.{});
-    }
+    try addInstallAndRun(b, benchmark_step, benchmark_exe, config);
 
     // geyser reader
     const geyser_reader_exe = b.addExecutable(.{
         .name = "geyser",
         .root_source_file = b.path("src/geyser/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .sanitize_thread = enable_tsan,
+        .target = config.target,
+        .optimize = config.optimize,
+        .sanitize_thread = config.enable_tsan,
     });
     geyser_reader_step.dependOn(&geyser_reader_exe.step);
     install_step.dependOn(&geyser_reader_exe.step);
 
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
     geyser_reader_exe.root_module.addImport("zig-cli", zig_cli_mod);
-
-    if (!no_bin) {
-        const geyser_reader_install = b.addInstallArtifact(geyser_reader_exe, .{});
-        geyser_reader_step.dependOn(&geyser_reader_install.step);
-        install_step.dependOn(&geyser_reader_install.step);
-    }
-
-    if (!no_run) {
-        const geyser_reader_run = b.addRunArtifact(geyser_reader_exe);
-        geyser_reader_step.dependOn(&geyser_reader_run.step);
-        geyser_reader_run.addArgs(b.args orelse &.{});
-    }
+    try addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
 
     const svm_exe = b.addExecutable(.{
         .name = "svm",
         .root_source_file = b.path("src/svm/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .sanitize_thread = enable_tsan,
+        .target = config.target,
+        .optimize = config.optimize,
+        .sanitize_thread = config.enable_tsan,
     });
     svm_step.dependOn(&svm_exe.step);
     install_step.dependOn(&svm_exe.step);
 
     svm_exe.root_module.addImport("sig", sig_mod);
-
-    if (!no_bin) {
-        const svm_install = b.addInstallArtifact(svm_exe, .{});
-        svm_step.dependOn(&svm_install.step);
-        install_step.dependOn(&svm_install.step);
-    }
-
-    if (!no_run) {
-        const svm_run = b.addRunArtifact(svm_exe);
-        svm_step.dependOn(&svm_run.step);
-        svm_run.addArgs(b.args orelse &.{});
-    }
+    try addInstallAndRun(b, svm_step, svm_exe, config);
 
     // docs for the Sig library
     const install_sig_docs = b.addInstallDirectory(.{
@@ -302,6 +277,52 @@ pub fn build(b: *Build) void {
         .install_subdir = "docs",
     });
     docs_step.dependOn(&install_sig_docs.step);
+}
+
+/// the standard approach for installing and running the executables produced in
+/// this build script.
+fn addInstallAndRun(
+    b: *Build,
+    step: *Build.Step,
+    exe: *Build.Step.Compile,
+    config: Config,
+) !void {
+    var send_step: ?*Build.Step = null;
+
+    if (config.install or (config.ssh_host != null and config.run)) {
+        const install = b.addInstallArtifact(exe, .{});
+        step.dependOn(&install.step);
+
+        if (config.ssh_host) |host| {
+            const install_dir = if (config.ssh_install_dir[0] == '/')
+                try b.allocator.dupe(u8, config.ssh_install_dir)
+            else
+                b.fmt("{s}/{s}", .{ config.ssh_workdir, config.ssh_install_dir });
+            defer b.allocator.free(install_dir);
+
+            const send = try ssh.addSendArtifact(b, install, host, install_dir);
+            send_step = &send.step;
+            b.getInstallStep().dependOn(&send.step);
+        } else {
+            b.getInstallStep().dependOn(&install.step);
+        }
+    }
+
+    if (config.run) {
+        if (config.ssh_host) |host| {
+            const exe_path =
+                b.fmt("{s}/{s}", .{ config.ssh_install_dir, exe.name });
+            defer b.allocator.free(exe_path);
+
+            const run = try ssh.addRemoteCommand(b, host, config.ssh_workdir, exe_path);
+            run.step.dependOn(send_step.?);
+            step.dependOn(&run.step);
+        } else {
+            const run = b.addRunArtifact(exe);
+            run.addArgs(b.args orelse &.{});
+            step.dependOn(&run.step);
+        }
+    }
 }
 
 const BlockstoreDB = enum {
@@ -358,3 +379,101 @@ fn defaultTargetDetectM3() ?std.Target.Query {
         .cpu_model = .{ .explicit = model },
     };
 }
+
+const ssh = struct {
+    /// SSH into the host and call `zig targets` to determine the compilation
+    /// target for that machine.
+    ///
+    /// This means the build script needs to spawn another process to run a
+    /// system installed SSH binary. This is a temporary hack to get a remote
+    /// target. This will stop working if build.zig is sandboxed.
+    /// > See more: https://github.com/ziglang/zig/issues/14286
+    ///
+    /// Do not depend on this function for any critical build processes. This
+    /// should only be used for optional ease-of-use features that are disabled
+    /// by default.
+    fn getHostTarget(b: *Build, remote_host: []const u8) !Build.ResolvedTarget {
+        const run_result = try std.process.Child.run(.{
+            .allocator = b.allocator,
+            .argv = &.{ "ssh", remote_host, "bash", "--login", "-c", "'zig targets'" },
+            .max_output_bytes = 2 << 20,
+        });
+
+        if (run_result.term != .Exited or run_result.term.Exited != 0) {
+            std.debug.print(
+                \\command completed unexpectedly with: {any}
+                \\stdout: {s}
+                \\stderr: {s}
+            , .{ run_result.term, run_result.stdout, run_result.stderr });
+            return error.CommandFailed;
+        }
+
+        const Targets = struct {
+            native: struct {
+                triple: []const u8,
+                cpu: struct { name: []const u8 },
+            },
+        };
+
+        const targets = try std.json.parseFromSlice(
+            Targets,
+            b.allocator,
+            run_result.stdout,
+            .{ .ignore_unknown_fields = true },
+        );
+        defer targets.deinit();
+
+        const query = try Build.parseTargetQuery(.{
+            .arch_os_abi = targets.value.native.triple,
+            .cpu_features = targets.value.native.cpu.name,
+        });
+
+        return b.resolveTargetQuery(query);
+    }
+
+    /// add a build step to send the artifact to the remote host using send-file.zig
+    fn addSendArtifact(
+        b: *Build,
+        install: *Build.Step.InstallArtifact,
+        host: []const u8,
+        remote_dir: []const u8,
+    ) !*Build.Step.Run {
+        const local_path = b.getInstallPath(install.dest_dir.?, install.dest_sub_path);
+        const remote_path = b.fmt("{s}/{s}", .{ remote_dir, install.dest_sub_path });
+
+        const exe = b.addExecutable(.{
+            .name = "send-file",
+            .root_source_file = b.path("scripts/send-file.zig"),
+            .target = b.host,
+        });
+
+        const run = b.addRunArtifact(exe);
+        run.addArgs(&.{ local_path, host, remote_path });
+
+        return run;
+    }
+
+    /// add a build step to run a command on a remote host using ssh.
+    fn addRemoteCommand(
+        b: *Build,
+        host: []const u8,
+        workdir: []const u8,
+        executable_path: []const u8,
+    ) !*Build.Step.Run {
+        const cd_exe = b.fmt("cd {s}; {s}", .{ workdir, executable_path });
+        defer b.allocator.free(cd_exe);
+
+        const cmd_size = 4;
+        const ssh_cd_exe = &[cmd_size][]const u8{ "ssh", "-t", host, cd_exe };
+
+        const full_command = if (b.args) |args| cmd: {
+            const cmd = try b.allocator.alloc([]const u8, cmd_size + args.len);
+            @memcpy(cmd[0..cmd_size], ssh_cd_exe[0..cmd_size]);
+            @memcpy(cmd[cmd_size..], args);
+            break :cmd cmd;
+        } else ssh_cd_exe;
+        defer b.allocator.free(full_command);
+
+        return b.addSystemCommand(full_command);
+    }
+};

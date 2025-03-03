@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
+const sig = @import("sig.zig");
 
 const ShredNetworkConfig = sig.shred_network.ShredNetworkConfig;
 const resolveSocketAddr = sig.net.net.resolveSocketAddr;
@@ -20,6 +20,8 @@ pub const Cmd = struct {
     genesis_file_path: ?[]const u8 = null,
     // general config
     log_level: sig.trace.Level = .debug,
+    log_file: ?[]const u8 = null,
+    tee_logs: bool = false,
     metrics_port: u16 = 12345,
     shred_version: ?u16 = null,
 

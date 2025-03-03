@@ -391,8 +391,6 @@ pub const Instruction = packed struct(u64) {
         alu_binary,
         alu_unary,
         load_dw_imm,
-        load_abs,
-        load_ind,
         load_reg,
         store_imm,
         store_reg,

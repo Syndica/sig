@@ -12,13 +12,6 @@ const RecycleFBA = sig.utils.allocators.RecycleFBA;
 const Level = trace.level.Level;
 const NewEntry = trace.entry.NewEntry;
 
-pub const Config = struct {
-    max_level: Level = Level.debug,
-    allocator: std.mem.Allocator,
-    /// Maximum memory that logger can use.
-    max_buffer: ?u64 = null,
-};
-
 pub fn ScopedLogger(comptime scope: ?[]const u8) type {
     return union(enum) {
         channel_print: *ChannelPrintLogger,
@@ -122,18 +115,30 @@ pub const ChannelPrintLogger = struct {
     max_buffer: u64,
     channel: Channel([]const u8),
     handle: ?std.Thread,
+    write_stderr: bool,
 
     const Self = @This();
 
-    pub fn init(config: Config) !*Self {
-        const max_buffer = config.max_buffer orelse return error.MaxBufferNotSet;
+    pub const Config = struct {
+        max_level: Level = Level.debug,
+        allocator: std.mem.Allocator,
+        /// Maximum memory that logger can use.
+        max_buffer: u64,
+        write_stderr: bool = true,
+    };
+
+    pub fn init(config: Config, maybe_writer: anytype) !*Self {
+        const max_buffer = config.max_buffer;
         const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
+        errdefer config.allocator.destroy(recycle_fba);
         recycle_fba.* = try RecycleFBA(.{}).init(.{
             .records_allocator = config.allocator,
             .bytes_allocator = config.allocator,
         }, max_buffer);
+        errdefer recycle_fba.deinit();
 
         const self = try config.allocator.create(Self);
+        errdefer config.allocator.destroy(self);
         self.* = .{
             .allocator = config.allocator,
             .log_allocator = recycle_fba.allocator(),
@@ -143,14 +148,17 @@ pub const ChannelPrintLogger = struct {
             .max_level = config.max_level,
             .handle = null,
             .channel = try Channel([]const u8).init(config.allocator),
+            .write_stderr = config.write_stderr,
         };
 
-        self.handle = try std.Thread.spawn(.{}, run, .{self});
+        self.handle = try std.Thread.spawn(.{}, run, .{ self, maybe_writer });
+        errdefer comptime unreachable;
+
         return self;
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.handle) |*handle| {
+        if (self.handle) |handle| {
             std.time.sleep(std.time.ns_per_ms * 5);
             self.exit.store(true, .seq_cst);
             handle.join();
@@ -170,16 +178,21 @@ pub const ChannelPrintLogger = struct {
         return .{ .channel_print = self };
     }
 
-    pub fn run(self: *Self) void {
+    pub fn run(self: *Self, maybe_writer: anytype) void {
+        const stderr_writer = std.io.getStdErr().writer();
         while (true) {
             self.channel.waitToReceive(.{ .unordered = &self.exit }) catch break;
 
             while (self.channel.tryReceive()) |message| {
                 defer self.log_allocator.free(message);
-                const writer = std.io.getStdErr().writer();
-                std.debug.lockStdErr();
-                defer std.debug.unlockStdErr();
-                writer.writeAll(message) catch {};
+                if (self.write_stderr) {
+                    std.debug.lockStdErr();
+                    defer std.debug.unlockStdErr();
+                    stderr_writer.writeAll(message) catch {};
+                }
+                if (sig.utils.types.toOptional(maybe_writer)) |writer| {
+                    writer.writeAll(message) catch {};
+                }
             }
         }
     }
@@ -275,7 +288,7 @@ test "direct" {
         .allocator = allocator,
         .max_level = test_level,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -324,7 +337,7 @@ test "trace_ngswitch" {
         .allocator = allocator,
         .max_level = test_level,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
 
     const logger = std_logger.logger();
@@ -346,7 +359,7 @@ test "reclaim" {
         .allocator = allocator,
         .max_level = test_level,
         .max_buffer = 4048,
-    });
+    }, null);
 
     defer std_logger.deinit();
 
@@ -368,7 +381,7 @@ test "level" {
         .allocator = allocator,
         .max_level = test_level,
         .max_buffer = 1 << 20,
-    });
+    }, null);
 
     defer std_logger.deinit();
 
@@ -410,4 +423,22 @@ test "test_logger" {
     const logger = test_logger.logger();
 
     logger.log(.info, "Logging with log");
+}
+
+test "channel logger" {
+    var buf: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+
+    const logger = try ChannelPrintLogger.init(.{
+        .allocator = std.testing.allocator,
+        .write_stderr = false,
+        .max_buffer = 512,
+    }, stream.writer());
+
+    logger.logger().log(.info, "hello world");
+    std.time.sleep(10 * std.time.ns_per_ms);
+    logger.deinit();
+
+    const actual = stream.getWritten();
+    try std.testing.expectEqualSlices(u8, "level=info message=\"hello world\"\n", actual[30..]);
 }

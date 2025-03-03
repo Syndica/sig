@@ -40,7 +40,7 @@ pub const Executable = struct {
     };
 
     /// Takes ownership of the `Elf`.
-    pub fn fromElf(elf: Elf) !Executable {
+    pub fn fromElf(elf: Elf) Executable {
         const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
         const text_vaddr = if (elf.version.enableElfVaddr() and
             text_section_addr >= memory.RODATA_START)
@@ -61,15 +61,23 @@ pub const Executable = struct {
         };
     }
 
-    pub fn fromAsm(allocator: std.mem.Allocator, source: []const u8, config: Config) !Executable {
+    pub fn fromAsm(
+        allocator: std.mem.Allocator,
+        source: []const u8,
+        config: Config,
+    ) !Executable {
         var function_registry, const instructions = try Assembler.parse(
             allocator,
             source,
             config,
         );
+        // loader isn't owned by the executable, so it's fine for it to
+        // die on the stack after the function returns
+        var loader: BuiltinProgram = .{};
         return fromTextBytes(
             allocator,
             std.mem.sliceAsBytes(instructions),
+            &loader,
             &function_registry,
             config,
         );
@@ -78,6 +86,7 @@ pub const Executable = struct {
     pub fn fromTextBytes(
         allocator: std.mem.Allocator,
         source: []const u8,
+        loader: *BuiltinProgram,
         registry: *Registry(u64),
         config: Config,
     ) !Executable {
@@ -88,6 +97,7 @@ pub const Executable = struct {
         else pc: {
             _ = try registry.registerHashedLegacy(
                 allocator,
+                loader,
                 !version.enableStaticSyscalls(),
                 "entrypoint",
                 0,
@@ -506,7 +516,7 @@ pub fn Registry(T: type) type {
         };
         const Self = @This();
 
-        /// Duplicates `name` to free later.
+        /// Duplicates `name` to free later later.
         pub fn register(
             self: *Self,
             allocator: std.mem.Allocator,
@@ -516,7 +526,7 @@ pub fn Registry(T: type) type {
         ) !void {
             const gop = try self.map.getOrPut(allocator, key);
             if (gop.found_existing) {
-                if (!std.mem.eql(u8, gop.value_ptr.name, name)) {
+                if (gop.value_ptr.value != value) {
                     return error.SymbolHashCollision;
                 }
             } else {
@@ -538,6 +548,7 @@ pub fn Registry(T: type) type {
         pub fn registerHashedLegacy(
             self: *Self,
             allocator: std.mem.Allocator,
+            loader: *BuiltinProgram,
             hash_symbol_name: bool,
             name: []const u8,
             value: T,
@@ -546,7 +557,13 @@ pub fn Registry(T: type) type {
                 sbpf.hashSymbolName(name)
             else
                 sbpf.hashSymbolName(&std.mem.toBytes(value));
-            const key: u64 = if (hash_symbol_name) hash else value;
+            const key: u64 = if (hash_symbol_name) blk: {
+                if (loader.functions.lookupKey(hash) != null) {
+                    return error.SymbolHashCollision;
+                }
+                break :blk hash;
+            } else value;
+
             try self.register(allocator, key, &.{}, value);
             return key;
         }
@@ -570,6 +587,27 @@ pub fn Registry(T: type) type {
                 allocator.free(entry.name);
             }
             self.map.deinit(allocator);
+        }
+
+        test "symbol collision" {
+            const allocator = std.testing.allocator;
+            var registry: Registry(u64) = .{};
+            defer registry.deinit(allocator);
+
+            _ = try registry.registerHashed(
+                allocator,
+                "foo",
+                0,
+            );
+
+            try std.testing.expectError(
+                error.SymbolHashCollision,
+                registry.registerHashed(
+                    allocator,
+                    "gmyionqhgxitzddvxfwubqhpomupciyvbeczintxxtfdsfhiyxcnzyowtgnrnvvd",
+                    4,
+                ),
+            );
         }
     };
 }

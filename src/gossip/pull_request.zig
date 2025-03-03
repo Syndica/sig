@@ -42,9 +42,9 @@ pub fn buildGossipPullFilters(
         errdefer filter_set.deinit();
 
         // add all gossip values
-        const gossip_values = gossip_table.store.iterator().values;
-        for (0..gossip_table.len()) |i| {
-            const hash = gossip_values[i].value_hash;
+        var gossip_values = gossip_table.store.iterator();
+        while (gossip_values.next()) |entry| {
+            const hash = entry.metadata_ptr.value_hash;
             filter_set.add(&hash);
         }
 
@@ -302,9 +302,10 @@ test "building pull filters" {
     const mask_bits = filters.items[0].mask_bits;
 
     // assert value is in the filter
-    const gossip_values = gossip_table.store.iterator().values;
-    for (0..num_items) |i| {
-        const versioned_value = gossip_values[i];
+    var gossip_values = gossip_table.store.iterator();
+    try std.testing.expectEqual(num_items, gossip_table.store.count());
+    while (gossip_values.next()) |value| {
+        const versioned_value = value.getVersionedData();
         const hash = versioned_value.value_hash;
 
         const index = GossipPullFilterSet.hashIndex(mask_bits, &hash);

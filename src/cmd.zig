@@ -1,36 +1,36 @@
+const std = @import("std");
 const builtin = @import("builtin");
 const cli = @import("zig-cli");
 const sig = @import("sig.zig");
-const std = @import("std");
-const config = @import("cmd/config.zig");
+const config = @import("config.zig");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 const Bank = sig.accounts_db.Bank;
-const Slot = sig.core.Slot;
+const BlockstoreReader = sig.ledger.BlockstoreReader;
+const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
+const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
+const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
-const Logger = sig.trace.Logger;
-const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
-const Pubkey = sig.core.Pubkey;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
+const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
+const Logger = sig.trace.Logger;
+const Pubkey = sig.core.Pubkey;
+const Slot = sig.core.Slot;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
-const StatusCache = sig.accounts_db.StatusCache;
-const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
-const BlockstoreReader = sig.ledger.BlockstoreReader;
 const SocketTag = sig.gossip.SocketTag;
-const GeyserWriter = sig.geyser.GeyserWriter;
+const StatusCache = sig.accounts_db.StatusCache;
 
-const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
-const globalRegistry = sig.prometheus.globalRegistry;
-const getWallclockMs = sig.time.getWallclockMs;
-const spawnMetrics = sig.prometheus.spawnMetrics;
-const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
 const createGeyserWriter = sig.geyser.core.createGeyserWriter;
+const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
+const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
+const getWallclockMs = sig.time.getWallclockMs;
+const globalRegistry = sig.prometheus.globalRegistry;
+const spawnMetrics = sig.prometheus.spawnMetrics;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = if (builtin.mode == .Debug)
@@ -220,7 +220,24 @@ pub fn main() !void {
         .value_name = "err|warn|info|debug",
     };
 
-    var metrics_port_option: cli.Option = .{
+    var log_file_option = cli.Option{
+        .long_name = "log-file",
+        .help = "Write logs to this file instead of stderr",
+        .value_ref = cli.mkRef(&current_config.log_file),
+        .required = false,
+        .value_name = "Log File",
+    };
+
+    var tee_logs_option = cli.Option{
+        .long_name = "tee-logs",
+        .help = "If --log-file is set, it disables logging to stderr. " ++
+            "Enable this flag to reactivate stderr logging when using --log-file.",
+        .value_ref = cli.mkRef(&current_config.tee_logs),
+        .required = false,
+        .value_name = "Log File",
+    };
+
+    var metrics_port_option = cli.Option{
         .long_name = "metrics-port",
         .help = "port to expose prometheus metrics via http - default: 12345",
         .short_alias = 'm',
@@ -429,7 +446,12 @@ pub fn main() !void {
                 \\This is still a WIP, PRs welcome.
                 // .detailed = "",
             },
-            .options = &.{ &log_level_option, &metrics_port_option },
+            .options = &.{
+                &log_level_option,
+                &log_file_option,
+                &tee_logs_option,
+                &metrics_port_option,
+            },
             .target = .{
                 .subcommands = &.{
                     &cli.Command{
@@ -706,7 +728,8 @@ pub fn main() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    const logger = try spawnLogger(gpa_allocator);
+    const maybe_file, const logger = try spawnLogger(gpa_allocator, current_config);
+    defer if (maybe_file) |file| file.close();
     defer logger.deinit();
 
     const keypair = try sig.identity.getOrInit(gpa_allocator, logger);
@@ -717,7 +740,7 @@ fn identity() !void {
 
 /// entrypoint to run only gossip
 fn gossip() !void {
-    var app_base = try AppBase.init(gpa_allocator);
+    var app_base = try AppBase.init(gpa_allocator, current_config);
     errdefer {
         app_base.shutdown();
         app_base.deinit();
@@ -737,7 +760,7 @@ fn gossip() !void {
 /// entrypoint to run a full solana validator
 fn validator() !void {
     const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator, current_config);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -911,7 +934,7 @@ fn validator() !void {
 
 fn shredNetwork() !void {
     const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator, current_config);
     defer {
         if (!app_base.closed) app_base.shutdown();
         app_base.deinit();
@@ -1028,7 +1051,7 @@ fn shredNetwork() !void {
 
 fn printManifest() !void {
     const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator, current_config);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -1056,7 +1079,7 @@ fn printManifest() !void {
 
 fn createSnapshot() !void {
     const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator, current_config);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -1106,7 +1129,7 @@ fn createSnapshot() !void {
 
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator, current_config);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -1142,7 +1165,7 @@ fn validateSnapshot() !void {
 /// entrypoint to print the leader schedule and then exit
 fn printLeaderSchedule() !void {
     const allocator = gpa_allocator;
-    var app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator, current_config);
     defer {
         app_base.shutdown();
         app_base.deinit();
@@ -1193,7 +1216,7 @@ fn getLeaderScheduleFromCli(allocator: std.mem.Allocator) !?struct { Slot, Leade
 pub fn testTransactionSenderService() !void {
     const allocator = gpa_allocator;
 
-    var app_base = try AppBase.init(allocator);
+    var app_base = try AppBase.init(allocator, current_config);
     defer {
         if (!app_base.closed) app_base.shutdown(); // we have this incase an error occurs
         app_base.deinit();
@@ -1347,6 +1370,7 @@ fn mockRpcServer() !void {
 const AppBase = struct {
     allocator: std.mem.Allocator,
     logger: ScopedLogger,
+    log_file: ?std.fs.File,
     metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
 
@@ -1359,34 +1383,36 @@ const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     closed: bool,
 
-    fn init(allocator: std.mem.Allocator) !AppBase {
-        const logger = (try spawnLogger(allocator)).withScope(LOG_SCOPE);
+    fn init(allocator: std.mem.Allocator, cmd_config: config.Cmd) !AppBase {
+        const maybe_file, const plain_logger = try spawnLogger(allocator, cmd_config);
+        errdefer if (maybe_file) |file| file.close();
+        const logger = plain_logger.withScope(LOG_SCOPE);
         errdefer logger.deinit();
 
         const metrics_registry = globalRegistry();
-        const metrics_thread = try spawnMetrics(allocator, current_config.metrics_port);
+        const metrics_thread = try spawnMetrics(allocator, cmd_config.metrics_port);
         errdefer metrics_thread.detach();
 
         const my_keypair = try sig.identity.getOrInit(allocator, logger.unscoped());
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-        const entrypoints = try current_config.gossip.getEntrypointAddrs(allocator);
+        const entrypoints = try cmd_config.gossip.getEntrypointAddrs(allocator);
 
         const echo_data = try getShredAndIPFromEchoServer(logger.unscoped(), entrypoints);
 
         // zig fmt: off
-        const my_shred_version = current_config.shred_version
+        const my_shred_version = cmd_config.shred_version
             orelse echo_data.shred_version
             orelse 0;
         // zig fmt: on
 
-        const config_host = current_config.gossip.getHost() catch null;
+        const config_host = cmd_config.gossip.getHost() catch null;
         const my_ip = config_host orelse echo_data.ip orelse IpAddr.newIpv4(127, 0, 0, 1);
 
-        const my_port = current_config.gossip.port;
+        const my_port = cmd_config.gossip.port;
 
         logger.info()
-            .field("metrics_port", current_config.metrics_port)
+            .field("metrics_port", cmd_config.metrics_port)
             .field("identity", my_pubkey)
             .field("entrypoints", entrypoints)
             .field("shred_version", my_shred_version)
@@ -1395,6 +1421,7 @@ const AppBase = struct {
         return .{
             .allocator = allocator,
             .logger = logger,
+            .log_file = maybe_file,
             .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
             .my_keypair = my_keypair,
@@ -1418,6 +1445,7 @@ const AppBase = struct {
         self.allocator.free(self.entrypoints);
         self.metrics_thread.detach();
         self.logger.deinit();
+        if (self.log_file) |file| file.close();
     }
 };
 
@@ -1461,13 +1489,27 @@ fn startGossip(
     return service;
 }
 
-fn spawnLogger(allocator: std.mem.Allocator) !Logger {
+fn spawnLogger(
+    allocator: std.mem.Allocator,
+    cmd_config: config.Cmd,
+) !struct { ?std.fs.File, Logger } {
+    const file, const writer = if (cmd_config.log_file) |path| blk: {
+        const file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch |e| switch (e) {
+            error.FileNotFound => try std.fs.cwd().createFile(path, .{}),
+            else => return e,
+        };
+        try file.seekFromEnd(0);
+        break :blk .{ file, file.writer() };
+    } else .{ null, null };
+
     var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = current_config.log_level,
+        .max_level = cmd_config.log_level,
         .max_buffer = 1 << 20,
-    });
-    return std_logger.logger();
+        .write_stderr = cmd_config.tee_logs or cmd_config.log_file == null,
+    }, writer);
+
+    return .{ file, std_logger.logger() };
 }
 
 const LoadedSnapshot = struct {
@@ -1650,7 +1692,7 @@ fn loadSnapshot(
 
 /// entrypoint to download snapshot
 fn downloadSnapshot() !void {
-    var app_base = try AppBase.init(gpa_allocator);
+    var app_base = try AppBase.init(gpa_allocator, current_config);
     errdefer {
         app_base.shutdown();
         app_base.deinit();

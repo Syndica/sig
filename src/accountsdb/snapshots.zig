@@ -9,20 +9,19 @@ const bincode = sig.bincode;
 
 const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
+const EpochSchedule = sig.core.EpochSchedule;
 const Hash = sig.core.hash.Hash;
 const InstructionError = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
-const FileId = sig.accounts_db.accounts_file.FileId;
-
-const EpochSchedule = sig.core.EpochSchedule;
 const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
+const FileId = sig.accounts_db.accounts_file.FileId;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const Rent = sig.accounts_db.genesis_config.Rent;
 const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
-const SlotHistory = sig.runtime.sysvar.SlotHistory;
 
 const Logger = sig.trace.Logger;
 
@@ -1714,13 +1713,8 @@ pub const AccountsDbFields = struct {
         try bincode.write(writer, data.slot, params);
         try bincode.write(writer, data.bank_hash_info, params);
 
-        if (data.rooted_slot_hashes.len != 0 or data.rooted_slots.len != 0) {
-            try bincode.write(writer, data.rooted_slots, params);
-        }
-
-        if (data.rooted_slot_hashes.len != 0) {
-            try bincode.write(writer, data.rooted_slot_hashes, params);
-        }
+        try bincode.write(writer, data.rooted_slots, params);
+        try bincode.write(writer, data.rooted_slot_hashes, params);
     }
 
     fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
