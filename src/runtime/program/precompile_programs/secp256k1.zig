@@ -12,7 +12,7 @@ const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
 
 pub const SECP256K1_DATA_START = SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
     SECP256K1_SIGNATURE_OFFSETS_START;
-pub const SECP256K1_PUBKEY_SERIALIZED_SIZE = 20;
+pub const SECP256K1_ETH_ADDRESS_SERIALIZED_SIZE = 20;
 pub const SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE = 11;
 pub const SECP256K1_SIGNATURE_OFFSETS_START = 1;
 pub const SECP256K1_SIGNATURE_SERIALIZED_SIZE = 64;
@@ -95,7 +95,7 @@ pub fn verify(
         );
 
         const eth_address = try getInstructionData(
-            SECP256K1_PUBKEY_SERIALIZED_SIZE,
+            SECP256K1_ETH_ADDRESS_SERIALIZED_SIZE,
             all_instruction_datas,
             sig_offsets.eth_address_instruction_idx,
             sig_offsets.eth_address_offset,
@@ -185,7 +185,7 @@ fn recoverSecp256k1Pubkey(
 ///   public key
 fn constructEthAddress(
     pubkey: *const Ecdsa.PublicKey,
-) [SECP256K1_PUBKEY_SERIALIZED_SIZE]u8 {
+) [SECP256K1_ETH_ADDRESS_SERIALIZED_SIZE]u8 {
     var pubkey_hash: [Keccak256.digest_length]u8 = undefined;
     const serialised_pubkey = pubkey.toUncompressedSec1();
     Keccak256.hash(serialised_pubkey[1..], &pubkey_hash, .{});
@@ -378,7 +378,7 @@ test "secp256k1 eth offset" {
     try std.testing.expectError(
         error.InvalidSignature,
         testCase(1, .{
-            .eth_address_offset = 100 - SECP256K1_PUBKEY_SERIALIZED_SIZE + 1,
+            .eth_address_offset = 100 - SECP256K1_ETH_ADDRESS_SERIALIZED_SIZE + 1,
         }),
     );
 }
@@ -394,7 +394,7 @@ test "secp256k1 signature offset" {
     try std.testing.expectError(
         error.InvalidSignature,
         testCase(1, .{
-            .signature_offset = 100 - SECP256K1_PUBKEY_SERIALIZED_SIZE + 1,
+            .signature_offset = 100 - SECP256K1_ETH_ADDRESS_SERIALIZED_SIZE + 1,
         }),
     );
 }
