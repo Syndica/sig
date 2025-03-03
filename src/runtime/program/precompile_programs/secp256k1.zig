@@ -116,7 +116,7 @@ pub fn verify(
         }
 
         const pubkey = try recoverSecp256k1Pubkey(&msg_hash, signature, recovery_id);
-        const recovered_eth_address = constructEthPubkey(&pubkey);
+        const recovered_eth_address = constructEthAddress(&pubkey);
 
         if (!std.mem.eql(u8, eth_address, &recovered_eth_address)) {
             return error.InvalidSignature;
@@ -183,7 +183,7 @@ fn recoverSecp256k1Pubkey(
 ///   new tab). You get a public address for your account by
 ///   taking the last 20 bytes of the Keccak-256 hash of the
 ///   public key
-fn constructEthPubkey(
+fn constructEthAddress(
     pubkey: *const Ecdsa.PublicKey,
 ) [SECP256K1_PUBKEY_SERIALIZED_SIZE]u8 {
     var pubkey_hash: [Keccak256.digest_length]u8 = undefined;
@@ -239,7 +239,7 @@ fn newSecp256k1Instruction(
     if (!builtin.is_test) @compileError("newSecp256k1Instruction is only for use in tests");
     std.debug.assert(message.len <= std.math.maxInt(u16));
 
-    const eth_pubkey = constructEthPubkey(&keypair.public_key);
+    const eth_address = constructEthAddress(&keypair.public_key);
 
     var message_hash: [Keccak256.digest_length]u8 = undefined;
     Keccak256.hash(message, &message_hash, .{});
@@ -247,16 +247,16 @@ fn newSecp256k1Instruction(
     const recovery_id, const signature = try signRecoverable(&keypair.secret_key, &message_hash);
     const signature_bytes = signature.toBytes();
 
-    const instruction_data_len = SECP256K1_DATA_START +| eth_pubkey.len +| 64 +| message.len +| 1;
+    const instruction_data_len = SECP256K1_DATA_START +| eth_address.len +| 64 +| message.len +| 1;
 
     const instruction_data = try allocator.alloc(u8, instruction_data_len);
     errdefer allocator.free(instruction_data);
     @memset(instruction_data, 0);
 
     const eth_address_offset = SECP256K1_DATA_START;
-    @memcpy(instruction_data[eth_address_offset..][0..eth_pubkey.len], &eth_pubkey);
+    @memcpy(instruction_data[eth_address_offset..][0..eth_address.len], &eth_address);
 
-    const signature_offset = eth_address_offset +| eth_pubkey.len;
+    const signature_offset = eth_address_offset +| eth_address.len;
     @memcpy(instruction_data[signature_offset..][0..64], &signature_bytes);
 
     instruction_data[signature_offset +| 64] = recovery_id;
@@ -485,7 +485,7 @@ test "flipped signature" {
     const seed: [32]u8 = .{ 50, 83 } ++ .{0} ** 30;
 
     const keypair = try Ecdsa.KeyPair.create(seed);
-    const eth_address = constructEthPubkey(&keypair.public_key);
+    const eth_address = constructEthAddress(&keypair.public_key);
 
     const message = "hello";
     var message_hash: [Keccak256.digest_length]u8 = undefined;
@@ -579,7 +579,7 @@ test "secp256 malleability" {
     const allocator = std.testing.allocator;
 
     const keypair = try Ecdsa.KeyPair.create(null);
-    const eth_address = constructEthPubkey(&keypair.public_key);
+    const eth_address = constructEthAddress(&keypair.public_key);
     const message = "hello";
 
     var message_hash: [Keccak256.digest_length]u8 = undefined;
