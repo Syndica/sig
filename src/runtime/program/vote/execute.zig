@@ -2,16 +2,19 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const vote_program = sig.runtime.program.vote_program;
+const pubkey_utils = sig.runtime.pubkey_utils;
 const vote_instruction = vote_program.vote_instruction;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
+const VoteState = vote_program.state.VoteState;
+const VoteAuthorize = vote_program.state.VoteAuthorize;
+
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 
-const VoteState = vote_program.VoteState;
 const VoteProgramInstruction = vote_instruction.Instruction;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
@@ -44,6 +47,36 @@ pub fn execute(
             args.authorized_voter,
             args.authorized_withdrawer,
             args.commission,
+        ),
+        .authorize => |args| try executeAuthorize(
+            allocator,
+            ic,
+            &vote_account,
+            args.pubkey,
+            args.vote_authorize,
+        ),
+        .authorize_with_seed => |args| try executeAuthorizeWithSeed(
+            allocator,
+            ic,
+            &vote_account,
+            args.new_authority,
+            args.authorization_type,
+            args.current_authority_derived_key_owner,
+            args.current_authority_derived_key_seed,
+        ),
+        .authorize_checked_with_seed => |args| try executeAuthorizeCheckedWithSeed(
+            allocator,
+            ic,
+            &vote_account,
+            args.authorization_type,
+            args.current_authority_derived_key_owner,
+            args.current_authority_derived_key_seed,
+        ),
+        .authorize_checked => |args| try executeAuthorizeChecked(
+            allocator,
+            ic,
+            &vote_account,
+            args,
         ),
     };
 }
@@ -130,6 +163,216 @@ fn intializeAccount(
     );
     defer vote_state.deinit();
     try vote_account.serializeIntoAccountData(vote_state);
+}
+
+fn executeAuthorize(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    pubkey: Pubkey,
+    vote_authorize: VoteAuthorize,
+) InstructionError!void {
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
+    );
+
+    try authorize(
+        allocator,
+        ic,
+        vote_account,
+        pubkey,
+        vote_authorize,
+        clock,
+        null,
+    );
+}
+
+fn authorize(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    authorized: Pubkey,
+    vote_authorize: VoteAuthorize,
+    clock: Clock,
+    signers: ?std.AutoHashMap(Pubkey, void),
+) InstructionError!void {
+    // TODO Support deserialising into VersionedVoteState and converting to current.
+    var vote_state = try vote_account.deserializeFromAccountData(allocator, VoteState);
+    switch (vote_authorize) {
+        .voter => {
+            const authorized_withdrawer_signer = if (signers) |signers_|
+                try verifyAuthorizedSigner(authorized, signers_)
+            else
+                ic.isPubkeySigner(vote_state.authorized_withdrawer);
+
+            try vote_state.setNewAuthorizedVoter(
+                allocator,
+                authorized,
+                clock.epoch,
+                (clock.leader_schedule_epoch +| 1),
+                authorized_withdrawer_signer,
+                ic,
+            );
+        },
+        .withdrawer => {
+            if (!ic.isPubkeySigner(vote_state.authorized_withdrawer)) {
+                return InstructionError.MissingRequiredSignature;
+            }
+            vote_state.authorized_withdrawer = authorized;
+        },
+    }
+    try vote_account.serializeIntoAccountData(vote_state);
+}
+
+fn executeAuthorizeWithSeed(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    new_account: Pubkey,
+    authorization_type: VoteAuthorize,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+) InstructionError!void {
+    try ic.checkNumberOfAccounts(3);
+
+    try authorizeWithSeed(
+        allocator,
+        ic,
+        vote_account,
+        new_account,
+        authorization_type,
+        current_authority_derived_key_owner,
+        current_authority_derived_key_seed,
+    );
+}
+
+fn authorizeWithSeed(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    new_authority: Pubkey,
+    authorization_type: VoteAuthorize,
+    owner: Pubkey,
+    seed: []const u8,
+) InstructionError!void {
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.clock_sysvar),
+    );
+
+    var expected_authority_keys = std.AutoHashMap(Pubkey, void).init(allocator);
+    defer expected_authority_keys.deinit();
+    if (try ic.isIndexSigner(
+        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.signer),
+    )) {
+        const signer_account = try ic.borrowInstructionAccount(
+            @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.signer),
+        );
+        const created = pubkey_utils.createWithSeed(
+            signer_account.pubkey,
+            seed,
+            owner,
+        ) catch |err| {
+            ic.tc.custom_error = @intFromError(err);
+            return InstructionError.Custom;
+        };
+        expected_authority_keys.put(created, {}) catch {
+            // TODO okay to convert out of memory to custom error?
+            return InstructionError.Custom;
+        };
+    }
+
+    try authorize(
+        allocator,
+        ic,
+        vote_account,
+        new_authority,
+        authorization_type,
+        clock,
+        if (expected_authority_keys.count() > 0)
+            expected_authority_keys
+        else
+            null,
+    );
+}
+
+fn executeAuthorizeCheckedWithSeed(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    authorization_type: VoteAuthorize,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+) InstructionError!void {
+    try ic.checkNumberOfAccounts(4);
+
+    const new_authority = try ic.borrowInstructionAccount(
+        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
+    );
+
+    if (!ic.isPubkeySigner(new_authority.pubkey)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    try authorizeWithSeed(
+        allocator,
+        ic,
+        vote_account,
+        new_authority.pubkey,
+        authorization_type,
+        current_authority_derived_key_owner,
+        current_authority_derived_key_seed,
+    );
+}
+
+fn executeAuthorizeChecked(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote_authorize: vote_instruction.VoteAuthorize,
+) InstructionError!void {
+    try ic.checkNumberOfAccounts(4);
+
+    const new_authority = try ic.borrowInstructionAccount(
+        @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_signer),
+    );
+
+    if (!ic.isPubkeySigner(new_authority.pubkey)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.clock_sysvar),
+    );
+
+    const autorize = switch (vote_authorize) {
+        .Voter => VoteAuthorize.voter,
+        .Withdrawer => VoteAuthorize.withdrawer,
+    };
+
+    try authorize(
+        allocator,
+        ic,
+        vote_account,
+        new_authority.pubkey,
+        autorize,
+        clock,
+        null,
+    );
+}
+
+// TODO: Move this to instruction_context.zig
+fn verifyAuthorizedSigner(
+    authorized: Pubkey,
+    signers: std.AutoHashMap(Pubkey, void),
+) InstructionError!bool {
+    if (signers.contains(authorized)) {
+        return true;
+    } else {
+        return InstructionError.MissingRequiredSignature;
+    }
 }
 
 test "executeIntializeAccount" {
