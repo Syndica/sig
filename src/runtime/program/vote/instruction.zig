@@ -46,7 +46,7 @@ pub const VoteAuthorizeWithSeedArgs = struct {
     current_authority_derived_key_seed: []const u8,
     new_authority: Pubkey,
 
-    const AccountIndex = enum(u8) {
+    pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to be updated
         account = 0,
         /// `[]` Clock sysvar

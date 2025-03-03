@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const vote_program = sig.runtime.program.vote_program;
+const pubkey_utils = sig.runtime.pubkey_utils;
 const vote_instruction = vote_program.vote_instruction;
 
 const Pubkey = sig.core.Pubkey;
@@ -53,6 +54,15 @@ pub fn execute(
             &vote_account,
             args.pubkey,
             args.vote_authorize,
+        ),
+        .authorize_with_seed => |args| try executeAuthorizeWithSeed(
+            allocator,
+            ic,
+            &vote_account,
+            args.new_authority,
+            args.authorization_type,
+            args.current_authority_derived_key_owner,
+            args.current_authority_derived_key_seed,
         ),
         else => @panic("TODO: Unsupported instruction"),
     };
@@ -161,6 +171,7 @@ fn executeAuthorize(
         pubkey,
         vote_authorize,
         clock,
+        null,
     );
 }
 
@@ -171,14 +182,16 @@ fn authorize(
     authorized: Pubkey,
     vote_authorize: VoteAuthorize,
     clock: Clock,
+    signers: ?std.AutoHashMap(Pubkey, void),
 ) InstructionError!void {
     // TODO Support deserialising into VersionedVoteState and converting to current.
     var vote_state = try vote_account.deserializeFromAccountData(allocator, VoteState);
     switch (vote_authorize) {
         .voter => {
-            const authorized_withdrawer_signer = ic.isPubkeySigner(
-                vote_state.authorized_withdrawer,
-            );
+            const authorized_withdrawer_signer = if (signers) |signers_|
+                try verifyAuthorizedSigner(authorized, signers_)
+            else
+                ic.isPubkeySigner(vote_state.authorized_withdrawer);
 
             try vote_state.setNewAuthorizedVoter(
                 allocator,
@@ -197,6 +210,90 @@ fn authorize(
         },
     }
     try vote_account.serializeIntoAccountData(vote_state);
+}
+
+fn executeAuthorizeWithSeed(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    new_account: Pubkey,
+    authorization_type: VoteAuthorize,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+) InstructionError!void {
+    try ic.checkNumberOfAccounts(3);
+
+    try authorizeWithSeed(
+        allocator,
+        ic,
+        vote_account,
+        new_account,
+        authorization_type,
+        current_authority_derived_key_owner,
+        current_authority_derived_key_seed,
+    );
+}
+
+fn authorizeWithSeed(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    new_authority: Pubkey,
+    authorization_type: VoteAuthorize,
+    owner: Pubkey,
+    seed: []const u8,
+) InstructionError!void {
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.clock_sysvar),
+    );
+
+    var expected_authority_keys = std.AutoHashMap(Pubkey, void).init(allocator);
+    defer expected_authority_keys.deinit();
+    if (try ic.isIndexSigner(
+        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.signer),
+    )) {
+        const signer_account = try ic.borrowInstructionAccount(
+            @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.signer),
+        );
+        const created = pubkey_utils.createWithSeed(
+            signer_account.pubkey,
+            seed,
+            owner,
+        ) catch |err| {
+            ic.tc.custom_error = @intFromError(err);
+            return InstructionError.Custom;
+        };
+        expected_authority_keys.put(created, {}) catch {
+            // TODO okay to convert out of memory to custom error?
+            return InstructionError.Custom;
+        };
+    }
+
+    try authorize(
+        allocator,
+        ic,
+        vote_account,
+        new_authority,
+        authorization_type,
+        clock,
+        if (expected_authority_keys.count() > 0)
+            expected_authority_keys
+        else
+            null,
+    );
+}
+
+// TODO: Move this to
+fn verifyAuthorizedSigner(
+    authorized: Pubkey,
+    signers: std.AutoHashMap(Pubkey, void),
+) InstructionError!bool {
+    if (signers.contains(authorized)) {
+        return true;
+    } else {
+        return InstructionError.MissingRequiredSignature;
+    }
 }
 
 test "executeIntializeAccount" {
