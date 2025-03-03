@@ -59,13 +59,14 @@ pub fn verify(
     const n_signatures = data[0];
     if (n_signatures == 0 and data.len > 1) return error.InvalidInstructionDataSize;
 
-    const expected_data_size = SECP256K1_SIGNATURE_OFFSETS_START +
-        n_signatures * SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+    const expected_data_size = SECP256K1_SIGNATURE_OFFSETS_START +|
+        @as(usize, n_signatures) *| SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+
     if (data.len < expected_data_size) return error.InvalidInstructionDataSize;
 
     for (0..n_signatures) |i| {
-        const offset = SECP256K1_SIGNATURE_OFFSETS_START +
-            i * SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+        const offset = SECP256K1_SIGNATURE_OFFSETS_START +|
+            i *| SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE;
         const sig_offsets: *align(1) const Secp256k1SignatureOffsets = @alignCast(
             @ptrCast(data.ptr + offset),
         );
