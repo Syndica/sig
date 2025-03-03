@@ -113,7 +113,7 @@ fn getInstructionValue(
     all_instruction_datas: []const []const u8,
     instruction_idx: u16,
     offset: u16,
-) error{ InvalidDataOffsets, InvalidSignature }!*align(1) const T {
+) error{InvalidDataOffsets}!*align(1) const T {
     return @ptrCast(try getInstructionData(
         @sizeOf(T),
         current_instruction_data,
