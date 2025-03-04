@@ -204,14 +204,20 @@ fn authorize(
     clock: Clock,
     signers: ?std.AutoHashMap(Pubkey, void),
 ) InstructionError!void {
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    // TODO: Fix
+    // const versioned_state = try vote_account.deserializeFromAccountData(
+    //     allocator,
+    //     VoteStateVersions,
+    // );
+    // var vote_state = versioned_state.convertToCurrent(allocator) catch {
+    //     // TODO okay to convert out of memory to custom error?
+    //     return InstructionError.Custom;
+    // };
+    var vote_state = try vote_account.deserializeFromAccountData(
         allocator,
-        VoteStateVersions,
+        VoteState,
     );
-    var vote_state = versioned_state.convertToCurrent(allocator) catch {
-        // TODO okay to convert out of memory to custom error?
-        return InstructionError.Custom;
-    };
+    defer vote_state.deinit();
 
     switch (vote_authorize) {
         .voter => {
@@ -489,86 +495,105 @@ test "executeIntializeAccount" {
     );
 }
 
-//test "serde" {
-// const MaleData = struct {
-//     age: u8,
-//     salary: u8,
-//     name: []const u8,
-// };
+test "executeAuthorize_signed_by_current_withdrawer" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
-// const FemaleData = struct {
-//     age: u8,
-//     married: bool,
-//     name: []const u8,
-// };
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
 
-// const Gender = union(enum) {
-//     male: MaleData,
-//     female: FemaleData,
-// };
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
 
-// // const data: Gender = Gender{ .male = MaleData{ .age = 11, .salary = 10, .name = "hello" } };
-// const data: Gender = Gender{ .female = FemaleData{ .age = 11, .married = false, .name = "hello" } };
+    // Insturction data.
+    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
 
-// const buffer = try std.testing.allocator.alloc(u8, sig.bincode.sizeOf(data, .{}));
-// errdefer std.testing.allocator.free(buffer);
-// defer std.testing.allocator.free(buffer);
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
 
-// _ = try sig.bincode.writeToSlice(buffer, data, .{});
+    // Account data.
+    const vote_account = Pubkey.initRandom(prng.random());
 
-// std.debug.print("bufferr: {any}\n", .{buffer});
+    const initial_vote_state = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer initial_vote_state.deinit();
 
-// const deserialized_data = try sig.bincode.readFromSlice(std.testing.allocator, Gender, buffer, .{});
-// switch (deserialized_data) {
-//     .female => |data_| {
-//         defer std.testing.allocator.free(data_.name);
-//         std.debug.print("data: {any}\n", .{data_});
-//     },
-//     .male => |data_| {
-//         defer std.testing.allocator.free(data_.name);
-//         std.debug.print("deserialized_data: {any}\n", .{data_});
-//     },
-// }
+    const final_vote_state = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        new_authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer final_vote_state.deinit();
 
-// const clock = Clock{
-//     .slot = 0,
-//     .epoch_start_timestamp = 0,
-//     .epoch = 0,
-//     .leader_schedule_epoch = 0,
-//     .unix_timestamp = 0,
-// };
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-// const VoteStateVersions = vote_program.state.VoteStateVersions;
-// const vote_state = try VoteState.init(
-//     std.testing.allocator,
-//     Pubkey.ZEROES,
-//     Pubkey.ZEROES,
-//     Pubkey.ZEROES,
-//     10,
-//     clock,
-// );
-// defer vote_state.deinit();
-// const version: VoteStateVersions = VoteStateVersions{ .current = vote_state };
-// //const version: VoteState = vote_state;
-// const buffer = try std.testing.allocator.alloc(u8, sig.bincode.sizeOf(version, .{}));
-// // errdefer std.testing.allocator.free(buffer);
-// defer std.testing.allocator.free(buffer);
-// std.debug.print("buffer: {any}\n", .{buffer});
-// _ = try sig.bincode.writeToSlice(buffer, version, .{});
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-// const deserialized_data = try sig.bincode.readFromSlice(std.testing.allocator, VoteStateVersions, buffer, .{});
-// switch (deserialized_data) {
-//     .v0_23_5 => |data_| {
-//         // defer std.testing.allocator.free(data_.name);
-//         std.debug.print("data: {any}\n", .{data_});
-//     },
-//     .v1_14_11 => |data_| {
-//         // defer std.testing.allocator.free(data_.name);
-//         std.debug.print("deserialized_data: {any}\n", .{data_});
-//     },
-//     .current => |data_| {
-//         // defer std.testing.allocator.free(data_.name);
-//         std.debug.print("deserialized_data: {any}\n", .{data_});
-//     },
-// }
-//}
+    try expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .authorize = .{
+                .pubkey = new_authorized_withdrawer,
+                .vote_authorize = VoteAuthorize.withdrawer,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+        },
+    );
+}
