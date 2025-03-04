@@ -904,7 +904,7 @@ test "executeTransfer" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
-                .{ .pubkey = account_1_key, .lamports = 0 },
+                .{ .pubkey = account_1_key },
                 .{ .pubkey = system_program.ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
@@ -1082,7 +1082,7 @@ test "executeWithdrawNonceAccount" {
     // Create Sysvars
     const recent_blockhashes = RecentBlockhashes{ .entries = &.{} };
     const rent = Rent.DEFAULT;
-    const rent_minimum_balance = rent.minimumBalance(try nonce_state.serializedSize());
+    const rent_minimum_balance = rent.minimumBalance(sig.bincode.sizeOf(nonce_state, .{}));
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
