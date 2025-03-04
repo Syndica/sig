@@ -298,7 +298,7 @@ const FunctionSignature = struct {
             if (@typeInfo(sub).ErrorSet) |sub_set| if (@typeInfo(super).ErrorSet) |super_set| {
                 sub: for (sub_set) |sub_err| {
                     for (super_set) |super_err| {
-                        if (std.mem.eql(sub_err.name, super_err.name)) {
+                        if (std.mem.eql(u8, sub_err.name, super_err.name)) {
                             continue :sub;
                         }
                     }
