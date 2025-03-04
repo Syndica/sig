@@ -165,6 +165,7 @@ fn intializeAccount(
     try vote_account.serializeIntoAccountData(vote_state);
 }
 
+/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
 fn executeAuthorize(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -188,6 +189,11 @@ fn executeAuthorize(
     );
 }
 
+/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_state/mod.rs#L678
+///
+/// Authorize the given pubkey to withdraw or sign votes. This may be called multiple times,
+/// but will implicitly withdraw authorization from the previously authorized
+/// key.
 fn authorize(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -216,6 +222,7 @@ fn authorize(
             );
         },
         .withdrawer => {
+            // current authorized withdrawer must say "yay".
             if (!ic.isPubkeySigner(vote_state.authorized_withdrawer)) {
                 return InstructionError.MissingRequiredSignature;
             }
@@ -225,6 +232,7 @@ fn authorize(
     try vote_account.serializeIntoAccountData(vote_state);
 }
 
+/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
 fn executeAuthorizeWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -247,6 +255,7 @@ fn executeAuthorizeWithSeed(
     );
 }
 
+/// Analogous to [process_authorize_with_seed_instruction] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L19
 fn authorizeWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -297,6 +306,7 @@ fn authorizeWithSeed(
     );
 }
 
+/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L96-L102
 fn executeAuthorizeCheckedWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -326,6 +336,7 @@ fn executeAuthorizeCheckedWithSeed(
     );
 }
 
+/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L239-L248
 fn executeAuthorizeChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
