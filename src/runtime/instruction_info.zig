@@ -10,7 +10,7 @@ const Pubkey = sig.core.Pubkey;
 /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/info/fd_instr_info.h#L14-L15
 pub const InstructionInfo = struct {
     program_meta: ProgramMeta,
-    account_metas: AccountMetas,
+    account_metas: std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS),
     instruction_data: []const u8,
     // Initial account lamports are computed and set immediately before
     // pushing an instruction onto the stack.
@@ -44,8 +44,6 @@ pub const InstructionInfo = struct {
         is_signer: bool,
         is_writable: bool,
     };
-
-    pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS);
 
     pub fn deinit(self: *InstructionInfo, allocator: std.mem.Allocator) void {
         allocator.free(self.instruction_data);

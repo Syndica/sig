@@ -214,8 +214,14 @@ fn prepareCpiInstructionInfo(
     if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
     const caller = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
-    var deduped_account_metas = InstructionInfo.AccountMetas{};
-    var deduped_indexes = std.BoundedArray(usize, deduped_account_metas.capacity()){};
+    var deduped_account_metas = std.BoundedArray(
+        InstructionInfo.AccountMeta,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ){};
+    var deduped_indexes = std.BoundedArray(
+        usize,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ){};
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
     for (callee.accounts, 0..) |account, index| {
@@ -277,7 +283,10 @@ fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L415-L425
-    var instruction_accounts = InstructionInfo.AccountMetas{};
+    var instruction_accounts = std.BoundedArray(
+        InstructionInfo.AccountMeta,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ){};
     for (deduped_indexes.slice()) |index| {
         const deduped_account = deduped_account_metas.buffer[index];
         instruction_accounts.appendAssumeCapacity(.{

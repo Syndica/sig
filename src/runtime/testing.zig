@@ -96,7 +96,10 @@ pub fn createInstructionInfo(
         return error.CoulfNotFindProgramAccount;
     };
 
-    var account_metas = InstructionInfo.AccountMetas{};
+    var account_metas = std.BoundedArray(
+        InstructionInfo.AccountMeta,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ){};
     for (accounts_params, 0..) |acc, idx| {
         if (acc.index_in_transaction >= tc.accounts.len) {
             return error.AccountIndexOutOfBounds;
