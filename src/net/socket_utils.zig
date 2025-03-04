@@ -207,6 +207,7 @@ const XevThread = struct {
             .cancelled => unreachable, // only observable in onSend/onRecv callback.
         }
 
+        const addr = node.data.packet.addr;
         switch (st.direction) {
             .sender => {
                 node.data.packet = st.channel.tryReceive() orelse return;
@@ -215,11 +216,9 @@ const XevThread = struct {
                     loop,
                     &node.data.udp_completion,
                     &node.data.udp_state,
-                    blk: { // Convert network.EndPoint to std.net.Address
-                        const addr = node.data.packet.addr;
-                        var buf = std.BoundedArray(u8, 256){};
-                        try buf.writer().print("{}", .{addr.address});
-                        break :blk try std.net.Address.parseIp(buf.slice(), addr.port);
+                    switch (addr.address) {
+                        .ipv4 => |ipv4| std.net.Address.initIp4(ipv4.value, addr.port),
+                        .ipv6 => @panic("TODO: ipv6 support"),
                     },
                     .{ .slice = node.data.packet.data[0..node.data.packet.size] },
                     List.Node,
@@ -407,11 +406,28 @@ const PerThread = struct {
         while (true) {
             st.channel.waitToReceive(st.exit) catch break;
 
-            while (st.channel.tryReceive()) |p| {
+            next_packet: while (st.channel.tryReceive()) |p| {
                 if (st.exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
-                const bytes_sent = st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
-                    logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
-                    continue; // on error, skip this packet and try to send another.
+                const bytes_sent = while (true) { // loop on error.SystemResources below.
+                    break st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| switch (e) {
+                        // on macOS, sendto() returns ENOBUFS on full buffer instead of blocking.
+                        // Wait for the socket to be writable (buffer has room) and retry.
+                        error.SystemResources => {
+                            var fds = [_]std.posix.pollfd{.{
+                                .fd = st.socket.internal,
+                                .events = std.posix.POLL.OUT,
+                                .revents = 0,
+                            }};
+                            const ready = try std.posix.poll(&fds, -1);
+                            std.debug.assert(ready > 0);
+                            std.debug.assert(fds[0].revents & std.posix.POLL.OUT > 0);
+                            continue;
+                        },
+                        else => {
+                            logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
+                            continue :next_packet; // on error, skip this packet and send another.
+                        },
+                    };
                 };
                 std.debug.assert(bytes_sent == p.size);
             }
