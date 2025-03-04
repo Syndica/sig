@@ -21,51 +21,14 @@ pub fn executeInstruction(
     instruction_info: InstructionInfo,
 ) (error{OutOfMemory} || InstructionError)!void {
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474
-    var ic = try pushInstruction(tc, instruction_info);
+    try pushInstruction(tc, instruction_info);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a1ed2b1052bde05e79c31388b399dba9da10f7de/program-runtime/src/invoke_context.rs#L518-L529
-    const program_id = blk: {
-        const program_account = ic.borrowProgramAccount() catch {
-            return InstructionError.UnsupportedProgramId;
-        };
-        defer program_account.release();
+    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L475
+    const maybe_execute_error = processNextInstruction(allocator, tc);
 
-        break :blk if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
-            program_account.pubkey
-        else
-            program_account.account.owner;
-    };
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
-    const maybe_precompile_fn =
-        program.PRECOMPILE_ENTRYPOINTS.get(program_id.base58String().slice());
-
-    const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
-        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
-            program_id.base58String().slice(),
-        );
-        tc.return_data.data.clearRetainingCapacity();
-        break :blk native_program_fn;
-    };
-
-    const native_program_fn = maybe_native_program_fn orelse {
-        return InstructionError.UnsupportedProgramId;
-    };
-
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
-    try stable_log.program_invoke(&tc.log_collector, program_id, tc.instruction_stack.len);
-    const maybe_execute_error = native_program_fn(allocator, ic);
-
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1168-L1190
-    const maybe_pop_error = popInstruction(tc);
-
-    if (maybe_execute_error) |execute_error| {
-        try stable_log.program_failure(&tc.log_collector, program_id, execute_error);
-        return execute_error;
-    } else {
-        try stable_log.program_success(&tc.log_collector, program_id);
-        if (maybe_pop_error) |pop_error| return pop_error;
-    }
+    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L478
+    popInstruction(tc) catch |err| if (maybe_execute_error == null) return err;
+    if (maybe_execute_error) |err| return err;
 }
 
 /// Execute a native CPI instruction\
@@ -88,7 +51,7 @@ pub fn executeNativeCpiInstruction(
 fn pushInstruction(
     tc: *TransactionContext,
     instruction_info: InstructionInfo,
-) InstructionError!*InstructionContext {
+) InstructionError!void {
     const program_id = instruction_info.program_meta.pubkey;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
@@ -151,13 +114,66 @@ fn pushInstruction(
         .info = info,
         .depth = @intCast(tc.instruction_stack.len),
     });
+}
 
-    return &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+/// Execute an instruction context after it has been pushed onto the instruction stack\
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L510
+fn processNextInstruction(
+    allocator: std.mem.Allocator,
+    tc: *TransactionContext,
+) ?(error{OutOfMemory} || InstructionError) {
+    // Get next instruction context from the stack
+    if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
+    const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+
+    // Lookup the program id
+    // [agave] https://github.com/anza-xyz/agave/blob/a1ed2b1052bde05e79c31388b399dba9da10f7de/program-runtime/src/invoke_context.rs#L518-L529
+    const program_id = blk: {
+        const program_account = ic.borrowProgramAccount() catch
+            return InstructionError.UnsupportedProgramId;
+        defer program_account.release();
+
+        break :blk if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
+            program_account.pubkey
+        else
+            program_account.account.owner;
+    };
+
+    // Lookup native program function
+    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
+    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1150-L1159
+    const maybe_precompile_fn =
+        program.PRECOMPILE_ENTRYPOINTS.get(program_id.base58String().slice());
+
+    const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
+        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
+            program_id.base58String().slice(),
+        );
+        ic.tc.return_data.data.clearRetainingCapacity();
+        break :blk native_program_fn;
+    };
+
+    const native_program_fn = maybe_native_program_fn orelse
+        return InstructionError.UnsupportedProgramId;
+
+    // Invoke the program and log the result
+    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
+    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
+    try stable_log.program_invoke(&ic.tc.log_collector, program_id, ic.tc.instruction_stack.len);
+    if (native_program_fn(allocator, ic)) |execute_error| {
+        try stable_log.program_failure(&ic.tc.log_collector, program_id, execute_error);
+        return execute_error;
+    } else {
+        try stable_log.program_success(&ic.tc.log_collector, program_id);
+        return null;
+    }
 }
 
 /// Pop an instruction from the instruction stack\
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L290
-pub fn popInstruction(tc: *TransactionContext) ?InstructionError {
+fn popInstruction(
+    tc: *TransactionContext,
+) InstructionError!void {
     // TODO: Syscall context
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L291-L294
 
@@ -187,15 +203,12 @@ pub fn popInstruction(tc: *TransactionContext) ?InstructionError {
 
     _ = tc.instruction_stack.pop();
 
-    return if (unbalanced_instruction)
-        InstructionError.UnbalancedInstruction
-    else
-        null;
+    if (unbalanced_instruction) return InstructionError.UnbalancedInstruction;
 }
 
 /// Prepare the InstructionInfo for an instruction invoked via CPI\
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L325
-pub fn prepareCpiInstructionInfo(
+fn prepareCpiInstructionInfo(
     tc: *TransactionContext,
     callee: Instruction,
     signers: []const Pubkey,
