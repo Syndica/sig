@@ -42,10 +42,6 @@ pub const ProgramState = union(enum) {
     Uninitialized,
     /// Initialized `LookupTable` account.
     LookupTable: LookupTableMeta,
-
-    pub fn serializedSize(self: *const ProgramState) !usize {
-        return sig.bincode.sizeOf(self, .{});
-    }
 };
 
 /// Activation status of a lookup table
