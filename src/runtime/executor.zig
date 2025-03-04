@@ -350,9 +350,10 @@ fn sumAccountLamports(
 
 test "pushInstruction" {
     const system_program = sig.runtime.program.system_program;
-    const allocator = std.testing.allocator;
     const createTransactionContext = sig.runtime.testing.createTransactionContext;
     const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
+
+    const allocator = std.testing.allocator;
 
     var tc = try createTransactionContext(
         allocator,
@@ -434,10 +435,91 @@ test "pushInstruction" {
     );
 }
 
-test "sumAccountLamports" {
+test "popInstruction" {
+    const system_program = sig.runtime.program.system_program;
+    const createTransactionContext = sig.runtime.testing.createTransactionContext;
+    const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
+
     const allocator = std.testing.allocator;
+
+    var tc = try createTransactionContext(
+        allocator,
+        .{
+            .accounts = &.{
+                .{ .lamports = 2_000 },
+                .{ .lamports = 0 },
+                .{ .pubkey = system_program.ID },
+            },
+        },
+    );
+    defer tc.deinit(allocator);
+
+    var instruction_info = try createInstructionInfo(
+        allocator,
+        &tc,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{
+                .lamports = 1_000,
+            },
+        },
+        &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    // Failure: CallDepth
+    try std.testing.expectError(
+        InstructionError.CallDepth,
+        popInstruction(&tc),
+    );
+
+    // Push an instruction onto the stack
+    try pushInstruction(&tc, instruction_info);
+
+    {
+        // Failure: AccountBorrowOutstanding
+        const borrowed_account = try tc.borrowAccountAtIndex(0, .{
+            .program_id = Pubkey.ZEROES,
+            .is_signer = false,
+            .is_writable = false,
+        });
+        defer borrowed_account.release();
+        try std.testing.expectError(
+            InstructionError.AccountBorrowOutstanding,
+            popInstruction(&tc),
+        );
+    }
+
+    {
+        // Failure: UnbalancedInstruction
+        const original_lamports = tc.accounts[0].account.lamports;
+        defer tc.accounts[0].account.lamports = original_lamports;
+        tc.accounts[0].account.lamports = original_lamports + 1;
+        try std.testing.expectError(
+            InstructionError.UnbalancedInstruction,
+            popInstruction(&tc),
+        );
+    }
+
+    // Unbalanced instruction still pops the instruction so we need to push another
+    try pushInstruction(&tc, instruction_info);
+
+    // Success
+    try popInstruction(&tc);
+    try std.testing.expectEqual(
+        0,
+        tc.instruction_stack.len,
+    );
+}
+
+test "sumAccountLamports" {
     const createTransactionContext = sig.runtime.testing.createTransactionContext;
     const createInstructionContextAccountMetas = sig.runtime.testing.createInstructionContextAccountMetas;
+
+    const allocator = std.testing.allocator;
 
     var tc = try createTransactionContext(
         allocator,
