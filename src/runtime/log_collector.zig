@@ -46,11 +46,7 @@ pub const LogCollector = struct {
     ) error{OutOfMemory}!void {
         if (self.bytes_limit_reached) return;
 
-        const message = try std.fmt.allocPrint(
-            self.allocator,
-            fmt,
-            args,
-        );
+        const message = try std.fmt.allocPrint(self.allocator, fmt, args);
 
         if (self.bytes_limit) |bl| {
             const bytes_written = self.bytes_written +| message.len;
