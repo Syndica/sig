@@ -15,7 +15,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 
 pub const TransactionContextAccountParams = struct {
-    pubkey: Pubkey,
+    pubkey: Pubkey = Pubkey.ZEROES,
     lamports: u64 = 0,
     data: []const u8 = &.{},
     owner: Pubkey = Pubkey.ZEROES,
@@ -96,19 +96,44 @@ pub fn createInstructionInfo(
         return error.CoulfNotFindProgramAccount;
     };
 
+    const account_metas = try createInstructionContextAccountMetas(tc, accounts_params);
+
+    return .{
+        .program_meta = .{
+            .pubkey = program_id,
+            .index_in_transaction = @intCast(program_index_in_transaction),
+        },
+        .account_metas = account_metas,
+        .instruction_data = try bincode.writeAlloc(
+            allocator,
+            instruction,
+            .{},
+        ),
+    };
+}
+
+pub fn createInstructionContextAccountMetas(
+    tc: *const TransactionContext,
+    account_meta_params: []const InstructionContextAccountMetaParams,
+) !std.BoundedArray(
+    InstructionInfo.AccountMeta,
+    InstructionInfo.MAX_ACCOUNT_METAS,
+) {
+    if (!builtin.is_test)
+        @compileError("createInstructionContextAccountMetas should only be called in test mode");
+
     var account_metas = std.BoundedArray(
         InstructionInfo.AccountMeta,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ){};
-    for (accounts_params, 0..) |acc, idx| {
-        if (acc.index_in_transaction >= tc.accounts.len) {
+    for (account_meta_params, 0..) |acc, idx| {
+        if (acc.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
-        }
 
         const index_in_callee = blk: {
             for (0..idx) |i| {
                 if (acc.index_in_transaction ==
-                    accounts_params[i].index_in_transaction)
+                    account_meta_params[i].index_in_transaction)
                 {
                     break :blk i;
                 }
@@ -126,18 +151,7 @@ pub fn createInstructionInfo(
         });
     }
 
-    return .{
-        .program_meta = .{
-            .pubkey = program_id,
-            .index_in_transaction = @intCast(program_index_in_transaction),
-        },
-        .account_metas = account_metas,
-        .instruction_data = try bincode.writeAlloc(
-            allocator,
-            instruction,
-            .{},
-        ),
-    };
+    return account_metas;
 }
 
 pub fn expectTransactionContextEqual(
