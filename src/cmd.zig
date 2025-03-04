@@ -888,7 +888,7 @@ fn validator() !void {
     });
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
-    var rpc_client = sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
     defer rpc_client.deinit();
 
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
@@ -944,12 +944,12 @@ fn shredNetwork() !void {
         return error.GenesisPathNotProvided;
     const genesis_config = try GenesisConfig.init(allocator, genesis_path);
 
-    var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
+    var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
     const shred_network_conf = current_config.shred_network.toConfig(
         current_config.shred_network.start_slot orelse blk: {
-            const response = try rpc_client.getSlot(allocator, .{});
+            const response = try rpc_client.getSlot(.{});
             break :blk try response.result();
         },
     );
@@ -1270,7 +1270,7 @@ pub fn testTransactionSenderService() !void {
     );
 
     // rpc is used to get blockhashes and other balance information
-    var rpc_client = sig.rpc.Client.init(allocator, rpc_cluster, .{
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster, .{
         .logger = app_base.logger.unscoped(),
     });
     defer rpc_client.deinit();
