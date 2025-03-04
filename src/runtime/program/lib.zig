@@ -6,6 +6,7 @@ const InstructionContext = sig.runtime.InstructionContext;
 
 pub const precompile_programs = @import("precompile_programs/lib.zig");
 pub const system_program = @import("system_program/lib.zig");
+pub const address_lookup_table = @import("address_lookup_table/lib.zig");
 pub const testing = @import("testing.zig");
 pub const vote_program = @import("vote/lib.zig");
 
