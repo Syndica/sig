@@ -287,7 +287,7 @@ pub fn executeV3Write(
     const start = bpf_loader_program.v3.State.BUFFER_METADATA_SIZE + @as(usize, offset);
     const end = start +| bytes.len;
 
-    if (end > buffer_account.getData().len) {
+    if (end > buffer_account.constAccountData().len) {
         try ic.tc.log("Write overflow: {} < {}", .{ bytes.len, end });
         return InstructionError.AccountDataTooSmall;
     }
@@ -340,12 +340,12 @@ pub fn executeV3DeployWithMaxDataLen(
             return InstructionError.AccountAlreadyInitialized;
         }
 
-        if (program_account.getData().len < bpf_loader_program.v3.State.PROGRAM_SIZE) {
+        if (program_account.constAccountData().len < bpf_loader_program.v3.State.PROGRAM_SIZE) {
             try ic.tc.log("Program account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
-        if (program_account.account.lamports < rent.minimumBalance(program_account.getData().len)) {
+        if (program_account.account.lamports < rent.minimumBalance(program_account.constAccountData().len)) {
             try ic.tc.log("Program account not rent-exempt", .{});
             return InstructionError.ExecutableAccountNotRentExempt;
         }
@@ -384,13 +384,13 @@ pub fn executeV3DeployWithMaxDataLen(
             },
         }
 
-        if (buffer_account.getData().len <= bpf_loader_program.v3.State.BUFFER_METADATA_SIZE) {
+        if (buffer_account.constAccountData().len <= bpf_loader_program.v3.State.BUFFER_METADATA_SIZE) {
             try ic.tc.log("Buffer account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
         const buffer_data_len =
-            buffer_account.getData().len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE;
+            buffer_account.constAccountData().len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE;
 
         if (max_data_len < buffer_data_len) {
             try ic.tc.log("Max data length is too small to hold Buffer data", .{});
@@ -486,7 +486,7 @@ pub fn executeV3DeployWithMaxDataLen(
         const buffer_account = try ic.borrowInstructionAccount(buffer_index);
         defer buffer_account.release();
 
-        if (buffer_account.getData().len < bpf_loader_program.v3.State.BUFFER_METADATA_SIZE)
+        if (buffer_account.constAccountData().len < bpf_loader_program.v3.State.BUFFER_METADATA_SIZE)
             return InstructionError.AccountDataTooSmall;
 
         try deployProgram(
@@ -494,7 +494,7 @@ pub fn executeV3DeployWithMaxDataLen(
             new_program_id,
             ic.info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
-            buffer_account.getData()[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
+            buffer_account.constAccountData()[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
             clock.slot,
             ic.tc.feature_set,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
@@ -512,16 +512,16 @@ pub fn executeV3DeployWithMaxDataLen(
                 .upgrade_authority_address = authority_key,
             } },
         );
-        const program_data = try program_data_account.getDataMutable();
+        const program_data = try program_data_account.mutableAccountData();
 
         var buffer_account = try ic.borrowInstructionAccount(buffer_index);
         defer buffer_account.release();
 
-        @memcpy(program_data.ptr, buffer_account.getData());
+        @memcpy(program_data.ptr, buffer_account.constAccountData());
 
         try buffer_account.setDataLength(
             allocator,
-            ic.tc,
+            &ic.tc.accounts_resize_delta,
             bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
         );
     }

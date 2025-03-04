@@ -28,7 +28,11 @@ pub const AccountSharedData = struct {
 
     /// Copy the old data into the new memory
     /// If the new size is less than the old size, truncate the data
-    pub fn resize(self: *AccountSharedData, allocator: std.mem.Allocator, new_size: usize) !void {
+    pub fn resize(
+        self: *AccountSharedData,
+        allocator: std.mem.Allocator,
+        new_size: usize,
+    ) error{OutOfMemory}!void {
         if (allocator.resize(self.data, new_size)) {
             const old_len = self.data.len;
             self.data.len = new_size;

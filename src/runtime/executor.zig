@@ -248,14 +248,14 @@ pub fn prepareCpiInstructionInfo(
         defer caller_account.release();
 
         // Readonly in caller cannot become writable in callee
-        if (!caller_account.isWritable() and callee_account.is_writable) {
+        if (!caller_account.context.is_writable and callee_account.is_writable) {
             try tc.log("{}'s writable privilege escalated", .{caller_account.pubkey});
             return InstructionError.PrivilegeEscalation;
         }
 
         // To be signed in the callee,
         // it must be either signed in the caller or by the program
-        var allow_callee_signer = caller_account.isSigner();
+        var allow_callee_signer = caller_account.context.is_signer;
         for (signers) |signer| {
             if (!allow_callee_signer) {
                 if (signer.equals(&caller_account.pubkey)) allow_callee_signer = true;

@@ -78,7 +78,7 @@ fn executeIntializeAccount(
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.rent_sysvar),
     );
 
-    const min_balance = rent.minimumBalance(vote_account.getData().len);
+    const min_balance = rent.minimumBalance(vote_account.constAccountData().len);
     if (vote_account.account.lamports < min_balance) {
         return InstructionError.InsufficientFunds;
     }
@@ -115,7 +115,7 @@ fn intializeAccount(
     vote_account: *BorrowedAccount,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (vote_account.getData().len != VoteState.sizeOf()) {
+    if (vote_account.constAccountData().len != VoteState.sizeOf()) {
         return InstructionError.InvalidAccountData;
     }
 

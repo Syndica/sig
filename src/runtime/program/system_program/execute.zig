@@ -398,7 +398,7 @@ fn executeUpgradeNonceAccount(
     if (!account.account.owner.equals(&system_program.ID))
         return InstructionError.InvalidAccountOwner;
 
-    if (!account.isWritable()) return InstructionError.InvalidArgument;
+    if (!account.context.is_writable) return InstructionError.InvalidArgument;
 
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
     switch (versioned_nonce) {
@@ -426,7 +426,7 @@ fn allocate(
         return InstructionError.MissingRequiredSignature;
     }
 
-    if (account.getData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
+    if (account.constAccountData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
         try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
         ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
@@ -441,7 +441,7 @@ fn allocate(
         return InstructionError.Custom;
     }
 
-    try account.setDataLength(allocator, ic.tc, @intCast(space));
+    try account.setDataLength(allocator, &ic.tc.accounts_resize_delta, @intCast(space));
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L112
@@ -528,7 +528,7 @@ fn transferVerified(
         var account = try ic.borrowInstructionAccount(from_index);
         defer account.release();
 
-        if (account.getData().len > 0) {
+        if (account.constAccountData().len > 0) {
             try ic.tc.log("Transfer: `from` must not carry data", .{});
             return InstructionError.InvalidArgument;
         }
@@ -558,7 +558,7 @@ fn advanceNonceAccount(
     ic: *InstructionContext,
     account: *BorrowedAccount,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!account.isWritable()) {
+    if (!account.context.is_writable) {
         try ic.tc.log(
             "Advance nonce account: Account {} must be writeable",
             .{account.pubkey},
@@ -618,7 +618,7 @@ fn withdrawNonceAccount(
         var from_account = try ic.borrowInstructionAccount(from_account_index);
         defer from_account.release();
 
-        if (!from_account.isWritable()) {
+        if (!from_account.context.is_writable) {
             try ic.tc.log(
                 "Withdraw nonce account: Account {} must be writeable",
                 .{from_account.pubkey},
@@ -657,7 +657,7 @@ fn withdrawNonceAccount(
                         nonce.Versions{ .current = nonce.State.unintialized },
                     );
                 } else {
-                    const min_balance = rent.minimumBalance(from_account.getData().len);
+                    const min_balance = rent.minimumBalance(from_account.constAccountData().len);
                     const amount = std.math.add(u64, lamports, min_balance) catch
                         return InstructionError.InsufficientFunds;
                     if (amount > from_account.account.lamports) {
@@ -696,7 +696,7 @@ fn initializeNonceAccount(
     authority: Pubkey,
     rent: Rent,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!account.isWritable()) {
+    if (!account.context.is_writable) {
         try ic.tc.log(
             "Initialize nonce account: Account {} must be writeable",
             .{account.pubkey},
@@ -707,7 +707,7 @@ fn initializeNonceAccount(
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
     switch (versioned_nonce.getState()) {
         .unintialized => {
-            const min_balance = rent.minimumBalance(account.getData().len);
+            const min_balance = rent.minimumBalance(account.constAccountData().len);
             if (min_balance > account.account.lamports) {
                 try ic.tc.log("Initialize nonce account: insufficient lamports {}, need {}", .{
                     account.account.lamports,
@@ -740,7 +740,7 @@ pub fn authorizeNonceAccount(
     account: *BorrowedAccount,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!account.isWritable()) {
+    if (!account.context.is_writable) {
         try ic.tc.log(
             "Authorize nonce account: Account {} must be writeable",
             .{account.pubkey},
