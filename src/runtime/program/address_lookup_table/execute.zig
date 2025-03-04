@@ -43,25 +43,41 @@ pub fn execute(
     };
 }
 
+// https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L125
+/// Program account states
+pub const ProgramState = union(enum) {
+    /// Account is not initialized.
+    Uninitialized,
+    /// Initialized `LookupTable` account.
+    LookupTable: LookupTableMeta,
+};
+
 // https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L46
+// https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L66
 /// Address lookup table metadata
-const LookupTableMeta = struct {
+pub const LookupTableMeta = struct {
     /// Lookup tables cannot be closed until the deactivation slot is
     /// no longer "recent" (not accessible in the `SlotHashes` sysvar).
-    deactivation_slot: Slot,
+    deactivation_slot: Slot = std.math.maxInt(Slot),
     /// The slot that the table was last extended. Address tables may
     /// only be used to lookup addresses that were extended before
     /// the current bank's slot.
-    last_extended_slot: Slot,
+    last_extended_slot: Slot = 0,
     /// The start index where the table was last extended from during
     /// the `last_extended_slot`.
-    last_extended_slot_start_index: u8,
+    last_extended_slot_start_index: u8 = 0,
     /// Authority address which must sign for each modification.
-    authority: ?Pubkey,
+    authority: ?Pubkey = null,
     // Padding to keep addresses 8-byte aligned
-    _padding: u16,
+    _padding: u16 = 0,
     // Raw list of addresses follows this serialized structure in
     // the account's data, starting from `LOOKUP_TABLE_META_SIZE`.
+
+    pub fn new(authority: Pubkey) LookupTableMeta {
+        return .{
+            .authority = authority,
+        };
+    }
 };
 
 // https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L133-L134
@@ -193,13 +209,13 @@ fn createLookupTable(
     // )?;
 
     {
-        const lookup_table_account = try ic.borrowInstructionAccount(0);
+        var lookup_table_account = try ic.borrowInstructionAccount(0);
         defer lookup_table_account.release();
 
-        // TODO: set_state
-        //         lookup_table_account.set_state(&ProgramState::LookupTable(LookupTableMeta::new(
-        //     authority_key,
-        // )))?;
+        const new_state: ProgramState = .{
+            .LookupTable = LookupTableMeta.new(authority_key),
+        };
+        try lookup_table_account.serializeIntoAccountData(new_state);
     }
 
     // success
@@ -210,9 +226,68 @@ fn freezeLookupTable(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
-    _ = allocator;
-    _ = ic;
+    {
+        const lookup_table_account = try ic.borrowInstructionAccount(0);
+        defer lookup_table_account.release();
+
+        if (!lookup_table_account.account.owner.equals(&program.ID)) {
+            return error.InvalidAccountOwner;
+        }
+    }
+
+    const authority_key = blk: {
+        const authority_account = try ic.borrowInstructionAccount(1);
+        defer authority_account.release();
+
+        if (!authority_account.context.is_signer) {
+            try ic.tc.log("Authority account must be a signer", .{});
+            return error.MissingRequiredSignature;
+        }
+
+        break :blk authority_account.pubkey;
+    };
+
+    const lookup_table_account = try ic.borrowInstructionAccount(0);
+    defer lookup_table_account.release();
+
+    if (!lookup_table_account.account.owner.equals(&program.ID)) {
+        return error.InvalidAccountOwner;
+    }
+
+    const lookup_table = try lookup_table_account.deserializeFromAccountData(
+        allocator,
+        AddressLookupTable,
+    );
+    defer sig.bincode.free(allocator, lookup_table);
+
+    if (lookup_table.meta.authority) |authority| {
+        if (!authority.equals(&authority_key)) {
+            return error.IncorrectAuthority;
+        }
+    } else {
+        try ic.tc.log("Lookup table is already frozen", .{});
+        return error.Immutable;
+    }
+
+    if (lookup_table.meta.deactivation_slot != std.math.maxInt(Slot)) {
+        try ic.tc.log("Deactivated tables cannnot be frozen", .{});
+        return error.InvalidArgument;
+    }
+
+    if (lookup_table.addresses.len == 0) {
+        try ic.tc.log("Empty lookup tables cannot be frozen", .{});
+        return error.InvalidInstructionData;
+    }
+
+    // TODO: success
     @panic("TODO");
+    //         let mut lookup_table_meta = lookup_table.meta;
+    // lookup_table_meta.authority = None;
+    // AddressLookupTable::overwrite_meta_data(
+    //     lookup_table_account.get_data_mut()?,
+    //     lookup_table_meta,
+    // )?;
+
 }
 
 // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L224
@@ -221,10 +296,126 @@ fn extendLookupTable(
     ic: *InstructionContext,
     new_addresses: []const Pubkey,
 ) !void {
-    _ = allocator;
-    _ = ic;
-    _ = new_addresses;
-    @panic("TODO");
+    const table_key = blk: {
+        const lookup_table_account = try ic.borrowInstructionAccount(0);
+        defer lookup_table_account.release();
+
+        if (!lookup_table_account.account.owner.equals(&program.ID)) {
+            return error.InvalidAccountOwner;
+        }
+        break :blk lookup_table_account.pubkey;
+    };
+
+    const authority_key = blk: {
+        const authority_account = try ic.borrowInstructionAccount(1);
+        defer authority_account.release();
+
+        if (!authority_account.context.is_signer) {
+            try ic.tc.log("Authority account must be a signer", .{});
+            return error.MissingRequiredSignature;
+        }
+
+        break :blk authority_account.pubkey;
+    };
+
+    const lookup_table_lamports, const new_table_data_len = blk: {
+        const lookup_table_account = try ic.borrowInstructionAccount(0);
+        defer lookup_table_account.release();
+
+        var lookup_table = try lookup_table_account.deserializeFromAccountData(
+            allocator,
+            AddressLookupTable,
+        );
+        defer sig.bincode.free(allocator, lookup_table);
+
+        if (lookup_table.meta.authority) |authority| {
+            if (!authority.equals(&authority_key)) {
+                return error.IncorrectAuthority;
+            }
+        } else {
+            return error.Immutable;
+        }
+
+        if (lookup_table.meta.deactivation_slot != std.math.maxInt(Slot)) {
+            try ic.tc.log("Deactivated tables cannot be extended", .{});
+            return error.InvalidArgument;
+        }
+
+        if (lookup_table.addresses.len >= program.LOOKUP_TABLE_MAX_ADDRESSES) {
+            try ic.tc.log("Lookup table is full and cannot contain more addresses", .{});
+            return error.InvalidArgument;
+        }
+
+        if (new_addresses.len == 0) {
+            try ic.tc.log("Must extend with at least one address", .{});
+            return error.InvalidInstructionData;
+        }
+
+        const new_table_addresses_len = lookup_table.addresses.len +| new_addresses.len;
+        if (new_table_addresses_len >= program.LOOKUP_TABLE_MAX_ADDRESSES) {
+            try ic.tc.log(
+                "Extended lookup table length {} would exceed max capacity of {}",
+                .{ new_table_addresses_len, program.LOOKUP_TABLE_MAX_ADDRESSES },
+            );
+            return error.InvalidInstructionData;
+        }
+
+        const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse return error.UnsupportedSysvar;
+        if (clock.slot != lookup_table.meta.last_extended_slot) {
+            lookup_table.meta.last_extended_slot = clock.slot;
+            lookup_table.meta.last_extended_slot_start_index = std.math.cast(
+                u8,
+                lookup_table.addresses.len,
+            ) orelse
+                // This is impossible as long as the length of new_addresses
+                // is non-zero and LOOKUP_TABLE_MAX_ADDRESSES == u8::MAX + 1.
+                return error.InvalidAccountData;
+        }
+
+        const lookup_table_meta = lookup_table.meta;
+        const new_table_data_len = std.math.add(
+            usize,
+            program.LOOKUP_TABLE_META_SIZE,
+            new_table_addresses_len *| Pubkey.SIZE,
+        ) catch return error.ArithmeticOverflow;
+
+        _ = lookup_table_meta;
+        // TODO: overrwrite
+        //     {
+        // AddressLookupTable::overwrite_meta_data(
+        //     lookup_table_account.get_data_mut()?,
+        //     lookup_table_meta,
+        // )?;
+        // for new_address in new_addresses {
+        //     lookup_table_account.extend_from_slice(new_address.as_ref())?;
+        // }
+
+        break :blk .{ lookup_table_account.account.lamports, new_table_data_len };
+    };
+
+    const rent = ic.tc.sysvar_cache.get(sysvar.Rent) orelse return error.UnsupportedSysvar;
+    const required_lamports = @max(rent.minimumBalance(new_table_data_len), 1) -|
+        lookup_table_lamports;
+
+    if (required_lamports > 0) {
+        {
+            const payer_account = try ic.borrowInstructionAccount(2);
+            defer payer_account.release();
+
+            if (!payer_account.context.is_signer) {
+                try ic.tc.log("Payer account must be a signer", .{});
+                return error.MissingRequiredSignature;
+            }
+        }
+
+        _ = table_key;
+
+        // TODO: transfer
+        // invoke_context.native_invoke(
+        //     system_instruction::transfer(&payer_key, &table_key, required_lamports).into(),
+        //     &[payer_key],
+        // )?;
+    }
 }
 
 // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L343
