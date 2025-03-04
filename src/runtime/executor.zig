@@ -426,8 +426,8 @@ test "pushInstruction" {
     );
 
     // Failure: ReentrancyNotAllowed
-    // Reentrancy error is triggered when attempting to push an instruction if there is
-    // an existing instruction on the stack with the same program id that is not the last entry
+    // Pushing an instruction to the stack causes a reentrancy violation if there is already
+    // an instruction context on the stack with the same program id that is not the last entry
     try std.testing.expectError(
         InstructionError.ReentrancyNotAllowed,
         pushInstruction(&tc, instruction_info),
@@ -453,6 +453,7 @@ test "sumAccountLamports" {
     defer tc.deinit(allocator);
 
     {
+        // Success: 0 + 1 + 2 + 3 = 6
         const account_metas = try createInstructionContextAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
@@ -466,6 +467,8 @@ test "sumAccountLamports" {
     }
 
     {
+        // Success: 0 + 1 + 2 + 0 = 3
+        // First and last instruction account metas reference the same transaction account
         const account_metas = try createInstructionContextAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
@@ -480,6 +483,7 @@ test "sumAccountLamports" {
     }
 
     {
+        // Failure: NotEnoughAccountKeys
         var account_metas = try createInstructionContextAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
@@ -496,6 +500,7 @@ test "sumAccountLamports" {
     }
 
     {
+        // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
             .program_id = Pubkey.ZEROES,
             .is_signer = false,
