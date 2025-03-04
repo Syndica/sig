@@ -348,8 +348,93 @@ fn sumAccountLamports(
     return lamports;
 }
 
+test "pushInstruction" {
+    const system_program = sig.runtime.program.system_program;
+    const allocator = std.testing.allocator;
+    const createTransactionContext = sig.runtime.testing.createTransactionContext;
+    const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
+
+    var tc = try createTransactionContext(
+        allocator,
+        .{
+            .accounts = &.{
+                .{ .lamports = 2_000 },
+                .{ .lamports = 0 },
+                .{ .pubkey = system_program.ID },
+            },
+        },
+    );
+    defer tc.deinit(allocator);
+
+    var instruction_info = try createInstructionInfo(
+        allocator,
+        &tc,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{
+                .lamports = 1_000,
+            },
+        },
+        &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    {
+        // Cannot push native loader
+        // Modify and defer reset the program id
+        const original_program_id = instruction_info.program_meta.pubkey;
+        defer instruction_info.program_meta.pubkey = original_program_id;
+        instruction_info.program_meta.pubkey = ids.NATIVE_LOADER_ID;
+
+        try std.testing.expectError(
+            InstructionError.UnsupportedProgramId,
+            pushInstruction(&tc, instruction_info),
+        );
+    }
+
+    // Success
+    try pushInstruction(&tc, instruction_info);
+    try std.testing.expectEqual(
+        1,
+        tc.instruction_stack.len,
+    );
+
+    {
+        // Failure: UnbalancedInstruction
+        // Defer reset the instruction info's initial account lamports
+        // Modify and defer reset the first account's lamports
+        defer instruction_info.initial_account_lamports = 0;
+
+        const original_lamports = tc.accounts[0].account.lamports;
+        defer tc.accounts[0].account.lamports = original_lamports;
+        tc.accounts[0].account.lamports = original_lamports + 1;
+
+        try std.testing.expectError(
+            InstructionError.UnbalancedInstruction,
+            pushInstruction(&tc, instruction_info),
+        );
+    }
+
+    // Success
+    try pushInstruction(&tc, instruction_info);
+    try std.testing.expectEqual(
+        2,
+        tc.instruction_stack.len,
+    );
+
+    // Failure: ReentrancyNotAllowed
+    // Reentrancy error is triggered when attempting to push an instruction if there is
+    // an existing instruction on the stack with the same program id that is not the last entry
+    try std.testing.expectError(
+        InstructionError.ReentrancyNotAllowed,
+        pushInstruction(&tc, instruction_info),
+    );
+}
+
 test "sumAccountLamports" {
-    std.debug.print("HI\n", .{});
     const allocator = std.testing.allocator;
     const createTransactionContext = sig.runtime.testing.createTransactionContext;
     const createInstructionContextAccountMetas = sig.runtime.testing.createInstructionContextAccountMetas;
