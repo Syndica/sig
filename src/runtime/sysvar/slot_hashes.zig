@@ -19,9 +19,11 @@ pub const SlotHashes = struct {
         return std.math.order(key, mid_item[0]);
     }
 
+    pub fn getIndex(self: *const SlotHashes, slot: u64) ?usize {
+        return std.sort.binarySearch(Entry, slot, self.entries, {}, compareFn);
+    }
+
     pub fn get(self: *const SlotHashes, slot: u64) ?Hash {
-        const found_index = std.sort.binarySearch(Entry, slot, self.entries, {}, compareFn) orelse
-            return null;
-        return self.entries[found_index][1];
+        return self.entries[(self.getIndex(slot) orelse return null)][1];
     }
 };

@@ -1,20 +1,7 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const BorrowedAccount = sig.runtime.BorrowedAccount;
-const InstructionContext = sig.runtime.InstructionContext;
-const InstructionError = sig.core.instruction.InstructionError;
-const nonce = sig.runtime.nonce;
 const Pubkey = sig.core.Pubkey;
-const pubkey_utils = sig.runtime.pubkey_utils;
-const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
-const Rent = sig.runtime.sysvar.Rent;
-const Slot = sig.core.Slot;
-const system_program = sig.runtime.program.system_program;
-const SystemProgramError = system_program.Error;
-const SystemProgramInstruction = system_program.Instruction;
-const SysvarCache = sig.runtime.SysvarCache;
-const sysvar = sig.runtime.sysvar;
 
 pub const Instruction = @import("instruction.zig").Instruction;
 
