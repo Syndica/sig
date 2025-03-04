@@ -3,6 +3,9 @@ const std = @import("std");
 const sig = @import("sig");
 const cli = @import("zig-cli");
 
+const servePrometheus = sig.prometheus.servePrometheus;
+const globalRegistry = sig.prometheus.globalRegistry;
+
 pub const Config = struct {
     pipe_path: []const u8 = sig.VALIDATOR_DIR ++ "geyser.pipe",
     measure_rate_secs: u64 = 5,
@@ -166,7 +169,8 @@ pub fn csvDump() !void {
 
     const logger = std_logger.logger();
 
-    const metrics_thread = try sig.prometheus.spawnMetrics(allocator, 12355);
+    const metrics_thread = try std.Thread
+        .spawn(.{}, servePrometheus, .{ allocator, globalRegistry(), 12355 });
     metrics_thread.detach();
     logger.info().log("spawing metrics thread on port 12355");
 
