@@ -174,7 +174,7 @@ pub const VoteStateVersions = union(enum) {
     fn landedVotesFromLockouts(
         allocator: std.mem.Allocator,
         lockouts: std.ArrayList(Lockout),
-    ) std.ArrayList(LandedVote) {
+    ) !std.ArrayList(LandedVote) {
         var landedVotes = std.ArrayList(LandedVote).init(allocator);
         errdefer landedVotes.deinit();
 
@@ -188,26 +188,33 @@ pub const VoteStateVersions = union(enum) {
         return landedVotes;
     }
 
-    pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) VoteState {
+    pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
         switch (self) {
-            .v0_23_5 => |state| return VoteState{
-                .node_pubkey = state.node_pubkey,
-                .authorized_withdrawer = state.authorized_withdrawer,
-                .commission = state.commission,
-                .votes = VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
-                .root_slot = state.root_slot,
-                .authorized_voter = state.authorized_voter,
-                .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
-                .epoch_credits = state.epoch_credits,
-                .last_timestamp = state.last_timestamp,
+            .v0_23_5 => |state| {
+                const authorized_voters = try AuthorizedVoters.init(
+                    allocator,
+                    state.authorized_voter_epoch,
+                    state.authorized_voter,
+                );
+                return VoteState{
+                    .node_pubkey = state.node_pubkey,
+                    .authorized_withdrawer = state.authorized_withdrawer,
+                    .commission = state.commission,
+                    .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
+                    .root_slot = state.root_slot,
+                    .authorized_voters = authorized_voters,
+                    .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+                    .epoch_credits = state.epoch_credits,
+                    .last_timestamp = state.last_timestamp,
+                };
             },
             .v1_14_11 => |state| return VoteState{
                 .node_pubkey = state.node_pubkey,
                 .authorized_withdrawer = state.authorized_withdrawer,
                 .commission = state.commission,
-                .votes = VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
+                .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
                 .root_slot = state.root_slot,
-                .authorized_voter = state.authorized_voter,
+                .authorized_voters = state.authorized_voters,
                 .prior_voters = state.prior_voters,
                 .epoch_credits = state.epoch_credits,
                 .last_timestamp = state.last_timestamp,
@@ -237,7 +244,7 @@ pub const VoteState0_23_5 = struct {
     commission: u8,
 
     // TODO this should be a double ended queue.
-    votes: std.ArrayList(LandedVote),
+    votes: std.ArrayList(Lockout),
 
     root_slot: ?Slot,
 
@@ -282,7 +289,7 @@ pub const VoteState1_14_11 = struct {
     commission: u8,
 
     // TODO this should be a double ended queue.
-    votes: std.ArrayList(LandedVote),
+    votes: std.ArrayList(Lockout),
 
     // This usually the last Lockout which was popped from self.votes.
     // However, it can be arbitrary slot, when being used inside Tower
