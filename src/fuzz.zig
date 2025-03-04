@@ -9,7 +9,8 @@ const ledger_fuzz = sig.ledger.fuzz_ledger;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Level = sig.trace.Level;
 
-const spawnMetrics = sig.prometheus.spawnMetrics;
+const servePrometheus = sig.prometheus.servePrometheus;
+const globalRegistry = sig.prometheus.globalRegistry;
 
 // where seeds are saved (in case of too many logs)
 const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_seeds.txt";
@@ -45,12 +46,10 @@ pub fn main() !void {
     const metrics_port: u16 = 12345;
 
     logger.info().logf("metrics port: {d}", .{metrics_port});
-    const metrics_thread = try spawnMetrics(
-        // TODO: use the GPA here, the server is just leaking because we're losing the handle
-        // to it and never deiniting.
-        std.heap.c_allocator,
-        metrics_port,
-    );
+    const metrics_thread = try std.Thread
+    // TODO: use the GPA here, the server is just leaking because we're losing the handle
+    // to it and never deiniting.
+        .spawn(.{}, servePrometheus, .{ std.heap.c_allocator, globalRegistry(), 12355 });
     metrics_thread.detach();
 
     _ = cli_args.skip();
