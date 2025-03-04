@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub fn serialize(allocator: Allocator, request: anytype) ![]const u8 {
+pub fn serialize(allocator: Allocator, request: anytype) Allocator.Error![]const u8 {
     const formatted = if (@hasDecl(@TypeOf(request), "jsonStringify"))
         request
     else
@@ -12,7 +12,11 @@ pub fn serialize(allocator: Allocator, request: anytype) ![]const u8 {
     return try serializeTuple(allocator, methodName(request), formatted);
 }
 
-pub fn serializeTuple(allocator: Allocator, method: []const u8, params: anytype) ![]const u8 {
+pub fn serializeTuple(
+    allocator: Allocator,
+    method: []const u8,
+    params: anytype,
+) Allocator.Error![]const u8 {
     return try std.json.stringifyAlloc(
         allocator,
         .{

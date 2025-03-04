@@ -949,7 +949,7 @@ fn shredNetwork() !void {
 
     const shred_network_conf = current_config.shred_network.toConfig(
         current_config.shred_network.start_slot orelse blk: {
-            const response = try rpc_client.fetch(sig.rpc.methods.GetSlot{});
+            const response = try rpc_client.getSlot(.{});
             break :blk try response.result();
         },
     );

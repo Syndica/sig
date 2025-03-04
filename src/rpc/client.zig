@@ -5,15 +5,50 @@ const rpc = @import("lib.zig");
 const Allocator = std.mem.Allocator;
 
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
-const ErrorReturn = sig.utils.types.ErrorReturn;
-const Logger = sig.trace.log.Logger;
 
+const HttpPostFetcher = rpc.http.HttpPostFetcher;
 const Response = rpc.response.Response;
+
+const GetAccountInfo = rpc.methods.GetAccountInfo;
+const GetBalance = rpc.methods.GetBalance;
+const GetBlock = rpc.methods.GetBlock;
+const GetBlockCommitment = rpc.methods.GetBlockCommitment;
+const GetBlockHeight = rpc.methods.GetBlockHeight;
+const GetClusterNodes = rpc.methods.GetClusterNodes;
+const GetEpochInfo = rpc.methods.GetEpochInfo;
+const GetEpochSchedule = rpc.methods.GetEpochSchedule;
+const GetLatestBlockhash = rpc.methods.GetLatestBlockhash;
+const GetLeaderSchedule = rpc.methods.GetLeaderSchedule;
+const GetSignatureStatuses = rpc.methods.GetSignatureStatuses;
+const GetSlot = rpc.methods.GetSlot;
+const GetTransaction = rpc.methods.GetTransaction;
+const GetVersion = rpc.methods.GetVersion;
+const GetVoteAccounts = rpc.methods.GetVoteAccounts;
+const RequestAirdrop = rpc.methods.RequestAirdrop;
+const SendTransaction = rpc.methods.SendTransaction;
+
+pub const FetchRpcError = Allocator.Error || HttpPostFetcher.Error || rpc.response.ParseError;
+
+/// Send a typed RPC request and await a response.
+/// Pass a struct, such as those defined in `rpc.methods`.
+/// Returns data allocated with the passed allocator.
+pub fn fetchRpc(
+    fetcher: *HttpPostFetcher,
+    allocator: Allocator,
+    request: anytype,
+) FetchRpcError!Response(@TypeOf(request)) {
+    const request_json = try rpc.request.serialize(allocator, request);
+    defer allocator.free(request_json);
+    const response_json = try fetcher.fetchWithRetries(allocator, request_json);
+    defer allocator.free(response_json);
+    return try Response(@TypeOf(request)).fromJson(allocator, response_json);
+}
 
 pub const Client = struct {
     fetcher: HttpPostFetcher,
 
     pub const Options = HttpPostFetcher.Options;
+    pub const Error = FetchRpcError;
 
     pub fn init(
         allocator: Allocator,
@@ -27,26 +62,89 @@ pub const Client = struct {
         self.fetcher.deinit();
     }
 
-    /// Send a typed RPC request and await a response.
-    /// Pass a struct, such as those defined in `rpc.methods`.
-    /// Returns data allocated with the contained allocator.
-    pub fn fetch(self: *Client, request: anytype) !Response(@TypeOf(request)) {
-        return try self.fetchAlloc(self.fetcher.http_client.allocator, request);
+    /// Call fetchRpc using the contained allocator and fetcher.
+    fn fetch(self: *Client, request: anytype) Error!Response(@TypeOf(request)) {
+        return try fetchRpc(&self.fetcher, self.fetcher.http_client.allocator, request);
     }
 
-    /// Send a typed RPC request and await a response.
-    /// Pass a struct, such as those defined in `rpc.methods`.
-    /// Returns data allocated with the passed allocator.
-    pub fn fetchAlloc(
+    /// Call fetchRpc using the contained fetcher and the passed allocator.
+    pub fn fetchCustom(
         self: *Client,
         allocator: Allocator,
         request: anytype,
-    ) !Response(@TypeOf(request)) {
-        const request_json = try rpc.request.serialize(allocator, request);
-        defer allocator.free(request_json);
-        const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);
-        defer allocator.free(response_json);
-        return try Response(@TypeOf(request)).fromJson(allocator, response_json);
+    ) Error!Response(@TypeOf(request)) {
+        return try fetchRpc(&self.fetcher, allocator, request);
+    }
+
+    ///////////////////////////
+    // All remaining functions are helpers for each RPC method, to make call sites less verbose.
+
+    pub fn getAccountInfo(self: *Client, request: GetAccountInfo) Error!Response(GetAccountInfo) {
+        return self.fetch(request);
+    }
+
+    pub fn getBalance(self: *Client, request: GetBalance) Error!Response(GetBalance) {
+        return self.fetch(request);
+    }
+
+    pub fn getBlock(self: *Client, request: GetBlock) Error!Response(GetBlock) {
+        return self.fetch(request);
+    }
+
+    pub fn getBlockCommitment(self: *Client, request: GetBlockCommitment) Error!Response(GetBlockCommitment) {
+        return self.fetch(request);
+    }
+
+    pub fn getBlockHeight(self: *Client, request: GetBlockHeight) Error!Response(GetBlockHeight) {
+        return self.fetch(request);
+    }
+
+    pub fn getClusterNodes(self: *Client, request: GetClusterNodes) Error!Response(GetClusterNodes) {
+        return self.fetch(request);
+    }
+
+    pub fn getEpochInfo(self: *Client, request: GetEpochInfo) Error!Response(GetEpochInfo) {
+        return self.fetch(request);
+    }
+
+    pub fn getEpochSchedule(self: *Client, request: GetEpochSchedule) Error!Response(GetEpochSchedule) {
+        return self.fetch(request);
+    }
+
+    pub fn getLatestBlockhash(self: *Client, request: GetLatestBlockhash) Error!Response(GetLatestBlockhash) {
+        return self.fetch(request);
+    }
+
+    pub fn getLeaderSchedule(self: *Client, request: GetLeaderSchedule) Error!Response(GetLeaderSchedule) {
+        return self.fetch(request);
+    }
+
+    pub fn getSignatureStatuses(self: *Client, request: GetSignatureStatuses) Error!Response(GetSignatureStatuses) {
+        return self.fetch(request);
+    }
+
+    pub fn getSlot(self: *Client, request: GetSlot) Error!Response(GetSlot) {
+        return self.fetch(request);
+    }
+
+    pub fn getTransaction(self: *Client, request: GetTransaction) Error!Response(GetTransaction) {
+        return self.fetch(request);
+    }
+
+    pub fn getVersion(self: *Client, request: GetVersion) Error!Response(GetVersion) {
+        return self.fetch(request);
+    }
+
+    pub fn getVoteAccounts(self: *Client, request: GetVoteAccounts) Error!Response(GetVoteAccounts) {
+        return self.fetch(request);
+    }
+
+    pub fn requestAirdrop(self: *Client, request: RequestAirdrop) Error!Response(RequestAirdrop) {
+        return self.fetch(request);
+    }
+
+    pub fn sendTransaction(self: *Client, request: SendTransaction) Error!Response(SendTransaction) {
+        return self.fetch(request);
     }
 };
 
@@ -59,104 +157,3 @@ pub fn rpcUrl(cluster_type: ClusterType) []const u8 {
         else => "http://localhost:8899",
     };
 }
-
-pub const HttpPostFetcher = struct {
-    http_client: std.http.Client,
-    base_url: []const u8,
-    logger: Logger,
-    max_retries: usize,
-
-    pub const Options = struct {
-        max_retries: usize = 0,
-        logger: Logger = .noop,
-    };
-
-    pub const Error = error{HttpRequestFailed} ||
-        ErrorReturn(std.http.Client.fetch) || Allocator.Error;
-
-    pub fn init(
-        allocator: Allocator,
-        base_url: []const u8,
-        options: Options,
-    ) Allocator.Error!HttpPostFetcher {
-        return .{
-            .base_url = try allocator.dupe(u8, base_url),
-            .http_client = std.http.Client{ .allocator = allocator },
-            .logger = options.logger,
-            .max_retries = options.max_retries,
-        };
-    }
-
-    pub fn deinit(self: *HttpPostFetcher) void {
-        self.http_client.allocator.free(self.base_url);
-        self.http_client.deinit();
-    }
-
-    /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
-    /// If the request fails, it will be retried up to `max_retries` times,
-    /// If the response fails to parse, an error will be returned.
-    pub fn fetchWithRetries(
-        self: *HttpPostFetcher,
-        allocator: std.mem.Allocator,
-        request: []const u8,
-    ) Error![]const u8 {
-        var response = std.ArrayList(u8).init(allocator);
-        errdefer response.deinit();
-
-        var last_error: ?Error = null;
-
-        for (0..self.max_retries + 1) |curr_retries| {
-            const result = self.fetchOnce(request, &response) catch |fetch_error| {
-                last_error = fetch_error;
-                self.logger.warn().logf(
-                    "HTTP client error, attempting reinitialisation: error={any}",
-                    .{fetch_error},
-                );
-                response.clearRetainingCapacity();
-                self.restartHttpClient();
-                continue;
-            };
-
-            if (result.status != .ok) {
-                last_error = error.HttpRequestFailed;
-                self.logger.warn().logf(
-                    "HTTP request failed ({d}/{d}): {}",
-                    .{ curr_retries, self.max_retries, result.status },
-                );
-                response.clearRetainingCapacity();
-                continue;
-            }
-
-            return try response.toOwnedSlice();
-        }
-
-        return last_error.?;
-    }
-
-    pub fn fetchOnce(
-        self: *HttpPostFetcher,
-        request_payload: []const u8,
-        response_payload: *std.ArrayList(u8),
-    ) ErrorReturn(std.http.Client.fetch)!std.http.Client.FetchResult {
-        return self.http_client.fetch(.{
-            .location = .{ .url = self.base_url },
-            .method = .POST,
-            .headers = .{
-                .content_type = .{
-                    .override = "application/json",
-                },
-                .user_agent = .{
-                    .override = "sig/0.1",
-                },
-            },
-            .payload = request_payload,
-            .response_storage = .{ .dynamic = response_payload },
-            .max_append_size = 100 * 1024 * 1024,
-        });
-    }
-
-    fn restartHttpClient(self: *HttpPostFetcher) void {
-        self.http_client.deinit();
-        self.http_client = std.http.Client{ .allocator = self.http_client.allocator };
-    }
-};

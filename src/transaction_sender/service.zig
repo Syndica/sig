@@ -13,8 +13,6 @@ const Packet = sig.net.Packet;
 const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
-const GetBlockHeight = sig.rpc.methods.GetBlockHeight;
-const GetSignatureStatuses = sig.rpc.methods.GetSignatureStatuses;
 const RpcClient = sig.rpc.Client;
 const ClusterType = sig.accounts_db.ClusterType;
 const RwMux = sig.sync.RwMux;
@@ -194,7 +192,7 @@ pub const Service = struct {
     fn processTransactions(self: *Service, rpc_client: *RpcClient) !void {
         var block_height_timer = try Timer.start();
         const block_height_response = try rpc_client
-            .fetch(GetBlockHeight{ .config = .{ .commitment = .processed } });
+            .getBlockHeight(.{ .config = .{ .commitment = .processed } });
         defer block_height_response.deinit();
         const block_height = try block_height_response.result();
         self.metrics.rpc_block_height_millis.set(block_height_timer.read().asMillis());
@@ -206,7 +204,7 @@ pub const Service = struct {
         defer transactions_lg.unlock();
 
         var signature_statuses_timer = try Timer.start();
-        const signature_statuses_response = try rpc_client.fetch(GetSignatureStatuses{
+        const signature_statuses_response = try rpc_client.getSignatureStatuses(.{
             .signatures = signatures,
             .config = .{ .searchTransactionHistory = false },
         });

@@ -2,6 +2,8 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
+pub const ParseError = std.json.ParseError(std.json.Scanner) || error{MissingResult};
+
 /// Wraps a parsed response from the RPC server with an arena that owns all
 /// contained pointers.
 pub fn Response(comptime Method: type) type {
@@ -16,7 +18,10 @@ pub fn Response(comptime Method: type) type {
             err: Error,
         };
 
-        pub fn fromJson(allocator: Allocator, response_json: []const u8) !Response(Method) {
+        pub fn fromJson(
+            allocator: Allocator,
+            response_json: []const u8,
+        ) ParseError!Response(Method) {
             const arena = try allocator.create(std.heap.ArenaAllocator);
             errdefer allocator.destroy(arena);
             arena.* = std.heap.ArenaAllocator.init(allocator);

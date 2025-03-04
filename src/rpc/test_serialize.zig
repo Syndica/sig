@@ -123,7 +123,7 @@ test GetEpochInfo {
     try testRequest(GetEpochInfo{},
         \\{"id":1,"jsonrpc":"2.0","method":"getEpochInfo","params":[]}
     );
-    try testResponse(GetEpochInfo, .{ .result = rpc.types.EpochInfo{
+    try testResponse(GetEpochInfo, .{ .result = GetEpochInfo.Response{
         .absoluteSlot = 309275328,
         .blockHeight = 268651552,
         .epoch = 728,

@@ -111,7 +111,7 @@ pub const RpcEpochContextService = struct {
     }
 
     fn refresh(self: *Self) !void {
-        const response = try self.rpc_client.fetch(rpc.methods.GetSlot{});
+        const response = try self.rpc_client.getSlot(.{});
         defer response.deinit();
         const this_slot = try response.result();
         const this_epoch = self.state.schedule.getEpoch(this_slot);
@@ -139,7 +139,7 @@ pub const RpcEpochContextService = struct {
     }
 
     fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) ![]const sig.core.Pubkey {
-        const response = try self.rpc_client.fetch(rpc.methods.GetLeaderSchedule{ .slot = slot });
+        const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
         const rpc_schedule = (try response.result()).value;
         const schedule = try leader_schedule.LeaderSchedule.fromMap(self.allocator, rpc_schedule);

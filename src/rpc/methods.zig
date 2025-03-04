@@ -1,8 +1,11 @@
+//! Every RPC method defined as a struct, where the fields are the parameters
+//! for the rpc method. The order of the fields in the struct definition must
+//! match the order of the parameters for the RPC method. Each method's response
+//! type is defined as a nested struct called Response.
+
 const std = @import("std");
 const sig = @import("../sig.zig");
 const rpc = @import("lib.zig");
-
-const types = rpc.types;
 
 const Allocator = std.mem.Allocator;
 const ParseOptions = std.json.ParseOptions;
@@ -16,19 +19,14 @@ pub const GetAccountInfo = struct {
     config: ?Config = null,
 
     pub const Config = struct {
-        commitment: ?types.Commitment = null,
+        commitment: ?common.Commitment = null,
         minContextSlot: ?u64 = null,
         encoding: ?enum { base58, base64, @"base64+zstd", jsonParsed } = null,
-        dataSlice: ?DataSlice = null,
-
-        pub const DataSlice = struct {
-            offset: usize,
-            length: usize,
-        };
+        dataSlice: ?common.DataSlice = null,
     };
 
     pub const Response = struct {
-        context: types.Context,
+        context: common.Context,
         value: ?Value,
 
         pub const Value = struct {
@@ -44,10 +42,10 @@ pub const GetAccountInfo = struct {
 
 pub const GetBalance = struct {
     pubkey: Pubkey,
-    config: ?types.CommitmentSlotConfig = null,
+    config: ?common.CommitmentSlotConfig = null,
 
     pub const Response = struct {
-        context: types.Context,
+        context: common.Context,
         value: u64,
     };
 };
@@ -56,7 +54,7 @@ pub const GetBlock = struct {
     config: ?Config = null,
 
     pub const Config = struct {
-        commitment: ?types.Commitment = null,
+        commitment: ?common.Commitment = null,
         encoding: ?enum { json, jsonParsed, base58, base64 } = null,
         transactionDetails: ?[]const u8 = null,
         maxSupportedTransactionVersion: ?u64 = null,
@@ -76,7 +74,7 @@ pub const GetBlockCommitment = struct {
 };
 
 pub const GetBlockHeight = struct {
-    config: ?types.CommitmentSlotConfig = null,
+    config: ?common.CommitmentSlotConfig = null,
 
     pub const Response = u64;
 };
@@ -87,13 +85,52 @@ pub const GetBlockHeight = struct {
 // TODO: getBlocksWithLimit
 
 pub const GetClusterNodes = struct {
-    pub const Response = []const types.RpcContactInfo;
+    pub const Response = []const common.RpcContactInfo;
+
+    // TODO field types
+    pub const RpcContactInfo = struct {
+        /// Pubkey of the node as a base-58 string
+        pubkey: []const u8,
+        /// Gossip port
+        gossip: ?[]const u8 = null,
+        /// Tvu UDP port
+        tvu: ?[]const u8 = null,
+        /// Tpu UDP port
+        tpu: ?[]const u8 = null,
+        /// Tpu QUIC port
+        tpuQuic: ?[]const u8 = null,
+        /// Tpu UDP forwards port
+        tpuForwards: ?[]const u8 = null,
+        /// Tpu QUIC forwards port
+        tpuForwardsQuic: ?[]const u8 = null,
+        /// Tpu UDP vote port
+        tpuVote: ?[]const u8 = null,
+        /// Server repair UDP port
+        serveRepair: ?[]const u8 = null,
+        /// JSON RPC port
+        rpc: ?[]const u8 = null,
+        /// WebSocket PubSub port
+        pubsub: ?[]const u8 = null,
+        /// Software version
+        version: ?[]const u8 = null,
+        /// First 4 bytes of the FeatureSet identifier
+        featureSet: ?u32 = null,
+        /// Shred version
+        shredVersion: ?u16 = null,
+    };
 };
 
 pub const GetEpochInfo = struct {
-    config: ?types.CommitmentSlotConfig = null,
+    config: ?common.CommitmentSlotConfig = null,
 
-    pub const Response = types.EpochInfo;
+    pub const Response = struct {
+        absoluteSlot: u64,
+        blockHeight: u64,
+        epoch: u64,
+        slotIndex: u64,
+        slotsInEpoch: u64,
+        transactionCount: u64,
+    };
 };
 
 pub const GetEpochSchedule = struct {
@@ -128,10 +165,10 @@ pub const GetEpochSchedule = struct {
 // TODO: getLargeAccounts
 
 pub const GetLatestBlockhash = struct {
-    config: ?types.CommitmentSlotConfig = null,
+    config: ?common.CommitmentSlotConfig = null,
 
     pub const Response = struct {
-        context: types.Context,
+        context: common.Context,
         value: Value,
 
         pub const Value = struct {
@@ -146,7 +183,7 @@ pub const GetLeaderSchedule = struct {
     config: ?Config = null,
 
     pub const Config = struct {
-        commitment: ?types.Commitment = null,
+        commitment: ?common.Commitment = null,
         identity: ?[]const u8 = null,
     };
 
@@ -195,7 +232,7 @@ pub const GetSignatureStatuses = struct {
     };
 
     pub const Response = struct {
-        context: types.Context,
+        context: common.Context,
         value: []const ?TransactionStatus,
 
         pub const TransactionStatus = struct {
@@ -211,7 +248,7 @@ pub const GetSignatureStatuses = struct {
 // TODO: getSignaturesForAddress
 
 pub const GetSlot = struct {
-    config: ?types.CommitmentSlotConfig = null,
+    config: ?common.CommitmentSlotConfig = null,
 
     pub const Response = Slot;
 };
@@ -294,7 +331,7 @@ pub const GetVoteAccounts = struct {
     config: ?Config,
 
     const Config = struct {
-        commitment: ?types.Commitment = null,
+        commitment: ?common.Commitment = null,
         votePubkey: ?Pubkey = null,
         keepUnstakedDelinquents: ?bool = null,
         delinquintSlotDistance: ?u64 = null,
@@ -323,7 +360,7 @@ pub const GetVoteAccounts = struct {
 pub const RequestAirdrop = struct {
     pubkey: Pubkey,
     lamports: u64,
-    config: ?struct { commitment: types.Commitment } = null,
+    config: ?struct { commitment: common.Commitment } = null,
 
     pub const Response = sig.core.Signature;
 };
@@ -335,7 +372,7 @@ pub const SendTransaction = struct {
     pub const Config = struct {
         encoding: ?enum { base58, bas64 } = null,
         skipPreflight: ?bool = null,
-        preflightCommitment: ?types.Commitment = null,
+        preflightCommitment: ?common.Commitment = null,
         maxRetries: ?usize = null,
         minContextSlot: ?Slot = null,
     };
@@ -344,3 +381,28 @@ pub const SendTransaction = struct {
 };
 
 // TODO: simulateTransaction
+
+/// Types that are used in multiple RPC methods.
+pub const common = struct {
+    pub const DataSlice = struct {
+        offset: usize,
+        length: usize,
+    };
+
+    pub const Commitment = enum {
+        finalized,
+        confirmed,
+        processed,
+    };
+
+    /// Used to configure several RPC method requests
+    pub const CommitmentSlotConfig = struct {
+        commitment: ?Commitment = null,
+        minContextSlot: ?sig.core.Slot = null,
+    };
+
+    pub const Context = struct {
+        slot: u64,
+        apiVersion: []const u8,
+    };
+};

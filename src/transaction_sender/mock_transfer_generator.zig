@@ -1,6 +1,5 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const types = @import("../rpc/types.zig");
 
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
@@ -15,12 +14,7 @@ const RpcClient = sig.rpc.Client;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const Duration = sig.time.Duration;
 
-const GetBalance = sig.rpc.methods.GetBalance;
-const GetBlockHeight = sig.rpc.methods.GetBlockHeight;
 const GetLatestBlockhash = sig.rpc.methods.GetLatestBlockhash;
-const GetSignatureStatuses = sig.rpc.methods.GetSignatureStatuses;
-const RequestAirdrop = sig.rpc.methods.RequestAirdrop;
-const SendTransaction = sig.rpc.methods.SendTransaction;
 
 const TRANSFER_FEE_LAMPORTS: u64 = 5000;
 const MAX_AIRDROP_LAMPORTS: u64 = 5e9;
@@ -154,8 +148,8 @@ pub const MockTransferService = struct {
                 }
                 log_timer.reset();
             }
-            const signature_statuses_response = try self.rpc_client.fetch(
-                GetSignatureStatuses{ .signatures = &[_]Signature{signature} },
+            const signature_statuses_response = try self.rpc_client.getSignatureStatuses(
+                .{ .signatures = &[_]Signature{signature} },
             );
             defer signature_statuses_response.deinit();
             const signature_statuses = try signature_statuses_response.result();
@@ -178,7 +172,7 @@ pub const MockTransferService = struct {
             );
 
             const latest_blockhash, _ = blk: {
-                const blockhash_response = try self.rpc_client.fetch(GetLatestBlockhash{});
+                const blockhash_response = try self.rpc_client.getLatestBlockhash(.{});
                 defer blockhash_response.deinit();
                 const blockhash = try blockhash_response.result();
                 break :blk .{
@@ -198,7 +192,7 @@ pub const MockTransferService = struct {
             defer transaction.deinit(self.allocator);
 
             const signature = blk: {
-                const response = try self.rpc_client.fetch(SendTransaction{ .transaction = transaction });
+                const response = try self.rpc_client.sendTransaction(.{ .transaction = transaction });
                 defer response.deinit();
                 break :blk response.result() catch |err| {
                     self.logger.debug().logf("rpc transfer failed with: {}", .{err});
@@ -226,14 +220,14 @@ pub const MockTransferService = struct {
     ) !void {
         for (0..MAX_SIG_RETRIES) |_| {
             const block_height = blk: {
-                const block_height_response = try self.rpc_client.fetch(GetBlockHeight{});
+                const block_height_response = try self.rpc_client.getBlockHeight(.{});
                 defer block_height_response.deinit();
                 const block_height = try block_height_response.result();
                 break :blk block_height;
             };
 
             const latest_blockhash, const last_valid_block_height = blk: {
-                const blockhash_response = try self.rpc_client.fetch(GetLatestBlockhash{});
+                const blockhash_response = try self.rpc_client.getLatestBlockhash(.{});
                 defer blockhash_response.deinit();
                 const blockhash = try blockhash_response.result();
                 break :blk .{
@@ -333,7 +327,7 @@ pub const MockTransferService = struct {
 
     /// Get the balance of a pubkey
     pub fn getBalance(self: *MockTransferService, pubkey: Pubkey) !u64 {
-        const balance_response = try self.rpc_client.fetch(GetBalance{ .pubkey = pubkey });
+        const balance_response = try self.rpc_client.getBalance(.{ .pubkey = pubkey });
         defer balance_response.deinit();
         const balance = try balance_response.result();
         return balance.value;
@@ -362,8 +356,8 @@ pub const MockTransferService = struct {
     ) !void {
         for (0..MAX_RPC_RETRIES) |_| {
             const signature = blk: {
-                const response = try self.rpc_client.fetch(
-                    RequestAirdrop{ .pubkey = pubkey, .lamports = lamports },
+                const response = try self.rpc_client.requestAirdrop(
+                    .{ .pubkey = pubkey, .lamports = lamports },
                 );
                 defer response.deinit();
                 break :blk try response.result();
