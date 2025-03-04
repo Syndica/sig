@@ -15,13 +15,13 @@ const LogCollector = sig.runtime.LogCollector;
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L20
 pub fn program_invoke(
     log_collector: *?LogCollector,
-    program_pubkey: Pubkey,
+    program_id: Pubkey,
     invoke_depth: usize,
 ) !void {
     if (log_collector.* != null) {
         try log_collector.*.?.log(
             "Program {} invoke [{}]",
-            .{ program_pubkey, invoke_depth },
+            .{ program_id, invoke_depth },
         );
     }
 }
@@ -78,7 +78,7 @@ pub fn program_data(log_collector: *?LogCollector, data: []const []const u8) !vo
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L73
 pub fn program_return(
     log_collector: *?LogCollector,
-    program_pubkey: Pubkey,
+    program_id: Pubkey,
     data: []const u8,
 ) !void {
     if (log_collector.* != null) {
@@ -86,7 +86,7 @@ pub fn program_return(
             log_collector,
             "Program return: {} {any}",
             .{
-                program_pubkey,
+                program_id,
                 data, // TODO: Base64 encode
             },
         );
@@ -102,9 +102,9 @@ pub fn program_return(
 /// ```
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L93
-pub fn program_success(log_collector: *?LogCollector, program_pubkey: Pubkey) !void {
+pub fn program_success(log_collector: *?LogCollector, program_id: Pubkey) !void {
     if (log_collector.* != null) {
-        try log_collector.*.?.log("Program {} success", .{program_pubkey});
+        try log_collector.*.?.log("Program {} success", .{program_id});
     }
 }
 
@@ -119,10 +119,10 @@ pub fn program_success(log_collector: *?LogCollector, program_pubkey: Pubkey) !v
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L104
 pub fn program_failure(
     log_collector: *?LogCollector,
-    program_pubkey: Pubkey,
+    program_id: Pubkey,
     err: anytype,
 ) !void {
     if (log_collector.* != null) {
-        try log_collector.*.?.log("Program {} failed: {any}", .{ program_pubkey, err });
+        try log_collector.*.?.log("Program {} failed: {any}", .{ program_id, err });
     }
 }

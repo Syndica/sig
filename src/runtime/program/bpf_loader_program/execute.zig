@@ -441,7 +441,7 @@ pub fn executeV3DeployWithMaxDataLen(
         return InstructionError.Custom;
     };
 
-    const account_metas = &.{
+    const accounts = &.{
         .{ .pubkey = payer_key, .is_signer = true, .is_writable = true },
         .{ .pubkey = program_data_key, .is_signer = true, .is_writable = true },
         // pass an extra account to avoid the overly strict UnbalancedInstruction error
@@ -473,8 +473,8 @@ pub fn executeV3DeployWithMaxDataLen(
         allocator,
         ic.tc,
         Instruction{
-            .program_pubkey = system_program.ID,
-            .account_metas = account_metas,
+            .program_id = system_program.ID,
+            .accounts = accounts,
             .data = data,
         },
         &.{signer_derived_key},

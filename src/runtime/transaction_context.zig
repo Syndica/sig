@@ -18,10 +18,10 @@ const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
-pub const MAX_INSTRUCTION_TRACE_LENGTH: usize = 64;
+pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
 
 // https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
-pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
+pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
@@ -66,8 +66,8 @@ pub const TransactionContext = struct {
     );
 
     pub const InstructionTrace = std.BoundedArray(struct {
-        instruction_info: InstructionInfo,
-        stack_height: usize,
+        info: InstructionInfo,
+        depth: u8,
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
     pub fn deinit(self: TransactionContext, allocator: std.mem.Allocator) void {
@@ -140,7 +140,7 @@ pub const TransactionContext = struct {
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L493
 pub const TransactionReturnData = struct {
-    program_pubkey: Pubkey = Pubkey.ZEROES,
+    program_id: Pubkey = Pubkey.ZEROES,
     data: std.ArrayListUnmanaged(u8) = .{},
 };
 

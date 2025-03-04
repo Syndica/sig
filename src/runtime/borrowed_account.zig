@@ -25,7 +25,7 @@ pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
 /// Borrowed account context exists to provide information about the context under which an account
 /// was borrowed. It replaces the reference to an `InstructionContext` used in Agave.
 pub const BorrowedAccountContext = struct {
-    program_pubkey: Pubkey,
+    program_id: Pubkey,
     is_signer: bool = false,
     is_writable: bool = false,
 };
@@ -56,7 +56,7 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1068
     pub fn isOwnedByCurrentProgram(self: BorrowedAccount) bool {
-        return self.account.owner.equals(&self.context.program_pubkey);
+        return self.account.owner.equals(&self.context.program_id);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1042

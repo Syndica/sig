@@ -82,7 +82,7 @@ pub fn createTransactionContext(
 pub fn createInstructionInfo(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
-    program_pubkey: Pubkey,
+    program_id: Pubkey,
     instruction: anytype,
     accounts_params: []const InstructionContextAccountMetaParams,
 ) !InstructionInfo {
@@ -91,7 +91,7 @@ pub fn createInstructionInfo(
 
     const program_index_in_transaction = blk: {
         for (tc.accounts, 0..) |account, index| {
-            if (account.pubkey.equals(&program_pubkey)) break :blk index;
+            if (account.pubkey.equals(&program_id)) break :blk index;
         }
         return error.CoulfNotFindProgramAccount;
     };
@@ -125,7 +125,7 @@ pub fn createInstructionInfo(
 
     return .{
         .program_meta = .{
-            .pubkey = program_pubkey,
+            .pubkey = program_id,
             .index_in_transaction = @intCast(program_index_in_transaction),
         },
         .account_metas = account_metas,

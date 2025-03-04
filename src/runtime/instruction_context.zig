@@ -19,11 +19,11 @@ pub const InstructionContext = struct {
     /// The transaction context associated with this instruction execution
     tc: *TransactionContext,
 
-    /// The instruction context which invoked this instruction execution
-    parent: ?*const InstructionContext,
-
     /// The instruction information which is constant accross execution
     info: InstructionInfo,
+
+    /// The depth of the instruction on the stack
+    depth: u8,
 
     pub fn deinit(self: *InstructionContext, allocator: std.mem.Allocator) void {
         self.info.deinit(allocator);
@@ -35,7 +35,7 @@ pub const InstructionContext = struct {
     ) InstructionError!BorrowedAccount {
         const program_meta = self.info.program_meta;
         return self.tc.borrowAccountAtIndex(program_meta.index_in_transaction, .{
-            .program_pubkey = program_meta.pubkey,
+            .program_id = program_meta.pubkey,
         });
     }
 
@@ -48,7 +48,7 @@ pub const InstructionContext = struct {
             return InstructionError.NotEnoughAccountKeys;
         };
         return try self.tc.borrowAccountAtIndex(account_meta.index_in_transaction, .{
-            .program_pubkey = self.info.program_meta.pubkey,
+            .program_id = self.info.program_meta.pubkey,
             .is_signer = account_meta.is_signer,
             .is_writable = account_meta.is_writable,
         });

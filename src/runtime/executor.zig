@@ -24,7 +24,7 @@ pub fn executeInstruction(
     var ic = try pushInstruction(tc, instruction_info);
 
     // [agave] https://github.com/anza-xyz/agave/blob/a1ed2b1052bde05e79c31388b399dba9da10f7de/program-runtime/src/invoke_context.rs#L518-L529
-    const program_pubkey = blk: {
+    const program_id = blk: {
         const program_account = ic.borrowProgramAccount() catch {
             return InstructionError.UnsupportedProgramId;
         };
@@ -38,11 +38,11 @@ pub fn executeInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
     const maybe_precompile_fn =
-        program.PRECOMPILE_ENTRYPOINTS.get(program_pubkey.base58String().slice());
+        program.PRECOMPILE_ENTRYPOINTS.get(program_id.base58String().slice());
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
-            program_pubkey.base58String().slice(),
+            program_id.base58String().slice(),
         );
         tc.return_data.data.clearRetainingCapacity();
         break :blk native_program_fn;
@@ -53,17 +53,17 @@ pub fn executeInstruction(
     };
 
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
-    try stable_log.program_invoke(&tc.log_collector, program_pubkey, tc.instruction_stack.len);
+    try stable_log.program_invoke(&tc.log_collector, program_id, tc.instruction_stack.len);
     const maybe_execute_error = native_program_fn(allocator, ic);
 
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1168-L1190
     const maybe_pop_error = popInstruction(tc);
 
     if (maybe_execute_error) |execute_error| {
-        try stable_log.program_failure(&tc.log_collector, program_pubkey, execute_error);
+        try stable_log.program_failure(&tc.log_collector, program_id, execute_error);
         return execute_error;
     } else {
-        try stable_log.program_success(&tc.log_collector, program_pubkey);
+        try stable_log.program_success(&tc.log_collector, program_id);
         if (maybe_pop_error) |pop_error| return pop_error;
     }
 }
@@ -89,11 +89,11 @@ fn pushInstruction(
     tc: *TransactionContext,
     instruction_info: InstructionInfo,
 ) InstructionError!*InstructionContext {
-    const program_pubkey = instruction_info.program_meta.pubkey;
+    const program_id = instruction_info.program_meta.pubkey;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
     // [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_executor.c#L1001-L101
-    if (program_pubkey.equals(&ids.NATIVE_LOADER_ID)) {
+    if (program_id.equals(&ids.NATIVE_LOADER_ID)) {
         return InstructionError.UnsupportedProgramId;
     }
 
@@ -101,7 +101,7 @@ fn pushInstruction(
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
     for (tc.instruction_stack.constSlice(), 0..) |ic, level| {
         // If the program is on the stack, it must be the last entry otherwise it is a reentrancy violation
-        if (program_pubkey.equals(&ic.info.program_meta.pubkey) and
+        if (program_id.equals(&ic.info.program_meta.pubkey) and
             level != tc.instruction_stack.len - 1)
         {
             return InstructionError.ReentrancyNotAllowed;
@@ -119,13 +119,12 @@ fn pushInstruction(
         instruction_info.account_metas.constSlice(),
     );
 
-    const maybe_parent = if (tc.instruction_stack.len > 0) blk: {
+    if (tc.instruction_stack.len > 0) {
         const parent = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         const initial_lamports = parent.info.initial_account_lamports;
         const current_lamports = sumAccountLamports(tc, parent.info.account_metas.constSlice());
         if (initial_lamports != current_lamports) return InstructionError.UnbalancedInstruction;
-        break :blk parent;
-    } else null;
+    }
 
     if (tc.instruction_trace.len >= tc.instruction_trace.capacity()) {
         return InstructionError.MaxInstructionTraceLengthExceeded;
@@ -144,13 +143,13 @@ fn pushInstruction(
 
     tc.instruction_stack.appendAssumeCapacity(.{
         .tc = tc,
-        .parent = maybe_parent,
         .info = info,
+        .depth = @intCast(tc.instruction_stack.len),
     });
 
     tc.instruction_trace.appendAssumeCapacity(.{
-        .instruction_info = info,
-        .stack_height = tc.instruction_stack.len,
+        .info = info,
+        .depth = @intCast(tc.instruction_stack.len),
     });
 
     return &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
@@ -210,34 +209,34 @@ pub fn prepareCpiInstructionInfo(
     var deduped_indexes = std.BoundedArray(usize, InstructionInfo.MAX_ACCOUNT_METAS){};
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
-    for (callee.account_metas, 0..) |account_meta, index| {
-        const index_in_transaction = tc.getAccountIndex(account_meta.pubkey) orelse {
-            try tc.log("Instruction references unkown account {}", .{account_meta.pubkey});
+    for (callee.accounts, 0..) |account, index| {
+        const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
+            try tc.log("Instruction references unkown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
         for (deduped_instruction_accounts.slice(), 0..) |*dd_account, dd_index| {
             if (dd_account.index_in_transaction == index_in_transaction) {
                 deduped_indexes.appendAssumeCapacity(dd_index);
-                dd_account.is_signer = dd_account.is_signer or account_meta.is_signer;
-                dd_account.is_writable = dd_account.is_writable or account_meta.is_writable;
+                dd_account.is_signer = dd_account.is_signer or account.is_signer;
+                dd_account.is_writable = dd_account.is_writable or account.is_writable;
             }
             continue;
         }
 
-        const index_in_caller = caller.info.getAccountMetaIndex(account_meta.pubkey) orelse {
-            try tc.log("Instruction references unkown account {}", .{account_meta.pubkey});
+        const index_in_caller = caller.info.getAccountMetaIndex(account.pubkey) orelse {
+            try tc.log("Instruction references unkown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
         deduped_indexes.appendAssumeCapacity(deduped_instruction_accounts.len);
         deduped_instruction_accounts.appendAssumeCapacity(.{
-            .pubkey = account_meta.pubkey,
+            .pubkey = account.pubkey,
             .index_in_transaction = index_in_transaction,
             .index_in_caller = index_in_caller,
             .index_in_callee = @intCast(index),
-            .is_signer = account_meta.is_signer,
-            .is_writable = account_meta.is_writable,
+            .is_signer = account.is_signer,
+            .is_writable = account.is_writable,
         });
     }
 
@@ -283,8 +282,8 @@ pub fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const index_in_caller = caller.info.getAccountMetaIndex(callee.program_pubkey) orelse {
-        try tc.log("Unknown program {}", .{callee.program_pubkey});
+    const index_in_caller = caller.info.getAccountMetaIndex(callee.program_id) orelse {
+        try tc.log("Unknown program {}", .{callee.program_id});
         return InstructionError.MissingAccount;
     };
     const index_in_transaction =
@@ -295,13 +294,13 @@ pub fn prepareCpiInstructionInfo(
     defer borrowed_program_account.release();
 
     if (!borrowed_program_account.account.executable) {
-        try tc.log("Account {} is not executable", .{callee.program_pubkey});
+        try tc.log("Account {} is not executable", .{callee.program_id});
         return InstructionError.AccountNotExecutable;
     }
 
     return .{
         .program_meta = .{
-            .pubkey = callee.program_pubkey,
+            .pubkey = callee.program_id,
             .index_in_transaction = index_in_transaction,
         },
         .account_metas = instruction_accounts,
