@@ -495,7 +495,7 @@ test "executeIntializeAccount" {
     );
 }
 
-test "executeAuthorize_signed_by_current_withdrawer" {
+test "executeAuthorize_withdrawer_signed_by_current_withdrawer" {
     const expectProgramExecuteResult =
         sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
