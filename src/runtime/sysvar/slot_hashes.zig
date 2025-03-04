@@ -16,12 +16,12 @@ pub const SlotHashes = struct {
 
     fn compareFn(context: void, key: Slot, mid_item: Entry) std.math.Order {
         _ = context;
-        return std.math.order(key < mid_item[0]);
+        return std.math.order(key, mid_item[0]);
     }
 
     pub fn get(self: *const SlotHashes, slot: u64) ?Hash {
-        const found_index = std.sort.binarySearch(Slot, slot, self.entries, {}, compareFn) orelse
+        const found_index = std.sort.binarySearch(Entry, slot, self.entries, {}, compareFn) orelse
             return null;
-        return self.entries[found_index];
+        return self.entries[found_index][1];
     }
 };

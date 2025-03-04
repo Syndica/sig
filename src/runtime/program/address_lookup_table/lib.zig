@@ -33,6 +33,19 @@ pub const LOOKUP_TABLE_META_SIZE: usize = 56;
 // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L23
 pub const COMPUTE_UNITS = 750;
 
-const relax_authority_signer_check_for_lookup_table_creation = Pubkey.parseBase58String(
-    "relax_authority_signer_check_for_lookup_table_creation",
+pub const relax_authority_signer_check_for_lookup_table_creation = Pubkey.parseBase58String(
+    "FKAcEvNgSY79RpqsPNUV5gDyumopH4cEHqUxyfm8b8Ap",
 ) catch unreachable;
+
+test "bad execute" {
+    _ = sig.runtime.program.testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        @This(),
+        Instruction{
+            .CreateLookupTable = .{ .bump_seed = 0, .recent_slot = 0 },
+        },
+        &.{},
+        .{ .accounts = &.{} },
+        .{ .accounts = &.{} },
+    ) catch {};
+}

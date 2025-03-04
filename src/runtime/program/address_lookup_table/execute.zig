@@ -22,15 +22,20 @@ const program = @import("lib.zig");
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     // agave: consumed in declare_process_instruction
     try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
 
-    const instruction = try ic.deserializeInstruction(allocator, program.Instruction);
+    const instruction = try ic.info.deserializeInstruction(allocator, program.Instruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
-        .CreateLookupTable => |args| try createLookupTable(ic, args.recent_slot, args.bump_seed),
+        .CreateLookupTable => |args| try createLookupTable(
+            allocator,
+            ic,
+            args.recent_slot,
+            args.bump_seed,
+        ),
         .FreezeLookupTable => try freezeLookupTable(allocator, ic),
         .ExtendLookupTable => |args| try extendLookupTable(allocator, ic, args.new_addresses),
         .DeactivateLookupTable => try deactivateLookupTable(allocator, ic),
@@ -67,22 +72,23 @@ pub const AddressLookupTable = struct {
 
 // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L51
 fn createLookupTable(
+    allocator: std.mem.Allocator,
     ic: *InstructionContext,
     untrusted_recent_slot: Slot,
     bump_seed: u8,
-) (error{OutOfMemory} | InstructionError)!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const has_relax_authority_signer_check_for_lookup_table_creation =
         ic.tc.feature_set.active.contains(program.relax_authority_signer_check_for_lookup_table_creation);
 
     // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L59
-    const lookup_table_lamports, const table_key, const lookup_table_owner = blk: {
+    const lookup_table_lamports, const table_key: Pubkey, const lookup_table_owner: Pubkey = blk: {
         const lookup_table_account = try ic.borrowInstructionAccount(0);
         defer lookup_table_account.release();
 
         if (!has_relax_authority_signer_check_for_lookup_table_creation and
-            lookup_table_account.getData().len > 0)
+            lookup_table_account.account.data.len > 0)
         {
-            ic.tc.log("Table account must not be allocated", .{});
+            try ic.tc.log("Table account must not be allocated", .{});
             return error.AccountAlreadyInitialized;
         }
 
@@ -99,9 +105,9 @@ fn createLookupTable(
         defer authority_account.release();
 
         if (!has_relax_authority_signer_check_for_lookup_table_creation and
-            !authority_account.borrow_context.is_signer)
+            !authority_account.context.is_signer)
         {
-            ic.tc.log("Authority account must be a signer");
+            try ic.tc.log("Authority account must be a signer", .{});
             return error.MissingRequiredSignature;
         }
 
@@ -113,8 +119,8 @@ fn createLookupTable(
         const payer_account = try ic.borrowInstructionAccount(2);
         defer payer_account.release();
 
-        if (!payer_account.borrow_context.is_signer) {
-            ic.tc.log("Payer account must be a signer", .{});
+        if (!payer_account.context.is_signer) {
+            try ic.tc.log("Payer account must be a signer", .{});
             return error.MissingRequiredSignature;
         }
 
@@ -125,28 +131,30 @@ fn createLookupTable(
         const slot_hashes = ic.tc.sysvar_cache.get(sysvar.SlotHashes) orelse
             return error.UnsupportedSysvar;
 
-        break :blk slot_hashes.get(untrusted_recent_slot) orelse {
-            ic.tc.log("{} is not a recent slot", .{untrusted_recent_slot});
-            return error.InvalidInstructionIndex;
-        };
+        if (slot_hashes.get(untrusted_recent_slot)) |_| {
+            break :blk untrusted_recent_slot;
+        } else {
+            try ic.tc.log("{} is not a recent slot", .{untrusted_recent_slot});
+            return error.InvalidInstructionData;
+        }
     };
 
-    const derived_table_key = try sig.runtime.pubkey_utils.createProgramAddress(
+    const derived_table_key = sig.runtime.pubkey_utils.createProgramAddress(
         &.{
             &authority_key.data,
             std.mem.asBytes(&std.mem.nativeToLittle(Slot, derivation_slot)),
         },
-        bump_seed,
+        &.{bump_seed},
         program.ID,
-    );
+    ) catch @panic("todo: error handling");
 
-    if (table_key != derived_table_key) {
-        ic.tc.log("Table address must mach derived address: {}", .{derived_table_key});
+    if (!table_key.equals(&derived_table_key)) {
+        try ic.tc.log("Table address must mach derived address: {}", .{derived_table_key});
         return error.InvalidArgument;
     }
 
     if (has_relax_authority_signer_check_for_lookup_table_creation and
-        lookup_table_owner == program.ID)
+        lookup_table_owner.equals(&program.ID))
     {
         return; // success
     }
@@ -158,12 +166,20 @@ fn createLookupTable(
     ) -| lookup_table_lamports;
 
     if (required_lamports > 0) {
-        // TODO: CPI
-        // invoke_context.native_invoke(
-        //     system_instruction::transfer(&payer_key, &table_key, required_lamports).into(),
-        //     &[payer_key],
-        // )?;
+        // const transfer_instruction = system_program.Instruction{
+        //     .transfer = .{ .lamports = required_lamports },
+        // };
+
+        // sig.runtime.executor.executeNativeCpiInstruction(
+        //     allocator,
+        //     ic.tc,
+        //     transfer_instruction,
+        //     &.{&payer_key},
+        // );
+
         _ = payer_key;
+        _ = allocator;
+        @panic("TODO");
     }
 
     // TODO: CPI
