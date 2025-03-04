@@ -13,7 +13,18 @@ const Slot = sig.core.Slot;
 const system_program = sig.runtime.program.system_program;
 const SystemProgramError = system_program.Error;
 const SystemProgramInstruction = system_program.Instruction;
-const InstructionError = sig.core.instruction.InstructionErrorEnum;
+const SysvarCache = sig.runtime.SysvarCache;
+const sysvar = sig.runtime.sysvar;
+
+pub const ID = sig.runtime.ids.ADDRESS_LOOKUP_TABLE_PROGRAM_ID;
+
+// https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L30
+/// The maximum number of addresses that a lookup table can hold
+pub const LOOKUP_TABLE_MAX_ADDRESSES: usize = 256;
+
+//https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L33
+/// The serialized size of lookup table metadata
+pub const LOOKUP_TABLE_META_SIZE: usize = 56;
 
 // https://github.com/anza-xyz/agave/blob/7e8a1ddf86fa84b0ca4b64360af89399afd9de44/sdk/program/src/address_lookup_table/instruction.rs#L13
 pub const Instruction = union(enum) {
@@ -95,7 +106,7 @@ pub fn execute(
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
-        .CreateLookupTable => |args| try createLookupTable(allocator, ic, args.recent_slot, args.bump_seed),
+        .CreateLookupTable => |args| try createLookupTable(ic, args.recent_slot, args.bump_seed),
         .FreezeLookupTable => try freezeLookupTable(allocator, ic),
         .ExtendLookupTable => |args| try extendLookupTable(allocator, ic, args.new_addresses),
         .DeactivateLookupTable => try deactivateLookupTable(allocator, ic),
@@ -136,33 +147,124 @@ const relax_authority_signer_check_for_lookup_table_creation = Pubkey.parseBase5
 
 // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L51
 fn createLookupTable(
-    allocator: std.mem.Allocator,
     ic: *InstructionContext,
-    recent_slot: Slot,
+    untrusted_recent_slot: Slot,
     bump_seed: u8,
 ) (error{OutOfMemory} | InstructionError)!void {
-    _ = allocator;
-    _ = recent_slot;
-    _ = bump_seed;
-
-    const lookup_table_account = try ic.borrowInstructionAccount(0);
-    defer lookup_table_account.release();
-
     const has_relax_authority_signer_check_for_lookup_table_creation =
         ic.tc.feature_set.active.contains(relax_authority_signer_check_for_lookup_table_creation);
 
-    // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L64
-    if (!has_relax_authority_signer_check_for_lookup_table_creation and
-        lookup_table_account.getData().len > 0)
-    {
-        ic.tc.log("Table account must not be allocated", .{});
-        return error.AccountAlreadInitialized;
+    // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L59
+    const lookup_table_lamports, const table_key, const lookup_table_owner = blk: {
+        const lookup_table_account = try ic.borrowInstructionAccount(0);
+        defer lookup_table_account.release();
+
+        if (!has_relax_authority_signer_check_for_lookup_table_creation and
+            lookup_table_account.getData().len > 0)
+        {
+            ic.tc.log("Table account must not be allocated", .{});
+            return error.AccountAlreadyInitialized;
+        }
+
+        break :blk .{
+            lookup_table_account.account.lamports,
+            lookup_table_account.pubkey,
+            lookup_table_account.account.owner,
+        };
+    };
+
+    // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L74
+    const authority_key = blk: {
+        const authority_account = try ic.borrowInstructionAccount(1);
+        defer authority_account.release();
+
+        if (!has_relax_authority_signer_check_for_lookup_table_creation and
+            !authority_account.borrow_context.is_signer)
+        {
+            ic.tc.log("Authority account must be a signer");
+            return error.MissingRequiredSignature;
+        }
+
+        break :blk authority_account.pubkey;
+    };
+
+    // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L87
+    const payer_key = blk: {
+        const payer_account = try ic.borrowInstructionAccount(2);
+        defer payer_account.release();
+
+        if (!payer_account.borrow_context.is_signer) {
+            ic.tc.log("Payer account must be a signer", .{});
+            return error.MissingRequiredSignature;
+        }
+
+        break :blk payer_account.pubkey;
+    };
+
+    const derivation_slot = blk: {
+        const slot_hashes = ic.tc.sysvar_cache.get(sysvar.SlotHashes) orelse
+            return error.UnsupportedSysvar;
+
+        break :blk slot_hashes.get(untrusted_recent_slot) orelse {
+            ic.tc.log("{} is not a recent slot", .{untrusted_recent_slot});
+            return error.InvalidInstructionIndex;
+        };
+    };
+
+    const derived_table_key = try sig.runtime.pubkey_utils.createProgramAddress(
+        &.{
+            &authority_key.data,
+            std.mem.asBytes(&std.mem.nativeToLittle(Slot, derivation_slot)),
+        },
+        bump_seed,
+        ID,
+    );
+
+    if (table_key != derived_table_key) {
+        ic.tc.log("Table address must mach derived address: {}", .{derived_table_key});
+        return error.InvalidArgument;
     }
 
-    // const authority_account = try ic.borrowInstructionAccount(1);
+    if (has_relax_authority_signer_check_for_lookup_table_creation and lookup_table_owner == ID) {
+        return; // success
+    }
 
-    // if (!has_relax_authority_signer_check_for_lookup_table_creation and authority_account.is)
-    @panic("TODO");
+    const rent = ic.tc.sysvar_cache.get(sysvar.Rent) orelse return error.UnsupportedSysvar;
+    const required_lamports = @max(
+        rent.minimumBalance(LOOKUP_TABLE_META_SIZE),
+        1,
+    ) -| lookup_table_lamports;
+
+    if (required_lamports > 0) {
+        // TODO: CPI
+        // invoke_context.native_invoke(
+        //     system_instruction::transfer(&payer_key, &table_key, required_lamports).into(),
+        //     &[payer_key],
+        // )?;
+        _ = payer_key;
+    }
+
+    // TODO: CPI
+    // invoke_context.native_invoke(
+    //     system_instruction::allocate(&table_key, table_account_data_len as u64).into(),
+    //     &[table_key],
+    // )?;
+    // invoke_context.native_invoke(
+    //     system_instruction::assign(&table_key, &id()).into(),
+    //     &[table_key],
+    // )?;
+
+    {
+        const lookup_table_account = try ic.borrowInstructionAccount(0);
+        defer lookup_table_account.release();
+
+        // TODO: set_state
+        //         lookup_table_account.set_state(&ProgramState::LookupTable(LookupTableMeta::new(
+        //     authority_key,
+        // )))?;
+    }
+
+    // success
 }
 
 // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L173
