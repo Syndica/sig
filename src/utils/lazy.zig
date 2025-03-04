@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 const ParamsTuple = sig.utils.types.ParamsTuple;
@@ -34,7 +35,7 @@ pub fn Lazy(comptime T: type) type {
                 .genericFn = struct {
                     fn genericFn(opaque_ptr: *anyopaque) T {
                         const args_back: *ParamsTuple(function) = @ptrCast(@alignCast(opaque_ptr));
-                        @call(.auto, function, args_back.*);
+                        return @call(.auto, function, args_back.*);
                     }
                 }.genericFn,
                 .state = @as(*anyopaque, @ptrCast(@alignCast(args_ptr))),
@@ -52,4 +53,49 @@ pub fn Lazy(comptime T: type) type {
             return self.genericFn(self.state);
         }
     };
+}
+
+test Lazy {
+    // void example
+    {
+        const allocator = std.testing.allocator;
+        var a = false;
+        const lazy = try Lazy(void).init(allocator, _set, .{&a});
+        try testing.expect(!a);
+        _ = lazy.call();
+        try testing.expect(a);
+    }
+
+    // void multiple arguments
+    {
+        const allocator = std.testing.allocator;
+        var a = false;
+        var b = false;
+        const lazy = try Lazy(void).init(allocator, _set2, .{ &a, &b });
+        try testing.expect(!a);
+        try testing.expect(!b);
+        _ = lazy.call();
+        try testing.expect(a);
+        try testing.expect(b);
+    }
+
+    // non-void return type
+    {
+        const allocator = std.testing.allocator;
+        const lazy = try Lazy(i32).init(allocator, _add, .{ 1, 41 });
+        try testing.expectEqual(lazy.call(), 42);
+    }
+}
+
+fn _set(x: *bool) void {
+    x.* = true;
+}
+
+fn _set2(x: *bool, y: *bool) void {
+    x.* = true;
+    y.* = true;
+}
+
+fn _add(x: i32, y: i32) i32 {
+    return x + y;
 }
