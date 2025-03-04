@@ -49,8 +49,9 @@ pub fn executeNativeCpiInstruction(
 /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1034-L1035
 fn pushInstruction(
     tc: *TransactionContext,
-    instruction_info: InstructionInfo,
+    instruction_info_: InstructionInfo,
 ) InstructionError!void {
+    var instruction_info = instruction_info_;
     const program_id = instruction_info.program_meta.pubkey;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
@@ -76,7 +77,8 @@ fn pushInstruction(
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L366-L403
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L975-L976
 
-    const initial_account_lamports = sumAccountLamports(
+    // Set initial account lamports before pushing the instruction context
+    instruction_info.initial_account_lamports = try sumAccountLamports(
         tc,
         instruction_info.account_metas.constSlice(),
     );
@@ -84,7 +86,8 @@ fn pushInstruction(
     if (tc.instruction_stack.len > 0) {
         const parent = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         const initial_lamports = parent.info.initial_account_lamports;
-        const current_lamports = sumAccountLamports(tc, parent.info.account_metas.constSlice());
+        const current_lamports =
+            try sumAccountLamports(tc, parent.info.account_metas.constSlice());
         if (initial_lamports != current_lamports) return InstructionError.UnbalancedInstruction;
     }
 
@@ -96,21 +99,14 @@ fn pushInstruction(
         return InstructionError.CallDepth;
     }
 
-    const info = .{
-        .program_meta = instruction_info.program_meta,
-        .account_metas = instruction_info.account_metas,
-        .instruction_data = instruction_info.instruction_data,
-        .initial_account_lamports = initial_account_lamports,
-    };
-
     tc.instruction_stack.appendAssumeCapacity(.{
         .tc = tc,
-        .info = info,
+        .info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
     });
 
     tc.instruction_trace.appendAssumeCapacity(.{
-        .info = info,
+        .info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
     });
 }
@@ -193,7 +189,7 @@ fn popInstruction(
         program_account.release();
 
         const initial_lamports = ic.info.initial_account_lamports;
-        const current_lamports = sumAccountLamports(tc, ic.info.account_metas.constSlice());
+        const current_lamports = try sumAccountLamports(tc, ic.info.account_metas.constSlice());
 
         break :blk (initial_lamports != current_lamports);
     };
@@ -328,23 +324,110 @@ fn prepareCpiInstructionInfo(
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L452
 fn sumAccountLamports(
-    self: *const TransactionContext,
+    tc: *const TransactionContext,
     account_metas: []const InstructionInfo.AccountMeta,
-) u128 {
+) InstructionError!u128 {
     var lamports: u128 = 0;
     for (account_metas, 0..) |account_meta, index| {
         if (account_meta.index_in_callee != index) continue;
 
-        const transaction_account =
-            self.getAccountAtIndex(account_meta.index_in_transaction) orelse return 0;
+        const transaction_account = tc.getAccountAtIndex(
+            account_meta.index_in_transaction,
+        ) orelse return InstructionError.NotEnoughAccountKeys;
 
-        const account, const account_read_lock =
-            transaction_account.readWithLock() orelse return 0;
-        defer account_read_lock.release();
+        const account, const read_lock = transaction_account.readWithLock() orelse
+            return InstructionError.AccountBorrowOutstanding;
+        defer read_lock.release();
 
         lamports = std.math.add(u128, lamports, account.lamports) catch {
-            return 0;
+            // Effectively unreachable, would required greater
+            // than 1.8e19 accounts with max u64 lamports
+            return InstructionError.ArithmeticOverflow;
         };
     }
     return lamports;
+}
+
+test "sumAccountLamports" {
+    std.debug.print("HI\n", .{});
+    const allocator = std.testing.allocator;
+    const createTransactionContext = sig.runtime.testing.createTransactionContext;
+    const createInstructionContextAccountMetas = sig.runtime.testing.createInstructionContextAccountMetas;
+
+    var tc = try createTransactionContext(
+        allocator,
+        .{
+            .accounts = &.{
+                .{ .lamports = 0 },
+                .{ .lamports = 1 },
+                .{ .lamports = 2 },
+                .{ .lamports = 3 },
+            },
+        },
+    );
+    defer tc.deinit(allocator);
+
+    {
+        const account_metas = try createInstructionContextAccountMetas(&tc, &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+            .{ .index_in_transaction = 2 },
+            .{ .index_in_transaction = 3 },
+        });
+        try std.testing.expectEqual(
+            6,
+            try sumAccountLamports(&tc, account_metas.constSlice()),
+        );
+    }
+
+    {
+        const account_metas = try createInstructionContextAccountMetas(&tc, &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+            .{ .index_in_transaction = 2 },
+            .{ .index_in_transaction = 0 },
+        });
+
+        try std.testing.expectEqual(
+            3,
+            try sumAccountLamports(&tc, account_metas.constSlice()),
+        );
+    }
+
+    {
+        var account_metas = try createInstructionContextAccountMetas(&tc, &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+            .{ .index_in_transaction = 2 },
+            .{ .index_in_transaction = 3 },
+        });
+
+        account_metas.buffer[0].index_in_transaction = 4;
+
+        try std.testing.expectError(
+            InstructionError.NotEnoughAccountKeys,
+            sumAccountLamports(&tc, account_metas.constSlice()),
+        );
+    }
+
+    {
+        const borrowed_account = try tc.borrowAccountAtIndex(0, .{
+            .program_id = Pubkey.ZEROES,
+            .is_signer = false,
+            .is_writable = false,
+        });
+        defer borrowed_account.release();
+
+        const account_metas = try createInstructionContextAccountMetas(&tc, &.{
+            .{ .index_in_transaction = 0 },
+            .{ .index_in_transaction = 1 },
+            .{ .index_in_transaction = 2 },
+            .{ .index_in_transaction = 3 },
+        });
+
+        try std.testing.expectError(
+            InstructionError.AccountBorrowOutstanding,
+            sumAccountLamports(&tc, account_metas.constSlice()),
+        );
+    }
 }
