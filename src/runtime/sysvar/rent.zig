@@ -45,4 +45,8 @@ pub const Rent = struct {
         );
         return @intFromFloat(self.exemption_threshold * lamports_per_year);
     }
+
+    pub fn isExempt(self: Rent, lamports: u64, data_len: usize) bool {
+        return lamports >= self.minimumBalance(data_len);
+    }
 };
