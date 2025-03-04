@@ -5,17 +5,10 @@ const ids = sig.runtime.ids;
 const program = sig.runtime.program;
 const stable_log = sig.runtime.stable_log;
 
-const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
 
-const AccountSharedData = sig.runtime.AccountSharedData;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
-const BorrowedAccountContext = sig.runtime.BorrowedAccountContext;
-const FeatureSet = sig.runtime.FeatureSet;
-const LogCollector = sig.runtime.LogCollector;
-const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
@@ -26,7 +19,7 @@ pub fn executeInstruction(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
     instruction_info: InstructionInfo,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474
     var ic = try pushInstruction(tc, instruction_info);
 
@@ -44,41 +37,34 @@ pub fn executeInstruction(
     };
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
-    const maybe_native_program_fn = program.PRECOMPILE_ENTRYPOINTS.get(program_pubkey.base58String().slice()) orelse blk: {
-        const entrypoint = program.PROGRAM_ENTRYPOINTS.get(program_pubkey.base58String().slice());
+    const maybe_precompile_fn =
+        program.PRECOMPILE_ENTRYPOINTS.get(program_pubkey.base58String().slice());
+
+    const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
+        const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
+            program_pubkey.base58String().slice(),
+        );
         tc.return_data.data.clearRetainingCapacity();
-        break :blk entrypoint;
+        break :blk native_program_fn;
+    };
+
+    const native_program_fn = maybe_native_program_fn orelse {
+        return InstructionError.UnsupportedProgramId;
     };
 
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
-    var execute_error: ?InstructionError = null;
-    if (maybe_native_program_fn) |native_program_fn| {
-        stable_log.program_invoke(&tc.log_collector, program_pubkey, tc.instruction_stack.len) catch |err| {
-            tc.custom_error = @intFromError(err);
-            return InstructionError.Custom;
-        };
-        native_program_fn(allocator, ic) catch |err| {
-            execute_error = err;
-        };
-    } else return InstructionError.UnsupportedProgramId;
+    try stable_log.program_invoke(&tc.log_collector, program_pubkey, tc.instruction_stack.len);
+    const maybe_execute_error = native_program_fn(allocator, ic);
 
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1168-L1190
-    const pop_error = popInstruction(tc);
-    if (execute_error == null) {
-        stable_log.program_success(&tc.log_collector, program_pubkey) catch |err| {
-            tc.custom_error = @intFromError(err);
-            return InstructionError.Custom;
-        };
-        if (pop_error != null) execute_error = pop_error;
-    } else {
-        stable_log.program_failure(&tc.log_collector, program_pubkey, execute_error) catch |err| {
-            tc.custom_error = @intFromError(err);
-            return InstructionError.Custom;
-        };
-    }
+    const maybe_pop_error = popInstruction(tc);
 
-    if (execute_error != null) {
-        return execute_error.?;
+    if (maybe_execute_error) |execute_error| {
+        try stable_log.program_failure(&tc.log_collector, program_pubkey, execute_error);
+        return execute_error;
+    } else {
+        try stable_log.program_success(&tc.log_collector, program_pubkey);
+        if (maybe_pop_error) |pop_error| return pop_error;
     }
 }
 
@@ -89,7 +75,7 @@ pub fn executeNativeCpiInstruction(
     tc: *TransactionContext,
     instruction: Instruction,
     signers: []const Pubkey,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const instruction_info = try prepareCpiInstructionInfo(tc, instruction, signers);
     try executeInstruction(allocator, tc, instruction_info);
 }
@@ -214,7 +200,7 @@ pub fn prepareCpiInstructionInfo(
     tc: *TransactionContext,
     callee: Instruction,
     signers: []const Pubkey,
-) InstructionError!InstructionInfo {
+) (error{OutOfMemory} || InstructionError)!InstructionInfo {
     if (tc.instruction_stack.len == 0) {
         return InstructionError.CallDepth;
     }
@@ -230,11 +216,11 @@ pub fn prepareCpiInstructionInfo(
             return InstructionError.MissingAccount;
         };
 
-        for (deduped_instruction_accounts.slice(), 0..) |*deduped_account, deduped_index| {
-            if (deduped_account.index_in_transaction == index_in_transaction) {
-                deduped_indexes.appendAssumeCapacity(deduped_index);
-                deduped_account.is_signer = deduped_account.is_signer or account_meta.is_signer;
-                deduped_account.is_writable = deduped_account.is_writable or account_meta.is_writable;
+        for (deduped_instruction_accounts.slice(), 0..) |*dd_account, dd_index| {
+            if (dd_account.index_in_transaction == index_in_transaction) {
+                deduped_indexes.appendAssumeCapacity(dd_index);
+                dd_account.is_signer = dd_account.is_signer or account_meta.is_signer;
+                dd_account.is_writable = dd_account.is_writable or account_meta.is_writable;
             }
             continue;
         }
@@ -258,7 +244,8 @@ pub fn prepareCpiInstructionInfo(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L386-L415
     for (deduped_instruction_accounts.slice()) |callee_account| {
         // Borrow the account via the caller context
-        const caller_account = try caller.borrowInstructionAccount(callee_account.index_in_transaction);
+        const caller_account =
+            try caller.borrowInstructionAccount(callee_account.index_in_transaction);
         defer caller_account.release();
 
         // Readonly in caller cannot become writable in callee
@@ -300,9 +287,11 @@ pub fn prepareCpiInstructionInfo(
         try tc.log("Unknown program {}", .{callee.program_pubkey});
         return InstructionError.MissingAccount;
     };
-    const index_in_transaction = caller.info.account_metas.buffer[index_in_caller].index_in_transaction;
+    const index_in_transaction =
+        caller.info.account_metas.buffer[index_in_caller].index_in_transaction;
 
-    const borrowed_program_account = try caller.borrowInstructionAccount(index_in_caller);
+    const borrowed_program_account =
+        try caller.borrowInstructionAccount(index_in_caller);
     defer borrowed_program_account.release();
 
     if (!borrowed_program_account.account.executable) {
@@ -322,16 +311,19 @@ pub fn prepareCpiInstructionInfo(
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L452
-fn sumAccountLamports(self: *const TransactionContext, account_metas: []const InstructionInfo.AccountMeta) u128 {
+fn sumAccountLamports(
+    self: *const TransactionContext,
+    account_metas: []const InstructionInfo.AccountMeta,
+) u128 {
     var lamports: u128 = 0;
     for (account_metas, 0..) |account_meta, index| {
         if (account_meta.index_in_callee != index) continue;
 
-        const transaction_account = self.getAccountAtIndex(account_meta.index_in_transaction) orelse
-            return 0;
+        const transaction_account =
+            self.getAccountAtIndex(account_meta.index_in_transaction) orelse return 0;
 
-        const account, const account_read_lock = transaction_account.readWithLock() orelse
-            return 0;
+        const account, const account_read_lock =
+            transaction_account.readWithLock() orelse return 0;
         defer account_read_lock.release();
 
         lamports = std.math.add(u128, lamports, account.lamports) catch {

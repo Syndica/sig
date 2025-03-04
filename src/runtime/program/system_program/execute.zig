@@ -17,11 +17,20 @@ const SystemProgramError = system_program.Error;
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
-pub fn execute(
+/// Entrypoint maps calls `execute` and converts the error to an optional return value.
+pub fn entrypoint(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) InstructionError!void {
+) ?(error{OutOfMemory} || InstructionError) {
+    execute(allocator, ic) catch |err| return err;
+    return null;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
+fn execute(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
     try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
@@ -114,7 +123,7 @@ fn executeCreateAccount(
     lamports: u64,
     space: u64,
     owner: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
     try createAccount(
         allocator,
@@ -132,7 +141,7 @@ fn executeCreateAccount(
 fn executeAssign(
     ic: *InstructionContext,
     owner: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(1);
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -148,7 +157,7 @@ fn executeAssign(
 fn executeTransfer(
     ic: *InstructionContext,
     lamports: u64,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
     try transfer(
         ic,
@@ -167,7 +176,7 @@ fn executeCreateAccountWithSeed(
     lamports: u64,
     space: u64,
     owner: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
@@ -193,7 +202,7 @@ fn executeCreateAccountWithSeed(
 fn executeAdvanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -214,7 +223,7 @@ fn executeWithdrawNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     lamports: u64,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
 
     // TODO: Is this sysvar call required for consensus despite being unused?
@@ -230,7 +239,7 @@ fn executeInitializeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     authority: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -259,7 +268,7 @@ fn executeAuthorizeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     authority: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -278,7 +287,7 @@ fn executeAllocate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     space: u64,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -295,7 +304,7 @@ fn executeAllocateWithSeed(
     seed: []const u8,
     space: u64,
     owner: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -320,7 +329,7 @@ fn executeAssignWithSeed(
     base: Pubkey,
     seed: []const u8,
     owner: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -344,7 +353,7 @@ fn executeTransferWithSeed(
     lamports: u64,
     from_seed: []const u8,
     from_owner: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(3);
 
     const from_index = 0;
@@ -380,7 +389,7 @@ fn executeTransferWithSeed(
 fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
@@ -411,7 +420,7 @@ fn allocate(
     account: *BorrowedAccount,
     space: u64,
     authority: Pubkey,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (!ic.info.isPubkeySigner(authority)) {
         try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
@@ -441,7 +450,7 @@ fn assign(
     account: *BorrowedAccount,
     owner: Pubkey,
     authority: Pubkey,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (account.account.owner.equals(&owner)) return;
 
     if (!ic.info.isPubkeySigner(authority)) {
@@ -462,7 +471,7 @@ fn createAccount(
     space: u64,
     owner: Pubkey,
     authority: Pubkey,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     {
         var account = try ic.borrowInstructionAccount(to_index);
         defer account.release();
@@ -491,7 +500,7 @@ fn transfer(
     from_index: u16,
     to_index: u16,
     lamports: u64,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (!try ic.info.isIndexSigner(from_index)) {
         try ic.tc.log(
             "Transfer: `from` account {} must sign",
@@ -514,7 +523,7 @@ fn transferVerified(
     from_index: u16,
     to_index: u16,
     lamports: u64,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     {
         var account = try ic.borrowInstructionAccount(from_index);
         defer account.release();
@@ -548,7 +557,7 @@ fn advanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     account: *BorrowedAccount,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (!account.isWritable()) {
         try ic.tc.log(
             "Advance nonce account: Account {} must be writeable",
@@ -601,7 +610,7 @@ fn withdrawNonceAccount(
     ic: *InstructionContext,
     lamports: u64,
     rent: Rent,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     const from_account_index = 0;
     const to_account_index = 1;
 
@@ -686,7 +695,7 @@ fn initializeNonceAccount(
     account: *BorrowedAccount,
     authority: Pubkey,
     rent: Rent,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (!account.isWritable()) {
         try ic.tc.log(
             "Initialize nonce account: Account {} must be writeable",
@@ -730,7 +739,7 @@ pub fn authorizeNonceAccount(
     ic: *InstructionContext,
     account: *BorrowedAccount,
     authority: Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (!account.isWritable()) {
         try ic.tc.log(
             "Authorize nonce account: Account {} must be writeable",
@@ -777,7 +786,7 @@ fn checkSeedAddress(
     owner: Pubkey,
     seed: []const u8,
     comptime log_err_fmt: []const u8,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     const created = pubkey_utils.createWithSeed(base, seed, owner) catch |err| {
         ic.tc.custom_error = @intFromError(err);
         return InstructionError.Custom;

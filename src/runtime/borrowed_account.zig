@@ -209,7 +209,10 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L742
-    pub fn setOwner(self: *BorrowedAccount, pubkey: Pubkey) InstructionError!void {
+    pub fn setOwner(
+        self: *BorrowedAccount,
+        pubkey: Pubkey,
+    ) InstructionError!void {
         if (!self.isOwnedByCurrentProgram()) return InstructionError.ModifiedProgramId;
         if (!self.isWritable()) return InstructionError.ModifiedProgramId;
         if (self.account.executable) return InstructionError.ModifiedProgramId;
@@ -218,7 +221,11 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L1001
-    pub fn setExecutable(self: *BorrowedAccount, executable: bool, rent: sysvar.Rent) InstructionError!void {
+    pub fn setExecutable(
+        self: *BorrowedAccount,
+        executable: bool,
+        rent: sysvar.Rent,
+    ) InstructionError!void {
         if (!rent.isExempt(self.account.lamports, self.account.data.len))
             return InstructionError.ExecutableModified;
         if (!self.isOwnedByCurrentProgram()) return InstructionError.ExecutableModified;

@@ -5,10 +5,6 @@ const bincode = sig.bincode;
 
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
-const Transaction = sig.core.Transaction;
-
-const TransactionContext = sig.runtime.TransactionContext;
-const BorrowedAccount = sig.runtime.BorrowedAccount;
 
 /// Intruction information which is constant across instruction execution
 /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/info/fd_instr_info.h#L14-L15

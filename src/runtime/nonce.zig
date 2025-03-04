@@ -57,7 +57,9 @@ pub const Data = struct {
         return .{
             .authority = authority,
             .durable_nonce = durable_nonce,
-            .fee_calculator = .{ .lamports_per_signature = lamports_per_signature },
+            .fee_calculator = .{
+                .lamports_per_signature = lamports_per_signature,
+            },
         };
     }
 };

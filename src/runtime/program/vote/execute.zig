@@ -16,11 +16,20 @@ const Clock = sig.runtime.sysvar.Clock;
 const VoteState = vote_program.VoteState;
 const VoteProgramInstruction = vote_instruction.Instruction;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
-pub fn execute(
+/// Entrypoint maps calls `execute` and converts the error to an optional return value.
+pub fn entrypoint(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) InstructionError!void {
+) ?(error{OutOfMemory} || InstructionError) {
+    execute(allocator, ic) catch |err| return err;
+    return null;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
+fn execute(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
     try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
@@ -63,7 +72,7 @@ fn executeIntializeAccount(
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
     commission: u8,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.rent_sysvar),
@@ -105,7 +114,7 @@ fn intializeAccount(
     commission: u8,
     vote_account: *BorrowedAccount,
     clock: Clock,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (vote_account.getData().len != VoteState.sizeOf()) {
         return InstructionError.InvalidAccountData;
     }

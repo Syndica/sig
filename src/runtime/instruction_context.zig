@@ -1,11 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const bincode = sig.bincode;
-
 const InstructionError = sig.core.instruction.InstructionError;
-const Pubkey = sig.core.Pubkey;
-const Transaction = sig.core.Transaction;
 
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;

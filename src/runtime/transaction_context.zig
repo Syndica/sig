@@ -1,9 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const ids = sig.runtime.ids;
 const program = sig.runtime.program;
-const stable_log = sig.runtime.stable_log;
 
 const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
@@ -80,14 +78,20 @@ pub const TransactionContext = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233
-    pub fn getAccountIndex(self: *TransactionContext, pubkey: Pubkey) ?u16 {
+    pub fn getAccountIndex(
+        self: *TransactionContext,
+        pubkey: Pubkey,
+    ) ?u16 {
         for (self.accounts, 0..) |account, index|
             if (account.pubkey.equals(&pubkey)) return @intCast(index);
         return null;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L223
-    pub fn getAccountAtIndex(self: *const TransactionContext, index: u16) ?*TransactionContextAccount {
+    pub fn getAccountAtIndex(
+        self: *const TransactionContext,
+        index: u16,
+    ) ?*TransactionContextAccount {
         if (index >= self.accounts.len) return null;
         return &self.accounts[index];
     }
@@ -98,11 +102,11 @@ pub const TransactionContext = struct {
         index: u16,
         context: BorrowedAccountContext,
     ) InstructionError!BorrowedAccount {
-        const txn_account = self.getAccountAtIndex(index) orelse
-            return InstructionError.MissingAccount;
+        const txn_account =
+            self.getAccountAtIndex(index) orelse return InstructionError.MissingAccount;
 
-        const account, const account_write_guard = txn_account.writeWithLock() orelse
-            return InstructionError.AccountBorrowFailed;
+        const account, const account_write_guard =
+            txn_account.writeWithLock() orelse return InstructionError.AccountBorrowFailed;
 
         return .{
             .pubkey = txn_account.pubkey,
@@ -117,9 +121,11 @@ pub const TransactionContext = struct {
         self: *TransactionContext,
         compute: u64,
     ) InstructionError!void {
-        const exceeded = self.compute_meter < compute;
+        if (self.compute_meter < compute) {
+            self.compute_meter = 0;
+            return InstructionError.ComputationalBudgetExceeded;
+        }
         self.compute_meter -|= compute;
-        if (exceeded) return InstructionError.ComputationalBudgetExceeded;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L94
@@ -127,12 +133,8 @@ pub const TransactionContext = struct {
         self: *TransactionContext,
         comptime fmt: []const u8,
         args: anytype,
-    ) InstructionError!void {
-        if (self.log_collector) |*lc|
-            lc.log(fmt, args) catch |err| {
-                self.custom_error = @intFromError(err);
-                return InstructionError.Custom;
-            };
+    ) (error{OutOfMemory} || InstructionError)!void {
+        if (self.log_collector) |*lc| try lc.log(fmt, args);
     }
 };
 

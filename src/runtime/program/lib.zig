@@ -13,25 +13,20 @@ pub const vote_program = @import("vote/lib.zig");
 pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
-fn initProgramEntrypoints() std.StaticStringMap(
-    *const fn (std.mem.Allocator, *InstructionContext) InstructionError!void,
-) {
+const EntrypointFn =
+    *const fn (std.mem.Allocator, *InstructionContext) ?(error{OutOfMemory} || InstructionError);
+
+fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
     @setEvalBranchQuota(5000);
-    return std.StaticStringMap(
-        *const fn (std.mem.Allocator, *InstructionContext) InstructionError!void,
-    ).initComptime(&.{
-        .{ system_program.ID.base58String().slice(), system_program.execute },
-        .{ bpf_loader_program.v1.ID.base58String().slice(), bpf_loader_program.execute },
-        .{ bpf_loader_program.v2.ID.base58String().slice(), bpf_loader_program.execute },
-        .{ bpf_loader_program.v3.ID.base58String().slice(), bpf_loader_program.execute },
-        .{ vote_program.ID.base58String().slice(), vote_program.execute },
+    return std.StaticStringMap(EntrypointFn).initComptime(&.{
+        .{ system_program.ID.base58String().slice(), system_program.entrypoint },
+        .{ bpf_loader_program.v1.ID.base58String().slice(), bpf_loader_program.entrypoint },
+        .{ bpf_loader_program.v2.ID.base58String().slice(), bpf_loader_program.entrypoint },
+        .{ bpf_loader_program.v3.ID.base58String().slice(), bpf_loader_program.entrypoint },
+        .{ vote_program.ID.base58String().slice(), vote_program.entrypoint },
     });
 }
 
-fn initPrecompileEntrypoints() std.StaticStringMap(
-    *const fn (std.mem.Allocator, *InstructionContext) InstructionError!void,
-) {
-    return std.StaticStringMap(
-        *const fn (std.mem.Allocator, *InstructionContext) InstructionError!void,
-    ).initComptime(&.{});
+fn initPrecompileEntrypoints() std.StaticStringMap(EntrypointFn) {
+    return std.StaticStringMap(EntrypointFn).initComptime(&.{});
 }

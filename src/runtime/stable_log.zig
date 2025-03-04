@@ -1,3 +1,4 @@
+const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -10,6 +11,8 @@ const LogCollector = sig.runtime.LogCollector;
 /// ```notrust
 /// "Program <address> invoke [<depth>]"
 /// ```
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L20
 pub fn program_invoke(
     log_collector: *?LogCollector,
     program_pubkey: Pubkey,
@@ -32,6 +35,8 @@ pub fn program_invoke(
 /// ```
 ///
 /// That is, any program-generated output is guaranteed to be prefixed by "Program log: "
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L42
 pub fn program_log(log_collector: *?LogCollector, message: []const u8) !void {
     if (log_collector.* != null) {
         try log_collector.*.?.log("Program log: {}", .{message});
@@ -47,6 +52,8 @@ pub fn program_log(log_collector: *?LogCollector, message: []const u8) !void {
 /// ```
 ///
 /// That is, any program-generated output is guaranteed to be prefixed by "Program data: "
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L55
 pub fn program_data(log_collector: *?LogCollector, data: []const []const u8) !void {
     if (log_collector.* != null) {
         try log_collector.*.?.log(
@@ -67,6 +74,8 @@ pub fn program_data(log_collector: *?LogCollector, data: []const []const u8) !vo
 /// ```
 ///
 /// That is, any program-generated output is guaranteed to be prefixed by "Program return: "
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L73
 pub fn program_return(
     log_collector: *?LogCollector,
     program_pubkey: Pubkey,
@@ -91,6 +100,8 @@ pub fn program_return(
 /// ```notrust
 /// "Program <address> success"
 /// ```
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L93
 pub fn program_success(log_collector: *?LogCollector, program_pubkey: Pubkey) !void {
     if (log_collector.* != null) {
         try log_collector.*.?.log("Program {} success", .{program_pubkey});
@@ -104,6 +115,8 @@ pub fn program_success(log_collector: *?LogCollector, program_pubkey: Pubkey) !v
 /// ```notrust
 /// "Program <address> failed: <program error details>"
 /// ```
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L104
 pub fn program_failure(
     log_collector: *?LogCollector,
     program_pubkey: Pubkey,

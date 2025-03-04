@@ -3,14 +3,11 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
-const executor = sig.runtime.executor;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
-const Transaction = sig.core.Transaction;
 
 const FeatureSet = sig.runtime.FeatureSet;
-const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
@@ -55,13 +52,15 @@ pub fn createTransactionContext(
 
     var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
     for (params.accounts) |account_params| {
-        try accounts.append(TransactionContextAccount.init(account_params.pubkey, .{
-            .lamports = account_params.lamports,
-            .data = try allocator.dupe(u8, account_params.data),
-            .owner = account_params.owner,
-            .executable = account_params.executable,
-            .rent_epoch = account_params.rent_epoch,
-        }));
+        try accounts.append(
+            TransactionContextAccount.init(account_params.pubkey, .{
+                .lamports = account_params.lamports,
+                .data = try allocator.dupe(u8, account_params.data),
+                .owner = account_params.owner,
+                .executable = account_params.executable,
+                .rent_epoch = account_params.rent_epoch,
+            }),
+        );
     }
 
     return .{
@@ -149,7 +148,10 @@ pub fn expectTransactionContextEqual(
         return error.AccountsLengthMismatch;
 
     for (expected.accounts, 0..) |expected_account, index|
-        try expectTransactionAccountEqual(expected_account, actual.accounts[index]);
+        try expectTransactionAccountEqual(
+            expected_account,
+            actual.accounts[index],
+        );
 
     if (expected.accounts_resize_delta != actual.accounts_resize_delta)
         return error.AccountsResizeDeltaMismatch;
