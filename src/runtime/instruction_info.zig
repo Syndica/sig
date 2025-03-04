@@ -56,9 +56,8 @@ pub const InstructionInfo = struct {
         self: InstructionInfo,
         pubkey: Pubkey,
     ) ?u16 {
-        for (self.account_metas.slice(), 0..) |account_meta, index| {
+        for (self.account_metas.slice(), 0..) |account_meta, index|
             if (account_meta.pubkey.equals(&pubkey)) return @intCast(index);
-        }
         return null;
     }
 
@@ -76,9 +75,8 @@ pub const InstructionInfo = struct {
         self: InstructionInfo,
         index: u16,
     ) InstructionError!bool {
-        const account_meta = self.getAccountMetaAtIndex(index) orelse {
+        const account_meta = self.getAccountMetaAtIndex(index) orelse
             return InstructionError.NotEnoughAccountKeys;
-        };
         return account_meta.is_signer;
     }
 
@@ -88,9 +86,8 @@ pub const InstructionInfo = struct {
         self: InstructionInfo,
         pubkey: Pubkey,
     ) bool {
-        for (self.account_metas.slice()) |account_meta| {
+        for (self.account_metas.slice()) |account_meta|
             if (account_meta.pubkey.equals(&pubkey) and account_meta.is_signer) return true;
-        }
         return false;
     }
 
@@ -111,8 +108,6 @@ pub const InstructionInfo = struct {
         self: InstructionInfo,
         minimum_accounts: u16,
     ) InstructionError!void {
-        if (self.account_metas.len < minimum_accounts) {
-            return InstructionError.NotEnoughAccountKeys;
-        }
+        if (self.account_metas.len < minimum_accounts) return InstructionError.NotEnoughAccountKeys;
     }
 };

@@ -33,9 +33,8 @@ pub const InstructionContext = struct {
     pub fn borrowProgramAccount(
         self: *const InstructionContext,
     ) InstructionError!BorrowedAccount {
-        const program_meta = self.info.program_meta;
-        return self.tc.borrowAccountAtIndex(program_meta.index_in_transaction, .{
-            .program_id = program_meta.pubkey,
+        return self.tc.borrowAccountAtIndex(self.info.program_meta.index_in_transaction, .{
+            .program_id = self.info.program_meta.pubkey,
         });
     }
 
@@ -44,9 +43,9 @@ pub const InstructionContext = struct {
         self: *const InstructionContext,
         index_in_instruction: u16,
     ) InstructionError!BorrowedAccount {
-        const account_meta = self.info.getAccountMetaAtIndex(index_in_instruction) orelse {
+        const account_meta = self.info.getAccountMetaAtIndex(index_in_instruction) orelse
             return InstructionError.NotEnoughAccountKeys;
-        };
+
         return try self.tc.borrowAccountAtIndex(account_meta.index_in_transaction, .{
             .program_id = self.info.program_meta.pubkey,
             .is_signer = account_meta.is_signer,
@@ -60,10 +59,12 @@ pub const InstructionContext = struct {
         comptime T: type,
         index_in_instruction: u16,
     ) InstructionError!T {
-        const account_meta = self.info.getAccountMetaAtIndex(index_in_instruction) orelse {
+        const account_meta = self.info.getAccountMetaAtIndex(index_in_instruction) orelse
             return InstructionError.NotEnoughAccountKeys;
-        };
-        if (!T.ID.equals(&account_meta.pubkey)) return InstructionError.InvalidArgument;
+
+        if (!T.ID.equals(&account_meta.pubkey))
+            return InstructionError.InvalidArgument;
+
         return self.tc.sysvar_cache.get(T) orelse InstructionError.UnsupportedSysvar;
     }
 };

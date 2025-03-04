@@ -142,6 +142,9 @@ fn processNextInstruction(
     // Lookup native program function
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/svm/src/message_processor.rs#L72-L75
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1150-L1159
+    // TODO:
+    // - precompile feature gate move to svm otherwise noop
+    // - precompile entrypoints
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(program_id.base58String().slice());
 
@@ -174,16 +177,11 @@ fn processNextInstruction(
 fn popInstruction(
     tc: *TransactionContext,
 ) InstructionError!void {
-    // TODO: Syscall context
+    // TODO: pop syscall context and record trace log
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L291-L294
 
-    // Pop from the instruction stack
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L406-L434
-
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L407-L410
-    if (tc.instruction_stack.len == 0) {
-        return InstructionError.CallDepth;
-    }
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L407-L409
+    if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
 
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L411-L426
     const unbalanced_instruction = blk: {
@@ -213,13 +211,11 @@ fn prepareCpiInstructionInfo(
     callee: Instruction,
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
-    if (tc.instruction_stack.len == 0) {
-        return InstructionError.CallDepth;
-    }
+    if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
     const caller = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
-    var deduped_instruction_accounts = InstructionInfo.AccountMetas{};
-    var deduped_indexes = std.BoundedArray(usize, InstructionInfo.MAX_ACCOUNT_METAS){};
+    var deduped_account_metas = InstructionInfo.AccountMetas{};
+    var deduped_indexes = std.BoundedArray(usize, deduped_account_metas.capacity()){};
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
     for (callee.accounts, 0..) |account, index| {
@@ -228,11 +224,11 @@ fn prepareCpiInstructionInfo(
             return InstructionError.MissingAccount;
         };
 
-        for (deduped_instruction_accounts.slice(), 0..) |*dd_account, dd_index| {
-            if (dd_account.index_in_transaction == index_in_transaction) {
-                deduped_indexes.appendAssumeCapacity(dd_index);
-                dd_account.is_signer = dd_account.is_signer or account.is_signer;
-                dd_account.is_writable = dd_account.is_writable or account.is_writable;
+        for (deduped_account_metas.slice(), 0..) |*deduped_meta, deduped_index| {
+            if (deduped_meta.index_in_transaction == index_in_transaction) {
+                deduped_indexes.appendAssumeCapacity(deduped_index);
+                deduped_meta.is_signer = deduped_meta.is_signer or account.is_signer;
+                deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
             }
             continue;
         }
@@ -242,8 +238,8 @@ fn prepareCpiInstructionInfo(
             return InstructionError.MissingAccount;
         };
 
-        deduped_indexes.appendAssumeCapacity(deduped_instruction_accounts.len);
-        deduped_instruction_accounts.appendAssumeCapacity(.{
+        deduped_indexes.appendAssumeCapacity(deduped_account_metas.len);
+        deduped_account_metas.appendAssumeCapacity(.{
             .pubkey = account.pubkey,
             .index_in_transaction = index_in_transaction,
             .index_in_caller = index_in_caller,
@@ -254,7 +250,7 @@ fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L386-L415
-    for (deduped_instruction_accounts.slice()) |callee_account| {
+    for (deduped_account_metas.slice()) |callee_account| {
         // Borrow the account via the caller context
         const caller_account =
             try caller.borrowInstructionAccount(callee_account.index_in_transaction);
@@ -283,7 +279,7 @@ fn prepareCpiInstructionInfo(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L415-L425
     var instruction_accounts = InstructionInfo.AccountMetas{};
     for (deduped_indexes.slice()) |index| {
-        const deduped_account = deduped_instruction_accounts.buffer[index];
+        const deduped_account = deduped_account_metas.buffer[index];
         instruction_accounts.appendAssumeCapacity(.{
             .pubkey = deduped_account.pubkey,
             .index_in_transaction = deduped_account.index_in_transaction,

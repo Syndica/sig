@@ -59,7 +59,7 @@ pub fn program_data(log_collector: *?LogCollector, data: []const []const u8) !vo
         try log_collector.*.?.log(
             log_collector,
             "Program data: {any}",
-            .{data}, // TODO: Base64 encode
+            .{data}, // TODO(native-cpi): Base64 encode
         );
     }
 }
@@ -87,7 +87,7 @@ pub fn program_return(
             "Program return: {} {any}",
             .{
                 program_id,
-                data, // TODO: Base64 encode
+                data, // TODO(native-cpi): Base64 encode
             },
         );
     }

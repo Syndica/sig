@@ -97,9 +97,9 @@ pub fn createProgramAddress(
     return .{ .data = hash };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L289-L290
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L289
 pub fn bytesAreCurvePoint(_: []const u8) bool {
-    // TODO: Implement
+    // TODO(native-cpi): Implement
     return false;
 }
 
