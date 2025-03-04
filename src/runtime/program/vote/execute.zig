@@ -8,6 +8,7 @@ const vote_instruction = vote_program.vote_instruction;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
+const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
 
 const InstructionContext = sig.runtime.InstructionContext;
@@ -203,8 +204,15 @@ fn authorize(
     clock: Clock,
     signers: ?std.AutoHashMap(Pubkey, void),
 ) InstructionError!void {
-    // TODO Support deserialising into VersionedVoteState and converting to current.
-    var vote_state = try vote_account.deserializeFromAccountData(allocator, VoteState);
+    const versioned_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+    var vote_state = versioned_state.convertToCurrent(allocator) catch {
+        // TODO okay to convert out of memory to custom error?
+        return InstructionError.Custom;
+    };
+
     switch (vote_authorize) {
         .voter => {
             const authorized_withdrawer_signer = if (signers) |signers_|
@@ -480,3 +488,87 @@ test "executeIntializeAccount" {
         },
     );
 }
+
+//test "serde" {
+// const MaleData = struct {
+//     age: u8,
+//     salary: u8,
+//     name: []const u8,
+// };
+
+// const FemaleData = struct {
+//     age: u8,
+//     married: bool,
+//     name: []const u8,
+// };
+
+// const Gender = union(enum) {
+//     male: MaleData,
+//     female: FemaleData,
+// };
+
+// // const data: Gender = Gender{ .male = MaleData{ .age = 11, .salary = 10, .name = "hello" } };
+// const data: Gender = Gender{ .female = FemaleData{ .age = 11, .married = false, .name = "hello" } };
+
+// const buffer = try std.testing.allocator.alloc(u8, sig.bincode.sizeOf(data, .{}));
+// errdefer std.testing.allocator.free(buffer);
+// defer std.testing.allocator.free(buffer);
+
+// _ = try sig.bincode.writeToSlice(buffer, data, .{});
+
+// std.debug.print("bufferr: {any}\n", .{buffer});
+
+// const deserialized_data = try sig.bincode.readFromSlice(std.testing.allocator, Gender, buffer, .{});
+// switch (deserialized_data) {
+//     .female => |data_| {
+//         defer std.testing.allocator.free(data_.name);
+//         std.debug.print("data: {any}\n", .{data_});
+//     },
+//     .male => |data_| {
+//         defer std.testing.allocator.free(data_.name);
+//         std.debug.print("deserialized_data: {any}\n", .{data_});
+//     },
+// }
+
+// const clock = Clock{
+//     .slot = 0,
+//     .epoch_start_timestamp = 0,
+//     .epoch = 0,
+//     .leader_schedule_epoch = 0,
+//     .unix_timestamp = 0,
+// };
+
+// const VoteStateVersions = vote_program.state.VoteStateVersions;
+// const vote_state = try VoteState.init(
+//     std.testing.allocator,
+//     Pubkey.ZEROES,
+//     Pubkey.ZEROES,
+//     Pubkey.ZEROES,
+//     10,
+//     clock,
+// );
+// defer vote_state.deinit();
+// const version: VoteStateVersions = VoteStateVersions{ .current = vote_state };
+// //const version: VoteState = vote_state;
+// const buffer = try std.testing.allocator.alloc(u8, sig.bincode.sizeOf(version, .{}));
+// // errdefer std.testing.allocator.free(buffer);
+// defer std.testing.allocator.free(buffer);
+// std.debug.print("buffer: {any}\n", .{buffer});
+// _ = try sig.bincode.writeToSlice(buffer, version, .{});
+
+// const deserialized_data = try sig.bincode.readFromSlice(std.testing.allocator, VoteStateVersions, buffer, .{});
+// switch (deserialized_data) {
+//     .v0_23_5 => |data_| {
+//         // defer std.testing.allocator.free(data_.name);
+//         std.debug.print("data: {any}\n", .{data_});
+//     },
+//     .v1_14_11 => |data_| {
+//         // defer std.testing.allocator.free(data_.name);
+//         std.debug.print("deserialized_data: {any}\n", .{data_});
+//     },
+//     .current => |data_| {
+//         // defer std.testing.allocator.free(data_.name);
+//         std.debug.print("deserialized_data: {any}\n", .{data_});
+//     },
+// }
+//}
