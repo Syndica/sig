@@ -71,8 +71,7 @@ pub const TransactionContext = struct {
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
     pub fn deinit(self: TransactionContext, allocator: std.mem.Allocator) void {
-        for (self.accounts) |account|
-            allocator.free(account.account.data);
+        for (self.accounts) |account| account.deinit(allocator);
         allocator.free(self.accounts);
         if (self.log_collector) |lc| lc.deinit();
     }
@@ -179,6 +178,10 @@ pub const TransactionContextAccount = struct {
             .read_refs = 0,
             .write_ref = false,
         };
+    }
+
+    pub fn deinit(self: TransactionContextAccount, allocator: std.mem.Allocator) void {
+        allocator.free(self.account.data);
     }
 
     pub fn writeWithLock(

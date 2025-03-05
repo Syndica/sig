@@ -352,9 +352,10 @@ test "pushInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
     const allocator = std.testing.allocator;
-
+    var prng = std.rand.DefaultPrng.init(0);
     var tc = try testing.createTransactionContext(
         allocator,
+        prng.random(),
         .{
             .accounts = &.{
                 .{ .lamports = 2_000 },
@@ -438,6 +439,7 @@ test "processNextInstruction" {
 
     var tc = try testing.createTransactionContext(
         allocator,
+        prng.random(),
         .{
             .accounts = &.{
                 .{ .lamports = 2_000 },
@@ -500,9 +502,10 @@ test "popInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
     const allocator = std.testing.allocator;
-
+    var prng = std.rand.DefaultPrng.init(0);
     var tc = try testing.createTransactionContext(
         allocator,
+        prng.random(),
         .{
             .accounts = &.{
                 .{ .lamports = 2_000 },
@@ -574,12 +577,147 @@ test "popInstruction" {
     );
 }
 
-test "sumAccountLamports" {
+test "prepareCpiInstructionInfo" {
     const testing = sig.runtime.testing;
+    const system_program = sig.runtime.program.system_program;
     const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
 
     var tc = try testing.createTransactionContext(
         allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{ .pubkey = Pubkey.initRandom(prng.random()), .lamports = 2_000 },
+                .{ .pubkey = Pubkey.initRandom(prng.random()), .lamports = 0 },
+                .{ .pubkey = system_program.ID, .executable = true },
+                .{ .pubkey = Pubkey.initRandom(prng.random()) },
+            },
+        },
+    );
+    defer tc.deinit(allocator);
+
+    const caller = try testing.createInstructionInfo(
+        allocator,
+        &tc,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{
+                .lamports = 1_000,
+            },
+        },
+        &.{
+            .{ .index_in_transaction = 0, .is_signer = true, .is_writable = true },
+            .{ .index_in_transaction = 1, .is_signer = false, .is_writable = false },
+            .{ .index_in_transaction = 2, .is_signer = false, .is_writable = false },
+        },
+    );
+    defer caller.deinit(allocator);
+
+    var callee: sig.core.Instruction = .{
+        .program_id = system_program.ID,
+        .accounts = &.{
+            .{ .pubkey = tc.accounts[0].pubkey, .is_signer = true, .is_writable = true },
+            .{ .pubkey = tc.accounts[1].pubkey, .is_signer = false, .is_writable = false },
+        },
+        .data = &.{},
+    };
+
+    // Failure: CallDepth
+    try std.testing.expectError(
+        InstructionError.CallDepth,
+        prepareCpiInstructionInfo(&tc, callee, &.{}),
+    );
+
+    try pushInstruction(&tc, caller);
+
+    // Failure: Missing Account 1 (transaction missing account)
+    {
+        const original_accounts = callee.accounts;
+        callee.accounts = &.{
+            .{ .pubkey = Pubkey.initRandom(prng.random()), .is_signer = true, .is_writable = true },
+        };
+        defer callee.accounts = original_accounts;
+
+        try std.testing.expectError(
+            InstructionError.MissingAccount,
+            prepareCpiInstructionInfo(&tc, callee, &.{}),
+        );
+    }
+
+    // Failure: Missing Account 2 (caller missing account)
+    {
+        const original_accounts = callee.accounts;
+        callee.accounts = &.{
+            .{ .pubkey = tc.accounts[3].pubkey, .is_signer = false, .is_writable = false },
+        };
+        defer callee.accounts = original_accounts;
+
+        try std.testing.expectError(
+            InstructionError.MissingAccount,
+            prepareCpiInstructionInfo(&tc, callee, &.{}),
+        );
+    }
+
+    // Failure: MissingAccount 3 (caller missing program)
+    {
+        const original_program_id = callee.program_id;
+        callee.program_id = Pubkey.initRandom(prng.random());
+        defer callee.program_id = original_program_id;
+
+        try std.testing.expectError(
+            InstructionError.MissingAccount,
+            prepareCpiInstructionInfo(&tc, callee, &.{}),
+        );
+    }
+
+    // Failure: PriviledgeEscalation 1 (writable)
+    {
+        const original_accounts = callee.accounts;
+        callee.accounts = &.{
+            .{ .pubkey = tc.accounts[1].pubkey, .is_signer = false, .is_writable = true },
+        };
+        defer callee.accounts = original_accounts;
+
+        try std.testing.expectError(
+            InstructionError.PrivilegeEscalation,
+            prepareCpiInstructionInfo(&tc, callee, &.{}),
+        );
+    }
+
+    // Failure: PriviledgeEscalation 2 (signer)
+    {
+        const original_accounts = callee.accounts;
+        callee.accounts = &.{
+            .{ .pubkey = tc.accounts[1].pubkey, .is_signer = true, .is_writable = false },
+        };
+        defer callee.accounts = original_accounts;
+
+        try std.testing.expectError(
+            InstructionError.PrivilegeEscalation,
+            prepareCpiInstructionInfo(&tc, callee, &.{}),
+        );
+    }
+
+    // Failure: AccountNotExecutable
+    {
+        tc.accounts[2].account.executable = false;
+        defer tc.accounts[2].account.executable = true;
+
+        try std.testing.expectError(
+            InstructionError.AccountNotExecutable,
+            prepareCpiInstructionInfo(&tc, callee, &.{}),
+        );
+    }
+}
+
+test "sumAccountLamports" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+    var tc = try testing.createTransactionContext(
+        allocator,
+        prng.random(),
         .{
             .accounts = &.{
                 .{ .lamports = 0 },

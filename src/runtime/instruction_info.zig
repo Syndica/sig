@@ -45,7 +45,7 @@ pub const InstructionInfo = struct {
         is_writable: bool,
     };
 
-    pub fn deinit(self: *InstructionInfo, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: InstructionInfo, allocator: std.mem.Allocator) void {
         allocator.free(self.instruction_data);
     }
 

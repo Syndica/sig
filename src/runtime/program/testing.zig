@@ -23,14 +23,18 @@ pub fn expectProgramExecuteResult(
     transaction_context_params: TransactionContextParams,
     expected_transaction_context_params: TransactionContextParams,
 ) !void {
+    var prng_0 = std.rand.DefaultPrng.init(0);
     var transaction_context = try createTransactionContext(
         allocator,
+        prng_0.random(),
         transaction_context_params,
     );
     defer transaction_context.deinit(allocator);
 
+    var prng_1 = std.rand.DefaultPrng.init(0);
     const expected_transaction_context = try createTransactionContext(
         allocator,
+        prng_1.random(),
         expected_transaction_context_params,
     );
     defer expected_transaction_context.deinit(allocator);

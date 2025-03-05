@@ -15,12 +15,10 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 
 pub const TransactionContextAccountParams = struct {
-    pubkey: Pubkey =
-        Pubkey.parseBase58String("TestPubkey111111111111111111111111111111111") catch unreachable,
+    pubkey: ?Pubkey = null,
     lamports: u64 = 0,
     data: []const u8 = &.{},
-    owner: Pubkey =
-        Pubkey.parseBase58String("TestPubkey211111111111111111111111111111111") catch unreachable,
+    owner: ?Pubkey = null,
     executable: bool = false,
     rent_epoch: u64 = 0,
 };
@@ -47,26 +45,14 @@ pub const InstructionContextAccountMetaParams = struct {
 
 pub fn createTransactionContext(
     allocator: std.mem.Allocator,
+    random: std.Random,
     params: TransactionContextParams,
 ) !TransactionContext {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
-    var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
-    for (params.accounts) |account_params| {
-        try accounts.append(
-            TransactionContextAccount.init(account_params.pubkey, .{
-                .lamports = account_params.lamports,
-                .data = try allocator.dupe(u8, account_params.data),
-                .owner = account_params.owner,
-                .executable = account_params.executable,
-                .rent_epoch = account_params.rent_epoch,
-            }),
-        );
-    }
-
     return .{
-        .accounts = try accounts.toOwnedSlice(),
+        .accounts = try createTransactionContextAccounts(allocator, random, params.accounts),
         .instruction_stack = .{},
         .instruction_trace = .{},
         .return_data = .{},
@@ -79,6 +65,27 @@ pub fn createTransactionContext(
         .last_blockhash = params.last_blockhash,
         .feature_set = params.feature_set,
     };
+}
+
+pub fn createTransactionContextAccounts(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    account_params: []const TransactionContextAccountParams,
+) ![]TransactionContextAccount {
+    var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
+    errdefer accounts.deinit();
+    for (account_params) |params| {
+        try accounts.append(
+            TransactionContextAccount.init(params.pubkey orelse Pubkey.initRandom(random), .{
+                .lamports = params.lamports,
+                .data = try allocator.dupe(u8, params.data),
+                .owner = params.owner orelse Pubkey.initRandom(random),
+                .executable = params.executable,
+                .rent_epoch = params.rent_epoch,
+            }),
+        );
+    }
+    return accounts.toOwnedSlice();
 }
 
 pub fn createInstructionInfo(
