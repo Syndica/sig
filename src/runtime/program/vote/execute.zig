@@ -144,8 +144,7 @@ fn intializeAccount(
 }
 
 test "executeIntializeAccount" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -180,7 +179,7 @@ test "executeIntializeAccount" {
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
@@ -208,7 +207,7 @@ test "executeIntializeAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = node_publey },
-                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                testing.VOTE_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -227,7 +226,7 @@ test "executeIntializeAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = node_publey },
-                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+                testing.VOTE_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = 0,
             .sysvar_cache = .{

@@ -1,15 +1,29 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
+const ids = sig.runtime.ids;
 const executor = sig.runtime.executor;
 const runtime_testing = sig.runtime.testing;
+const system_program = sig.runtime.program.system_program;
+const vote_program = sig.runtime.program.vote_program;
 
 const InstructionContextAccountMetaParams = runtime_testing.InstructionContextAccountMetaParams;
 const TransactionContextParams = runtime_testing.TransactionContextParams;
+const TransactionContextAccountParams = runtime_testing.TransactionContextAccountParams;
 
 const createTransactionContext = runtime_testing.createTransactionContext;
 const createInstructionInfo = runtime_testing.createInstructionInfo;
 const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
+
+pub const SYSTEM_PROGRAM_ACCOUNT_PARAMS: TransactionContextAccountParams = .{
+    .pubkey = system_program.ID,
+    .owner = ids.NATIVE_LOADER_ID,
+};
+
+pub const VOTE_PROGRAM_ACCOUNT_PARAMS: TransactionContextAccountParams = .{
+    .pubkey = vote_program.ID,
+    .owner = ids.NATIVE_LOADER_ID,
+};
 
 pub fn expectProgramExecuteResult(
     allocator: std.mem.Allocator,

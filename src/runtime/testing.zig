@@ -15,10 +15,12 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 
 pub const TransactionContextAccountParams = struct {
-    pubkey: Pubkey = Pubkey.ZEROES,
+    pubkey: Pubkey =
+        Pubkey.parseBase58String("TestPubkey111111111111111111111111111111111") catch unreachable,
     lamports: u64 = 0,
     data: []const u8 = &.{},
-    owner: Pubkey = Pubkey.ZEROES,
+    owner: Pubkey =
+        Pubkey.parseBase58String("TestPubkey211111111111111111111111111111111") catch unreachable,
     executable: bool = false,
     rent_epoch: u64 = 0,
 };

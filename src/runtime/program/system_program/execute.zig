@@ -799,21 +799,20 @@ fn checkSeedAddress(
 }
 
 test "executeCreateAccount" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
             .create_account = .{
                 .lamports = 1_000_000,
-                .space = 0,
+                .space = 2,
                 .owner = system_program.ID,
             },
         },
@@ -824,8 +823,8 @@ test "executeCreateAccount" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
-                .{ .pubkey = account_1_key },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = account_1_key, .owner = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = 150,
         },
@@ -834,26 +833,26 @@ test "executeCreateAccount" {
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{
                     .pubkey = account_1_key,
-                    .lamports = 1_000_000,
                     .owner = system_program.ID,
-                    .data = &.{},
+                    .lamports = 1_000_000,
+                    .data = &[_]u8{ 0, 0 },
                 },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
+            .accounts_resize_delta = 2,
         },
     );
 }
 
 test "executeAssign" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const new_owner = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -866,30 +865,29 @@ test "executeAssign" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = account_0_key, .owner = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = new_owner },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
         },
     );
 }
 
 test "executeTransfer" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -905,7 +903,7 @@ test "executeTransfer" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = account_1_key },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -913,15 +911,14 @@ test "executeTransfer" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = account_1_key, .lamports = 1_000_000 },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
         },
     );
 }
 
 test "executeCreateAccountWithSeed" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -931,7 +928,7 @@ test "executeCreateAccountWithSeed" {
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = try pubkey_utils.createWithSeed(base, seed, system_program.ID);
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -951,18 +948,18 @@ test "executeCreateAccountWithSeed" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
-                .{ .pubkey = account_1_key },
+                .{ .pubkey = account_1_key, .owner = system_program.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
-                .{ .pubkey = account_1_key, .lamports = 1_000_000, .owner = system_program.ID },
+                .{ .pubkey = account_1_key, .owner = system_program.ID, .lamports = 1_000_000 },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
         },
     );
@@ -970,8 +967,7 @@ test "executeCreateAccountWithSeed" {
 
 test "executeAdvanceNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1016,7 +1012,7 @@ test "executeAdvanceNonceAccount" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         system_program,
         SystemProgramInstruction{
@@ -1029,10 +1025,14 @@ test "executeAdvanceNonceAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = nonce_state_bytes },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = nonce_state_bytes,
+                },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .lamports_per_signature = lamports_per_signature,
@@ -1043,10 +1043,14 @@ test "executeAdvanceNonceAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = final_nonce_state_bytes,
+                },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
@@ -1059,8 +1063,7 @@ test "executeAdvanceNonceAccount" {
 
 test "executeWithdrawNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1087,7 +1090,7 @@ test "executeWithdrawNonceAccount" {
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         system_program,
         SystemProgramInstruction{
@@ -1111,7 +1114,7 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -1130,7 +1133,7 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
@@ -1142,8 +1145,7 @@ test "executeWithdrawNonceAccount" {
 
 test "executeInitializeNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1184,7 +1186,7 @@ test "executeInitializeNonceAccount" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1199,12 +1201,13 @@ test "executeInitializeNonceAccount" {
             .accounts = &.{
                 .{
                     .pubkey = account_0_key,
+                    .owner = system_program.ID,
                     .lamports = rent.minimumBalance(final_nonce_state_bytes.len),
                     .data = nonce_state_bytes,
                 },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .lamports_per_signature = lamports_per_signature,
@@ -1218,12 +1221,13 @@ test "executeInitializeNonceAccount" {
             .accounts = &.{
                 .{
                     .pubkey = account_0_key,
+                    .owner = system_program.ID,
                     .lamports = rent.minimumBalance(final_nonce_state_bytes.len),
                     .data = final_nonce_state_bytes,
                 },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
@@ -1237,8 +1241,7 @@ test "executeInitializeNonceAccount" {
 
 test "executeAuthorizeNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1268,7 +1271,7 @@ test "executeAuthorizeNonceAccount" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1280,25 +1283,32 @@ test "executeAuthorizeNonceAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = nonce_state_bytes },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = nonce_state_bytes,
+                },
                 .{ .pubkey = initial_nonce_authority },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = final_nonce_state_bytes,
+                },
                 .{ .pubkey = initial_nonce_authority },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
         },
     );
 }
 
 test "executeAllocate" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1306,7 +1316,7 @@ test "executeAllocate" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1319,15 +1329,22 @@ test "executeAllocate" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key },
-                .{ .pubkey = system_program.ID },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = &[_]u8{0} ** allocation_size },
-                .{ .pubkey = system_program.ID },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = &[_]u8{0} ** allocation_size,
+                },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .accounts_resize_delta = allocation_size,
         },
@@ -1335,8 +1352,7 @@ test "executeAllocate" {
 }
 
 test "executeAllocateWithSeed" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1346,7 +1362,7 @@ test "executeAllocateWithSeed" {
 
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, system_program.ID);
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1363,17 +1379,24 @@ test "executeAllocateWithSeed" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = &[_]u8{0} ** 1024 },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = &[_]u8{0} ** 1024,
+                },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .accounts_resize_delta = allocation_size,
         },
@@ -1381,8 +1404,7 @@ test "executeAllocateWithSeed" {
 }
 
 test "executeAssignWithSeed" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1392,7 +1414,7 @@ test "executeAssignWithSeed" {
 
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, owner);
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1408,9 +1430,9 @@ test "executeAssignWithSeed" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key },
+                .{ .pubkey = account_0_key, .owner = system_program.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1418,15 +1440,14 @@ test "executeAssignWithSeed" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = owner },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
         },
     );
 }
 
 test "executeTransferWithSeed" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1437,7 +1458,7 @@ test "executeTransferWithSeed" {
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, owner);
     const account_2_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1457,7 +1478,7 @@ test "executeTransferWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 0 },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1466,7 +1487,7 @@ test "executeTransferWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 1_000_000 },
-                .{ .pubkey = system_program.ID },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
         },
     );
@@ -1474,8 +1495,7 @@ test "executeTransferWithSeed" {
 
 test "executeUpgradeNonceAccount" {
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.testing.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1507,7 +1527,7 @@ test "executeUpgradeNonceAccount" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1518,15 +1538,23 @@ test "executeUpgradeNonceAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = nonce_state_bytes },
-                .{ .pubkey = system_program.ID },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = nonce_state_bytes,
+                },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
-                .{ .pubkey = system_program.ID },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = final_nonce_state_bytes,
+                },
+                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
             },
         },
     );
