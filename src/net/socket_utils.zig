@@ -507,7 +507,7 @@ test "SocketThread: overload sendto" {
     var socket = try UdpSocket.create(.ipv4, .udp);
     try socket.bindToPort(0);
 
-    var exit = std.atomic.Value(bool).init(true);
+    var exit = std.atomic.Value(bool).init(false);
     var st = try SocketThread.spawnSender(
         allocator,
         .noop,
