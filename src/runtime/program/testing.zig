@@ -2,15 +2,11 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const ids = sig.runtime.ids;
 const executor = sig.runtime.executor;
 const runtime_testing = sig.runtime.testing;
-const system_program = sig.runtime.program.system_program;
-const vote_program = sig.runtime.program.vote_program;
 
 const InstructionContextAccountMetaParams = runtime_testing.InstructionContextAccountMetaParams;
 const TransactionContextParams = runtime_testing.TransactionContextParams;
-const TransactionContextAccountParams = runtime_testing.TransactionContextAccountParams;
 
 const createTransactionContext = runtime_testing.createTransactionContext;
 const createInstructionInfo = runtime_testing.createInstructionInfo;
