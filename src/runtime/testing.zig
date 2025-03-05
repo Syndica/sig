@@ -72,6 +72,9 @@ pub fn createTransactionContextAccounts(
     random: std.Random,
     account_params: []const TransactionContextAccountParams,
 ) ![]TransactionContextAccount {
+    if (!builtin.is_test)
+        @compileError("createTransactionContext should only be called in test mode");
+
     var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
     errdefer accounts.deinit();
     for (account_params) |params| {
@@ -213,6 +216,7 @@ pub fn expectTransactionAccountEqual(
 ) !void {
     if (!builtin.is_test)
         @compileError("expectTransactionAccountEqual should only be called in test mode");
+
     if (!expected.pubkey.equals(&actual.pubkey))
         return error.PubkeyMismatch;
     if (expected.account.lamports != actual.account.lamports)

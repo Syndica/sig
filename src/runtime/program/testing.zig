@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
@@ -23,6 +24,9 @@ pub fn expectProgramExecuteResult(
     transaction_context_params: TransactionContextParams,
     expected_transaction_context_params: TransactionContextParams,
 ) !void {
+    if (!builtin.is_test)
+        @compileError("createTransactionContext should only be called in test mode");
+
     var prng_0 = std.rand.DefaultPrng.init(0);
     var transaction_context = try createTransactionContext(
         allocator,
