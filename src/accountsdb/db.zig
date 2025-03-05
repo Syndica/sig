@@ -9,30 +9,31 @@ const sysvar = sig.runtime.sysvar;
 const snapgen = sig.accounts_db.snapshots.generate;
 
 const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
+
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const StatusCache = sig.accounts_db.StatusCache;
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
+const StatusCache = sig.accounts_db.StatusCache;
 
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
 const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
+const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
-const SnapshotManifest = sig.accounts_db.snapshots.Manifest;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
+const SnapshotManifest = sig.accounts_db.snapshots.Manifest;
 
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
-const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 const PubkeyShardCalculator = sig.accounts_db.index.PubkeyShardCalculator;
 const ShardedPubkeyRefMap = sig.accounts_db.index.ShardedPubkeyRefMap;
 
@@ -2636,8 +2637,8 @@ pub const AccountsDB = struct {
             };
             const archive_file_name_bounded = archive_info.snapshotArchiveName();
             const archive_file_name = archive_file_name_bounded.constSlice();
-            self.logger.info().logf("Generating full snapshot '{s}' (full path: {s}).", .{
-                archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, archive_file_name),
+            self.logger.info().logf("Generating full snapshot '{s}' (full path: {1s}/{0s}).", .{
+                archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, "."),
             });
             break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
         };
@@ -2853,9 +2854,13 @@ pub const AccountsDB = struct {
             };
             const archive_file_name_bounded = archive_info.snapshotArchiveName();
             const archive_file_name = archive_file_name_bounded.constSlice();
-            self.logger.info().logf("Generating incremental snapshot '{s}' (full path: {s}).", .{
-                archive_file_name, sig.utils.fmt.tryRealPath(self.snapshot_dir, archive_file_name),
-            });
+            self.logger.info().logf(
+                "Generating incremental snapshot '{0s}' (full path: {1s}/{0s}).",
+                .{
+                    archive_file_name,
+                    sig.utils.fmt.tryRealPath(self.snapshot_dir, "."),
+                },
+            );
             break :blk try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
         };
         defer archive_file.close();

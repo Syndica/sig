@@ -54,7 +54,9 @@ pub const GossipDumpService = struct {
 
             // write records to string
             const endec = base58.Table.BITCOIN;
-            for (gossip_table.store.values()) |gossip_versioned_data| {
+            var iterator = gossip_table.store.iterator();
+            while (iterator.next()) |entry| {
+                const gossip_versioned_data = entry.getVersionedData();
                 const val: SignedGossipData = gossip_versioned_data.value;
 
                 var encoded_buf: [50]u8 = undefined;

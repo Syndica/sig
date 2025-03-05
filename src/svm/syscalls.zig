@@ -31,7 +31,7 @@ pub fn log(vm: *Vm) Error!void {
     const len = vm.registers.get(.r2);
     const host_addr = try vm.memory_map.vmap(.constant, vm_addr, len);
     const string = std.mem.sliceTo(host_addr, 0);
-    if (!builtin.is_test) std.debug.print("{d}\n", .{string});
+    vm.logger.logf(.info, "{s}", .{string});
 }
 
 pub fn log64(vm: *Vm) Error!void {
@@ -41,8 +41,9 @@ pub fn log64(vm: *Vm) Error!void {
     const arg4 = vm.registers.get(.r4);
     const arg5 = vm.registers.get(.r5);
 
-    std.debug.print(
-        "log: 0x{x} 0x{x} 0x{x} 0x{x} 0x{x}\n",
+    vm.logger.logf(
+        .info,
+        "log: 0x{x} 0x{x} 0x{x} 0x{x} 0x{x}",
         .{ arg1, arg2, arg3, arg4, arg5 },
     );
 }
@@ -51,11 +52,11 @@ pub fn logPubkey(vm: *Vm) Error!void {
     const pubkey_addr = vm.registers.get(.r1);
     const pubkey_bytes = try vm.memory_map.vmap(.constant, pubkey_addr, @sizeOf(Pubkey));
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
-    std.debug.print("log: {}\n", .{pubkey});
+    vm.logger.logf(.info, "log: {}", .{pubkey});
 }
 
-pub fn logComputeUnits(_: *Vm) Error!void {
-    std.debug.print("TODO: compute budget calculations\n", .{});
+pub fn logComputeUnits(vm: *Vm) Error!void {
+    vm.logger.log(.warn, "TODO: compute budget calculations");
 }
 
 // memory operators
@@ -151,8 +152,7 @@ pub fn panic(vm: *Vm) Error!void {
     // const column = vm.registers.get(.r4);
 
     const message = try vm.memory_map.vmap(.constant, file, len);
-    if (!builtin.is_test)
-        std.debug.print("panic: {s}\n", .{message});
+    vm.logger.logf(.err, "panic: {s}", .{message});
     return error.SyscallAbort;
 }
 

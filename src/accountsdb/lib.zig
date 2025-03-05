@@ -11,13 +11,13 @@ pub const snapshots = @import("snapshots.zig");
 pub const swiss_map = @import("swiss_map.zig");
 
 pub const AccountsDB = db.AccountsDB;
-pub const FullAndIncrementalManifest = snapshots.FullAndIncrementalManifest;
 pub const Bank = bank.Bank;
+pub const ClusterType = genesis_config.ClusterType;
+pub const FullAndIncrementalManifest = snapshots.FullAndIncrementalManifest;
 pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const Manifest = snapshots.Manifest;
 pub const SnapshotFiles = snapshots.SnapshotFiles;
 pub const StatusCache = snapshots.StatusCache;
-pub const ClusterType = genesis_config.ClusterType;
 
 pub const downloadSnapshotsFromGossip = download.downloadSnapshotsFromGossip;
 pub const parallelUnpackZstdTarBall = snapshots.parallelUnpackZstdTarBall;

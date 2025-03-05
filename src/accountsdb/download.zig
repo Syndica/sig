@@ -3,16 +3,17 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const SlotAndHash = sig.core.hash.SlotAndHash;
-const Pubkey = sig.core.Pubkey;
-const GossipTable = sig.gossip.GossipTable;
-const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipService = sig.gossip.GossipService;
-const Logger = sig.trace.Logger;
-const ScopedLogger = sig.trace.ScopedLogger;
-const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
-const SignedGossipData = sig.gossip.data.SignedGossipData;
+const GossipTable = sig.gossip.GossipTable;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const Logger = sig.trace.Logger;
+const Pubkey = sig.core.Pubkey;
+const ScopedLogger = sig.trace.ScopedLogger;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const SlotAndHash = sig.core.hash.SlotAndHash;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
+
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
 

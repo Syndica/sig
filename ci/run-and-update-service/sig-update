@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+# check if there is an update. if so rebuild sig. otherwise exit
+sudo -iu sig bash <<'EOF' | tee /dev/null
+    set -euxo pipefail
+    . /etc/sig.conf
+    cd /home/sig/sig
+    git fetch
+
+    if [[ $(git rev-parse HEAD) == $(git rev-parse remotes/origin/$BRANCH) ]] && \
+        [ -f /home/sig/sig/zig-out/bin/sig ]; then
+        echo sig is unchanged, skipping update
+        exit 58
+    fi
+
+    git checkout remotes/origin/$BRANCH
+    echo building sig
+    zig build -Doptimize=ReleaseSafe -Dno-run sig
+
+    if ! [ -z "$SLACK_WEBHOOK_URL" ]; then
+        echo "SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL" > /home/sig/sig/metrics/.env
+    fi
+EOF
+code=$?
+
+set -euxo pipefail
+
+if [[ $code == 58 ]]; then
+    # 58 means there were no changes. just make sure sig is running
+    systemctl start sig
+    cd /home/sig/sig/metrics
+    docker-compose up -d
+elif [[ $code == 0 ]]; then
+    # 0 means there was a change and rebuild, so restart sig
+    systemctl restart sig
+    cd /home/sig/sig/metrics
+    docker-compose down
+    docker-compose pull
+    docker-compose up -d
+else
+    # other codes indicate error and should be propagated
+    exit $code
+fi

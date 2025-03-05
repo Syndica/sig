@@ -20,7 +20,6 @@ const panic: *const fn ([*]const u8, u64, u64, u64) void = @ptrFromInt(0x686093b
 const POSEIDON_PARAMETERS_BN254_X5 = 0;
 const POSEIDON_ENDIANNESS_BIG_ENDIAN = 0;
 const POSEIDON_ENDIANNESS_LITTLE_ENDIAN = 1;
-const POSEIDON_RESULT_LENGTH = 32;
 
 /// Mirrors this Agave test: https://github.com/anza-xyz/agave/blob/e87917adab5468fe13287147800922a3191d0040/programs/sbf/c/src/poseidon/poseidon.c#L8
 export fn entrypoint() u64 {

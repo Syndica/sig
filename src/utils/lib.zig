@@ -8,7 +8,6 @@ pub const interface = @import("interface.zig");
 pub const io = @import("io.zig");
 pub const lazy = @import("lazy.zig");
 pub const lru = @import("lru.zig");
-pub const math = @import("math.zig");
 pub const merkle_tree = @import("merkle_tree.zig");
 pub const service_manager = @import("service.zig");
 pub const tar = @import("tar.zig");

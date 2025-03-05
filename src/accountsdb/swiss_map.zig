@@ -4,8 +4,10 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
-const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
+
 const accounts_db = sig.accounts_db;
+
+const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 
 pub fn SwissMap(
     comptime Key: type,

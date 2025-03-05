@@ -2,23 +2,22 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const zstd = @import("zstd");
 
-const AccountsDB = sig.accounts_db.AccountsDB;
-const StandardErrLogger = sig.trace.ChannelPrintLogger;
-const Level = sig.trace.Level;
 const Account = sig.core.Account;
-const Slot = sig.core.time.Slot;
+const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.pubkey.Pubkey;
-const BankFields = sig.accounts_db.snapshots.BankFields;
+const Slot = sig.core.time.Slot;
+
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
+const AccountsDB = sig.accounts_db.AccountsDB;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
-const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
     slot: u64,
     data: [32]u8,
 
-    pub fn initRandom(random: std.rand.Random, slot: Slot) !TrackedAccount {
+    pub fn initRandom(random: std.rand.Random, slot: Slot) TrackedAccount {
         var data: [32]u8 = undefined;
         random.bytes(&data);
         return .{
@@ -61,27 +60,26 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
-    var std_logger = try StandardErrLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
-        .max_level = Level.debug,
+        .max_level = .debug,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
-
     const logger = std_logger.logger();
 
     const use_disk = random.boolean();
 
-    var test_data_dir = try std.fs.cwd().makeOpenPath(sig.FUZZ_DATA_DIR, .{});
-    defer test_data_dir.close();
+    var fuzz_data_dir = try std.fs.cwd().makeOpenPath(sig.FUZZ_DATA_DIR, .{});
+    defer fuzz_data_dir.close();
 
     const snapshot_dir_name = "accountsdb";
-    var snapshot_dir = try test_data_dir.makeOpenPath(snapshot_dir_name, .{});
+    var snapshot_dir = try fuzz_data_dir.makeOpenPath(snapshot_dir_name, .{});
     defer snapshot_dir.close();
     defer {
         // NOTE: sometimes this can take a long time so we print when we start and finish
         std.debug.print("deleting snapshot dir...\n", .{});
-        test_data_dir.deleteTreeMinStackSize(snapshot_dir_name) catch |err| {
+        fuzz_data_dir.deleteTreeMinStackSize(snapshot_dir_name) catch |err| {
             std.debug.print(
                 "failed to delete snapshot dir ('{s}'): {}\n",
                 .{ sig.utils.fmt.tryRealPath(snapshot_dir, "."), err },
@@ -133,9 +131,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer tracked_accounts.deinit();
     try tracked_accounts.ensureTotalCapacity(10_000);
 
-    var random_bank_fields = try BankFields.initRandom(allocator, random, 1 << 8);
-    defer random_bank_fields.deinit(allocator);
-
     const zstd_compressor = try zstd.Compressor.init(.{});
     defer zstd_compressor.deinit();
 
@@ -172,7 +167,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
                     errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
 
-                    var tracked_account = try TrackedAccount.initRandom(random, slot);
+                    var tracked_account = TrackedAccount.initRandom(random, slot);
 
                     const existing_pubkey = random.boolean();
                     if ((existing_pubkey and tracked_accounts.count() > 0) or
@@ -277,8 +272,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     true,
                 );
                 logger.info().logf(
-                    "fuzz[validate]: unpacked full snapshot at slot: {}",
-                    .{full_snapshot_info.slot},
+                    "fuzz[validate]: unpacked full snapshot '{s}'",
+                    .{full_archive_name},
                 );
 
                 break :full full_snapshot_file_info;
@@ -320,8 +315,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     true,
                 );
                 logger.info().logf(
-                    "fuzz[validate]: unpacked inc snapshot at slot: {}",
-                    .{inc_snapshot_info.slot},
+                    "fuzz[validate]: unpacked inc snapshot '{s}'",
+                    .{inc_archive_name},
                 );
 
                 break :inc inc_snapshot_file_info;

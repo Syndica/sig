@@ -1003,7 +1003,7 @@ pub const ForkChoice = struct {
         // Update the fork info with the aggregated values
         const fork_info = self.fork_infos.getPtr(slot_hash_key).?;
         if (is_duplicate_confirmed and !fork_info.is_duplicate_confirmed) {
-            std.log.info(
+            self.logger.info().logf(
                 "Fork choice setting {} to duplicate confirmed",
                 .{slot_hash_key},
             );

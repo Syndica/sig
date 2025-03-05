@@ -6,9 +6,9 @@ const bincode = sig.bincode;
 
 const AutoHashMap = std.AutoHashMap;
 const Account = sig.core.Account;
-const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
+const Pubkey = sig.core.Pubkey;
 
 pub const UnixTimestamp = i64;
 pub const String = std.ArrayList(u8);

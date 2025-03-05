@@ -16,7 +16,7 @@ pub const Level = enum {
     pub fn asText(self: Level) []const u8 {
         return switch (self) {
             .err => "error",
-            .warn => "warning",
+            .warn => "warn",
             .info => "info",
             .debug => "debug",
             .trace => "trace",

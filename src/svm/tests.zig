@@ -43,7 +43,14 @@ fn testAsmWithMemory(
     }, .v0);
 
     var loader: BuiltinProgram = .{};
-    var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
+    var vm = try Vm.init(
+        allocator,
+        &executable,
+        m,
+        &loader,
+        .noop,
+        stack_memory.len,
+    );
     defer vm.deinit();
 
     const result = vm.run();
@@ -1894,17 +1901,24 @@ test "pqr" {
         var registry: lib.Registry(u64) = .{};
         defer registry.deinit(allocator);
 
+        var loader: BuiltinProgram = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
+            &loader,
             &registry,
             config,
         );
-
-        var loader: BuiltinProgram = .{};
         const map = try MemoryMap.init(&.{}, .v2);
 
-        var vm = try Vm.init(allocator, &executable, map, &loader, 0);
+        var vm = try Vm.init(
+            allocator,
+            &executable,
+            map,
+            &loader,
+            .noop,
+            0,
+        );
         defer vm.deinit();
 
         const unsigned_expected: u64 = expected;
@@ -1935,17 +1949,24 @@ test "pqr divide by zero" {
         var registry: lib.Registry(u64) = .{};
         defer registry.deinit(allocator);
 
+        var loader: BuiltinProgram = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
+            &loader,
             &registry,
             config,
         );
 
-        var loader: BuiltinProgram = .{};
         const map = try MemoryMap.init(&.{}, .v3);
-
-        var vm = try Vm.init(allocator, &executable, map, &loader, 0);
+        var vm = try Vm.init(
+            allocator,
+            &executable,
+            map,
+            &loader,
+            .noop,
+            0,
+        );
         defer vm.deinit();
 
         try expectEqual(error.DivisionByZero, vm.run());
@@ -2150,11 +2171,8 @@ pub fn testElfWithSyscalls(
         );
     }
 
-    var executable = exec: {
-        const elf = try Elf.parse(allocator, bytes, &loader, config);
-        errdefer elf.deinit(allocator);
-        break :exec try Executable.fromElf(elf);
-    };
+    const elf = try Elf.parse(allocator, bytes, &loader, config);
+    var executable = Executable.fromElf(elf);
     defer executable.deinit(allocator);
 
     const stack_memory = try allocator.alloc(u8, config.stackSize());
@@ -2167,7 +2185,14 @@ pub fn testElfWithSyscalls(
         Region.init(.mutable, &.{}, memory.INPUT_START),
     }, .v0);
 
-    var vm = try Vm.init(allocator, &executable, m, &loader, stack_memory.len);
+    var vm = try Vm.init(
+        allocator,
+        &executable,
+        m,
+        &loader,
+        .noop,
+        stack_memory.len,
+    );
     defer vm.deinit();
 
     const result = vm.run();
@@ -2293,6 +2318,29 @@ test "bss section" {
             .{ .maximum_version = .v0 },
             sig.ELF_DATA_DIR ++ "bss_section_sbpfv0.so",
             &.{},
+            0,
+        ),
+    );
+}
+
+test "hash collision" {
+    // Mined Murmur3_32 hashes until I found one that collided with
+    // `hashSymbolName(&std.mem.toBytes(@as(u64, 0)))`
+    const colliding_name: []const u8 = &.{
+        0x6b, 0x2b, 0xad, 0xc9, 0xea, 0x56, 0xe0, 0x18, 0x4e, 0xf9, 0xce, 0x29,
+        0xf6, 0x48, 0x40, 0x80, 0xc2, 0xb2, 0x2e, 0xca, 0x1b, 0x4d, 0xc1, 0x22,
+        0xd5, 0x59, 0x39, 0xeb, 0xfb, 0x86, 0xc2, 0xe3, 0x18, 0xbc, 0xdc, 0x2e,
+        0x68, 0x23, 0x1,  0xb4, 0x86, 0x65, 0xb0, 0xc4, 0x71, 0x65, 0x26, 0x89,
+        0x5d, 0xbe, 0xbc, 0x4f, 0xd6, 0xe9, 0xff, 0x9e, 0xf6, 0x76, 0x81, 0x1d,
+        0xb6, 0xb0, 0x99, 0x95,
+    };
+
+    try expectEqual(
+        error.SymbolHashCollision,
+        testElfWithSyscalls(
+            .{ .maximum_version = .v0 },
+            sig.ELF_DATA_DIR ++ "hash_collision_sbpfv0.so",
+            &.{.{ .name = colliding_name, .builtin_fn = syscalls.abort }},
             0,
         ),
     );

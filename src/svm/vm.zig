@@ -2,6 +2,7 @@ const std = @import("std");
 const lib = @import("lib.zig");
 const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
+const sig = @import("../sig.zig");
 
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
@@ -10,6 +11,7 @@ const BuiltinProgram = lib.BuiltinProgram;
 
 pub const Vm = struct {
     allocator: std.mem.Allocator,
+    logger: sig.trace.Logger,
     executable: *const Executable,
 
     registers: std.EnumArray(sbpf.Instruction.Register, u64),
@@ -32,6 +34,7 @@ pub const Vm = struct {
         executable: *const Executable,
         memory_map: MemoryMap,
         loader: *const BuiltinProgram,
+        logger: sig.trace.Logger,
         stack_len: u64,
     ) !Vm {
         const offset = if (executable.version.enableDynamicStackFrames())
@@ -49,6 +52,7 @@ pub const Vm = struct {
             .instruction_count = 0,
             .vm_addr = executable.text_vaddr,
             .loader = loader,
+            .logger = logger,
         };
 
         self.registers.set(.r10, stack_pointer);

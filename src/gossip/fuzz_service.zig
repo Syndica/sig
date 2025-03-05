@@ -47,7 +47,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .allocator = std.heap.c_allocator,
         .max_level = sig.trace.Level.debug,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
 
     // setup randomness

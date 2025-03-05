@@ -445,6 +445,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 }
             };
         }
+
+        pub fn flush(_: *Self, comptime _: ColumnFamily) anyerror!void {}
     };
 }
 
