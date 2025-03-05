@@ -52,7 +52,7 @@ pub const VoteAuthorizeWithSeedArgs = struct {
         /// `[]` Clock sysvar
         clock_sysvar = 1,
         /// `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
-        signer = 3,
+        signer = 2,
     };
 };
 

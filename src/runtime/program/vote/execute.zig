@@ -237,7 +237,12 @@ fn authorize(
         },
         .withdrawer => {
             // current authorized withdrawer must say "yay".
-            if (!ic.isPubkeySigner(vote_state.authorized_withdrawer)) {
+            const authorized_withdrawer_signer = if (signers) |signers_|
+                try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
+            else
+                ic.isPubkeySigner(vote_state.authorized_withdrawer);
+
+            if (!authorized_withdrawer_signer) {
                 return InstructionError.MissingRequiredSignature;
             }
             vote_state.authorized_withdrawer = authorized;
@@ -289,9 +294,10 @@ fn authorizeWithSeed(
     if (try ic.isIndexSigner(
         @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.signer),
     )) {
-        const signer_account = try ic.borrowInstructionAccount(
-            @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.signer),
+        var signer_account = try ic.borrowInstructionAccount(
+            @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.signer),
         );
+        defer signer_account.release();
         const created = pubkey_utils.createWithSeed(
             signer_account.pubkey,
             seed,
@@ -300,8 +306,9 @@ fn authorizeWithSeed(
             ic.tc.custom_error = @intFromError(err);
             return InstructionError.Custom;
         };
-        expected_authority_keys.put(created, {}) catch {
+        expected_authority_keys.put(created, {}) catch |err| {
             // TODO okay to convert out of memory to custom error?
+            ic.tc.custom_error = @intFromError(err);
             return InstructionError.Custom;
         };
     }
@@ -698,6 +705,119 @@ test "executeAuthorize_voter_signed_by_current_withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+        },
+    );
+}
+
+test "authorizeWithSeed_withdrawer" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    // Insturction data.
+    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Account data.
+    const vote_account = Pubkey.initRandom(prng.random());
+    const base = Pubkey.initRandom(prng.random());
+    const current_withdrawer_owner = Pubkey.initRandom(prng.random());
+    const current_withdrawer_seed = &[_]u8{0x10} ** 32;
+
+    const authorized_withdrawer = try pubkey_utils.createWithSeed(
+        base,
+        current_withdrawer_seed,
+        current_withdrawer_owner,
+    );
+
+    const initial_vote_state = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        new_authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .authorize_with_seed = .{
+                .authorization_type = VoteAuthorize.withdrawer,
+                .current_authority_derived_key_owner = current_withdrawer_owner,
+                .current_authority_derived_key_seed = current_withdrawer_seed,
+                .new_authority = new_authorized_withdrawer,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = base },
+                .{ .pubkey = vote_program.ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = Clock.ID },
+                .{ .pubkey = base },
                 .{ .pubkey = vote_program.ID },
             },
             .compute_meter = 0,
