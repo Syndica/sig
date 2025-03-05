@@ -407,8 +407,8 @@ const PerThread = struct {
             st.channel.waitToReceive(st.exit) catch break;
 
             next_packet: while (st.channel.tryReceive()) |p| {
-                if (st.exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
                 const bytes_sent = while (true) { // loop on error.SystemResources below.
+                    if (st.exit.shouldExit()) return; // drop packets if exit prematurely.
                     break st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| switch (e) {
                         // on macOS, sendto() returns ENOBUFS on full buffer instead of blocking.
                         // Wait for the socket to be writable (buffer has room) and retry.
@@ -418,9 +418,7 @@ const PerThread = struct {
                                 .events = std.posix.POLL.OUT,
                                 .revents = 0,
                             }};
-                            const ready = try std.posix.poll(&fds, -1);
-                            std.debug.assert(ready > 0);
-                            std.debug.assert(fds[0].revents & std.posix.POLL.OUT > 0);
+                            _ = try std.posix.poll(&fds, 1000); // poll at most 1s to check exit.
                             continue;
                         },
                         else => {
@@ -499,6 +497,36 @@ pub const SocketThread = struct {
         self.allocator.destroy(self);
     }
 };
+
+test "SocketThread: overload sendto" {
+    const allocator = std.testing.allocator;
+
+    var send_channel = try Channel(Packet).init(allocator);
+    defer send_channel.deinit();
+
+    var socket = try UdpSocket.create(.ipv4, .udp);
+    try socket.bindToPort(0);
+
+    var exit = std.atomic.Value(bool).init(true);
+    var st = try SocketThread.spawnSender(
+        allocator,
+        .noop,
+        socket,
+        &send_channel,
+        .{ .unordered = &exit },
+    );
+    defer st.join();
+    defer exit.store(true, .release);
+
+    // send a bunch of packets to overload the SocketThread's internal sendto().
+    const addr = try network.EndPoint.parse("127.0.0.1:12345");
+    for (0..10_000) |_| {
+        try send_channel.send(Packet.init(addr, undefined, PACKET_DATA_SIZE));
+    }
+
+    // Wait for all sends to have started/happened.
+    while (!send_channel.isEmpty()) std.time.sleep(10 * std.time.ns_per_ms);
+}
 
 pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 1;
