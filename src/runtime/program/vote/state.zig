@@ -111,7 +111,7 @@ pub const AuthorizedVoters = struct {
         }
 
         for (expired_keys.items) |key| {
-            _ = self.authorized_voters.remove(key);
+            _ = self.authorized_voters.orderedRemove(key);
         }
 
         std.debug.assert(self.authorized_voters.count() != 0);
