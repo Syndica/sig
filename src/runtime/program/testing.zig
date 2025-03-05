@@ -15,16 +15,6 @@ const createTransactionContext = runtime_testing.createTransactionContext;
 const createInstructionInfo = runtime_testing.createInstructionInfo;
 const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
 
-pub const SYSTEM_PROGRAM_ACCOUNT_PARAMS: TransactionContextAccountParams = .{
-    .pubkey = system_program.ID,
-    .owner = ids.NATIVE_LOADER_ID,
-};
-
-pub const VOTE_PROGRAM_ACCOUNT_PARAMS: TransactionContextAccountParams = .{
-    .pubkey = vote_program.ID,
-    .owner = ids.NATIVE_LOADER_ID,
-};
-
 pub fn expectProgramExecuteResult(
     allocator: std.mem.Allocator,
     program: anytype,

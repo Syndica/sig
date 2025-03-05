@@ -142,6 +142,7 @@ fn intializeAccount(
 }
 
 test "executeIntializeAccount" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -205,7 +206,7 @@ test "executeIntializeAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = node_publey },
-                testing.VOTE_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -224,7 +225,7 @@ test "executeIntializeAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = node_publey },
-                testing.VOTE_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
             .sysvar_cache = .{

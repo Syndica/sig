@@ -403,10 +403,7 @@ test "pushInstruction" {
 
     {
         // Failure: UnbalancedInstruction
-        // Defer reset the instruction info's initial account lamports
         // Modify and defer reset the first account's lamports
-        defer instruction_info.initial_account_lamports = 0;
-
         const original_lamports = tc.accounts[0].account.lamports;
         defer tc.accounts[0].account.lamports = original_lamports;
         tc.accounts[0].account.lamports = original_lamports + 1;
@@ -430,6 +427,72 @@ test "pushInstruction" {
     try std.testing.expectError(
         InstructionError.ReentrancyNotAllowed,
         pushInstruction(&tc, instruction_info),
+    );
+}
+
+test "processNextInstruction" {
+    const testing = sig.runtime.testing;
+    const system_program = sig.runtime.program.system_program;
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    var tc = try testing.createTransactionContext(
+        allocator,
+        .{
+            .accounts = &.{
+                .{ .lamports = 2_000 },
+                .{ .lamports = 0 },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+        },
+    );
+    defer tc.deinit(allocator);
+
+    var instruction_info = try testing.createInstructionInfo(
+        allocator,
+        &tc,
+        system_program.ID,
+        system_program.Instruction{
+            .transfer = .{
+                .lamports = 1_000,
+            },
+        },
+        &.{
+            .{ .index_in_transaction = 0, .is_signer = true, .is_writable = true },
+            .{ .index_in_transaction = 1, .is_signer = false, .is_writable = true },
+        },
+    );
+    defer instruction_info.deinit(allocator);
+
+    // Failure: CallDepth
+    try std.testing.expectEqual(
+        InstructionError.CallDepth,
+        processNextInstruction(allocator, &tc).?,
+    );
+
+    {
+        // Failure: UnsupportedProgramId
+        // Modify and defer reset the system program id
+        const original_program_id = tc.accounts[2].pubkey;
+        defer tc.accounts[2].pubkey = original_program_id;
+        tc.accounts[2].pubkey = Pubkey.initRandom(prng.random());
+
+        try pushInstruction(&tc, instruction_info);
+
+        try std.testing.expectEqual(
+            InstructionError.UnsupportedProgramId,
+            processNextInstruction(allocator, &tc).?,
+        );
+
+        _ = tc.instruction_stack.pop();
+    }
+
+    // Success
+    try pushInstruction(&tc, instruction_info);
+    try std.testing.expectEqual(
+        null,
+        processNextInstruction(allocator, &tc),
     );
 }
 

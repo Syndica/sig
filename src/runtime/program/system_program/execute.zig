@@ -799,6 +799,7 @@ fn checkSeedAddress(
 }
 
 test "executeCreateAccount" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
@@ -824,7 +825,7 @@ test "executeCreateAccount" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = account_1_key, .owner = system_program.ID },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 150,
         },
@@ -837,7 +838,7 @@ test "executeCreateAccount" {
                     .lamports = 1_000_000,
                     .data = &[_]u8{ 0, 0 },
                 },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .accounts_resize_delta = 2,
         },
@@ -845,6 +846,7 @@ test "executeCreateAccount" {
 }
 
 test "executeAssign" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
@@ -866,20 +868,21 @@ test "executeAssign" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = system_program.ID },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = new_owner },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeTransfer" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
@@ -903,7 +906,7 @@ test "executeTransfer" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = account_1_key },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -911,13 +914,14 @@ test "executeTransfer" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = account_1_key, .lamports = 1_000_000 },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeCreateAccountWithSeed" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
@@ -950,7 +954,7 @@ test "executeCreateAccountWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = account_1_key, .owner = system_program.ID },
                 .{ .pubkey = base },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -959,15 +963,16 @@ test "executeCreateAccountWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = account_1_key, .owner = system_program.ID, .lamports = 1_000_000 },
                 .{ .pubkey = base },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeAdvanceNonceAccount" {
-    const Hash = sig.core.Hash;
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
+    const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1032,7 +1037,7 @@ test "executeAdvanceNonceAccount" {
                 },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = nonce_authority },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .lamports_per_signature = lamports_per_signature,
@@ -1050,7 +1055,7 @@ test "executeAdvanceNonceAccount" {
                 },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = nonce_authority },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
@@ -1062,8 +1067,9 @@ test "executeAdvanceNonceAccount" {
 }
 
 test "executeWithdrawNonceAccount" {
-    const Hash = sig.core.Hash;
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
+    const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1114,7 +1120,7 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -1133,7 +1139,7 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
@@ -1144,8 +1150,9 @@ test "executeWithdrawNonceAccount" {
 }
 
 test "executeInitializeNonceAccount" {
-    const Hash = sig.core.Hash;
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
+    const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1207,7 +1214,7 @@ test "executeInitializeNonceAccount" {
                 },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .lamports_per_signature = lamports_per_signature,
@@ -1227,7 +1234,7 @@ test "executeInitializeNonceAccount" {
                 },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
@@ -1240,8 +1247,9 @@ test "executeInitializeNonceAccount" {
 }
 
 test "executeAuthorizeNonceAccount" {
-    const Hash = sig.core.Hash;
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
+    const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1289,7 +1297,7 @@ test "executeAuthorizeNonceAccount" {
                     .data = nonce_state_bytes,
                 },
                 .{ .pubkey = initial_nonce_authority },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1301,13 +1309,14 @@ test "executeAuthorizeNonceAccount" {
                     .data = final_nonce_state_bytes,
                 },
                 .{ .pubkey = initial_nonce_authority },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeAllocate" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1333,7 +1342,7 @@ test "executeAllocate" {
                     .pubkey = account_0_key,
                     .owner = system_program.ID,
                 },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1344,7 +1353,7 @@ test "executeAllocate" {
                     .owner = system_program.ID,
                     .data = &[_]u8{0} ** allocation_size,
                 },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .accounts_resize_delta = allocation_size,
         },
@@ -1352,6 +1361,7 @@ test "executeAllocate" {
 }
 
 test "executeAllocateWithSeed" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1384,7 +1394,7 @@ test "executeAllocateWithSeed" {
                     .owner = system_program.ID,
                 },
                 .{ .pubkey = base },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1396,7 +1406,7 @@ test "executeAllocateWithSeed" {
                     .data = &[_]u8{0} ** 1024,
                 },
                 .{ .pubkey = base },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .accounts_resize_delta = allocation_size,
         },
@@ -1404,6 +1414,7 @@ test "executeAllocateWithSeed" {
 }
 
 test "executeAssignWithSeed" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1432,7 +1443,7 @@ test "executeAssignWithSeed" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = system_program.ID },
                 .{ .pubkey = base },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1440,13 +1451,14 @@ test "executeAssignWithSeed" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = owner },
                 .{ .pubkey = base },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeTransferWithSeed" {
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1478,7 +1490,7 @@ test "executeTransferWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 0 },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1487,15 +1499,16 @@ test "executeTransferWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 1_000_000 },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeUpgradeNonceAccount" {
-    const Hash = sig.core.Hash;
+    const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
+    const Hash = sig.core.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1543,7 +1556,7 @@ test "executeUpgradeNonceAccount" {
                     .owner = system_program.ID,
                     .data = nonce_state_bytes,
                 },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1554,7 +1567,7 @@ test "executeUpgradeNonceAccount" {
                     .owner = system_program.ID,
                     .data = final_nonce_state_bytes,
                 },
-                testing.SYSTEM_PROGRAM_ACCOUNT_PARAMS,
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
