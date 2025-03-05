@@ -349,13 +349,11 @@ fn sumAccountLamports(
 }
 
 test "pushInstruction" {
+    const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
-    const createTransactionContext = sig.runtime.testing.createTransactionContext;
-    const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
-
     const allocator = std.testing.allocator;
 
-    var tc = try createTransactionContext(
+    var tc = try testing.createTransactionContext(
         allocator,
         .{
             .accounts = &.{
@@ -367,7 +365,7 @@ test "pushInstruction" {
     );
     defer tc.deinit(allocator);
 
-    var instruction_info = try createInstructionInfo(
+    var instruction_info = try testing.createInstructionInfo(
         allocator,
         &tc,
         system_program.ID,
@@ -436,13 +434,11 @@ test "pushInstruction" {
 }
 
 test "popInstruction" {
+    const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
-    const createTransactionContext = sig.runtime.testing.createTransactionContext;
-    const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
-
     const allocator = std.testing.allocator;
 
-    var tc = try createTransactionContext(
+    var tc = try testing.createTransactionContext(
         allocator,
         .{
             .accounts = &.{
@@ -454,7 +450,7 @@ test "popInstruction" {
     );
     defer tc.deinit(allocator);
 
-    var instruction_info = try createInstructionInfo(
+    var instruction_info = try testing.createInstructionInfo(
         allocator,
         &tc,
         system_program.ID,
@@ -516,12 +512,10 @@ test "popInstruction" {
 }
 
 test "sumAccountLamports" {
-    const createTransactionContext = sig.runtime.testing.createTransactionContext;
-    const createInstructionContextAccountMetas = sig.runtime.testing.createInstructionContextAccountMetas;
-
+    const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
 
-    var tc = try createTransactionContext(
+    var tc = try testing.createTransactionContext(
         allocator,
         .{
             .accounts = &.{
@@ -536,7 +530,7 @@ test "sumAccountLamports" {
 
     {
         // Success: 0 + 1 + 2 + 3 = 6
-        const account_metas = try createInstructionContextAccountMetas(&tc, &.{
+        const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
             .{ .index_in_transaction = 2 },
@@ -551,7 +545,7 @@ test "sumAccountLamports" {
     {
         // Success: 0 + 1 + 2 + 0 = 3
         // First and last instruction account metas reference the same transaction account
-        const account_metas = try createInstructionContextAccountMetas(&tc, &.{
+        const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
             .{ .index_in_transaction = 2 },
@@ -566,7 +560,7 @@ test "sumAccountLamports" {
 
     {
         // Failure: NotEnoughAccountKeys
-        var account_metas = try createInstructionContextAccountMetas(&tc, &.{
+        var account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
             .{ .index_in_transaction = 2 },
@@ -590,7 +584,7 @@ test "sumAccountLamports" {
         });
         defer borrowed_account.release();
 
-        const account_metas = try createInstructionContextAccountMetas(&tc, &.{
+        const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
             .{ .index_in_transaction = 2 },

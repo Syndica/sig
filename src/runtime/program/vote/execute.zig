@@ -1,8 +1,6 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const ids = sig.runtime.ids;
-
 const vote_program = sig.runtime.program.vote_program;
 const vote_instruction = vote_program.vote_instruction;
 
