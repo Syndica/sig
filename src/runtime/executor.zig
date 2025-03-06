@@ -157,12 +157,12 @@ fn processNextInstruction(
     // Invoke the program and log the result
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
-    try stable_log.program_invoke(&ic.tc.log_collector, program_id, ic.tc.instruction_stack.len);
+    try stable_log.programInvoke(&ic.tc.log_collector, program_id, ic.tc.instruction_stack.len);
     if (native_program_fn(allocator, ic)) |execute_error| {
-        try stable_log.program_failure(&ic.tc.log_collector, program_id, execute_error);
+        try stable_log.programFailure(&ic.tc.log_collector, program_id, execute_error);
         return execute_error;
     } else {
-        try stable_log.program_success(&ic.tc.log_collector, program_id);
+        try stable_log.programSuccess(&ic.tc.log_collector, program_id);
         return null;
     }
 }
