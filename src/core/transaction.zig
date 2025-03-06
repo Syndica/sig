@@ -73,6 +73,7 @@ pub const Transaction = struct {
     }
 
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
+        std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
         for (data.signatures) |sgn| try writer.writeAll(&sgn.data);
         try data.version.serialize(writer);
@@ -189,17 +190,20 @@ pub const TransactionMessage = struct {
         try writer.writeByte(self.readonly_unsigned_count);
 
         // WARN: Truncate okay if transaction is valid
+        std.debug.assert(self.account_keys.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(self.account_keys.len)));
         for (self.account_keys) |id| try writer.writeAll(&id.data);
 
         try writer.writeAll(&self.recent_blockhash.data);
 
         // WARN: Truncate okay if transaction is valid
+        std.debug.assert(self.instructions.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(self.instructions.len)));
         for (self.instructions) |instr| try sig.bincode.write(writer, instr, .{});
 
         // WARN: Truncate okay if transaction is valid
         if (version != TransactionVersion.legacy) {
+            std.debug.assert(self.address_lookups.len <= std.math.maxInt(u16));
             try leb.writeULEB128(writer, @as(u16, @intCast(self.address_lookups.len)));
             for (self.address_lookups) |alt| try sig.bincode.write(writer, alt, .{});
         }
