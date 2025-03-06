@@ -403,7 +403,7 @@ fn verifyAuthorizedSigner(
     }
 }
 
-test "executeIntializeAccount" {
+test "vote_program: executeIntializeAccount" {
     const expectProgramExecuteResult =
         sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
@@ -498,7 +498,7 @@ test "executeIntializeAccount" {
     );
 }
 
-test "executeAuthorize_withdrawer_signed_by_current_withdrawer" {
+test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     const expectProgramExecuteResult =
         sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
@@ -601,7 +601,7 @@ test "executeAuthorize_withdrawer_signed_by_current_withdrawer" {
     );
 }
 
-test "executeAuthorize_voter_signed_by_current_withdrawer" {
+test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const PriorVote = sig.runtime.program.vote_program.state.PriorVote;
     _ = &PriorVote;
     const expectProgramExecuteResult =
@@ -711,7 +711,7 @@ test "executeAuthorize_voter_signed_by_current_withdrawer" {
     );
 }
 
-test "authorizeWithSeed_withdrawer" {
+test "vote_program: authorizeWithSeed withdrawer" {
     const expectProgramExecuteResult =
         sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
@@ -824,7 +824,7 @@ test "authorizeWithSeed_withdrawer" {
     );
 }
 
-test "authorizeCheckedWithSeed_withdrawer" {
+test "vote_program: authorizeCheckedWithSeed withdrawer" {
     const expectProgramExecuteResult =
         sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
@@ -939,7 +939,7 @@ test "authorizeCheckedWithSeed_withdrawer" {
     );
 }
 
-test "authorizeChecked_withdrawer" {
+test "vote_program: authorizeChecked withdrawer" {
     const expectProgramExecuteResult =
         sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
