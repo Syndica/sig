@@ -271,6 +271,8 @@ fn executeAuthorizeWithSeed(
         authorization_type,
         current_authority_derived_key_owner,
         current_authority_derived_key_seed,
+        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.signer),
+        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.clock_sysvar),
     );
 }
 
@@ -283,20 +285,15 @@ fn authorizeWithSeed(
     authorization_type: VoteAuthorize,
     owner: Pubkey,
     seed: []const u8,
+    signer_index: u8,
+    clock_index: u8,
 ) InstructionError!void {
-    const clock = try ic.getSysvarWithAccountCheck(
-        Clock,
-        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.clock_sysvar),
-    );
+    const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
     var expected_authority_keys = std.AutoHashMap(Pubkey, void).init(allocator);
     defer expected_authority_keys.deinit();
-    if (try ic.isIndexSigner(
-        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.signer),
-    )) {
-        var signer_account = try ic.borrowInstructionAccount(
-            @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.signer),
-        );
+    if (try ic.isIndexSigner(signer_index)) {
+        var signer_account = try ic.borrowInstructionAccount(signer_index);
         defer signer_account.release();
         const created = pubkey_utils.createWithSeed(
             signer_account.pubkey,
@@ -338,13 +335,10 @@ fn executeAuthorizeCheckedWithSeed(
 ) InstructionError!void {
     try ic.checkNumberOfAccounts(4);
 
-    const new_authority = try ic.borrowInstructionAccount(
+    var new_authority = try ic.borrowInstructionAccount(
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
     );
-
-    if (!ic.isPubkeySigner(new_authority.pubkey)) {
-        return InstructionError.MissingRequiredSignature;
-    }
+    defer new_authority.release();
 
     try authorizeWithSeed(
         allocator,
@@ -354,6 +348,8 @@ fn executeAuthorizeCheckedWithSeed(
         authorization_type,
         current_authority_derived_key_owner,
         current_authority_derived_key_seed,
+        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.base_key),
+        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.clock_sysvar),
     );
 }
 
