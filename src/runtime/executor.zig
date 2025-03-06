@@ -225,29 +225,36 @@ fn prepareCpiInstructionInfo(
             return InstructionError.MissingAccount;
         };
 
-        for (deduped_account_metas.slice(), 0..) |*deduped_meta, deduped_index| {
-            if (deduped_meta.index_in_transaction == index_in_transaction) {
-                deduped_indexes.appendAssumeCapacity(deduped_index);
-                deduped_meta.is_signer = deduped_meta.is_signer or account.is_signer;
-                deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
+        const maybe_duplicate_index: ?usize = blk: {
+            for (deduped_account_metas.slice(), 0..) |*deduped_meta, deduped_index| {
+                if (deduped_meta.index_in_transaction == index_in_transaction) {
+                    break :blk deduped_index;
+                }
             }
-            continue;
-        }
-
-        const index_in_caller = caller.info.getAccountMetaIndex(account.pubkey) orelse {
-            try tc.log("Instruction references unkown account {}", .{account.pubkey});
-            return InstructionError.MissingAccount;
+            break :blk null;
         };
 
-        deduped_indexes.appendAssumeCapacity(deduped_account_metas.len);
-        deduped_account_metas.appendAssumeCapacity(.{
-            .pubkey = account.pubkey,
-            .index_in_transaction = index_in_transaction,
-            .index_in_caller = index_in_caller,
-            .index_in_callee = @intCast(index),
-            .is_signer = account.is_signer,
-            .is_writable = account.is_writable,
-        });
+        if (maybe_duplicate_index) |duplicate_index| {
+            deduped_indexes.appendAssumeCapacity(duplicate_index);
+            const deduped_meta = &deduped_account_metas.buffer[duplicate_index];
+            deduped_meta.is_signer = deduped_meta.is_signer or account.is_signer;
+            deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
+        } else {
+            const index_in_caller = caller.info.getAccountMetaIndex(account.pubkey) orelse {
+                try tc.log("Instruction references unkown account {}", .{account.pubkey});
+                return InstructionError.MissingAccount;
+            };
+
+            deduped_indexes.appendAssumeCapacity(deduped_account_metas.len);
+            deduped_account_metas.appendAssumeCapacity(.{
+                .pubkey = account.pubkey,
+                .index_in_transaction = index_in_transaction,
+                .index_in_caller = index_in_caller,
+                .index_in_callee = @intCast(index),
+                .is_signer = account.is_signer,
+                .is_writable = account.is_writable,
+            });
+        }
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L386-L415
