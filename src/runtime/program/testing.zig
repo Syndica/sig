@@ -32,7 +32,7 @@ pub fn expectProgramExecuteResult(
     defer transaction_context.deinit(allocator);
 
     var prng_1 = std.rand.DefaultPrng.init(0);
-    const expected_transaction_context = try createTransactionContext(
+    var expected_transaction_context = try createTransactionContext(
         allocator,
         prng_1.random(),
         expected_transaction_context_params,

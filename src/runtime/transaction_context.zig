@@ -70,10 +70,11 @@ pub const TransactionContext = struct {
         depth: u8,
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
-    pub fn deinit(self: TransactionContext, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *TransactionContext, allocator: std.mem.Allocator) void {
         for (self.accounts) |account| account.deinit(allocator);
         allocator.free(self.accounts);
         if (self.log_collector) |lc| lc.deinit();
+        self.feature_set.deinit(allocator);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233

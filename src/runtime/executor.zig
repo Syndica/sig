@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 const ids = sig.runtime.ids;
 const program = sig.runtime.program;
 const stable_log = sig.runtime.stable_log;
+const feature_set = sig.runtime.feature_set;
 
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -301,27 +302,36 @@ fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    // TODO: support lift_cpi_caller_restriction feature gate
-    const index_in_caller = caller.info.getAccountMetaIndex(callee.program_id) orelse {
-        try tc.log("Unknown program {}", .{callee.program_id});
-        return InstructionError.MissingAccount;
+    const program_index_in_transaction = if (tc.feature_set.active.contains(feature_set.LIFT_CPI_CALLER_RESTRICTION)) blk: {
+        break :blk tc.getAccountIndex(callee.program_id) orelse {
+            try tc.log("Unknown program {}", .{callee.program_id});
+            return InstructionError.MissingAccount;
+        };
+    } else blk: {
+        const index_in_caller = caller.info.getAccountMetaIndex(callee.program_id) orelse {
+            try tc.log("Unknown program {}", .{callee.program_id});
+            return InstructionError.MissingAccount;
+        };
+        const program_meta = caller.info.account_metas.buffer[index_in_caller];
+
+        const borrowed_account =
+            try caller.borrowInstructionAccount(index_in_caller);
+        defer borrowed_account.release();
+
+        if (!tc.feature_set.active.contains(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
+            !borrowed_account.account.executable)
+        {
+            try tc.log("Account {} is not executable", .{callee.program_id});
+            return InstructionError.AccountNotExecutable;
+        }
+
+        break :blk program_meta.index_in_transaction;
     };
-    const index_in_transaction =
-        caller.info.account_metas.buffer[index_in_caller].index_in_transaction;
-
-    const borrowed_program_account =
-        try caller.borrowInstructionAccount(index_in_caller);
-    defer borrowed_program_account.release();
-
-    if (!borrowed_program_account.account.executable) {
-        try tc.log("Account {} is not executable", .{callee.program_id});
-        return InstructionError.AccountNotExecutable;
-    }
 
     return .{
         .program_meta = .{
             .pubkey = callee.program_id,
-            .index_in_transaction = index_in_transaction,
+            .index_in_transaction = program_index_in_transaction,
         },
         .account_metas = instruction_accounts,
         .instruction_data = callee.data,
@@ -666,7 +676,7 @@ test "prepareCpiInstructionInfo" {
         );
     }
 
-    // Failure: MissingAccount 3 (caller missing program)
+    // Failure: MissingAccount 3 (caller missing program) lift_cpi_caller_restriction off)
     {
         const original_program_id = callee.program_id;
         callee.program_id = Pubkey.initRandom(prng.random());
@@ -715,6 +725,17 @@ test "prepareCpiInstructionInfo" {
             InstructionError.AccountNotExecutable,
             prepareCpiInstructionInfo(&tc, callee, &.{}),
         );
+    }
+
+    // Success: REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS
+    {
+        tc.accounts[2].account.executable = false;
+        defer tc.accounts[2].account.executable = true;
+
+        try tc.feature_set.active.put(allocator, feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS, 0);
+        defer _ = tc.feature_set.active.orderedRemove(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS);
+
+        _ = try prepareCpiInstructionInfo(&tc, callee, &.{});
     }
 }
 

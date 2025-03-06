@@ -6,6 +6,7 @@ const bincode = sig.bincode;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
+const Slot = sig.core.Slot;
 
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -32,8 +33,10 @@ pub const TransactionContextParams = struct {
     sysvar_cache: SysvarCache = .{},
     lamports_per_signature: u64 = 0,
     last_blockhash: Hash = Hash.ZEROES,
-    feature_set: FeatureSet = FeatureSet.EMPTY,
+    feature_set: FeatureSetParams = &.{},
 };
+
+pub const FeatureSetParams = []const struct { pubkey: Pubkey, slot: Slot = 0 };
 
 pub const InstructionContextAccountMetaParams = struct {
     index_in_transaction: u16 = 0,
@@ -50,9 +53,25 @@ pub fn createTransactionContext(
 ) !TransactionContext {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
+    const accounts = try createTransactionContextAccounts(
+        allocator,
+        random,
+        params.accounts,
+    );
+    errdefer {
+        for (accounts) |account| {
+            account.deinit(allocator);
+        }
+        allocator.free(accounts);
+    }
+
+    const feature_set = try createFeatureSet(
+        allocator,
+        params.feature_set,
+    );
 
     return .{
-        .accounts = try createTransactionContextAccounts(allocator, random, params.accounts),
+        .accounts = accounts,
         .instruction_stack = .{},
         .instruction_trace = .{},
         .return_data = .{},
@@ -63,32 +82,50 @@ pub fn createTransactionContext(
         .sysvar_cache = params.sysvar_cache,
         .lamports_per_signature = params.lamports_per_signature,
         .last_blockhash = params.last_blockhash,
-        .feature_set = params.feature_set,
+        .feature_set = feature_set,
     };
 }
 
 pub fn createTransactionContextAccounts(
     allocator: std.mem.Allocator,
     random: std.Random,
-    account_params: []const TransactionContextAccountParams,
+    params: []const TransactionContextAccountParams,
 ) ![]TransactionContextAccount {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
     var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
     errdefer accounts.deinit();
-    for (account_params) |params| {
+    for (params) |account_params| {
         try accounts.append(
-            TransactionContextAccount.init(params.pubkey orelse Pubkey.initRandom(random), .{
-                .lamports = params.lamports,
-                .data = try allocator.dupe(u8, params.data),
-                .owner = params.owner orelse Pubkey.initRandom(random),
-                .executable = params.executable,
-                .rent_epoch = params.rent_epoch,
-            }),
+            TransactionContextAccount.init(
+                account_params.pubkey orelse Pubkey.initRandom(random),
+                .{
+                    .lamports = account_params.lamports,
+                    .data = try allocator.dupe(u8, account_params.data),
+                    .owner = account_params.owner orelse Pubkey.initRandom(random),
+                    .executable = account_params.executable,
+                    .rent_epoch = account_params.rent_epoch,
+                },
+            ),
         );
     }
     return accounts.toOwnedSlice();
+}
+
+pub fn createFeatureSet(
+    allocator: std.mem.Allocator,
+    params: FeatureSetParams,
+) !FeatureSet {
+    if (!builtin.is_test)
+        @compileError("createFeatureSet should only be called in test mode");
+
+    var feature_set = FeatureSet.EMPTY;
+
+    for (params) |feature|
+        try feature_set.active.put(allocator, feature.pubkey, feature.slot);
+
+    return feature_set;
 }
 
 pub fn createInstructionInfo(
