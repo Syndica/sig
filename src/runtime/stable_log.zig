@@ -58,7 +58,11 @@ pub fn programLog(log_collector: *?LogCollector, message: []const u8) !void {
 /// That is, any program-generated output is guaranteed to be prefixed by "Program data: "
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L55
-pub fn programData(allocator: std.mem.Allocator, log_collector: *?LogCollector, data: []const []const u8) !void {
+pub fn programData(
+    allocator: std.mem.Allocator,
+    log_collector: *?LogCollector,
+    data: []const []const u8,
+) !void {
     if (log_collector.* != null) {
         var encoded = std.ArrayListUnmanaged(u8){};
         defer encoded.deinit(allocator);
