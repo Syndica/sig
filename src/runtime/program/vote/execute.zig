@@ -362,9 +362,10 @@ fn executeAuthorizeChecked(
 ) InstructionError!void {
     try ic.checkNumberOfAccounts(4);
 
-    const new_authority = try ic.borrowInstructionAccount(
+    var new_authority = try ic.borrowInstructionAccount(
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_signer),
     );
+    defer new_authority.release();
 
     if (!ic.isPubkeySigner(new_authority.pubkey)) {
         return InstructionError.MissingRequiredSignature;
@@ -954,26 +955,14 @@ test "vote_program: authorizeChecked withdrawer" {
         .unix_timestamp = 0,
     };
 
-    // Insturction data.
-    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
-
+    // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const commission: u8 = 10;
+    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
 
-    // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
-    const base = Pubkey.initRandom(prng.random());
-    const current_withdrawer_owner = Pubkey.initRandom(prng.random());
-    const current_withdrawer_seed = &[_]u8{0x10} ** 32;
-
-    const authorized_withdrawer = try pubkey_utils.createWithSeed(
-        base,
-        current_withdrawer_seed,
-        current_withdrawer_owner,
-    );
-
-    // const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
 
     const initial_vote_state = try VoteState.init(
         allocator,
@@ -1022,8 +1011,8 @@ test "vote_program: authorizeChecked withdrawer" {
                     .data = initial_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
-                .{ .pubkey = base },
                 .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = new_authorized_withdrawer },
                 .{ .pubkey = vote_program.ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1040,7 +1029,7 @@ test "vote_program: authorizeChecked withdrawer" {
                     .data = final_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
-                .{ .pubkey = base },
+                .{ .pubkey = authorized_withdrawer },
                 .{ .pubkey = new_authorized_withdrawer },
                 .{ .pubkey = vote_program.ID },
             },
