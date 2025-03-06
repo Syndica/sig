@@ -189,7 +189,7 @@ pub fn runService(
         = if (result) |_|
             .{ config.return_handler, num_oks, "return", logger.info(), null }
         else |_|
-            .{ config.error_handler, num_errors, "error", logger.warn(), @errorReturnTrace() };
+            .{ config.error_handler, num_errors, "error", logger.err(), @errorReturnTrace() };
 
         // handle result
         if (handler.log_return) {
