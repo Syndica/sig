@@ -15,7 +15,7 @@ pub const Cmd = struct {
 
     test_transaction_sender: TestTransactionSender = .{},
 
-    max_shreds: u64 = 1_000,
+    max_shreds: u64 = 5_000_000,
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
     // general config

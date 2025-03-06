@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 
 pub fn peekableReader(reader: anytype) PeekableReader(@TypeOf(reader)) {
     return .{ .backing_reader = reader };
@@ -170,4 +171,96 @@ test WindowedWriter {
     try testWindowedWriter(.str, .{ .start = 1, .size = 1 }, "foo\n", "o");
     try testWindowedWriter(.str, .{ .start = 2, .size = 1 }, "foo\n", "o");
     try testWindowedWriter(.str, .{ .start = 3, .size = 1 }, "foo\n", "\n");
+}
+
+test PeekableReader {
+    // peek empty data
+    {
+        var stream = std.io.fixedBufferStream("");
+        var reader = peekableReader(stream.reader());
+        try testing.expectError(error.EndOfStream, reader.peekByte());
+    }
+
+    // peek non-empty data
+    {
+        var stream = std.io.fixedBufferStream("abcdef");
+        var reader = peekableReader(stream.reader());
+        try testing.expect(try reader.peekByte() == 'a');
+    }
+
+    // read empty data
+    {
+        var stream = std.io.fixedBufferStream("");
+        var peekable = peekableReader(stream.reader());
+        var reader = peekable.reader();
+
+        var out_buf: [5]u8 = undefined;
+        try testing.expectEqual(try reader.readAll(&out_buf), 0);
+        try testing.expectError(error.EndOfStream, peekable.peekByte());
+    }
+
+    // read when len data < dest
+    {
+        var stream = std.io.fixedBufferStream("abcdef");
+        var peekable = peekableReader(stream.reader());
+        var reader = peekable.reader();
+
+        var out_buf: [9]u8 = undefined;
+        try testing.expectEqual(try reader.readAll(&out_buf), 6);
+
+        const expected: [6]u8 = .{ 'a', 'b', 'c', 'd', 'e', 'f' };
+        try testing.expectEqualSlices(u8, out_buf[0..6], &expected);
+        try testing.expectError(error.EndOfStream, peekable.peekByte());
+    }
+
+    // read when len data > dest
+    {
+        var stream = std.io.fixedBufferStream("abcdef");
+        var peekable = peekableReader(stream.reader());
+        var reader = peekable.reader();
+
+        var out_buf: [2]u8 = undefined;
+        try testing.expectEqual(try reader.readAll(&out_buf), 2);
+        try testing.expectEqualSlices(u8, &out_buf, &.{ 'a', 'b' });
+        try testing.expect(try peekable.peekByte() == 'c');
+    }
+
+    // read when len data == dest
+    {
+        var stream = std.io.fixedBufferStream("abcdef");
+        var peekable = peekableReader(stream.reader());
+        var reader = peekable.reader();
+
+        var out_buf: [6]u8 = undefined;
+        try testing.expectEqual(try reader.readAll(&out_buf), 6);
+
+        const expected: [6]u8 = .{ 'a', 'b', 'c', 'd', 'e', 'f' };
+        try testing.expectEqualSlices(u8, &out_buf, &expected);
+        try testing.expectError(error.EndOfStream, peekable.peekByte());
+    }
+
+    // read in chunks
+    {
+        var stream = std.io.fixedBufferStream("abcdefg");
+        var peekable = peekableReader(stream.reader());
+        var reader = peekable.reader();
+
+        var out_buf: [2]u8 = undefined;
+
+        try testing.expectEqual(try reader.readAll(&out_buf), 2);
+        try testing.expectEqualSlices(u8, &out_buf, &.{ 'a', 'b' });
+        try testing.expect(try peekable.peekByte() == 'c');
+
+        try testing.expectEqual(try reader.readAll(&out_buf), 2);
+        try testing.expectEqualSlices(u8, &out_buf, &.{ 'c', 'd' });
+        try testing.expect(try peekable.peekByte() == 'e');
+
+        try testing.expectEqual(try reader.readAll(&out_buf), 2);
+        try testing.expectEqualSlices(u8, &out_buf, &.{ 'e', 'f' });
+        try testing.expect(try peekable.peekByte() == 'g');
+
+        try testing.expectEqual(try reader.readAll(&out_buf), 1);
+        try testing.expectEqualSlices(u8, out_buf[0..1], &.{'g'});
+        try testing.expectError(error.EndOfStream, peekable.peekByte());
+    }
 }

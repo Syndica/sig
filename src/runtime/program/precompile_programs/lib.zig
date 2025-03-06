@@ -125,41 +125,6 @@ pub const PrecompileProgramError = error{
     InvalidInstructionDataSize,
 };
 
-pub fn getInstructionValue(
-    T: type,
-    current_instruction_data: []const u8,
-    all_instruction_datas: []const []const u8,
-    instruction_idx: u16,
-    offset: usize,
-) error{InvalidDataOffsets}!*align(1) const T {
-    return @ptrCast(try getInstructionData(
-        @sizeOf(T),
-        current_instruction_data,
-        all_instruction_datas,
-        instruction_idx,
-        offset,
-    ));
-}
-
-// https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L74
-pub fn getInstructionData(
-    len: usize,
-    current_instruction_data: []const u8,
-    all_instruction_datas: []const []const u8,
-    instruction_idx: u16,
-    offset: usize,
-) error{InvalidDataOffsets}![]const u8 {
-    const data: []const u8 = if (instruction_idx == std.math.maxInt(u16))
-        current_instruction_data
-    else data: {
-        if (instruction_idx >= all_instruction_datas.len) return error.InvalidDataOffsets;
-        break :data all_instruction_datas[instruction_idx];
-    };
-
-    if (offset +| len > data.len) return error.InvalidDataOffsets;
-    return data[offset..][0..len];
-}
-
 test "verify ed25519" {
     try verifyPrecompiles(
         std.testing.allocator,
@@ -242,4 +207,25 @@ test "verify cost" {
 
     const compute_units = verifyPrecompilesComputeCost(ed25519_tx, sig.runtime.FeatureSet.EMPTY);
     try std.testing.expectEqual(expected_cost, compute_units);
+}
+
+test "verify secp256k1" {
+    const bad_secp256k1_tx = std.mem.zeroInit(sig.core.Transaction, .{
+        .msg = .{
+            .account_keys = &.{sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID},
+            .instructions = &.{
+                .{
+                    .program_index = 0,
+                    .account_indexes = &.{0},
+                    .data = "hello",
+                },
+            },
+        },
+        .version = .legacy,
+    });
+
+    try std.testing.expectError(
+        error.InvalidInstructionDataSize,
+        verifyPrecompiles(std.testing.allocator, bad_secp256k1_tx, sig.runtime.FeatureSet.EMPTY),
+    );
 }
