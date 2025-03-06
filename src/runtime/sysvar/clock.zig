@@ -28,4 +28,12 @@ pub const Clock = struct {
 
     pub const ID =
         Pubkey.parseBase58String("SysvarC1ock11111111111111111111111111111111") catch unreachable;
+
+    pub const DEFAULT = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
 };

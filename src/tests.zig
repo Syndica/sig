@@ -13,6 +13,7 @@ comptime {
 /// - runs at comptime to avoid compiler errors for hypothetical
 ///   code paths that would never actually run.
 pub inline fn refAllDeclsRecursive(comptime T: type, comptime depth: usize) void {
+    @setEvalBranchQuota(2000); // Raise as required
     if (depth == 0) return;
     inline for (comptime std.meta.declarations(T)) |decl| {
         if (@TypeOf(@field(T, decl.name)) == type) {
