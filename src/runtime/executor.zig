@@ -274,9 +274,8 @@ fn prepareCpiInstructionInfo(
         // it must be either signed in the caller or by the program
         var allow_callee_signer = caller_account.context.is_signer;
         for (signers) |signer| {
-            if (!allow_callee_signer) {
-                if (signer.equals(&caller_account.pubkey)) allow_callee_signer = true;
-            } else break;
+            if (allow_callee_signer) break;
+            if (signer.equals(&caller_account.pubkey)) allow_callee_signer = true;
         }
         if (!allow_callee_signer and callee_account.is_signer) {
             try tc.log("{}'s signer privilege escalated", .{caller_account.pubkey});
