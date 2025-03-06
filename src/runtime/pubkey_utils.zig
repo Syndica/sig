@@ -98,9 +98,11 @@ pub fn createProgramAddress(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L289
-pub fn bytesAreCurvePoint(_: []const u8) bool {
-    // TODO(native-cpi): Implement
-    return false;
+pub fn bytesAreCurvePoint(bytes: []const u8) bool {
+    const encoded_length = std.crypto.ecc.Edwards25519.encoded_length;
+    if (encoded_length != bytes.len) return false;
+    _ = std.crypto.ecc.Edwards25519.fromBytes(bytes[0..encoded_length].*) catch return false;
+    return true;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L1336
@@ -122,5 +124,36 @@ test "findProgramAddress" {
                 program_id,
             ),
         );
+    }
+}
+
+test "bytesAreCurvePoint" {
+    const bytes_on_curve: []const []const u8 = &.{ &.{
+        184, 122, 70,  205, 215, 194, 55,  219,
+        159, 56,  94,  18,  203, 78,  63,  11,
+        107, 126, 107, 223, 96,  94,  9,   49,
+        122, 31,  227, 26,  152, 243, 124, 42,
+    }, &.{
+        39,  213, 147, 248, 112, 167, 66,  184,
+        142, 235, 171, 216, 255, 29,  177, 139,
+        57,  136, 93,  197, 146, 244, 176, 247,
+        83,  139, 174, 167, 38,  112, 156, 202,
+    } };
+
+    const bytes_off_curve: []const []const u8 = &.{ &.{
+        184, 122, 70,  205, 215, 194, 55,  219,
+        159, 56,  94,  18,  203, 78,  63,  11,
+        107, 126, 107, 223, 96,  94,  9,   49,
+        122, 31,  227, 26,  152, 243, 124, 0,
+    }, &.{
+        39,  213, 147, 248, 112, 167, 66,  184,
+        142, 235, 171, 216, 255, 29,  177, 139,
+        57,  136, 93,  197, 146, 244, 176, 247,
+        83,  139, 174, 167, 38,  112, 156, 0,
+    } };
+
+    for (bytes_on_curve, bytes_off_curve) |on_curve, off_curve| {
+        try std.testing.expect(bytesAreCurvePoint(on_curve));
+        try std.testing.expect(!bytesAreCurvePoint(off_curve));
     }
 }
