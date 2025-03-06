@@ -28,10 +28,13 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
         const Self = @This();
 
-        pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) Error!Self {
+        const OpenError = Error || std.posix.MakeDirError || std.fs.Dir.StatFileError;
+
+        pub fn open(allocator: Allocator, logger_: Logger, path: []const u8) OpenError!Self {
             const logger = logger_.withScope(LOG_SCOPE);
             logger.info().log("Initializing RocksDB");
             const owned_path = try std.fmt.allocPrintZ(allocator, "{s}/rocksdb", .{path});
+            try std.fs.cwd().makePath(owned_path);
 
             // allocate cf descriptions
             const column_family_descriptions = try allocator
@@ -326,6 +329,14 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
+        pub fn flush(self: *Self, comptime cf: ColumnFamily) error{RocksDBFlush}!void {
+            try callRocks(
+                self.logger,
+                rocks.DB.flush,
+                .{ &self.db, self.cf_handles[cf.find(column_families)] },
+            );
+        }
+
         const Error = error{
             RocksDBOpen,
             RocksDBPut,
@@ -334,6 +345,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             RocksDBDeleteFilesInRange,
             RocksDBIterator,
             RocksDBWrite,
+            RocksDBFlush,
         } || Allocator.Error;
     };
 }

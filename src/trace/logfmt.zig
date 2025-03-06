@@ -28,28 +28,14 @@ pub fn writeLog(
     comptime fmt: []const u8,
     args: anytype,
 ) !void {
-    try std.fmt.format(writer, "level={s} ", .{level.asText()});
-
-    if (maybe_scope) |scope| {
-        try std.fmt.format(writer, "scope={s} ", .{scope});
-    }
-
-    try std.fmt.format(writer, "message=\"", .{});
-    try std.fmt.format(writer, fmt ++ "\" ", args);
-
-    inline for (@typeInfo(@TypeOf(fields)).Struct.fields) |field| {
-        try std.fmt.format(writer, fieldFmtString(field.type), .{
-            field.name,
-            @field(fields, field.name),
-        });
-    }
-
     // format time as ISO8601
     const utc_format = "YYYY-MM-DDTHH:mm:ss.SSS";
     try std.fmt.format(writer, "time=", .{});
     const now = time.DateTime.now();
     try now.format(utc_format, .{}, writer);
-    try std.fmt.format(writer, "Z\n", .{});
+    try writer.writeByte('Z');
+
+    try writeLogWithoutTime(writer, maybe_scope, level, fields, fmt, args);
 }
 
 /// Returns the number of bytes needed to format the log message.
@@ -60,23 +46,39 @@ pub fn countLog(
     comptime fmt: []const u8,
     args: anytype,
 ) usize {
-    var count: usize = 30; // timestamp is 30 chars
+    const time_len: usize = 29;
 
-    if (maybe_scope) |scope| count += std.fmt.count("scope={s} ", .{scope});
+    var counter = std.io.countingWriter(std.io.null_writer);
+    try writeLogWithoutTime(counter.writer(), maybe_scope, level, fields, fmt, args);
 
-    count += std.fmt.count("level={s} ", .{level.asText()});
+    return time_len + counter.bytes_written;
+}
+
+/// Formats the log message as a string, excluding the time.
+fn writeLogWithoutTime(
+    writer: anytype,
+    comptime maybe_scope: ?[]const u8,
+    level: Level,
+    fields: anytype,
+    comptime fmt: []const u8,
+    args: anytype,
+) !void {
+    try std.fmt.format(writer, " level={s}", .{level.asText()});
+
+    if (maybe_scope) |scope| {
+        try std.fmt.format(writer, " scope={s}", .{scope});
+    }
+
+    try std.fmt.format(writer, " message=\"" ++ fmt ++ "\"", args);
 
     inline for (@typeInfo(@TypeOf(fields)).Struct.fields) |field| {
-        count += std.fmt.count(fieldFmtString(field.type), .{
+        try writer.writeByte(' ');
+        try std.fmt.format(writer, fieldFmtString(field.type), .{
             field.name,
             @field(fields, field.name),
         });
     }
-
-    count += std.fmt.count("message=\"", .{});
-    count += std.fmt.count(fmt ++ "\"\n", args);
-
-    return count;
+    try std.fmt.format(writer, "\n", .{});
 }
 
 test "countLog matches writeLog" {

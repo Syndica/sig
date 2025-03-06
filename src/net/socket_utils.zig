@@ -207,6 +207,7 @@ const XevThread = struct {
             .cancelled => unreachable, // only observable in onSend/onRecv callback.
         }
 
+        const addr = node.data.packet.addr;
         switch (st.direction) {
             .sender => {
                 node.data.packet = st.channel.tryReceive() orelse return;
@@ -215,11 +216,9 @@ const XevThread = struct {
                     loop,
                     &node.data.udp_completion,
                     &node.data.udp_state,
-                    blk: { // Convert network.EndPoint to std.net.Address
-                        const addr = node.data.packet.addr;
-                        var buf = std.BoundedArray(u8, 256){};
-                        try buf.writer().print("{}", .{addr.address});
-                        break :blk try std.net.Address.parseIp(buf.slice(), addr.port);
+                    switch (addr.address) {
+                        .ipv4 => |ipv4| std.net.Address.initIp4(ipv4.value, addr.port),
+                        .ipv6 => @panic("TODO: ipv6 support"),
                     },
                     .{ .slice = node.data.packet.data[0..node.data.packet.size] },
                     List.Node,
@@ -407,11 +406,26 @@ const PerThread = struct {
         while (true) {
             st.channel.waitToReceive(st.exit) catch break;
 
-            while (st.channel.tryReceive()) |p| {
-                if (st.exit.shouldExit()) return; // drop the rest (like above) if exit prematurely.
-                const bytes_sent = st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
-                    logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
-                    continue; // on error, skip this packet and try to send another.
+            next_packet: while (st.channel.tryReceive()) |p| {
+                const bytes_sent = while (true) { // loop on error.SystemResources below.
+                    if (st.exit.shouldExit()) return; // drop packets if exit prematurely.
+                    break st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| switch (e) {
+                        // on macOS, sendto() returns ENOBUFS on full buffer instead of blocking.
+                        // Wait for the socket to be writable (buffer has room) and retry.
+                        error.SystemResources => {
+                            var fds = [_]std.posix.pollfd{.{
+                                .fd = st.socket.internal,
+                                .events = std.posix.POLL.OUT,
+                                .revents = 0,
+                            }};
+                            _ = try std.posix.poll(&fds, 1000); // poll at most 1s to check exit.
+                            continue;
+                        },
+                        else => {
+                            logger.err().logf("sendSocket error: {s}", .{@errorName(e)});
+                            continue :next_packet; // on error, skip this packet and send another.
+                        },
+                    };
                 };
                 std.debug.assert(bytes_sent == p.size);
             }
@@ -483,6 +497,36 @@ pub const SocketThread = struct {
         self.allocator.destroy(self);
     }
 };
+
+test "SocketThread: overload sendto" {
+    const allocator = std.testing.allocator;
+
+    var send_channel = try Channel(Packet).init(allocator);
+    defer send_channel.deinit();
+
+    var socket = try UdpSocket.create(.ipv4, .udp);
+    try socket.bindToPort(0);
+
+    var exit = std.atomic.Value(bool).init(false);
+    var st = try SocketThread.spawnSender(
+        allocator,
+        .noop,
+        socket,
+        &send_channel,
+        .{ .unordered = &exit },
+    );
+    defer st.join();
+    defer exit.store(true, .release);
+
+    // send a bunch of packets to overload the SocketThread's internal sendto().
+    const addr = try network.EndPoint.parse("127.0.0.1:12345");
+    for (0..10_000) |_| {
+        try send_channel.send(Packet.init(addr, undefined, PACKET_DATA_SIZE));
+    }
+
+    // Wait for all sends to have started/happened.
+    while (!send_channel.isEmpty()) std.time.sleep(10 * std.time.ns_per_ms);
+}
 
 pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 1;

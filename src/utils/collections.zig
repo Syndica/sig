@@ -296,8 +296,8 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
             try self.map.put(item, {});
         }
 
-        pub fn remove(self: *Self, item: T) bool {
-            return self.map.remove(item);
+        pub fn orderedRemove(self: *Self, item: T) bool {
+            return self.map.orderedRemove(item);
         }
 
         pub fn contains(self: Self, item: T) bool {
@@ -394,7 +394,9 @@ pub fn SortedMapCustom(
 
         pub fn fetchSwapRemove(self: *Self, key: K) ?Inner.KV {
             const item = self.inner.fetchSwapRemove(key);
-            self.resetMaxOnRemove(key);
+            if (item != null and !self.resetMaxOnRemove(key)) {
+                self.is_sorted = false;
+            }
             return item;
         }
 
@@ -417,21 +419,27 @@ pub fn SortedMapCustom(
             }
         }
 
-        pub fn remove(self: *Self, key: K) bool {
-            const item = self.inner.orderedRemove(key);
-            self.resetMaxOnRemove(key);
-            return item;
+        pub fn orderedRemove(self: *Self, key: K) bool {
+            const was_removed = self.inner.orderedRemove(key);
+            if (was_removed) _ = self.resetMaxOnRemove(key);
+            return was_removed;
         }
 
-        fn resetMaxOnRemove(self: *Self, removed_key: K) void {
-            if (self.max) |max| {
-                if (self.count() == 0) {
-                    self.max = null;
-                } else if (order(removed_key, max) == .eq) {
-                    self.sort();
+        /// - returns whether the key was the prior max.
+        /// - don't call this unless an item was definitely removed.
+        fn resetMaxOnRemove(self: *Self, removed_key: K) bool {
+            std.debug.assert(self.max != null);
+            if (self.count() == 0) {
+                self.max = null;
+                return true;
+            } else switch (order(removed_key, self.max.?)) {
+                .eq => {
                     const sorted_keys = self.keys();
                     self.max = sorted_keys[sorted_keys.len - 1];
-                }
+                    return true;
+                },
+                .gt => unreachable,
+                .lt => return false,
             }
         }
 
@@ -797,6 +805,44 @@ pub fn Window(T: type) type {
     };
 }
 
+/// Analogous to [CircBuf](https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/vote-interface/src/state/vote_state_0_23_5.rs#L44)
+/// `RingBuffer` is a fixed-size circular buffer (ring buffer) implementation.
+/// It stores a fixed number of elements of type `I` and overwrites the oldest elements
+/// when the buffer is full.
+pub fn RingBuffer(comptime I: type, comptime Size: usize) type {
+    return struct {
+        buf: [Size]I,
+        idx: usize,
+        is_empty: bool,
+
+        const Self = @This();
+
+        pub const DEFAULT = Self{
+            .buf = [_]I{std.mem.zeroes(I)} ** Size,
+            .idx = Size - 1,
+            .is_empty = true,
+        };
+
+        pub fn append(self: *Self, item: I) void {
+            self.idx = (self.idx + 1) % Size;
+            self.buf[self.idx] = item;
+            self.is_empty = false;
+        }
+
+        pub fn getBuf(self: *const Self) *const [Size]I {
+            return &self.buf;
+        }
+
+        pub fn last(self: *const Self) ?I {
+            if (!self.is_empty) {
+                return self.buf[self.idx];
+            } else {
+                return null;
+            }
+        }
+    };
+}
+
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
@@ -816,9 +862,9 @@ test SortedSet {
     try set.put(5);
 
     // remove
-    try expect(set.remove(5));
+    try expect(set.orderedRemove(5));
     try expect(!set.contains(5));
-    try expect(!set.remove(5));
+    try expect(!set.orderedRemove(5));
     try set.put(5);
     try expect(set.contains(5));
 
@@ -1061,5 +1107,44 @@ test "Window realigns" {
 
     for (0..40) |i| {
         try std.testing.expectEqual(null, window.get(i));
+    }
+}
+
+test "RingBuffer" {
+    const IntRingBuffer = RingBuffer(i32, 3);
+    var cb = IntRingBuffer.DEFAULT;
+
+    try std.testing.expect(cb.is_empty);
+    try std.testing.expect(cb.last() == null);
+
+    cb.append(1);
+    cb.append(2);
+    cb.append(3);
+
+    try std.testing.expect(!cb.is_empty);
+    {
+        const data = cb.getBuf();
+        const expected = [_]i32{ 1, 2, 3 };
+        try std.testing.expect(std.mem.eql(i32, data, &expected));
+        try std.testing.expect(cb.last() == @as(i32, 3));
+    }
+
+    cb.append(4);
+
+    {
+        const data = cb.getBuf();
+        const expected = [_]i32{ 4, 2, 3 };
+        try std.testing.expect(std.mem.eql(i32, data, &expected));
+        try std.testing.expect(cb.last() == @as(i32, 4));
+    }
+
+    cb.append(5);
+    cb.append(6);
+
+    {
+        const data = cb.getBuf();
+        const expected = [_]i32{ 4, 5, 6 };
+        try std.testing.expect(std.mem.eql(i32, data, &expected));
+        try std.testing.expect(cb.last() == @as(i32, 6));
     }
 }

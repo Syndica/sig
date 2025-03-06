@@ -2,14 +2,15 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const zstd = @import("zstd");
 
-const AccountsDB = sig.accounts_db.AccountsDB;
-const StandardErrLogger = sig.trace.ChannelPrintLogger;
 const Account = sig.core.Account;
-const Slot = sig.core.time.Slot;
+const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const Pubkey = sig.core.pubkey.Pubkey;
+const Slot = sig.core.time.Slot;
+
+const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
+const AccountsDB = sig.accounts_db.AccountsDB;
 const FullSnapshotFileInfo = sig.accounts_db.snapshots.FullSnapshotFileInfo;
 const IncrementalSnapshotFileInfo = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo;
-const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
@@ -59,11 +60,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
-    var std_logger = try StandardErrLogger.init(.{
+    var std_logger = try ChannelPrintLogger.init(.{
         .allocator = allocator,
         .max_level = .debug,
         .max_buffer = 1 << 20,
-    });
+    }, null);
     defer std_logger.deinit();
     const logger = std_logger.logger();
 
