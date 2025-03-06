@@ -301,6 +301,7 @@ fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
+    // TODO: support lift_cpi_caller_restriction feature gate
     const index_in_caller = caller.info.getAccountMetaIndex(callee.program_id) orelse {
         try tc.log("Unknown program {}", .{callee.program_id});
         return InstructionError.MissingAccount;
