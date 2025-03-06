@@ -188,6 +188,19 @@ pub const VoteStateVersions = union(enum) {
         return landedVotes;
     }
 
+    pub fn deinit(self: VoteStateVersions) void {
+        switch (self) {
+            .v0_23_5 => |vote_state| vote_state.deinit(),
+            .v1_14_11 => |vote_state| vote_state.deinit(),
+            .current => |vote_state| vote_state.deinit(),
+        }
+    }
+
+    // For bincode
+    pub fn serializedSize(self: VoteStateVersions) !usize {
+        return sig.bincode.sizeOf(self, .{});
+    }
+
     pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
         switch (self) {
             .v0_23_5 => |state| {
@@ -276,6 +289,16 @@ pub const VoteState0_23_5 = struct {
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
     }
+
+    pub fn deinit(self: VoteState0_23_5) void {
+        self.votes.deinit();
+        self.epoch_credits.deinit();
+    }
+
+    // For bincode.
+    pub fn serializedSize(self: VoteState0_23_5) !usize {
+        return sig.bincode.sizeOf(self, .{});
+    }
 };
 
 pub const VoteState1_14_11 = struct {
@@ -337,7 +360,7 @@ pub const VoteState1_14_11 = struct {
         };
     }
 
-    pub fn deinit(self: VoteState) void {
+    pub fn deinit(self: VoteState1_14_11) void {
         self.votes.deinit();
         self.authorized_voters.deinit();
         self.epoch_credits.deinit();
@@ -349,7 +372,8 @@ pub const VoteState1_14_11 = struct {
         return 3731;
     }
 
-    pub fn serializedSize(self: VoteState) !usize {
+    // For bincode.
+    pub fn serializedSize(self: VoteState1_14_11) !usize {
         return sig.bincode.sizeOf(self, .{});
     }
 };

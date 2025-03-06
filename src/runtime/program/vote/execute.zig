@@ -163,7 +163,7 @@ fn intializeAccount(
         clock,
     );
     defer vote_state.deinit();
-    try vote_account.serializeIntoAccountData(vote_state);
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
 /// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
@@ -204,19 +204,14 @@ fn authorize(
     clock: Clock,
     signers: ?std.AutoHashMap(Pubkey, void),
 ) InstructionError!void {
-    // TODO: Fix
-    // const versioned_state = try vote_account.deserializeFromAccountData(
-    //     allocator,
-    //     VoteStateVersions,
-    // );
-    // var vote_state = versioned_state.convertToCurrent(allocator) catch {
-    //     // TODO okay to convert out of memory to custom error?
-    //     return InstructionError.Custom;
-    // };
-    var vote_state = try vote_account.deserializeFromAccountData(
+    const versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
-        VoteState,
+        VoteStateVersions,
     );
+    var vote_state = versioned_state.convertToCurrent(allocator) catch {
+        // TODO okay to convert out of memory to custom error?
+        return InstructionError.Custom;
+    };
     defer vote_state.deinit();
 
     switch (vote_authorize) {
@@ -248,7 +243,7 @@ fn authorize(
             vote_state.authorized_withdrawer = authorized;
         },
     }
-    try vote_account.serializeIntoAccountData(vote_state);
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
 /// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
@@ -428,14 +423,14 @@ test "vote_program: executeIntializeAccount" {
 
     // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
-    const final_vote_state = try VoteState.init(
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_publey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer final_vote_state.deinit();
 
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
@@ -525,24 +520,24 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
 
-    const initial_vote_state = try VoteState.init(
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer initial_vote_state.deinit();
 
-    const final_vote_state = try VoteState.init(
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         new_authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer final_vote_state.deinit();
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
@@ -629,17 +624,17 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
     // Account data.
     const vote_account = Pubkey.initRandom(prng.random());
 
-    const initial_vote_state = try VoteState.init(
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer initial_vote_state.deinit();
 
-    var final_vote_state = try VoteState.init(
+    var final_vote_state_ = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -647,13 +642,15 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         commission,
         clock,
     );
-    defer final_vote_state.deinit();
-    try final_vote_state.authorized_voters.insert(1, new_authorized_voter);
-    final_vote_state.prior_voters.append(PriorVote{
+    try final_vote_state_.authorized_voters.insert(1, new_authorized_voter);
+    final_vote_state_.prior_voters.append(PriorVote{
         .key = authorized_voter,
         .start = 0,
         .end = 1,
     });
+
+    var final_vote_state = VoteStateVersions{ .current = final_vote_state_ };
+    defer final_vote_state.deinit();
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
@@ -746,24 +743,24 @@ test "vote_program: authorizeWithSeed withdrawer" {
         current_withdrawer_owner,
     );
 
-    const initial_vote_state = try VoteState.init(
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer initial_vote_state.deinit();
 
-    const final_vote_state = try VoteState.init(
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         new_authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer final_vote_state.deinit();
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
@@ -859,24 +856,24 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
         current_withdrawer_owner,
     );
 
-    const initial_vote_state = try VoteState.init(
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer initial_vote_state.deinit();
 
-    const final_vote_state = try VoteState.init(
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         new_authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer final_vote_state.deinit();
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
@@ -964,24 +961,24 @@ test "vote_program: authorizeChecked withdrawer" {
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
-    const initial_vote_state = try VoteState.init(
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer initial_vote_state.deinit();
 
-    const final_vote_state = try VoteState.init(
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
         new_authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer final_vote_state.deinit();
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
