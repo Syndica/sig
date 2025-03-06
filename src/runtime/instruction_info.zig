@@ -95,7 +95,7 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        // TODO: Does bincode have limits on the size of the data it can deserialize?
+        // TODO: Implement size limit on bincode deserialization
         return bincode.readFromSlice(allocator, T, self.instruction_data, .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
