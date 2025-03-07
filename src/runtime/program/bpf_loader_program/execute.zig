@@ -521,14 +521,14 @@ pub fn executeV3DeployWithMaxDataLen(
 pub fn executeV3SetAuthority(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+) InstructionError!void {
+    try ic.checkNumberOfAccounts(2);
 
-    const account = try ic.borrowInstructionAccount(0);
+    var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    const present_authority_key = ic.info.getAccountMetaAtIndex(1).?.pubkey;
-    const new_authority = if (ic.info.getAccountMetaAtIndex(2)) |meta| meta.pubkey else null;
+    const present_authority_key = ic.getAccountMetaAtIndex(1).?.pubkey;
+    const new_authority = if (ic.getAccountMetaAtIndex(2)) |meta| meta.pubkey else null;
 
     switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |buffer| {
@@ -540,11 +540,11 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Buffer is immutable", .{});
                 return InstructionError.Immutable;
             }
-            if (!buffer.authority_address.?.equals(present_authority_key)) {
+            if (!buffer.authority_address.?.equals(&present_authority_key)) {
                 try ic.tc.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!ic.info.getAccountMetaAtIndex(1).?.is_signer) {
+            if (!(try ic.isIndexSigner(1))) {
                 try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -559,11 +559,11 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Program not upgradeable", .{});
                 return InstructionError.Immutable;
             }
-            if (!data.upgrade_authority_address.?.equals(present_authority_key)) {
+            if (!data.upgrade_authority_address.?.equals(&present_authority_key)) {
                 try ic.tc.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!ic.info.getAccountMetaAtIndex(1).?.is_signer) {
+            if (!(try ic.isIndexSigner(1))) {
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -587,21 +587,18 @@ pub fn executeV3SetAuthority(
 pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void {
-    const enable_bpf_loader_set_authority_checked_ix = 
-        Pubkey.parseBase58String("5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL") catch unreachable; 
-
-    if (!ic.tc.feature_set.active.contains(enable_bpf_loader_set_authority_checked_ix)) {
+) InstructionError!void {
+    if (!ic.tc.feature_set.isActive(FeatureSet.enable_bpf_loader_set_authority_checked_ix)) {
         return InstructionError.InvalidInstructionData;
     }
 
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.checkNumberOfAccounts(3);
 
-    const account = try ic.borrowInstructionAccount(0);
+    var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    const present_authority_key = ic.info.getAccountMetaAtIndex(1).?.pubkey;
-    const new_authority = ic.info.getAccountMetaAtIndex(2).?.pubkey;
+    const present_authority_key = ic.getAccountMetaAtIndex(1).?.pubkey;
+    const new_authority = ic.getAccountMetaAtIndex(2).?.pubkey;
 
     switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |buffer| {
@@ -609,15 +606,15 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("Buffer is immutable", .{});
                 return InstructionError.Immutable;
             }
-            if (!buffer.authority_address.?.equals(present_authority_key)) {
+            if (!buffer.authority_address.?.equals(&present_authority_key)) {
                 try ic.tc.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!ic.info.getAccountMetaAtIndex(1).?.is_signer) {
+            if (!(try ic.isIndexSigner(1))) {
                 try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!ic.info.getAccountMetaAtIndex(2).?.is_signer) {
+            if (!(try ic.isIndexSigner(2))) {
                 try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -632,15 +629,15 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("Program not upgradeable", .{});
                 return InstructionError.Immutable;
             }
-            if (!data.upgrade_authority_address.?.equals(present_authority_key)) {
+            if (!data.upgrade_authority_address.?.equals(&present_authority_key)) {
                 try ic.tc.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!ic.info.getAccountMetaAtIndex(1).?.is_signer) {
+            if (!(try ic.isIndexSigner(1))) {
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!ic.info.getAccountMetaAtIndex(2).?.is_signer) {
+            if (!(try ic.isIndexSigner(2))) {
                 try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -989,4 +986,72 @@ test "executeDeployWithMaxDataLen" {
         }
         return err;
     };
+}
+
+test "executeV3SetAuthority" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const buffer_account_key = Pubkey.initRandom(prng.random());
+    const buffer_authority_key = Pubkey.initRandom(prng.random());
+    const new_authority_key = Pubkey.initRandom(prng.random());
+
+    const initial_buffer_account_state = bpf_loader_program.v3.State{ .buffer = .{
+        .authority_address = buffer_authority_key,
+    } };
+    const initial_buffer_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(initial_buffer_account_data);
+    _ = try bincode.writeToSlice(initial_buffer_account_data, initial_buffer_account_state, .{});
+
+    const final_buffer_account_state = bpf_loader_program.v3.State{ .buffer = .{
+        .authority_address = new_authority_key,
+    } };
+    const final_buffer_account_data = try allocator.dupe(u8, initial_buffer_account_data);
+    defer allocator.free(final_buffer_account_data);
+    _ = try bincode.writeToSlice(final_buffer_account_data, final_buffer_account_state, .{});
+
+    try expectProgramExecuteResult(
+        std.testing.allocator,
+        bpf_loader_program.v3,
+        bpf_loader_program.v3.Instruction.set_authority,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_buffer_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_buffer_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+            },
+        },
+    );
 }
