@@ -24,6 +24,55 @@ pub const relax_authority_signer_check_for_lookup_table_creation = Pubkey.parseB
     "FKAcEvNgSY79RpqsPNUV5gDyumopH4cEHqUxyfm8b8Ap",
 ) catch unreachable;
 
+pub fn createLookupTableSigned(
+    allocator: std.mem.Allocator,
+    authority_address: Pubkey,
+    payer_address: Pubkey,
+    recent_slot: Slot,
+) error{OutOfMemory}!struct { sig.core.Instruction, Pubkey } {
+    return try createLookupTableCommon(allocator, authority_address, payer_address, recent_slot, true);
+}
+
+fn createLookupTableCommon(
+    allocator: std.mem.Allocator,
+    authority_address: Pubkey,
+    payer_address: Pubkey,
+    recent_slot: Slot,
+    authority_is_signer: bool,
+) error{OutOfMemory}!struct { sig.core.Instruction, Pubkey } {
+    const lookup_table_address, const bump_seed = deriveLookupTableAddress(authority_address, recent_slot);
+
+    const accounts: []const sig.core.instruction.InstructionAccount = &.{
+        .{ .pubkey = lookup_table_address, .is_signer = false, .is_writable = true },
+        .{ .pubkey = authority_address, .is_signer = authority_is_signer, .is_writable = false },
+        .{ .pubkey = payer_address, .is_signer = true, .is_writable = true },
+        .{ .pubkey = ID, .is_signer = false, .is_writable = false },
+    };
+
+    const instruction = try sig.core.Instruction.initUsingBincodeAlloc(
+        allocator,
+        Instruction,
+        ID,
+        accounts,
+        &.{ .CreateLookupTable = .{ .recent_slot = recent_slot, .bump_seed = bump_seed } },
+    );
+
+    return .{ instruction, lookup_table_address };
+}
+
+pub fn deriveLookupTableAddress(
+    authority_address: Pubkey,
+    recent_block_slot: Slot,
+) struct { Pubkey, u8 } {
+    return sig.runtime.pubkey_utils.findProgramAddress(
+        &.{
+            std.mem.asBytes(&authority_address),
+            std.mem.asBytes(&std.mem.nativeToLittle(Slot, recent_block_slot)),
+        },
+        ID,
+    ).?;
+}
+
 test "bad execute" {
     _ = sig.runtime.program.testing.expectProgramExecuteResult(
         std.testing.allocator,
