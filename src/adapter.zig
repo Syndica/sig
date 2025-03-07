@@ -4,6 +4,7 @@ const std = @import("std");
 const sig = @import("sig.zig");
 
 const leader_schedule = sig.core.leader_schedule;
+const rpc = sig.rpc;
 
 const Allocator = std.mem.Allocator;
 
@@ -77,7 +78,7 @@ pub const EpochContextManager = struct {
 pub const RpcEpochContextService = struct {
     allocator: std.mem.Allocator,
     logger: sig.trace.ScopedLogger(@typeName(Self)),
-    rpc_client: sig.rpc.Client,
+    rpc_client: rpc.Client,
     state: *EpochContextManager,
 
     const Self = @This();
@@ -86,7 +87,7 @@ pub const RpcEpochContextService = struct {
         allocator: Allocator,
         logger: sig.trace.Logger,
         state: *EpochContextManager,
-        rpc_client: sig.rpc.Client,
+        rpc_client: rpc.Client,
     ) Self {
         return .{
             .allocator = allocator,
@@ -110,7 +111,7 @@ pub const RpcEpochContextService = struct {
     }
 
     fn refresh(self: *Self) !void {
-        const response = try self.rpc_client.getSlot(self.allocator, .{});
+        const response = try self.rpc_client.getSlot(.{});
         defer response.deinit();
         const this_slot = try response.result();
         const this_epoch = self.state.schedule.getEpoch(this_slot);
@@ -138,9 +139,9 @@ pub const RpcEpochContextService = struct {
     }
 
     fn getLeaderSchedule(self: *Self, slot: sig.core.Slot) ![]const sig.core.Pubkey {
-        const response = try self.rpc_client.getLeaderSchedule(self.allocator, slot, .{});
+        const response = try self.rpc_client.getLeaderSchedule(.{ .slot = slot });
         defer response.deinit();
-        const rpc_schedule = try response.result();
+        const rpc_schedule = (try response.result()).value;
         const schedule = try leader_schedule.LeaderSchedule.fromMap(self.allocator, rpc_schedule);
         return schedule.slot_leaders;
     }
@@ -154,7 +155,7 @@ test "epochctx" {
         .init(allocator, "data/genesis-files/testnet_genesis.bin");
     defer genesis_config.deinit(allocator);
 
-    var rpc_client = sig.rpc.Client.init(allocator, .Testnet, .{});
+    var rpc_client = rpc.Client.init(allocator, .Testnet, .{});
     defer rpc_client.deinit();
 
     var epoch_context_manager = try sig.adapter.EpochContextManager

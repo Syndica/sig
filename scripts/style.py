@@ -170,6 +170,7 @@ files_excluded_from_line_length_check = [
     "src/rand/rand.zig",
     "src/rpc/client.zig",
     "src/rpc/request.zig",
+    "src/rpc/test_serialize.zig",
     "src/shred_network/repair_message.zig",
     "src/shred_network/repair_service.zig",
     "src/sync/thread_pool.zig",
