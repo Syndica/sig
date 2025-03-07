@@ -228,7 +228,7 @@ fn authorize(
             const authorized_withdrawer_signer = if (signers) |signers_|
                 try verifyAuthorizedSigner(authorized, signers_)
             else
-                ic.isPubkeySigner(vote_state.authorized_withdrawer);
+                ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
 
             try vote_state.setNewAuthorizedVoter(
                 allocator,
@@ -244,7 +244,7 @@ fn authorize(
             const authorized_withdrawer_signer = if (signers) |signers_|
                 try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
             else
-                ic.isPubkeySigner(vote_state.authorized_withdrawer);
+                ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
 
             if (!authorized_withdrawer_signer) {
                 return InstructionError.MissingRequiredSignature;
@@ -265,7 +265,7 @@ fn executeAuthorizeWithSeed(
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 ) InstructionError!void {
-    try ic.checkNumberOfAccounts(3);
+    try ic.info.checkNumberOfAccounts(3);
 
     try authorizeWithSeed(
         allocator,
@@ -296,7 +296,7 @@ fn authorizeWithSeed(
 
     var expected_authority_keys = std.AutoHashMap(Pubkey, void).init(allocator);
     defer expected_authority_keys.deinit();
-    if (try ic.isIndexSigner(signer_index)) {
+    if (try ic.info.isIndexSigner(signer_index)) {
         var signer_account = try ic.borrowInstructionAccount(signer_index);
         defer signer_account.release();
         const created = pubkey_utils.createWithSeed(
@@ -337,7 +337,7 @@ fn executeAuthorizeCheckedWithSeed(
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 ) InstructionError!void {
-    try ic.checkNumberOfAccounts(4);
+    try ic.info.checkNumberOfAccounts(4);
 
     var new_authority = try ic.borrowInstructionAccount(
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
@@ -364,14 +364,14 @@ fn executeAuthorizeChecked(
     vote_account: *BorrowedAccount,
     vote_authorize: vote_instruction.VoteAuthorize,
 ) InstructionError!void {
-    try ic.checkNumberOfAccounts(4);
+    try ic.info.checkNumberOfAccounts(4);
 
     var new_authority = try ic.borrowInstructionAccount(
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_signer),
     );
     defer new_authority.release();
 
-    if (!ic.isPubkeySigner(new_authority.pubkey)) {
+    if (!ic.info.isPubkeySigner(new_authority.pubkey)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -409,8 +409,8 @@ fn verifyAuthorizedSigner(
 }
 
 test "vote_program: executeIntializeAccount" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -504,8 +504,8 @@ test "vote_program: executeIntializeAccount" {
 }
 
 test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -555,7 +555,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
@@ -579,7 +579,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = authorized_withdrawer },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -596,7 +596,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = authorized_withdrawer },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
             .sysvar_cache = .{
@@ -607,10 +607,10 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 }
 
 test "vote_program: executeAuthorize voter signed by current withdrawer" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
     const PriorVote = sig.runtime.program.vote_program.state.PriorVote;
     _ = &PriorVote;
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -667,7 +667,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
@@ -691,7 +691,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = authorized_withdrawer },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -708,7 +708,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = authorized_withdrawer },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
             .sysvar_cache = .{
@@ -719,8 +719,8 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
 }
 
 test "vote_program: authorizeWithSeed withdrawer" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -778,7 +778,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
@@ -804,7 +804,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -821,7 +821,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
             .sysvar_cache = .{
@@ -832,8 +832,8 @@ test "vote_program: authorizeWithSeed withdrawer" {
 }
 
 test "vote_program: authorizeCheckedWithSeed withdrawer" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -891,7 +891,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
@@ -918,7 +918,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = base },
                 .{ .pubkey = new_authorized_withdrawer },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -936,7 +936,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = base },
                 .{ .pubkey = new_authorized_withdrawer },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
             .sysvar_cache = .{
@@ -947,8 +947,8 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
 }
 
 test "vote_program: authorizeChecked withdrawer" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -996,7 +996,7 @@ test "vote_program: authorizeChecked withdrawer" {
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
@@ -1019,7 +1019,7 @@ test "vote_program: authorizeChecked withdrawer" {
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = authorized_withdrawer },
                 .{ .pubkey = new_authorized_withdrawer },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -1037,7 +1037,7 @@ test "vote_program: authorizeChecked withdrawer" {
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = authorized_withdrawer },
                 .{ .pubkey = new_authorized_withdrawer },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
             .sysvar_cache = .{

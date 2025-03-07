@@ -471,7 +471,7 @@ pub const VoteState = struct {
             allocator,
             current_epoch,
         );
-        if (!authorized_withdrawer_signer and !ic.isPubkeySigner(epoch_authorized_voter)) {
+        if (!authorized_withdrawer_signer and !ic.info.isPubkeySigner(epoch_authorized_voter)) {
             return InstructionError.MissingRequiredSignature;
         }
 
