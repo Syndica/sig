@@ -14,6 +14,27 @@ pub const Instruction = struct {
     /// Data is the binary encoding of the program instruction and its
     /// arguments. The lifetime of the data must outlive the instruction.
     data: []const u8,
+
+    // https://github.com/anza-xyz/agave/blob/3bbabb38c5800b197841eb79037a82e88e174440/sdk/instruction/src/lib.rs#L221
+    pub fn initUsingBincodeAlloc(
+        allocator: std.mem.Allocator,
+        T: type,
+        program_id: Pubkey,
+        accounts: []const InstructionAccount,
+        data: *const T,
+    ) error{OutOfMemory}!Instruction {
+        const serialized = sig.bincode.writeAlloc(allocator, data, .{}) catch
+        // reviewer's note - can we trim away bincode's use of any error? I don't think we need it,
+        // a bit annoying.
+            return error.OutOfMemory;
+        errdefer allocator.free(serialized);
+
+        return .{
+            .program_id = program_id,
+            .accounts = accounts,
+            .data = serialized,
+        };
+    }
 };
 
 pub const InstructionAccount = struct {
