@@ -191,12 +191,18 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             ic,
             args.max_data_len,
         ),
+        .set_authority => executeV3SetAuthority(
+            allocator,
+            ic,
+        ),
+        .set_authority_checked => executeV3SetAuthorityChecked(
+            allocator,
+            ic,
+        ),
         // TODO: Implement the following instructions
         // .upgrade => executeV3Upgrade(),
-        // .set_authority => executeV3SetAuthority(),
         // .close => executeV3Close(),
         // .extend_program => executeV3ExtendProgram(),
-        // .set_authority_checked => executeV3SetAuthorityChecked(),
         else => @panic("Instruction not implemented"),
     };
 }
@@ -509,6 +515,149 @@ pub fn executeV3DeployWithMaxDataLen(
     }
 
     try ic.tc.log("Deployed program {}", .{new_program_id});
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010
+pub fn executeV3SetAuthority(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
+
+    const account = try ic.borrowInstructionAccount(0);
+    defer account.release();
+
+    const present_authority_key = ic.info.getAccountMetaAtIndex(1).?.pubkey;
+    const new_authority = if (ic.info.getAccountMetaAtIndex(2)) |meta| meta.pubkey else null;
+
+    switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+        .buffer => |buffer| {
+            if (new_authority == null) {
+                try ic.tc.log("Buffer authority is not optional", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (buffer.authority_address == null) {
+                try ic.tc.log("Buffer is immutable", .{});
+                return InstructionError.Immutable;
+            }
+            if (!buffer.authority_address.?.equals(present_authority_key)) {
+                try ic.tc.log("Incorrect buffer authority provided", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (!ic.info.getAccountMetaAtIndex(1).?.is_signer) {
+                try ic.tc.log("Buffer authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+                .buffer = .{
+                    .authority_address = new_authority,
+                },
+            });
+        },
+        .program_data => |data| {
+            if (data.upgrade_authority_address == null) {
+                try ic.tc.log("Program not upgradeable", .{});
+                return InstructionError.Immutable;
+            }
+            if (!data.upgrade_authority_address.?.equals(present_authority_key)) {
+                try ic.tc.log("Incorrect upgrade authority provided", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (!ic.info.getAccountMetaAtIndex(1).?.is_signer) {
+                try ic.tc.log("Upgrade authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+                .program_data = .{
+                    .slot = data.slot,
+                    .upgrade_authority_address = new_authority,
+                },
+            });
+        },
+        else => {
+            try ic.tc.log("Account does not support authorities", .{});
+            return InstructionError.InvalidArgument;
+        },
+    }
+
+    try ic.tc.log("New authority {?}", .{new_authority});
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L1011-L1083
+pub fn executeV3SetAuthorityChecked(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
+    const enable_bpf_loader_set_authority_checked_ix = 
+        Pubkey.parseBase58String("5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL") catch unreachable; 
+
+    if (!ic.tc.feature_set.active.contains(enable_bpf_loader_set_authority_checked_ix)) {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    try ic.info.checkNumberOfAccounts(3);
+
+    const account = try ic.borrowInstructionAccount(0);
+    defer account.release();
+
+    const present_authority_key = ic.info.getAccountMetaAtIndex(1).?.pubkey;
+    const new_authority = ic.info.getAccountMetaAtIndex(2).?.pubkey;
+
+    switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+        .buffer => |buffer| {
+            if (buffer.authority_address == null) {
+                try ic.tc.log("Buffer is immutable", .{});
+                return InstructionError.Immutable;
+            }
+            if (!buffer.authority_address.?.equals(present_authority_key)) {
+                try ic.tc.log("Incorrect buffer authority provided", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (!ic.info.getAccountMetaAtIndex(1).?.is_signer) {
+                try ic.tc.log("Buffer authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            if (!ic.info.getAccountMetaAtIndex(2).?.is_signer) {
+                try ic.tc.log("New authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+                .buffer = .{
+                    .authority_address = new_authority,
+                },
+            });
+        },
+        .program_data => |data| {
+            if (data.upgrade_authority_address == null) {
+                try ic.tc.log("Program not upgradeable", .{});
+                return InstructionError.Immutable;
+            }
+            if (!data.upgrade_authority_address.?.equals(present_authority_key)) {
+                try ic.tc.log("Incorrect upgrade authority provided", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (!ic.info.getAccountMetaAtIndex(1).?.is_signer) {
+                try ic.tc.log("Upgrade authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            if (!ic.info.getAccountMetaAtIndex(2).?.is_signer) {
+                try ic.tc.log("New authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+                .program_data = .{
+                    .slot = data.slot,
+                    .upgrade_authority_address = new_authority,
+                },
+            });
+        },
+        else => {
+            try ic.tc.log("Account does not support authorities", .{});
+            return InstructionError.InvalidArgument;
+        },
+    }
+
+    try ic.tc.log("New authority {?}", .{new_authority});
 }
 
 /// TODO: This function depends on syscalls and program cache implementations
