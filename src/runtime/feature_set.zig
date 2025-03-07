@@ -22,6 +22,6 @@ pub const FeatureSet = struct {
         return self.active.contains(feature);
     }
 
-    pub const enable_bpf_loader_set_authority_checked_ix = 
-        Pubkey.parseBase58String("5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL") catch unreachable; 
+    pub const enable_bpf_loader_set_authority_checked_ix =
+        Pubkey.parseBase58String("5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL") catch unreachable;
 };
