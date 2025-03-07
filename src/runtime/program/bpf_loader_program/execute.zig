@@ -993,34 +993,40 @@ test "executeV3SetAuthority" {
         sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-
     var prng = std.Random.DefaultPrng.init(5083);
 
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
     const new_authority_key = Pubkey.initRandom(prng.random());
 
-    const initial_buffer_account_state = bpf_loader_program.v3.State{ .buffer = .{
-        .authority_address = buffer_authority_key,
-    } };
     const initial_buffer_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
     defer allocator.free(initial_buffer_account_data);
-    _ = try bincode.writeToSlice(initial_buffer_account_data, initial_buffer_account_state, .{});
+    _ = try bincode.writeToSlice(
+        initial_buffer_account_data,
+        bpf_loader_program.v3.State{
+            .buffer = .{ .authority_address = buffer_authority_key },
+        },
+        .{},
+    );
 
-    const final_buffer_account_state = bpf_loader_program.v3.State{ .buffer = .{
-        .authority_address = new_authority_key,
-    } };
     const final_buffer_account_data = try allocator.dupe(u8, initial_buffer_account_data);
     defer allocator.free(final_buffer_account_data);
-    _ = try bincode.writeToSlice(final_buffer_account_data, final_buffer_account_state, .{});
+    _ = try bincode.writeToSlice(
+        final_buffer_account_data,
+        bpf_loader_program.v3.State{
+            .buffer = .{ .authority_address = new_authority_key },
+        },
+        .{},
+    );
 
     try expectProgramExecuteResult(
-        std.testing.allocator,
+        allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
             .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
         },
         .{
             .accounts = &.{
@@ -1034,6 +1040,10 @@ test "executeV3SetAuthority" {
                 },
                 .{
                     .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
@@ -1050,6 +1060,80 @@ test "executeV3SetAuthority" {
                 },
                 .{
                     .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+    );
+
+    const initial_program_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(initial_program_account_data);
+    _ = try bincode.writeToSlice(
+        initial_program_account_data,
+        bpf_loader_program.v3.State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = buffer_authority_key },
+        },
+        .{},
+    );
+
+    const final_program_account_data = try allocator.dupe(u8, initial_program_account_data);
+    defer allocator.free(final_program_account_data);
+    _ = try bincode.writeToSlice(
+        final_program_account_data,
+        bpf_loader_program.v3.State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = new_authority_key },
+        },
+        .{},
+    );
+
+    try expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3,
+        bpf_loader_program.v3.Instruction.set_authority,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
                 },
             },
         },
