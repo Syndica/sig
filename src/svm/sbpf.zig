@@ -89,7 +89,7 @@ pub const Version = enum(u32) {
         return @intFromEnum(version) >= @intFromEnum(other);
     }
 
-    pub fn computeTarget(version: Version, pc: usize, inst: Instruction) u64 {
+    pub fn computeTargetPc(version: Version, pc: usize, inst: Instruction) u64 {
         const target_pc: i64 = if (version.enableStaticSyscalls())
             @as(i64, @intCast(pc)) +| @as(i32, @bitCast(inst.imm)) +| 1
         else
@@ -364,7 +364,7 @@ pub const Instruction = packed struct(u64) {
         call_reg = jmp | x | call,
 
         /// bpf opcode: `exit` /// `return r0`. /// valid only until sbpfv3
-        exit = jmp | exit_code,
+        exit_or_syscall = jmp | exit_code,
         /// bpf opcode: `return` /// `return r0`. /// Valid only since sbpfv3
         @"return" = jmp | x | exit_code,
         _,

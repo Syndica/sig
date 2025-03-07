@@ -1762,7 +1762,7 @@ test "pqr" {
 
     // set the instruction we're testing to use r1 as the src
     program[33] = 16; // src = r1
-    program[40] = @intFromEnum(OpCode.exit);
+    program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
     const max_int = std.math.maxInt(u64);
     inline for (
@@ -1869,7 +1869,7 @@ test "pqr divide by zero" {
     const allocator = std.testing.allocator;
     var program: [24]u8 = .{0} ** 24;
     program[0] = @intFromEnum(OpCode.mov32_imm);
-    program[16] = @intFromEnum(OpCode.exit);
+    program[16] = @intFromEnum(OpCode.exit_or_syscall);
 
     inline for (.{
         OpCode.udiv32_reg,

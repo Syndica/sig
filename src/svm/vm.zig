@@ -526,10 +526,10 @@ pub const Vm = struct {
             },
 
             // calling
-            .exit,
+            .exit_or_syscall,
             .@"return",
             => {
-                if (opcode == .exit and version.enableStaticSyscalls()) {
+                if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                         try entry.value(self);
@@ -570,7 +570,7 @@ pub const Vm = struct {
                 }
 
                 if (internal and !resolved) {
-                    const target_pc = version.computeTarget(pc, inst);
+                    const target_pc = version.computeTargetPc(pc, inst);
                     if (self.executable.function_registry.lookupKey(target_pc)) |entry| {
                         resolved = true;
                         try self.pushCallFrame();

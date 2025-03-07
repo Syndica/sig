@@ -208,19 +208,19 @@ pub const Executable = struct {
 
                 .neg32 => if (version.disableNegation()) return error.UnknownInstruction,
 
+                .mul32_reg,
+                .div32_reg,
+                .mod32_reg,
+                => {},
+
                 .mul64_imm,
                 .mul64_reg,
-                .mul32_reg,
                 .div64_reg,
-                .div32_reg,
                 .mod64_reg,
-                .mod32_reg,
                 .neg64,
-                => if (version.enablePqr()) {
+                => if (version.moveMemoryInstructionClasses()) {
                     // SIMD-0173 turns these into load and store instructions.
-                    if (inst.opcode.is64()) {
-                        store = true;
-                    }
+                    store = true;
                 },
 
                 .div64_imm,
@@ -349,7 +349,7 @@ pub const Executable = struct {
                 } else return error.UnknownInstruction,
 
                 .call_imm => if (version.enableStaticSyscalls()) {
-                    const target_pc = version.computeTarget(pc, inst);
+                    const target_pc = version.computeTargetPc(pc, inst);
                     if (!self.function_registry.map.contains(target_pc)) {
                         return error.InvalidFunction;
                     }
@@ -364,12 +364,10 @@ pub const Executable = struct {
                 },
 
                 .@"return" => if (!version.enableStaticSyscalls()) return error.UnknownInstruction,
-                .exit => {
-                    if (version.enableStaticSyscalls() and
-                        !loader.functions.map.contains(inst.imm))
-                    {
-                        return error.InvalidSyscall;
-                    }
+                .exit_or_syscall => if (version.enableStaticSyscalls() and
+                    !loader.functions.map.contains(inst.imm))
+                {
+                    return error.InvalidSyscall;
                 },
 
                 else => return error.UnknownInstruction,
@@ -516,7 +514,7 @@ pub const Assembler = struct {
                             // Harded to work for both `exit` and `return`, even though
                             // the `exit` instruction was technically deprecated.
                             .opcode = if (version == .v0)
-                                .exit
+                                .exit_or_syscall
                             else
                                 .@"return",
                             .dst = .r0,
