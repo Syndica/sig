@@ -1,6 +1,7 @@
 /// Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
 const sig = @import("../../../sig.zig");
+const builtin = @import("builtin");
 
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteError = sig.runtime.program.vote_program.VoteError;
@@ -71,11 +72,11 @@ pub const AuthorizedVoters = struct {
     }
 
     pub fn getAuthorizedVoter(
-        self: *const AuthorizedVoters,
+        self: *AuthorizedVoters,
         epoch: Epoch,
     ) ?Pubkey {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
-            return entry.pubkey;
+            return entry[0];
         }
         return null;
     }
@@ -283,7 +284,7 @@ pub const VoteState0_23_5 = struct {
             .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
             .authorized_withdrawer = authorized_withdrawer,
             .commission = commission,
-            .votes = std.ArrayList(LandedVote).init(allocator),
+            .votes = std.ArrayList(Lockout).init(allocator),
             .root_slot = null,
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
@@ -351,7 +352,7 @@ pub const VoteState1_14_11 = struct {
             .node_pubkey = node_pubkey,
             .authorized_withdrawer = authorized_withdrawer,
             .commission = commission,
-            .votes = std.ArrayList(LandedVote).init(allocator),
+            .votes = std.ArrayList(Lockout).init(allocator),
             .root_slot = null,
             .authorized_voters = authorized_voters,
             .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
@@ -535,3 +536,132 @@ pub const VoteAuthorize = enum {
     withdrawer,
     voter,
 };
+
+pub fn default_vote_state(allocator: std.mem.Allocator) VoteState {
+    if (!builtin.is_test) {
+        @panic("default_vote_state should only be called in test mode");
+    }
+    return VoteState{
+        .node_pubkey = Pubkey.ZEROES,
+        .authorized_withdrawer = Pubkey.ZEROES,
+        .commission = 0,
+        .votes = std.ArrayList(LandedVote).init(allocator),
+        .root_slot = null,
+        .authorized_voters = try AuthorizedVoters.init(
+            std.heap.page_allocator,
+            0,
+            Pubkey.ZEROES,
+        ),
+        .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+        .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
+        .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+    };
+}
+
+test "vote_convert_to_current" {
+    const allocator = std.testing.allocator;
+    // VoteState0_23_5 -> Current
+    {
+        const vote_state_0_23_5 = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            10,
+            Clock{
+                .slot = 0,
+                .epoch_start_timestamp = 0,
+                .epoch = 0,
+                .leader_schedule_epoch = 0,
+                .unix_timestamp = 0,
+            },
+        ) };
+        const vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator);
+        defer vote_state.deinit();
+        try std.testing.expect(vote_state.authorized_voters.count() == 1);
+        var authorized_voter = vote_state.authorized_voters;
+        try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
+        try std.testing.expect(vote_state.authorized_withdrawer.equals(&Pubkey.ZEROES));
+        try std.testing.expect(vote_state.commission == 10);
+        try std.testing.expect(vote_state.votes.items.len == 0);
+        try std.testing.expect(vote_state.root_slot == null);
+        try std.testing.expect(vote_state.prior_voters.is_empty == true);
+        try std.testing.expect(vote_state.epoch_credits.items.len == 0);
+        try std.testing.expect(vote_state.last_timestamp.slot == 0);
+        try std.testing.expect(vote_state.last_timestamp.timestamp == 0);
+    }
+    // VoteStatev1_14_11 -> Current
+    {
+        const vote_state_1_14_1 = VoteStateVersions{ .v1_14_11 = try VoteState1_14_11.init(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            10,
+            Clock{
+                .slot = 0,
+                .epoch_start_timestamp = 0,
+                .epoch = 0,
+                .leader_schedule_epoch = 0,
+                .unix_timestamp = 0,
+            },
+        ) };
+        const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
+        defer vote_state.deinit();
+        try std.testing.expect(vote_state.authorized_voters.count() == 1);
+        var authorized_voter = vote_state.authorized_voters;
+        try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
+        try std.testing.expect(vote_state.authorized_withdrawer.equals(&Pubkey.ZEROES));
+        try std.testing.expect(vote_state.commission == 10);
+        try std.testing.expect(vote_state.votes.items.len == 0);
+        try std.testing.expect(vote_state.root_slot == null);
+        try std.testing.expect(vote_state.prior_voters.is_empty == true);
+        try std.testing.expect(vote_state.epoch_credits.items.len == 0);
+        try std.testing.expect(vote_state.last_timestamp.slot == 0);
+        try std.testing.expect(vote_state.last_timestamp.timestamp == 0);
+    }
+
+    // Current -> Current
+    {
+        const expected = try VoteState.init(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            10,
+            Clock{
+                .slot = 0,
+                .epoch_start_timestamp = 0,
+                .epoch = 0,
+                .leader_schedule_epoch = 0,
+                .unix_timestamp = 0,
+            },
+        );
+
+        const vote_state_1_14_1 = VoteStateVersions{ .current = expected };
+        const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
+        defer vote_state.deinit();
+        try std.testing.expect(
+            vote_state.authorized_voters.count() == expected.authorized_voters.count(),
+        );
+        var authorized_voter = vote_state.authorized_voters;
+        var expected_authorized_voter = expected.authorized_voters;
+        try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(
+            &expected_authorized_voter.getAuthorizedVoter(0).?,
+        ));
+        try std.testing.expect(
+            vote_state.authorized_withdrawer.equals(&expected.authorized_withdrawer),
+        );
+        try std.testing.expect(vote_state.commission == expected.commission);
+        try std.testing.expect(vote_state.votes.items.len == expected.votes.items.len);
+        try std.testing.expect(vote_state.root_slot == expected.root_slot);
+        try std.testing.expect(vote_state.prior_voters.is_empty == expected.prior_voters.is_empty);
+        try std.testing.expect(
+            vote_state.epoch_credits.items.len == expected.epoch_credits.items.len,
+        );
+        try std.testing.expect(vote_state.last_timestamp.slot == expected.last_timestamp.slot);
+        try std.testing.expect(
+            vote_state.last_timestamp.timestamp == expected.last_timestamp.timestamp,
+        );
+    }
+}
