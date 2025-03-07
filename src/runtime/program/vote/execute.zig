@@ -18,11 +18,20 @@ const Clock = sig.runtime.sysvar.Clock;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
-pub fn execute(
+/// Entrypoint maps calls `execute` and converts the error to an optional return value.
+pub fn entrypoint(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) InstructionError!void {
+) ?(error{OutOfMemory} || InstructionError) {
+    execute(allocator, ic) catch |err| return err;
+    return null;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
+fn execute(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
     try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
@@ -36,7 +45,7 @@ pub fn execute(
         return InstructionError.InvalidAccountOwner;
     }
 
-    const instruction = try ic.deserializeInstruction(allocator, VoteProgramInstruction);
+    const instruction = try ic.info.deserializeInstruction(allocator, VoteProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -95,13 +104,13 @@ fn executeIntializeAccount(
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
     commission: u8,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.rent_sysvar),
     );
 
-    const min_balance = rent.minimumBalance(vote_account.getData().len);
+    const min_balance = rent.minimumBalance(vote_account.constAccountData().len);
     if (vote_account.account.lamports < min_balance) {
         return InstructionError.InsufficientFunds;
     }
@@ -137,8 +146,8 @@ fn intializeAccount(
     commission: u8,
     vote_account: *BorrowedAccount,
     clock: Clock,
-) InstructionError!void {
-    if (vote_account.getData().len != VoteState.sizeOf()) {
+) (error{OutOfMemory} || InstructionError)!void {
+    if (vote_account.constAccountData().len != VoteState.sizeOf()) {
         return InstructionError.InvalidAccountData;
     }
 
@@ -149,7 +158,7 @@ fn intializeAccount(
     }
 
     // node must agree to accept this vote account
-    if (!ic.isPubkeySigner(node_pubkey)) {
+    if (!ic.info.isPubkeySigner(node_pubkey)) {
         try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -436,7 +445,7 @@ test "vote_program: executeIntializeAccount" {
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
@@ -464,7 +473,7 @@ test "vote_program: executeIntializeAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = node_publey },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -483,7 +492,7 @@ test "vote_program: executeIntializeAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = node_publey },
-                .{ .pubkey = vote_program.ID },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
             .sysvar_cache = .{

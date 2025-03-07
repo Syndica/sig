@@ -14,4 +14,5 @@ pub const vote_instruction = @import("instruction.zig");
 
 pub const VoteError = @import("error.zig").VoteError;
 pub const VoteAuthorize = state.VoteAuthorize;
-pub const execute = @import("execute.zig").execute;
+pub const VoteState = @import("state.zig").VoteState;
+pub const entrypoint = @import("execute.zig").entrypoint;

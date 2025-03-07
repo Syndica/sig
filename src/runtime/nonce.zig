@@ -23,13 +23,6 @@ pub const Versions = union(enum) {
             .current => |state| return state,
         }
     }
-
-    pub fn serializedSize(self: Versions) !usize {
-        return switch (self.getState()) {
-            .unintialized => 8,
-            .initialized => |_| 80,
-        };
-    }
 };
 
 /// The state of a durable transaction nonce account.

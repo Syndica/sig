@@ -17,18 +17,27 @@ const SystemProgramError = system_program.Error;
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
-pub fn execute(
+/// Entrypoint maps calls `execute` and converts the error to an optional return value.
+pub fn entrypoint(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) InstructionError!void {
+) ?(error{OutOfMemory} || InstructionError) {
+    execute(allocator, ic) catch |err| return err;
+    return null;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
+fn execute(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
     try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
-    const instruction = try ic.deserializeInstruction(allocator, SystemProgramInstruction);
+    const instruction = try ic.info.deserializeInstruction(allocator, SystemProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -114,8 +123,8 @@ fn executeCreateAccount(
     lamports: u64,
     space: u64,
     owner: Pubkey,
-) !void {
-    try ic.checkNumberOfAccounts(2);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
     try createAccount(
         allocator,
         ic,
@@ -124,7 +133,7 @@ fn executeCreateAccount(
         lamports,
         space,
         owner,
-        ic.accounts[1].pubkey,
+        ic.info.account_metas.buffer[1].pubkey,
     );
 }
 
@@ -132,8 +141,8 @@ fn executeCreateAccount(
 fn executeAssign(
     ic: *InstructionContext,
     owner: Pubkey,
-) !void {
-    try ic.checkNumberOfAccounts(1);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
     try assign(
@@ -148,8 +157,8 @@ fn executeAssign(
 fn executeTransfer(
     ic: *InstructionContext,
     lamports: u64,
-) !void {
-    try ic.checkNumberOfAccounts(2);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
     try transfer(
         ic,
         0,
@@ -167,11 +176,11 @@ fn executeCreateAccountWithSeed(
     lamports: u64,
     space: u64,
     owner: Pubkey,
-) !void {
-    try ic.checkNumberOfAccounts(2);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
-        ic.accounts[1].pubkey,
+        ic.info.account_metas.buffer[1].pubkey,
         base,
         owner,
         seed,
@@ -193,8 +202,9 @@ fn executeCreateAccountWithSeed(
 fn executeAdvanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
-    try ic.checkNumberOfAccounts(1);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
@@ -213,8 +223,8 @@ fn executeWithdrawNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     lamports: u64,
-) !void {
-    try ic.checkNumberOfAccounts(2);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
 
     // TODO: Is this sysvar call required for consensus despite being unused?
     _ = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
@@ -229,8 +239,9 @@ fn executeInitializeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     authority: Pubkey,
-) !void {
-    try ic.checkNumberOfAccounts(1);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
@@ -257,10 +268,12 @@ fn executeAuthorizeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     authority: Pubkey,
-) !void {
-    try ic.checkNumberOfAccounts(1);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
+
     return authorizeNonceAccount(
         allocator,
         ic,
@@ -274,10 +287,12 @@ fn executeAllocate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     space: u64,
-) !void {
-    try ic.checkNumberOfAccounts(1);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
+
     try allocate(allocator, ic, &account, space, account.pubkey);
 }
 
@@ -289,10 +304,12 @@ fn executeAllocateWithSeed(
     seed: []const u8,
     space: u64,
     owner: Pubkey,
-) !void {
-    try ic.checkNumberOfAccounts(1);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
+
     try checkSeedAddress(
         ic,
         account.pubkey,
@@ -301,6 +318,7 @@ fn executeAllocateWithSeed(
         seed,
         "Create: address {} does not match derived address {}",
     );
+
     try allocate(allocator, ic, &account, space, base);
     try assign(ic, &account, owner, base);
 }
@@ -311,10 +329,12 @@ fn executeAssignWithSeed(
     base: Pubkey,
     seed: []const u8,
     owner: Pubkey,
-) !void {
-    try ic.checkNumberOfAccounts(1);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
+
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
+
     try checkSeedAddress(
         ic,
         account.pubkey,
@@ -323,6 +343,7 @@ fn executeAssignWithSeed(
         seed,
         "Create: address {} does not match derived address {}",
     );
+
     try assign(ic, &account, owner, base);
 }
 
@@ -332,17 +353,17 @@ fn executeTransferWithSeed(
     lamports: u64,
     from_seed: []const u8,
     from_owner: Pubkey,
-) !void {
-    try ic.checkNumberOfAccounts(3);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(3);
 
     const from_index = 0;
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.accounts[from_base_index].pubkey;
-    const from_pubkey = ic.accounts[from_index].pubkey;
+    const from_base_pubkey = ic.info.account_metas.buffer[from_base_index].pubkey;
+    const from_pubkey = ic.info.account_metas.buffer[from_index].pubkey;
 
-    if (!try ic.isIndexSigner(from_base_index)) {
+    if (!try ic.info.isIndexSigner(from_base_index)) {
         try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -368,8 +389,8 @@ fn executeTransferWithSeed(
 fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
-    try ic.checkNumberOfAccounts(1);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -377,7 +398,7 @@ fn executeUpgradeNonceAccount(
     if (!account.account.owner.equals(&system_program.ID))
         return InstructionError.InvalidAccountOwner;
 
-    if (!account.isWritable()) return InstructionError.InvalidArgument;
+    if (!account.context.is_writable) return InstructionError.InvalidArgument;
 
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
     switch (versioned_nonce) {
@@ -399,13 +420,13 @@ fn allocate(
     account: *BorrowedAccount,
     space: u64,
     authority: Pubkey,
-) InstructionError!void {
-    if (!ic.isPubkeySigner(authority)) {
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!ic.info.isPubkeySigner(authority)) {
         try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
-    if (account.getData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
+    if (account.constAccountData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
         try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
         ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
@@ -420,7 +441,7 @@ fn allocate(
         return InstructionError.Custom;
     }
 
-    try account.setDataLength(allocator, ic.tc, @intCast(space));
+    try account.setDataLength(allocator, &ic.tc.accounts_resize_delta, @intCast(space));
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L112
@@ -429,10 +450,10 @@ fn assign(
     account: *BorrowedAccount,
     owner: Pubkey,
     authority: Pubkey,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (account.account.owner.equals(&owner)) return;
 
-    if (!ic.isPubkeySigner(authority)) {
+    if (!ic.info.isPubkeySigner(authority)) {
         try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -450,7 +471,7 @@ fn createAccount(
     space: u64,
     owner: Pubkey,
     authority: Pubkey,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     {
         var account = try ic.borrowInstructionAccount(to_index);
         defer account.release();
@@ -479,11 +500,11 @@ fn transfer(
     from_index: u16,
     to_index: u16,
     lamports: u64,
-) !void {
-    if (!try ic.isIndexSigner(from_index)) {
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!try ic.info.isIndexSigner(from_index)) {
         try ic.tc.log(
             "Transfer: `from` account {} must sign",
-            .{ic.accounts[from_index].pubkey},
+            .{ic.info.account_metas.buffer[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
     }
@@ -502,12 +523,12 @@ fn transferVerified(
     from_index: u16,
     to_index: u16,
     lamports: u64,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     {
         var account = try ic.borrowInstructionAccount(from_index);
         defer account.release();
 
-        if (account.getData().len > 0) {
+        if (account.constAccountData().len > 0) {
             try ic.tc.log("Transfer: `from` must not carry data", .{});
             return InstructionError.InvalidArgument;
         }
@@ -536,8 +557,8 @@ fn advanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     account: *BorrowedAccount,
-) !void {
-    if (!account.isWritable()) {
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!account.context.is_writable) {
         try ic.tc.log(
             "Advance nonce account: Account {} must be writeable",
             .{account.pubkey},
@@ -555,7 +576,7 @@ fn advanceNonceAccount(
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| {
-            if (!ic.isPubkeySigner(data.authority)) {
+            if (!ic.info.isPubkeySigner(data.authority)) {
                 try ic.tc.log(
                     "Advance nonce account: Account {} must be a signer",
                     .{data.authority},
@@ -589,7 +610,7 @@ fn withdrawNonceAccount(
     ic: *InstructionContext,
     lamports: u64,
     rent: Rent,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     const from_account_index = 0;
     const to_account_index = 1;
 
@@ -597,7 +618,7 @@ fn withdrawNonceAccount(
         var from_account = try ic.borrowInstructionAccount(from_account_index);
         defer from_account.release();
 
-        if (!from_account.isWritable()) {
+        if (!from_account.context.is_writable) {
             try ic.tc.log(
                 "Withdraw nonce account: Account {} must be writeable",
                 .{from_account.pubkey},
@@ -636,7 +657,7 @@ fn withdrawNonceAccount(
                         nonce.Versions{ .current = nonce.State.unintialized },
                     );
                 } else {
-                    const min_balance = rent.minimumBalance(from_account.getData().len);
+                    const min_balance = rent.minimumBalance(from_account.constAccountData().len);
                     const amount = std.math.add(u64, lamports, min_balance) catch
                         return InstructionError.InsufficientFunds;
                     if (amount > from_account.account.lamports) {
@@ -654,7 +675,7 @@ fn withdrawNonceAccount(
             },
         };
 
-        if (!ic.isPubkeySigner(authority)) {
+        if (!ic.info.isPubkeySigner(authority)) {
             try ic.tc.log("Withdraw nonce account: Account {} must sign", .{authority});
             return InstructionError.MissingRequiredSignature;
         }
@@ -674,8 +695,8 @@ fn initializeNonceAccount(
     account: *BorrowedAccount,
     authority: Pubkey,
     rent: Rent,
-) !void {
-    if (!account.isWritable()) {
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!account.context.is_writable) {
         try ic.tc.log(
             "Initialize nonce account: Account {} must be writeable",
             .{account.pubkey},
@@ -686,7 +707,7 @@ fn initializeNonceAccount(
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
     switch (versioned_nonce.getState()) {
         .unintialized => {
-            const min_balance = rent.minimumBalance(account.getData().len);
+            const min_balance = rent.minimumBalance(account.constAccountData().len);
             if (min_balance > account.account.lamports) {
                 try ic.tc.log("Initialize nonce account: insufficient lamports {}, need {}", .{
                     account.account.lamports,
@@ -718,8 +739,8 @@ pub fn authorizeNonceAccount(
     ic: *InstructionContext,
     account: *BorrowedAccount,
     authority: Pubkey,
-) !void {
-    if (!account.isWritable()) {
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!account.context.is_writable) {
         try ic.tc.log(
             "Authorize nonce account: Account {} must be writeable",
             .{account.pubkey},
@@ -740,7 +761,7 @@ pub fn authorizeNonceAccount(
         .initialized => |data| data,
     };
 
-    if (!ic.isPubkeySigner(nonce_data.authority)) {
+    if (!ic.info.isPubkeySigner(nonce_data.authority)) {
         try ic.tc.log("Authorize nonce account: Account {} must sign", .{nonce_data.authority});
         return InstructionError.MissingRequiredSignature;
     }
@@ -765,7 +786,7 @@ fn checkSeedAddress(
     owner: Pubkey,
     seed: []const u8,
     comptime log_err_fmt: []const u8,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     const created = pubkey_utils.createWithSeed(base, seed, owner) catch |err| {
         ic.tc.custom_error = @intFromError(err);
         return InstructionError.Custom;
@@ -778,21 +799,21 @@ fn checkSeedAddress(
 }
 
 test "executeCreateAccount" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
             .create_account = .{
                 .lamports = 1_000_000,
-                .space = 0,
+                .space = 2,
                 .owner = system_program.ID,
             },
         },
@@ -803,8 +824,8 @@ test "executeCreateAccount" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
-                .{ .pubkey = account_1_key },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = account_1_key, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 150,
         },
@@ -813,26 +834,27 @@ test "executeCreateAccount" {
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{
                     .pubkey = account_1_key,
-                    .lamports = 1_000_000,
                     .owner = system_program.ID,
-                    .data = &.{},
+                    .lamports = 1_000_000,
+                    .data = &[_]u8{ 0, 0 },
                 },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
+            .accounts_resize_delta = 2,
         },
     );
 }
 
 test "executeAssign" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const new_owner = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -845,30 +867,30 @@ test "executeAssign" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = account_0_key, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = new_owner },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeTransfer" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -883,8 +905,8 @@ test "executeTransfer" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
-                .{ .pubkey = account_1_key, .lamports = 0 },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = account_1_key },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -892,15 +914,15 @@ test "executeTransfer" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = account_1_key, .lamports = 1_000_000 },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeCreateAccountWithSeed" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -910,7 +932,7 @@ test "executeCreateAccountWithSeed" {
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = try pubkey_utils.createWithSeed(base, seed, system_program.ID);
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -930,27 +952,27 @@ test "executeCreateAccountWithSeed" {
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
-                .{ .pubkey = account_1_key },
+                .{ .pubkey = account_1_key, .owner = system_program.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
-                .{ .pubkey = account_1_key, .lamports = 1_000_000, .owner = system_program.ID },
+                .{ .pubkey = account_1_key, .owner = system_program.ID, .lamports = 1_000_000 },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeAdvanceNonceAccount" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -995,7 +1017,7 @@ test "executeAdvanceNonceAccount" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         system_program,
         SystemProgramInstruction{
@@ -1008,10 +1030,14 @@ test "executeAdvanceNonceAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = nonce_state_bytes },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = nonce_state_bytes,
+                },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .lamports_per_signature = lamports_per_signature,
@@ -1022,10 +1048,14 @@ test "executeAdvanceNonceAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = final_nonce_state_bytes,
+                },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
@@ -1037,9 +1067,9 @@ test "executeAdvanceNonceAccount" {
 }
 
 test "executeWithdrawNonceAccount" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1061,12 +1091,12 @@ test "executeWithdrawNonceAccount" {
     // Create Sysvars
     const recent_blockhashes = RecentBlockhashes{ .entries = &.{} };
     const rent = Rent.DEFAULT;
-    const rent_minimum_balance = rent.minimumBalance(try nonce_state.serializedSize());
+    const rent_minimum_balance = rent.minimumBalance(sig.bincode.sizeOf(nonce_state, .{}));
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         system_program,
         SystemProgramInstruction{
@@ -1090,7 +1120,7 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .sysvar_cache = .{
@@ -1109,7 +1139,7 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = nonce_authority },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
@@ -1120,9 +1150,9 @@ test "executeWithdrawNonceAccount" {
 }
 
 test "executeInitializeNonceAccount" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1163,7 +1193,7 @@ test "executeInitializeNonceAccount" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1178,12 +1208,13 @@ test "executeInitializeNonceAccount" {
             .accounts = &.{
                 .{
                     .pubkey = account_0_key,
+                    .owner = system_program.ID,
                     .lamports = rent.minimumBalance(final_nonce_state_bytes.len),
                     .data = nonce_state_bytes,
                 },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
             .lamports_per_signature = lamports_per_signature,
@@ -1197,12 +1228,13 @@ test "executeInitializeNonceAccount" {
             .accounts = &.{
                 .{
                     .pubkey = account_0_key,
+                    .owner = system_program.ID,
                     .lamports = rent.minimumBalance(final_nonce_state_bytes.len),
                     .data = final_nonce_state_bytes,
                 },
                 .{ .pubkey = RecentBlockhashes.ID },
                 .{ .pubkey = Rent.ID },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .lamports_per_signature = lamports_per_signature,
             .last_blockhash = last_blockhash,
@@ -1215,9 +1247,9 @@ test "executeInitializeNonceAccount" {
 }
 
 test "executeAuthorizeNonceAccount" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1247,7 +1279,7 @@ test "executeAuthorizeNonceAccount" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1259,25 +1291,33 @@ test "executeAuthorizeNonceAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = nonce_state_bytes },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = nonce_state_bytes,
+                },
                 .{ .pubkey = initial_nonce_authority },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = final_nonce_state_bytes,
+                },
                 .{ .pubkey = initial_nonce_authority },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeAllocate" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1285,7 +1325,7 @@ test "executeAllocate" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1298,15 +1338,22 @@ test "executeAllocate" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key },
-                .{ .pubkey = system_program.ID },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = &[_]u8{0} ** allocation_size },
-                .{ .pubkey = system_program.ID },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = &[_]u8{0} ** allocation_size,
+                },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .accounts_resize_delta = allocation_size,
         },
@@ -1314,8 +1361,8 @@ test "executeAllocate" {
 }
 
 test "executeAllocateWithSeed" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1325,7 +1372,7 @@ test "executeAllocateWithSeed" {
 
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, system_program.ID);
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1342,17 +1389,24 @@ test "executeAllocateWithSeed" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = &[_]u8{0} ** 1024 },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = &[_]u8{0} ** 1024,
+                },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .accounts_resize_delta = allocation_size,
         },
@@ -1360,8 +1414,8 @@ test "executeAllocateWithSeed" {
 }
 
 test "executeAssignWithSeed" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1371,7 +1425,7 @@ test "executeAssignWithSeed" {
 
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, owner);
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1387,9 +1441,9 @@ test "executeAssignWithSeed" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key },
+                .{ .pubkey = account_0_key, .owner = system_program.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1397,15 +1451,15 @@ test "executeAssignWithSeed" {
             .accounts = &.{
                 .{ .pubkey = account_0_key, .owner = owner },
                 .{ .pubkey = base },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeTransferWithSeed" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
 
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1416,7 +1470,7 @@ test "executeTransferWithSeed" {
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, owner);
     const account_2_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1436,7 +1490,7 @@ test "executeTransferWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 2_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 0 },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
@@ -1445,16 +1499,16 @@ test "executeTransferWithSeed" {
                 .{ .pubkey = account_0_key, .lamports = 1_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 1_000_000 },
-                .{ .pubkey = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );
 }
 
 test "executeUpgradeNonceAccount" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
     const Hash = sig.core.Hash;
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1486,7 +1540,7 @@ test "executeUpgradeNonceAccount" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         system_program,
         SystemProgramInstruction{
@@ -1497,15 +1551,23 @@ test "executeUpgradeNonceAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = nonce_state_bytes },
-                .{ .pubkey = system_program.ID },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = nonce_state_bytes,
+                },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .data = final_nonce_state_bytes },
-                .{ .pubkey = system_program.ID },
+                .{
+                    .pubkey = account_0_key,
+                    .owner = system_program.ID,
+                    .data = final_nonce_state_bytes,
+                },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
     );

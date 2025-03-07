@@ -2121,7 +2121,6 @@ pub const GossipMetrics = struct {
     table_old_values_removed: *Counter,
 
     const GaugeU64 = Gauge(u64);
-    const Self = @This();
 
     pub const histogram_buckets: [10]f64 = .{
         10,   25,
@@ -2131,14 +2130,14 @@ pub const GossipMetrics = struct {
         5000, 10000,
     };
 
-    pub fn init() GetMetricError!Self {
-        var self: Self = undefined;
+    pub fn init() GetMetricError!GossipMetrics {
+        var self: GossipMetrics = undefined;
         const registry = globalRegistry();
         std.debug.assert(try registry.initFields(&self) == 0);
         return self;
     }
 
-    pub fn reset(self: *Self) void {
+    pub fn reset(self: *GossipMetrics) void {
         inline for (@typeInfo(GossipMetrics).Struct.fields) |field| {
             @field(self, field.name).reset();
         }

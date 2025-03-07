@@ -166,6 +166,9 @@ jobs:
           name: Test
           # Disable network-accessing tests for this job, which behave badly on circleci
           command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --color off --summary all
+          # Because we need to "--color off" in order to avoid the TSan issues in std.Progress
+          # CircleCI's default no output timeout of 10 minutes is sometimes hit.
+          no_output_timeout: 30m
 
   test_kcov_linux:
     executor: linux-executor
