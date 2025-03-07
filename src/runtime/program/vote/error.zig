@@ -5,6 +5,8 @@ const InstructionError = sig.core.instruction.InstructionError;
 const BUILTIN_BIT_SHIFT: usize = 32;
 
 // TODO this should be an error set and not an enum.
+
+/// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/error.rs#L11
 pub const VoteError = enum {
     vote_too_old,
     slots_mismatch,
