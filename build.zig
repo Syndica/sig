@@ -302,6 +302,7 @@ fn addInstallAndRun(
     if (config.install or (config.ssh_host != null and config.run)) {
         const install = b.addInstallArtifact(exe, .{});
         step.dependOn(&install.step);
+        b.getInstallStep().dependOn(&install.step);
 
         if (config.ssh_host) |host| {
             const install_dir = if (config.ssh_install_dir[0] == '/')
@@ -311,17 +312,15 @@ fn addInstallAndRun(
             defer b.allocator.free(install_dir);
 
             const send = try ssh.addSendArtifact(b, install, host, install_dir);
+            send.step.dependOn(&install.step);
+            step.dependOn(&send.step);
             send_step = &send.step;
-            b.getInstallStep().dependOn(&send.step);
-        } else {
-            b.getInstallStep().dependOn(&install.step);
         }
     }
 
     if (config.run) {
         if (config.ssh_host) |host| {
-            const exe_path =
-                b.fmt("{s}/{s}", .{ config.ssh_install_dir, exe.name });
+            const exe_path = b.fmt("{s}/{s}", .{ config.ssh_install_dir, exe.name });
             defer b.allocator.free(exe_path);
 
             const run = try ssh.addRemoteCommand(b, host, config.ssh_workdir, exe_path);
@@ -455,6 +454,7 @@ const ssh = struct {
             .name = "send-file",
             .root_source_file = b.path("scripts/send-file.zig"),
             .target = b.host,
+            .link_libc = true,
         });
 
         const run = b.addRunArtifact(exe);
