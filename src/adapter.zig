@@ -101,9 +101,13 @@ pub const RpcEpochContextService = struct {
         var i: usize = 0;
         while (!exit.load(.monotonic)) {
             if (i % 1000 == 0) {
-                self.refresh() catch |e| {
+                var result: anyerror!void = undefined;
+                for (0..3) |_| {
+                    result = self.refresh();
+                    if (result != error.EndOfStream) break;
+                }
+                result catch |e|
                     self.logger.err().logf("failed to refresh epoch context via rpc: {}", .{e});
-                };
             }
             std.time.sleep(100 * std.time.ns_per_ms);
             i += 1;
