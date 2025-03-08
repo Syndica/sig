@@ -138,12 +138,9 @@ pub fn createInstructionInfo(
     if (!builtin.is_test)
         @compileError("createInstructionContext should only be called in test mode");
 
-    const program_index_in_transaction = blk: {
-        for (tc.accounts, 0..) |account, index| {
-            if (account.pubkey.equals(&program_id)) break :blk index;
-        }
-        return error.CoulfNotFindProgramAccount;
-    };
+    const program_index_in_transaction = for (tc.accounts, 0..) |account, index| {
+        if (account.pubkey.equals(&program_id)) break index;
+    } else return error.CouldNotFindProgramAccount;
 
     const account_metas = try createInstructionContextAccountMetas(tc, accounts_params);
 
