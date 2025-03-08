@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
+const Slot = sig.core.Slot;
 
 pub const Instruction = @import("instruction.zig").Instruction;
 
@@ -84,4 +85,53 @@ test "bad execute" {
         .{ .accounts = &.{} },
         .{ .accounts = &.{} },
     ) catch {};
+}
+
+test "address-lookup-table create with missing signer" {
+    // const testing = sig.runtime.testing;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const payer = Pubkey.initRandom(prng.random());
+    const unsigned_authority_address = Pubkey.initRandom(prng.random());
+    const recent_slot = std.math.maxInt(Slot);
+    const authority_is_signer = true;
+
+    const lookup_table_address, const bump_seed = deriveLookupTableAddress(
+        unsigned_authority_address,
+        recent_slot,
+    );
+
+    const accounts: []const testing.TransactionContextAccountParams = &.{
+        .{ .pubkey = lookup_table_address },
+        .{ .pubkey = unsigned_authority_address },
+        .{ .pubkey = payer, .lamports = 9999999999999 },
+        .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+    };
+
+    const meta: []const testing.InstructionContextAccountMetaParams = &.{
+        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
+        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+    };
+
+    const sysvar_cache = sig.runtime.SysvarCache{
+        .clock = sig.runtime.sysvar.Clock.DEFAULT,
+        .slot_hashes = sig.runtime.sysvar.SlotHashes{
+            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
+        },
+        .rent = sig.runtime.sysvar.Rent.DEFAULT,
+    };
+
+    try testing.expectProgramExecuteResult(
+        allocator,
+        @This(),
+        Instruction{ .CreateLookupTable = .{ .bump_seed = bump_seed, .recent_slot = recent_slot } },
+        meta,
+        .{ .accounts = accounts, .compute_meter = 9999999, .sysvar_cache = sysvar_cache },
+        .{ .accounts = accounts },
+    );
 }

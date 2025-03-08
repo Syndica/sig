@@ -19,11 +19,13 @@ const EntrypointFn =
     *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void;
 
+// reviewer's note: does this have to be a string map? might be better to keep as pubkeys
 fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
     @setEvalBranchQuota(5000);
     return std.StaticStringMap(EntrypointFn).initComptime(&.{
         .{ system_program.ID.base58String().slice(), system_program.execute },
         .{ vote_program.ID.base58String().slice(), vote_program.execute },
+        .{ address_lookup_table.ID.base58String().slice(), address_lookup_table.execute },
     });
 }
 
