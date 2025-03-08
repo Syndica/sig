@@ -10,6 +10,13 @@ const sysvar = sig.runtime.sysvar;
 
 const program = @import("lib.zig");
 
+pub fn entrypoint(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
+    return try execute(allocator, ic);
+}
+
 // https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L25
 pub fn execute(
     allocator: std.mem.Allocator,

@@ -14,13 +14,15 @@ pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
 const EntrypointFn =
-    *const fn (std.mem.Allocator, *InstructionContext) ?(error{OutOfMemory} || InstructionError);
+    *const fn (std.mem.Allocator, *InstructionContext) (error{OutOfMemory} || InstructionError)!void;
 
+// reviewer's note: does this have to be a string map? might be better to keep as pubkeys
 fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
     @setEvalBranchQuota(5000);
     return std.StaticStringMap(EntrypointFn).initComptime(&.{
         .{ system_program.ID.base58String().slice(), system_program.entrypoint },
         .{ vote_program.ID.base58String().slice(), vote_program.entrypoint },
+        .{ address_lookup_table.ID.base58String().slice(), address_lookup_table.entrypoint },
     });
 }
 
