@@ -5,12 +5,15 @@ const memory = @import("memory.zig");
 const syscalls = @import("syscalls.zig");
 const Vm = @import("vm.zig").Vm;
 
+const Instruction = sbpf.Instruction;
+const Register = Instruction.Register;
+
 pub const Executable = struct {
     bytes: []const u8,
-    instructions: []align(1) const sbpf.Instruction,
+    instructions: []align(1) const Instruction,
     version: sbpf.Version,
     entry_pc: u64,
-    from_elf: bool,
+    from_asm: bool,
     ro_section: Section,
     text_vaddr: u64,
     function_registry: Registry(u64),
@@ -54,7 +57,7 @@ pub const Executable = struct {
             .instructions = elf.getInstructions(),
             .version = elf.version,
             .entry_pc = elf.entry_pc,
-            .from_elf = true,
+            .from_asm = false,
             .text_vaddr = text_vaddr,
             .function_registry = elf.function_registry,
             .config = elf.config,
@@ -79,6 +82,7 @@ pub const Executable = struct {
             std.mem.sliceAsBytes(instructions),
             &loader,
             &function_registry,
+            true,
             config,
         );
     }
@@ -88,6 +92,7 @@ pub const Executable = struct {
         source: []const u8,
         loader: *BuiltinProgram,
         registry: *Registry(u64),
+        from_asm: bool,
         config: Config,
     ) !Executable {
         const version = config.maximum_version;
@@ -105,8 +110,9 @@ pub const Executable = struct {
             break :pc 0;
         };
 
+        if (source.len % 8 != 0) return error.ProgramLengthNotMultiple;
         return .{
-            .instructions = std.mem.bytesAsSlice(sbpf.Instruction, source),
+            .instructions = std.mem.bytesAsSlice(Instruction, source),
             .bytes = source,
             .version = version,
             .config = config,
@@ -117,7 +123,7 @@ pub const Executable = struct {
                 .start = 0,
                 .end = source.len,
             } },
-            .from_elf = false,
+            .from_asm = from_asm,
             .text_vaddr = if (version.enableLowerBytecodeVaddr())
                 memory.BYTECODE_START
             else
@@ -125,13 +131,259 @@ pub const Executable = struct {
         };
     }
 
+    pub fn verify(
+        self: *const Executable,
+        loader: *const BuiltinProgram,
+    ) !void {
+        const version = self.version;
+        const instructions = self.instructions;
+        if (instructions.len == 0) return error.NoProgram;
+
+        const map = self.function_registry.map;
+        var iter = map.iterator();
+        var function_start: u64 = 0;
+        var function_end: u64 = instructions.len;
+
+        var pc: u64 = 0;
+        while (pc + 1 <= instructions.len) : (pc += 1) {
+            const inst = instructions[pc];
+            var store: bool = false;
+
+            if (version.enableStaticSyscalls() and map.contains(pc)) {
+                function_start = if (iter.next()) |entry| entry.key_ptr.* else 0;
+                const before_index = iter.index;
+                function_end = if (iter.next()) |entry| entry.key_ptr.* else instructions.len;
+                iter.index = before_index;
+                switch (instructions[function_end -| 1].opcode) {
+                    .ja, .@"return" => {},
+                    else => return error.InvalidFunction,
+                }
+            }
+
+            switch (inst.opcode) {
+                .add64_reg,
+                .add32_imm,
+                .add32_reg,
+                .sub64_imm,
+                .sub64_reg,
+                .sub32_imm,
+                .sub32_reg,
+                .mov64_imm,
+                .mov64_reg,
+                .mov32_imm,
+                .mov32_reg,
+                .or64_imm,
+                .or64_reg,
+                .or32_imm,
+                .or32_reg,
+                .and64_imm,
+                .and64_reg,
+                .and32_imm,
+                .and32_reg,
+                .lsh32_reg,
+                .lsh64_reg,
+                .rsh32_reg,
+                .rsh64_reg,
+                .xor64_imm,
+                .xor64_reg,
+                .xor32_imm,
+                .xor32_reg,
+                .arsh32_reg,
+                .arsh64_reg,
+                => {}, // nothing to verify
+
+                .add64_imm => if (version.enableDynamicStackFrames() and inst.dst == .r10) {
+                    if (!std.mem.isAligned(inst.imm, 16)) return error.UnalignedImmediate;
+                },
+
+                .lsh32_imm,
+                .rsh32_imm,
+                .arsh32_imm,
+                => if (inst.imm >= 32) return error.ShiftWithOverflow,
+
+                .lsh64_imm,
+                .rsh64_imm,
+                .arsh64_imm,
+                => if (inst.imm >= 64) return error.ShiftWithOverflow,
+
+                .neg32 => if (version.disableNegation()) return error.UnknownInstruction,
+
+                .mul32_reg,
+                .div32_reg,
+                .mod32_reg,
+                => {},
+
+                .mul64_imm,
+                .mul64_reg,
+                .div64_reg,
+                .mod64_reg,
+                .neg64,
+                => if (version.moveMemoryInstructionClasses()) {
+                    // SIMD-0173 turns these into load and store instructions.
+                    store = true;
+                },
+
+                .div64_imm,
+                .mod64_imm,
+                => if (!version.enablePqr()) {
+                    if (inst.imm == 0) return error.DivisionByZero;
+                } else {
+                    store = true;
+                },
+
+                .mul32_imm => if (version.enablePqr()) return error.UnknownInstruction,
+                .mod32_imm,
+                .div32_imm,
+                => if (!version.enablePqr()) {
+                    if (inst.imm == 0) return error.DivisionByZero;
+                } else return error.UnknownInstruction,
+
+                .udiv32_reg,
+                .udiv64_reg,
+                .sdiv32_reg,
+                .sdiv64_reg,
+                .lmul32_imm,
+                .lmul32_reg,
+                .lmul64_imm,
+                .lmul64_reg,
+                .uhmul64_imm,
+                .uhmul64_reg,
+                .shmul64_imm,
+                .shmul64_reg,
+                .urem32_reg,
+                .urem64_reg,
+                .srem32_reg,
+                .srem64_reg,
+                => if (!version.enablePqr()) return error.UnknownInstruction,
+
+                .udiv32_imm,
+                .udiv64_imm,
+                .sdiv32_imm,
+                .sdiv64_imm,
+                .urem32_imm,
+                .urem64_imm,
+                .srem32_imm,
+                .srem64_imm,
+                => if (version.enablePqr()) {
+                    if (inst.imm == 0) return error.DivisionByZero;
+                } else return error.UnknownInstruction,
+
+                .hor64_imm => if (!version.disableLddw()) return error.UnknownInstruction,
+
+                .le, .be => {
+                    if (inst.opcode == .le and !version.enableLe()) {
+                        return error.UnknownInstruction;
+                    }
+                    switch (inst.imm) {
+                        16, 32, 64 => {},
+                        else => return error.UnsupportedLEBEArgument,
+                    }
+                },
+
+                .ja,
+                .jeq_imm,
+                .jeq_reg,
+                .jne_imm,
+                .jne_reg,
+                .jge_imm,
+                .jge_reg,
+                .jgt_imm,
+                .jgt_reg,
+                .jle_imm,
+                .jle_reg,
+                .jlt_imm,
+                .jlt_reg,
+                .jset_imm,
+                .jset_reg,
+                .jsge_imm,
+                .jsge_reg,
+                .jsgt_imm,
+                .jsgt_reg,
+                .jsle_imm,
+                .jsle_reg,
+                .jslt_imm,
+                .jslt_reg,
+                => {
+                    const destination = @as(i64, @bitCast(pc)) + 1 + inst.off;
+                    if (destination < 0 or
+                        destination < function_start or
+                        destination >= function_end)
+                    {
+                        return error.JumpOutOfCode;
+                    }
+
+                    const dest_inst = instructions[@bitCast(destination)];
+                    if (@intFromEnum(dest_inst.opcode) == 0) {
+                        return error.JumpToMiddleOfLddw;
+                    }
+                },
+
+                .ld_b_reg,
+                .ld_h_reg,
+                .ld_w_reg,
+                .ld_dw_reg,
+                => if (version.moveMemoryInstructionClasses()) return error.UnknownInstruction,
+
+                .st_b_imm,
+                .st_h_imm,
+                .st_w_imm,
+                .st_dw_imm,
+                .st_b_reg,
+                .st_h_reg,
+                .st_w_reg,
+                .st_dw_reg,
+                => if (!version.moveMemoryInstructionClasses()) {
+                    store = true;
+                } else return error.UnknownInstruction,
+
+                .ld_4b_reg,
+                .st_4b_reg,
+                => if (!version.moveMemoryInstructionClasses()) return error.UnknownInstruction,
+
+                .ld_dw_imm => if (!version.disableLddw()) {
+                    // If this is the last instructions, half of it is missing!
+                    if (pc == instructions.len - 1) return error.LddwCannotBeLast;
+                    pc += 1;
+                    const next_instruction = instructions[pc];
+                    if (@intFromEnum(next_instruction.opcode) != 0) return error.IncompleteLddw;
+                } else return error.UnknownInstruction,
+
+                .call_imm => if (version.enableStaticSyscalls()) {
+                    const target_pc = version.computeTargetPc(pc, inst);
+                    if (!self.function_registry.map.contains(target_pc)) {
+                        return error.InvalidFunction;
+                    }
+                },
+                .call_reg => {
+                    const reg = if (version.callRegUsesSrcReg())
+                        inst.src
+                    else
+                        std.meta.intToEnum(Register, inst.imm) catch
+                            return error.InvalidRegister;
+                    if (@intFromEnum(reg) >= 10) return error.InvalidRegister;
+                },
+
+                .@"return" => if (!version.enableStaticSyscalls()) return error.UnknownInstruction,
+                .exit_or_syscall => if (version.enableStaticSyscalls() and
+                    !loader.functions.map.contains(inst.imm))
+                {
+                    return error.InvalidSyscall;
+                },
+
+                else => return error.UnknownInstruction,
+            }
+
+            try inst.checkRegisters(store, version);
+        }
+    }
+
     /// When the executable comes from the assembler, we need to guarantee that the
     /// instructions are aligned to `sbpf.Instruction` rather than 1 like they would be
     /// if we created the executable from the Elf file. The GPA requires allocations and
     /// deallocations to be made with the same semantic alignment.
     pub fn deinit(self: *Executable, allocator: std.mem.Allocator) void {
-        if (!self.from_elf) allocator.free(@as(
-            []const sbpf.Instruction,
+        if (self.from_asm) allocator.free(@as(
+            []const Instruction,
             @alignCast(self.instructions),
         ));
 
@@ -153,7 +405,7 @@ pub const Assembler = struct {
 
     const Statement = union(enum) {
         label: []const u8,
-        instruction: Instruction,
+        instruction: Statement.Instruction,
 
         const Instruction = struct {
             name: []const u8,
@@ -162,13 +414,13 @@ pub const Assembler = struct {
     };
 
     const Operand = union(enum) {
-        register: sbpf.Instruction.Register,
+        register: Register,
         integer: i64,
         memory: Memory,
         label: []const u8,
 
         const Memory = struct {
-            base: sbpf.Instruction.Register,
+            base: Register,
             offset: i16,
         };
     };
@@ -177,7 +429,7 @@ pub const Assembler = struct {
         allocator: std.mem.Allocator,
         source: []const u8,
         config: Config,
-    ) !struct { Registry(u64), []const sbpf.Instruction } {
+    ) !struct { Registry(u64), []const Instruction } {
         const version = config.maximum_version;
         var assembler: Assembler = .{ .source = source };
         const statements = try assembler.tokenize(allocator);
@@ -220,7 +472,7 @@ pub const Assembler = struct {
             }
         }
 
-        var instructions: std.ArrayListUnmanaged(sbpf.Instruction) = .{};
+        var instructions: std.ArrayListUnmanaged(Instruction) = .{};
         defer instructions.deinit(allocator);
         inst_ptr = 0;
 
@@ -231,24 +483,20 @@ pub const Assembler = struct {
                     const name = inst.name;
                     const operands = inst.operands;
 
-                    if (sbpf.Instruction.disallowed.get(name)) |since| {
-                        if (version.gte(since)) return error.UnknownInstruction;
-                    }
-
-                    const bind = sbpf.Instruction.map.get(name) orelse
+                    const bind = Instruction.map.get(name) orelse
                         std.debug.panic("invalid instruction: {s}", .{name});
 
-                    const instruction: sbpf.Instruction = switch (bind.inst) {
+                    const instruction: Instruction = switch (bind.inst) {
                         .alu_binary => inst: {
                             const is_immediate = operands[1] == .integer;
                             break :inst if (is_immediate) .{
-                                .opcode = @enumFromInt(bind.opc | sbpf.Instruction.k),
+                                .opcode = @enumFromInt(bind.opc | Instruction.k),
                                 .dst = operands[0].register,
                                 .src = .r0,
                                 .off = 0,
                                 .imm = @truncate(@as(u64, @bitCast(operands[1].integer))),
                             } else .{
-                                .opcode = @enumFromInt(bind.opc | sbpf.Instruction.x),
+                                .opcode = @enumFromInt(bind.opc | Instruction.x),
                                 .dst = operands[0].register,
                                 .src = operands[1].register,
                                 .off = 0,
@@ -263,7 +511,12 @@ pub const Assembler = struct {
                             .imm = 0,
                         },
                         .no_operand => .{
-                            .opcode = @enumFromInt(bind.opc),
+                            // Harded to work for both `exit` and `return`, even though
+                            // the `exit` instruction was technically deprecated.
+                            .opcode = if (version == .v0)
+                                .exit_or_syscall
+                            else
+                                .@"return",
                             .dst = .r0,
                             .src = .r0,
                             .off = 0,
@@ -277,13 +530,13 @@ pub const Assembler = struct {
                                 @panic("TODO: label jump");
                             } else {
                                 break :inst if (is_immediate) .{
-                                    .opcode = @enumFromInt(bind.opc | sbpf.Instruction.k),
+                                    .opcode = @enumFromInt(bind.opc | Instruction.k),
                                     .dst = operands[0].register,
                                     .src = .r0,
                                     .off = @intCast(operands[2].integer),
                                     .imm = @bitCast(@as(i32, @intCast(operands[1].integer))),
                                 } else .{
-                                    .opcode = @enumFromInt(bind.opc | sbpf.Instruction.x),
+                                    .opcode = @enumFromInt(bind.opc | Instruction.x),
                                     .dst = operands[0].register,
                                     .src = operands[1].register,
                                     .off = @intCast(operands[2].integer),
@@ -412,7 +665,7 @@ pub const Assembler = struct {
                         switch (operands[1]) {
                             .integer => |int| {
                                 try instructions.append(allocator, .{
-                                    .opcode = .ld_dw_imm,
+                                    .opcode = @enumFromInt(0),
                                     .dst = .r0,
                                     .src = .r0,
                                     .off = 0,
@@ -459,7 +712,7 @@ pub const Assembler = struct {
 
             while (iter.next()) |op| {
                 if (std.mem.startsWith(u8, op, "r")) {
-                    const reg = std.meta.stringToEnum(sbpf.Instruction.Register, op) orelse
+                    const reg = std.meta.stringToEnum(Register, op) orelse
                         @panic("unknown register");
                     try operands.append(allocator, .{ .register = reg });
                 } else if (std.mem.startsWith(u8, op, "[")) {
@@ -480,7 +733,7 @@ pub const Assembler = struct {
                     }
 
                     // otherwise it's just an address register argument
-                    const reg = std.meta.stringToEnum(sbpf.Instruction.Register, base) orelse
+                    const reg = std.meta.stringToEnum(Register, base) orelse
                         @panic("unknown register");
 
                     try operands.append(allocator, .{ .memory = .{
@@ -508,7 +761,7 @@ pub const Assembler = struct {
 
 pub fn Registry(T: type) type {
     return struct {
-        map: std.AutoHashMapUnmanaged(u64, Entry) = .{},
+        map: std.AutoArrayHashMapUnmanaged(u64, Entry) = .{},
 
         const Entry = struct {
             name: []const u8,
@@ -574,17 +827,18 @@ pub fn Registry(T: type) type {
 
         // TODO: this can be sped up by using a bidirectional map
         pub fn lookupName(self: *const Self, name: []const u8) ?Entry {
-            var iter = self.map.valueIterator();
+            var iter = self.map.iterator();
             while (iter.next()) |entry| {
-                if (std.mem.eql(u8, entry.name, name)) return entry.*;
+                const entry_name = entry.value_ptr.name;
+                if (std.mem.eql(u8, entry_name, name)) return entry.value_ptr.*;
             }
             return null;
         }
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            var iter = self.map.valueIterator();
+            var iter = self.map.iterator();
             while (iter.next()) |entry| {
-                allocator.free(entry.name);
+                allocator.free(entry.value_ptr.name);
             }
             self.map.deinit(allocator);
         }

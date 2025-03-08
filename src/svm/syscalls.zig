@@ -163,6 +163,7 @@ test poseidon {
         &.{
             .{ .name = "sol_poseidon", .builtin_fn = poseidon },
             .{ .name = "log", .builtin_fn = log },
+            .{ .name = "panic", .builtin_fn = panic },
         },
         0,
     );
