@@ -191,12 +191,18 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             ic,
             args.max_data_len,
         ),
+        .set_authority => executeV3SetAuthority(
+            allocator,
+            ic,
+        ),
+        .set_authority_checked => executeV3SetAuthorityChecked(
+            allocator,
+            ic,
+        ),
         // TODO: Implement the following instructions
         // .upgrade => executeV3Upgrade(),
-        // .set_authority => executeV3SetAuthority(),
         // .close => executeV3Close(),
         // .extend_program => executeV3ExtendProgram(),
-        // .set_authority_checked => executeV3SetAuthorityChecked(),
         else => @panic("Instruction not implemented"),
     };
 }
@@ -509,6 +515,146 @@ pub fn executeV3DeployWithMaxDataLen(
     }
 
     try ic.tc.log("Deployed program {}", .{new_program_id});
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010
+pub fn executeV3SetAuthority(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) InstructionError!void {
+    try ic.checkNumberOfAccounts(2);
+
+    var account = try ic.borrowInstructionAccount(0);
+    defer account.release();
+
+    const present_authority_key = ic.getAccountMetaAtIndex(1).?.pubkey;
+    const new_authority = if (ic.getAccountMetaAtIndex(2)) |meta| meta.pubkey else null;
+
+    switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+        .buffer => |buffer| {
+            if (new_authority == null) {
+                try ic.tc.log("Buffer authority is not optional", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (buffer.authority_address == null) {
+                try ic.tc.log("Buffer is immutable", .{});
+                return InstructionError.Immutable;
+            }
+            if (!buffer.authority_address.?.equals(&present_authority_key)) {
+                try ic.tc.log("Incorrect buffer authority provided", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (!(try ic.isIndexSigner(1))) {
+                try ic.tc.log("Buffer authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+                .buffer = .{
+                    .authority_address = new_authority,
+                },
+            });
+        },
+        .program_data => |data| {
+            if (data.upgrade_authority_address == null) {
+                try ic.tc.log("Program not upgradeable", .{});
+                return InstructionError.Immutable;
+            }
+            if (!data.upgrade_authority_address.?.equals(&present_authority_key)) {
+                try ic.tc.log("Incorrect upgrade authority provided", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (!(try ic.isIndexSigner(1))) {
+                try ic.tc.log("Upgrade authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+                .program_data = .{
+                    .slot = data.slot,
+                    .upgrade_authority_address = new_authority,
+                },
+            });
+        },
+        else => {
+            try ic.tc.log("Account does not support authorities", .{});
+            return InstructionError.InvalidArgument;
+        },
+    }
+
+    try ic.tc.log("New authority {?}", .{new_authority});
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L1011-L1083
+pub fn executeV3SetAuthorityChecked(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) InstructionError!void {
+    if (!ic.tc.feature_set.isActive(FeatureSet.enable_bpf_loader_set_authority_checked_ix)) {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    try ic.checkNumberOfAccounts(3);
+
+    var account = try ic.borrowInstructionAccount(0);
+    defer account.release();
+
+    const present_authority_key = ic.getAccountMetaAtIndex(1).?.pubkey;
+    const new_authority = ic.getAccountMetaAtIndex(2).?.pubkey;
+
+    switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+        .buffer => |buffer| {
+            if (buffer.authority_address == null) {
+                try ic.tc.log("Buffer is immutable", .{});
+                return InstructionError.Immutable;
+            }
+            if (!buffer.authority_address.?.equals(&present_authority_key)) {
+                try ic.tc.log("Incorrect buffer authority provided", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (!(try ic.isIndexSigner(1))) {
+                try ic.tc.log("Buffer authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            if (!(try ic.isIndexSigner(2))) {
+                try ic.tc.log("New authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+                .buffer = .{
+                    .authority_address = new_authority,
+                },
+            });
+        },
+        .program_data => |data| {
+            if (data.upgrade_authority_address == null) {
+                try ic.tc.log("Program not upgradeable", .{});
+                return InstructionError.Immutable;
+            }
+            if (!data.upgrade_authority_address.?.equals(&present_authority_key)) {
+                try ic.tc.log("Incorrect upgrade authority provided", .{});
+                return InstructionError.IncorrectAuthority;
+            }
+            if (!(try ic.isIndexSigner(1))) {
+                try ic.tc.log("Upgrade authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            if (!(try ic.isIndexSigner(2))) {
+                try ic.tc.log("New authority did not sign", .{});
+                return InstructionError.MissingRequiredSignature;
+            }
+            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+                .program_data = .{
+                    .slot = data.slot,
+                    .upgrade_authority_address = new_authority,
+                },
+            });
+        },
+        else => {
+            try ic.tc.log("Account does not support authorities", .{});
+            return InstructionError.InvalidArgument;
+        },
+    }
+
+    try ic.tc.log("New authority {?}", .{new_authority});
 }
 
 /// TODO: This function depends on syscalls and program cache implementations
@@ -840,4 +986,320 @@ test "executeDeployWithMaxDataLen" {
         }
         return err;
     };
+}
+
+test "executeV3SetAuthority" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const buffer_account_key = Pubkey.initRandom(prng.random());
+    const buffer_authority_key = Pubkey.initRandom(prng.random());
+    const new_authority_key = Pubkey.initRandom(prng.random());
+
+    const initial_buffer_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(initial_buffer_account_data);
+    _ = try bincode.writeToSlice(
+        initial_buffer_account_data,
+        bpf_loader_program.v3.State{
+            .buffer = .{ .authority_address = buffer_authority_key },
+        },
+        .{},
+    );
+
+    const final_buffer_account_data = try allocator.dupe(u8, initial_buffer_account_data);
+    defer allocator.free(final_buffer_account_data);
+    _ = try bincode.writeToSlice(
+        final_buffer_account_data,
+        bpf_loader_program.v3.State{
+            .buffer = .{ .authority_address = new_authority_key },
+        },
+        .{},
+    );
+
+    // test with State.buffer
+    try expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3,
+        bpf_loader_program.v3.Instruction.set_authority,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_buffer_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_buffer_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+    );
+
+    const initial_program_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(initial_program_account_data);
+    _ = try bincode.writeToSlice(
+        initial_program_account_data,
+        bpf_loader_program.v3.State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = buffer_authority_key },
+        },
+        .{},
+    );
+
+    const final_program_account_data = try allocator.dupe(u8, initial_program_account_data);
+    defer allocator.free(final_program_account_data);
+    _ = try bincode.writeToSlice(
+        final_program_account_data,
+        bpf_loader_program.v3.State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = new_authority_key },
+        },
+        .{},
+    );
+
+    // test with State.program_data
+    try expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3,
+        bpf_loader_program.v3.Instruction.set_authority,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+    );
+}
+
+test "executeV3SetAuthorityChecked" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const buffer_account_key = Pubkey.initRandom(prng.random());
+    const buffer_authority_key = Pubkey.initRandom(prng.random());
+    const new_authority_key = Pubkey.initRandom(prng.random());
+
+    const initial_buffer_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(initial_buffer_account_data);
+    _ = try bincode.writeToSlice(
+        initial_buffer_account_data,
+        bpf_loader_program.v3.State{
+            .buffer = .{ .authority_address = buffer_authority_key },
+        },
+        .{},
+    );
+
+    const final_buffer_account_data = try allocator.dupe(u8, initial_buffer_account_data);
+    defer allocator.free(final_buffer_account_data);
+    _ = try bincode.writeToSlice(
+        final_buffer_account_data,
+        bpf_loader_program.v3.State{
+            .buffer = .{ .authority_address = new_authority_key },
+        },
+        .{},
+    );
+
+    var feature_set = FeatureSet{ .active = .{}, .inactive = .{} };
+    defer feature_set.active.deinit(allocator);
+    defer feature_set.inactive.deinit(allocator);
+    
+    try feature_set.active.putNoClobber(allocator, FeatureSet.enable_bpf_loader_set_authority_checked_ix, 0);
+
+    // test with State.buffer (1 and 2 must be signers).
+    try expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3,
+        bpf_loader_program.v3.Instruction.set_authority_checked,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_buffer_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            .feature_set = feature_set,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_buffer_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+    );
+
+    const initial_program_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(initial_program_account_data);
+    _ = try bincode.writeToSlice(
+        initial_program_account_data,
+        bpf_loader_program.v3.State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = buffer_authority_key },
+        },
+        .{},
+    );
+
+    const final_program_account_data = try allocator.dupe(u8, initial_program_account_data);
+    defer allocator.free(final_program_account_data);
+    _ = try bincode.writeToSlice(
+        final_program_account_data,
+        bpf_loader_program.v3.State{
+            .program_data = .{ .slot = 0, .upgrade_authority_address = new_authority_key },
+        },
+        .{},
+    );
+
+    // test with State.program_data (1 and 2 must be signers).
+    try expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3,
+        bpf_loader_program.v3.Instruction.set_authority_checked,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = initial_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            .feature_set = feature_set,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = final_program_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = buffer_authority_key,
+                },
+                .{
+                    .pubkey = new_authority_key,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+        },
+    );
 }

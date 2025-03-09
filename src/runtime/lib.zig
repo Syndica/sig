@@ -27,7 +27,8 @@ pub const AccountSharedData = @import("account_shared_data.zig").AccountSharedDa
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/serialization.rs#L26
 pub const MAX_INSTRUCTION_ACCOUNTS: usize = 256;
 
-/// TODO: Why do I need to define this here for the tests to run?
-pub const bpf_loader_program_serialization = @import("program/bpf_loader_program/serialization.zig");
-pub const bpf_loader_program_execute = @import("program/bpf_loader_program/execute.zig");
-pub const system_program_execute = @import("program/system_program/execute.zig");
+test {
+    _ = @import("program/bpf_loader_program/serialize.zig");
+    _ = @import("program/bpf_loader_program/execute.zig");
+    _ = @import("program/system_program/execute.zig");
+}

@@ -143,7 +143,7 @@ pub fn expectProgramExecuteResult(
 
     try program.execute(allocator, &instruction_context);
 
-    const expected_transaction_context = try createTransactionContext(
+    var expected_transaction_context = try createTransactionContext(
         allocator,
         expected_transaction_context_params,
     );
