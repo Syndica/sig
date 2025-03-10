@@ -145,4 +145,12 @@ pub const Instruction = union(enum) {
     ///   2. `[SIGNER]` Vote or withdraw authority
     ///   3. `[SIGNER]` New vote or withdraw authority
     authorize_checked: VoteAuthorize,
+
+    /// Update the vote account's validator identity (node_pubkey)
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated with the given authority public key
+    ///   1. `[SIGNER]` New validator identity (node_pubkey)
+    ///   2. `[SIGNER]` Withdraw authority
+    update_validator_identity,
 };
