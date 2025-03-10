@@ -461,7 +461,6 @@ pub const VoteState = struct {
         self.epoch_credits.deinit();
     }
 
-    // TODO move to union.
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteState) bool {
         return self.authorized_voters.count() == 0;
@@ -541,3 +540,32 @@ pub const VoteAuthorize = enum {
     withdrawer,
     voter,
 };
+
+pub fn createTestVoteState(
+    allocator: std.mem.Allocator,
+    node_pubkey: Pubkey,
+    authorized_voter: ?Pubkey,
+    authorized_withdrawer: Pubkey,
+    commission: u8,
+) VoteState {
+    if (!builtin.is_test) {
+        @panic("createTestVoteState should only be called in test mode");
+    }
+
+    return .{
+        .node_pubkey = node_pubkey,
+        .authorized_voters = if (authorized_voter) |authorized_voter_|
+            AuthorizedVoters.init(allocator, 0, authorized_voter_) catch unreachable
+        else
+            AuthorizedVoters{
+                .authorized_voters = SortedMap(Epoch, Pubkey).init(allocator),
+            },
+        .authorized_withdrawer = authorized_withdrawer,
+        .commission = commission,
+        .votes = std.ArrayList(LandedVote).init(allocator),
+        .root_slot = null,
+        .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+        .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
+        .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+    };
+}
