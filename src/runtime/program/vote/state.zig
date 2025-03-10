@@ -10,7 +10,6 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const RingBuffer = sig.utils.collections.RingBuffer;
-const InstructionContext = sig.runtime.InstructionContext;
 
 const Clock = sig.runtime.sysvar.Clock;
 
@@ -477,20 +476,9 @@ pub const VoteState = struct {
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
-        allocator: std.mem.Allocator,
         authorized_pubkey: Pubkey,
-        current_epoch: Epoch,
         target_epoch: Epoch,
-        authorized_withdrawer_signer: bool,
-        ic: *InstructionContext,
-    ) InstructionError!void {
-        const epoch_authorized_voter = try self.getAndUpdateAuthorizedVoter(
-            allocator,
-            current_epoch,
-        );
-        if (!authorized_withdrawer_signer and !ic.info.isPubkeySigner(epoch_authorized_voter)) {
-            return InstructionError.MissingRequiredSignature;
-        }
+    ) (InstructionError || VoteError)!void {
 
         // The offset in slots `n` on which the target_epoch
         // (default value `DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET`) is
@@ -498,8 +486,7 @@ pub const VoteState = struct {
         // first slot `S` of an epoch in which to set a new voter for
         // the epoch at `S` + `n`
         if (self.authorized_voters.contains(target_epoch)) {
-            ic.tc.custom_error = @intFromError(VoteError.TooSoonToReauthorize);
-            return InstructionError.Custom;
+            return VoteError.TooSoonToReauthorize;
         }
 
         const epoch, const pubkey = self.authorized_voters.last() orelse

@@ -10,7 +10,9 @@ const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
+const VoteError = vote_program.VoteError;
 
+const Epoch = sig.core.Epoch;
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
@@ -225,21 +227,33 @@ fn authorize(
 
     switch (vote_authorize) {
         .voter => {
-            const authorized_withdrawer_signer = if (signers) |signers_|
-                try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
-            else
-                ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
+            const current_epoch = clock.epoch;
+            const target_epoch = std.math.add(u64, current_epoch, 1) catch {
+                return InstructionError.InvalidAccountData;
+            };
 
-            try vote_state.setNewAuthorizedVoter(
+            try checkAuthority(
                 allocator,
-                authorized,
-                clock.epoch,
-                std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
-                    return InstructionError.InvalidAccountData;
-                },
-                authorized_withdrawer_signer,
                 ic,
+                &vote_state,
+                signers,
+                current_epoch,
             );
+
+            vote_state.setNewAuthorizedVoter(
+                authorized,
+                target_epoch,
+            ) catch |err| {
+                switch (err) {
+                    VoteError.TooSoonToReauthorize => {
+                        ic.tc.custom_error = @intFromError(err);
+                        return InstructionError.Custom;
+                    },
+                    else => {
+                        return InstructionError.InvalidAccountData;
+                    },
+                }
+            };
         },
         .withdrawer => {
             // current authorized withdrawer must say "yay".
@@ -255,6 +269,36 @@ fn authorize(
         },
     }
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+}
+
+/// Analogous to
+/// https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L691-L692
+/// https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L701-L707
+/// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
+///
+/// Check if the current authorized withdrawer or epoch authorized voter is a signer.
+fn checkAuthority(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_state: *VoteState,
+    signers: ?std.AutoHashMap(Pubkey, void),
+    current_epoch: Epoch,
+) InstructionError!void {
+    const authorized_withdrawer_signer = if (signers) |signers_|
+        try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
+    else
+        ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
+
+    // current authorized withdrawer or epoch authorized voter must say "yay"
+    if (!authorized_withdrawer_signer) {
+        const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
+            allocator,
+            current_epoch,
+        );
+        if (!ic.info.isPubkeySigner(epoch_authorized_voter)) {
+            return InstructionError.MissingRequiredSignature;
+        }
+    }
 }
 
 /// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
