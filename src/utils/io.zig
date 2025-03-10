@@ -188,6 +188,14 @@ test PeekableReader {
         try testing.expect(try reader.peekByte() == 'a');
     }
 
+    // double peek
+    {
+        var stream = std.io.fixedBufferStream("abcdef");
+        var reader = peekableReader(stream.reader());
+        try testing.expect(try reader.peekByte() == 'a');
+        try testing.expect(try reader.peekByte() == 'a');
+    }
+
     // read empty data
     {
         var stream = std.io.fixedBufferStream("");
