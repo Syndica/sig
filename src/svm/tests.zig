@@ -15,6 +15,8 @@ const MemoryMap = memory.MemoryMap;
 const OpCode = sbpf.Instruction.OpCode;
 const expectEqual = std.testing.expectEqual;
 
+// Execution tests
+
 fn testAsm(config: Config, source: []const u8, expected: anytype) !void {
     return testAsmWithMemory(config, source, &.{}, expected);
 }
@@ -29,6 +31,9 @@ fn testAsmWithMemory(
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
+    var loader: BuiltinProgram = .{};
+    try executable.verify(&loader);
+
     const mutable = try allocator.dupe(u8, program_memory);
     defer allocator.free(mutable);
 
@@ -40,9 +45,8 @@ fn testAsmWithMemory(
         Region.init(.mutable, stack_memory, memory.STACK_START),
         Region.init(.constant, &.{}, memory.HEAP_START),
         Region.init(.mutable, mutable, memory.INPUT_START),
-    }, .v0);
+    }, config.maximum_version);
 
-    var loader: BuiltinProgram = .{};
     var vm = try Vm.init(
         allocator,
         &executable,
@@ -342,35 +346,6 @@ test "neg64" {
     , 0xFFFFFFFFFFFFFFFE);
 }
 
-test "neg invalid on v3" {
-    try expectEqual(
-        error.UnknownInstruction,
-        testAsm(.{},
-            \\entrypoint:
-            \\  neg32 r0
-            \\  return
-        , 0),
-    );
-
-    try expectEqual(
-        error.UnknownInstruction,
-        testAsm(.{},
-            \\entrypoint:
-            \\  neg64 r0
-            \\  return
-        , 0),
-    );
-
-    try expectEqual(
-        error.UnknownInstruction,
-        testAsm(.{},
-            \\entrypoint:
-            \\  neg r0
-            \\  return
-        , 0),
-    );
-}
-
 test "sub32 imm" {
     try testAsm(.{},
         \\entrypoint:
@@ -558,17 +533,6 @@ test "lddw logic" {
     , 0x2);
 }
 
-test "lddw invalid on v3" {
-    try expectEqual(
-        error.UnknownInstruction,
-        testAsm(.{},
-            \\entrypoint:
-            \\  lddw r0, 0x1122334455667788
-            \\  return
-        , 0),
-    );
-}
-
 test "le16" {
     try testAsmWithMemory(
         .{ .maximum_version = .v0 },
@@ -626,31 +590,6 @@ test "le64" {
     ,
         &.{ 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11 },
         0x1122334455667788,
-    );
-}
-
-test "le invalid on v3" {
-    try expectEqual(
-        error.UnknownInstruction,
-        testAsm(.{},
-            \\  le16 r0
-            \\  return
-        , 0),
-    );
-    try expectEqual(
-        error.UnknownInstruction,
-        testAsm(.{},
-            \\  le32 r0
-            \\  return
-        , 0),
-    );
-
-    try expectEqual(
-        error.UnknownInstruction,
-        testAsm(.{},
-            \\  le64 r0
-            \\  return
-        , 0),
     );
 }
 
@@ -1823,7 +1762,7 @@ test "pqr" {
 
     // set the instruction we're testing to use r1 as the src
     program[33] = 16; // src = r1
-    program[40] = @intFromEnum(OpCode.exit);
+    program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
     const max_int = std.math.maxInt(u64);
     inline for (
@@ -1899,18 +1838,18 @@ test "pqr" {
         const config: Config = .{ .maximum_version = .v2 };
 
         var registry: lib.Registry(u64) = .{};
-        defer registry.deinit(allocator);
-
         var loader: BuiltinProgram = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
             &loader,
             &registry,
+            false,
             config,
         );
-        const map = try MemoryMap.init(&.{}, .v2);
+        defer executable.deinit(allocator);
 
+        const map = try MemoryMap.init(&.{}, .v2);
         var vm = try Vm.init(
             allocator,
             &executable,
@@ -1930,7 +1869,7 @@ test "pqr divide by zero" {
     const allocator = std.testing.allocator;
     var program: [24]u8 = .{0} ** 24;
     program[0] = @intFromEnum(OpCode.mov32_imm);
-    program[16] = @intFromEnum(OpCode.exit);
+    program[16] = @intFromEnum(OpCode.exit_or_syscall);
 
     inline for (.{
         OpCode.udiv32_reg,
@@ -1947,16 +1886,16 @@ test "pqr divide by zero" {
         const config: Config = .{ .maximum_version = .v2 };
 
         var registry: lib.Registry(u64) = .{};
-        defer registry.deinit(allocator);
-
         var loader: BuiltinProgram = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
             &loader,
             &registry,
+            false,
             config,
         );
+        defer executable.deinit(allocator);
 
         const map = try MemoryMap.init(&.{}, .v3);
         var vm = try Vm.init(
@@ -2144,6 +2083,8 @@ test "dynamic frame pointer" {
     , memory.STACK_START + config.stackSize());
 }
 
+// ELF Tests
+
 fn testElf(config: Config, path: []const u8, expected: anytype) !void {
     return testElfWithSyscalls(config, path, &.{}, expected);
 }
@@ -2171,12 +2112,11 @@ pub fn testElfWithSyscalls(
         );
     }
 
-    var executable = exec: {
-        const elf = try Elf.parse(allocator, bytes, &loader, config);
-        errdefer elf.deinit(allocator);
-        break :exec try Executable.fromElf(elf);
-    };
+    const elf = try Elf.parse(allocator, bytes, &loader, config);
+    var executable = Executable.fromElf(elf);
     defer executable.deinit(allocator);
+
+    try executable.verify(&loader);
 
     const stack_memory = try allocator.alloc(u8, config.stackSize());
     defer allocator.free(stack_memory);
@@ -2347,4 +2287,409 @@ test "hash collision" {
             0,
         ),
     );
+}
+
+// Verification tests
+
+fn testVerify(
+    config: Config,
+    source: []const u8,
+    expected: anytype,
+) !void {
+    try testVerifyWithSyscalls(config, source, &.{}, expected);
+}
+
+fn testVerifyTextBytes(
+    config: Config,
+    program: []const u8,
+    expected: anytype,
+) !void {
+    try testVerifyTextBytesWithSyscalls(config, program, &.{}, expected);
+}
+
+fn testVerifyTextBytesWithSyscalls(
+    config: Config,
+    program: []const u8,
+    extra_syscalls: []const syscalls.Syscall,
+    expected: anytype,
+) !void {
+    const allocator = std.testing.allocator;
+
+    var loader: BuiltinProgram = .{};
+    defer loader.deinit(allocator);
+
+    for (extra_syscalls) |syscall| {
+        _ = try loader.functions.registerHashed(
+            allocator,
+            syscall.name,
+            syscall.builtin_fn,
+        );
+    }
+
+    var function_registry: lib.Registry(u64) = .{};
+    var executable = try Executable.fromTextBytes(
+        allocator,
+        program,
+        &loader,
+        &function_registry,
+        false,
+        config,
+    );
+    defer executable.deinit(allocator);
+
+    const result = executable.verify(&loader);
+    try expectEqual(expected, result);
+}
+
+fn testVerifyWithSyscalls(
+    config: Config,
+    source: []const u8,
+    extra_syscalls: []const syscalls.Syscall,
+    expected: anytype,
+) !void {
+    const allocator = std.testing.allocator;
+
+    var loader: BuiltinProgram = .{};
+    defer loader.deinit(allocator);
+
+    for (extra_syscalls) |syscall| {
+        _ = try loader.functions.registerHashed(
+            allocator,
+            syscall.name,
+            syscall.builtin_fn,
+        );
+    }
+
+    var executable = try Executable.fromAsm(allocator, source, config);
+    defer executable.deinit(allocator);
+
+    const result = executable.verify(&loader);
+    try expectEqual(expected, result);
+}
+
+test "verifier div by zero immediate" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  mov32 r0, 1
+        \\  udiv32 r0, 0
+        \\  exit
+    , error.DivisionByZero);
+}
+
+test "endian size" {
+    try testVerifyTextBytes(
+        .{},
+        &.{
+            0xdc, 0x01, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+            0xb7, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        },
+        error.UnsupportedLEBEArgument,
+    );
+}
+
+test "incomplete lddw" {
+    try testVerifyTextBytes(
+        .{},
+        &.{
+            0x18, 0x00, 0x00, 0x00, 0x88, 0x77, 0x66, 0x55,
+            0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        },
+        error.InvalidFunction,
+    );
+}
+
+test "lddw cannot be last" {
+    try testVerifyTextBytes(
+        .{},
+        &.{
+            0x18, 0x00, 0x00, 0x00, 0x88, 0x77, 0x66, 0x55,
+        },
+        error.InvalidFunction,
+    );
+}
+
+test "invalid dst reg" {
+    inline for (.{ .v0, .v3 }) |sbpf_version| {
+        try testVerify(.{ .maximum_version = sbpf_version },
+            \\entrypoint:
+            \\  mov r11, 1
+            \\  exit
+        , error.InvalidDestinationRegister);
+    }
+}
+
+test "invalid src reg" {
+    inline for (.{ .v0, .v3 }) |sbpf_version| {
+        try testVerify(.{ .maximum_version = sbpf_version },
+            \\entrypoint:
+            \\  mov r0, r11
+            \\  exit
+        , error.InvalidSourceRegister);
+    }
+}
+
+test "resize stack pointer success" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  add r10, -64
+        \\  add r10, 64
+        \\  exit
+    , {});
+}
+
+test "unaligned stack" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  add r10, 63
+        \\  exit
+    , error.UnalignedImmediate);
+}
+
+test "negative unaligned stack" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  add r10, -63
+        \\  exit
+    , error.UnalignedImmediate);
+}
+
+test "jump to middle of lddw" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  ja +1
+        \\  lddw r0, 0x1122334455667788
+        \\  exit
+    , error.JumpToMiddleOfLddw);
+}
+
+test "call lddw" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  call 1
+        \\  lddw r0, 0x1122334455667788
+        \\  exit
+    , error.InvalidFunction);
+}
+
+test "callx r10" {
+    inline for (.{ .v0, .v3 }) |sbpf_version| {
+        try testVerify(.{ .maximum_version = sbpf_version },
+            \\entrypoint:
+            \\  callx r10
+            \\  exit
+        , error.InvalidRegister);
+    }
+}
+
+test "function fallthrough" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  mov r0, r1
+        \\function_foo:
+        \\  exit
+    , error.InvalidFunction);
+}
+
+test "jump out" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  ja +2
+        \\  exit
+    , error.JumpOutOfCode);
+}
+
+test "jump out start" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  ja -2
+        \\  exit
+    , error.JumpOutOfCode);
+}
+
+test "invalid return" {
+    try testVerifyTextBytes(
+        .{ .maximum_version = .v0 },
+        &.{
+            0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        },
+        error.UnknownInstruction,
+    );
+}
+
+test "invalid exit" {
+    try testVerifyTextBytes(
+        .{},
+        &.{
+            0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        },
+        error.InvalidFunction,
+    );
+}
+
+test "unknown syscall" {
+    try testVerifyTextBytes(
+        .{},
+        &.{
+            0x95, 0x00, 0x00, 0x00, 0xDD, 0x0C, 0x02, 0x91, // syscall gather_bytes
+            0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
+        },
+        error.InvalidSyscall,
+    );
+}
+
+test "known syscall" {
+    try testVerifyTextBytesWithSyscalls(
+        .{},
+        &.{
+            0x95, 0x00, 0x00, 0x00, 0xDD, 0x0C, 0x02, 0x91, // syscall gather_bytes
+            0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
+        },
+        &.{.{ .name = "gather_bytes", .builtin_fn = syscalls.log }},
+        {},
+    );
+}
+
+test "write r10" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  mov r10, 1
+        \\  exit
+    , error.CannotWriteR10);
+}
+
+test "neg invalid on v3" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  neg32 r0
+        \\  exit
+    , error.UnknownInstruction);
+}
+
+test "lddw invalid on v3" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  lddw r0, 0x1122334455667788
+        \\  exit
+    , error.UnknownInstruction);
+}
+
+test "le invalid on v3" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  le16 r0
+        \\  exit
+    , error.UnknownInstruction);
+
+    try testVerify(.{},
+        \\entrypoint:
+        \\  le32 r0
+        \\  exit
+    , error.UnknownInstruction);
+
+    try testVerify(.{},
+        \\entrypoint:
+        \\  le64 r0
+        \\  exit
+    , error.UnknownInstruction);
+}
+
+test "shift overflows" {
+    const allocator = std.testing.allocator;
+    const testcases = &.{
+        .{ "lsh32 r0, 16", {} },
+        .{ "lsh32 r0, 32", error.ShiftWithOverflow },
+        .{ "lsh32 r0, 64", error.ShiftWithOverflow },
+        // rsh32_imm
+        .{ "rsh32 r0, 16", {} },
+        .{ "rsh32 r0, 32", error.ShiftWithOverflow },
+        .{ "rsh32 r0, 64", error.ShiftWithOverflow },
+        // arsh32_imm
+        .{ "arsh32 r0, 16", {} },
+        .{ "arsh32 r0, 32", error.ShiftWithOverflow },
+        .{ "arsh32 r0, 64", error.ShiftWithOverflow },
+        // lsh64_imm
+        .{ "lsh64 r0, 32", {} },
+        .{ "lsh64 r0, 64", error.ShiftWithOverflow },
+        // rsh64_imm
+        .{ "rsh64 r0, 32", {} },
+        .{ "rsh64 r0, 64", error.ShiftWithOverflow },
+
+        // arsh64_imm
+        .{ "arsh64 r0, 32", {} },
+        .{ "arsh64 r0, 64", error.ShiftWithOverflow },
+    };
+
+    inline for (testcases) |case| {
+        const name, const expected = case;
+        const assembly = try std.fmt.allocPrint(allocator,
+            \\entrypoint:
+            \\  {s}
+            \\  exit
+        , .{name});
+        defer allocator.free(assembly);
+        try testVerify(.{}, assembly, expected);
+    }
+}
+
+test "sdiv disabled" {
+    const allocator = std.testing.allocator;
+    inline for (.{
+        "sdiv32 r0, 2",
+        "sdiv32 r0, r1",
+        "sdiv64 r0, 4",
+        "sdiv64 r0, r1",
+    }) |inst| {
+        inline for (.{ .v0, .v3 }) |sbpf_version| {
+            const assembly = try std.fmt.allocPrint(allocator,
+                \\entrypoint:
+                \\  {s}
+                \\  exit
+            , .{inst});
+            defer allocator.free(assembly);
+            try testVerify(
+                .{ .maximum_version = sbpf_version },
+                assembly,
+                switch (sbpf_version) {
+                    .v0 => error.UnknownInstruction,
+                    .v3 => {},
+                    else => unreachable,
+                },
+            );
+        }
+    }
+}
+
+test "return instruction" {
+    inline for (.{ .v0, .v3 }) |sbpf_version| {
+        try testVerifyTextBytes(
+            .{ .maximum_version = sbpf_version },
+            &.{
+                0xbf, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, // mov64 r0, 2
+                0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // exit (v1), syscall (v2)
+                0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
+            },
+            switch (sbpf_version) {
+                .v0 => error.UnknownInstruction,
+                .v3 => error.InvalidSyscall,
+                else => unreachable,
+            },
+        );
+    }
+}
+
+test "return in v2" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  mov r0, 2
+        \\  return
+    , {});
+}
+
+test "function without return" {
+    try testVerify(.{},
+        \\entrypoint:
+        \\  mov r0, 2
+        \\  add64 r0, 5
+    , error.InvalidFunction);
 }

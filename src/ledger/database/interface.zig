@@ -180,6 +180,10 @@ pub fn Database(comptime Impl: type) type {
                 }
             };
         }
+
+        pub fn flush(self: *Self, comptime cf: ColumnFamily) anyerror!void {
+            self.impl.flush(cf);
+        }
     };
 }
 

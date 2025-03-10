@@ -15,13 +15,17 @@
             .url = "https://github.com/sam701/zig-cli/archive/8c7a798c0f7fa0358d7ab41106fc872fca4cd995.tar.gz",
             .hash = "1220c008492d9460c3be2b209600a948181e6efb3bf0d79a1633def499632e708f4b",
         },
+        .httpz = .{
+            .url = "https://github.com/karlseguin/http.zig/archive/79dad0f0cc652830cd8e49bf3e73aa77155ad4b2.tar.gz",
+            .hash = "1220b8a918dfcee4fc8326ec337776e2ffd3029511c35f6b96d10aa7be98ca2faf99",
+        },
         .zstd = .{
             .url = "git+https://github.com/Syndica/zstd.zig#5095f011c1183aa67d696172795440d6a33732c9",
             .hash = "122030ebe280b73693963a67ed656226a67b7f00a0a05665155da00c9fcdee90de88",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/cf966c0c6bb6205a08bb2006f399719542e4e770.tar.gz",
-            .hash = "1220d25e3ef18526cb6c980b441f05dc96330bedd88a512dcb3aed775a981ce3707d",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/cd747a88e66539e37585cccacb5ae311be2ad527.tar.gz",
+            .hash = "1220d917ac77a71426253d31e6c2b6db40494aa4e18c7284dfca9dc1eed5c7864274",
         },
         .lsquic = .{
             .url = "https://github.com/Syndica/lsquic/archive/ed6ced0cbc6447f7135a32db491e398debdf8af7.tar.gz",
@@ -42,6 +46,10 @@
         .poseidon = .{
             .url = "git+https://github.com/Rexicon226/zig-poseidon#82e41845bfc689192359639fef5bb89c452388b2",
             .hash = "12208f0d8388111308c919d73c24e9a595c3f2b5f83edf2cebf10598f8439fe33843",
+        },
+        .secp256k1 = .{
+            .url = "git+https://github.com/Syndica/secp256k1-zig#82bbb3a5bf16c39330d69fa8699cf1b4b7f7f316",
+            .hash = "1220f7a062a9df740338610beb50a4af1a8a089e47ef01339b220f42626bc16494fd",
         },
     },
 }

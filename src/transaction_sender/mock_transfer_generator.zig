@@ -1,6 +1,5 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const types = @import("../rpc/types.zig");
 
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
@@ -14,6 +13,8 @@ const Pubkey = sig.core.Pubkey;
 const RpcClient = sig.rpc.Client;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const Duration = sig.time.Duration;
+
+const GetLatestBlockhash = sig.rpc.methods.GetLatestBlockhash;
 
 const TRANSFER_FEE_LAMPORTS: u64 = 5000;
 const MAX_AIRDROP_LAMPORTS: u64 = 5e9;
@@ -148,9 +149,7 @@ pub const MockTransferService = struct {
                 log_timer.reset();
             }
             const signature_statuses_response = try self.rpc_client.getSignatureStatuses(
-                self.allocator,
-                &[_]Signature{signature},
-                .{},
+                .{ .signatures = &[_]Signature{signature} },
             );
             defer signature_statuses_response.deinit();
             const signature_statuses = try signature_statuses_response.result();
@@ -173,7 +172,7 @@ pub const MockTransferService = struct {
             );
 
             const latest_blockhash, _ = blk: {
-                const blockhash_response = try self.rpc_client.getLatestBlockhash(self.allocator, .{});
+                const blockhash_response = try self.rpc_client.getLatestBlockhash(.{});
                 defer blockhash_response.deinit();
                 const blockhash = try blockhash_response.result();
                 break :blk .{
@@ -193,13 +192,12 @@ pub const MockTransferService = struct {
             defer transaction.deinit(self.allocator);
 
             const signature = blk: {
-                const response = try self.rpc_client.sendTransaction(self.allocator, transaction, .{});
+                const response = try self.rpc_client.sendTransaction(.{ .transaction = transaction });
                 defer response.deinit();
-                const signature_string = response.result() catch |err| {
+                break :blk response.result() catch |err| {
                     self.logger.debug().logf("rpc transfer failed with: {}", .{err});
                     return error.RpcTransferFailed;
                 };
-                break :blk try Signature.parseBase58String(signature_string);
             };
 
             const signature_confirmed = try self.waitForSignatureConfirmation(
@@ -222,14 +220,14 @@ pub const MockTransferService = struct {
     ) !void {
         for (0..MAX_SIG_RETRIES) |_| {
             const block_height = blk: {
-                const block_height_response = try self.rpc_client.getBlockHeight(self.allocator, .{});
+                const block_height_response = try self.rpc_client.getBlockHeight(.{});
                 defer block_height_response.deinit();
                 const block_height = try block_height_response.result();
                 break :blk block_height;
             };
 
             const latest_blockhash, const last_valid_block_height = blk: {
-                const blockhash_response = try self.rpc_client.getLatestBlockhash(self.allocator, .{});
+                const blockhash_response = try self.rpc_client.getLatestBlockhash(.{});
                 defer blockhash_response.deinit();
                 const blockhash = try blockhash_response.result();
                 break :blk .{
@@ -274,7 +272,7 @@ pub const MockTransferService = struct {
     /// Transfer lamports via sig from one account to another, retries transaction max
     pub fn sigTransfer(self: *MockTransferService, random: std.Random, from_keypair: KeyPair, to_pubkey: Pubkey, lamports: u64) !void {
         const latest_blockhash, const last_valid_block_height = blk: {
-            const blockhash_response = try self.rpc_client.getLatestBlockhash(self.allocator, .{});
+            const blockhash_response = try self.rpc_client.fetch(GetLatestBlockhash{});
             defer blockhash_response.deinit();
             const blockhash = try blockhash_response.result();
             break :blk .{
@@ -329,7 +327,7 @@ pub const MockTransferService = struct {
 
     /// Get the balance of a pubkey
     pub fn getBalance(self: *MockTransferService, pubkey: Pubkey) !u64 {
-        const balance_response = try self.rpc_client.getBalance(self.allocator, pubkey, .{});
+        const balance_response = try self.rpc_client.getBalance(.{ .pubkey = pubkey });
         defer balance_response.deinit();
         const balance = try balance_response.result();
         return balance.value;
@@ -358,10 +356,11 @@ pub const MockTransferService = struct {
     ) !void {
         for (0..MAX_RPC_RETRIES) |_| {
             const signature = blk: {
-                const response = try self.rpc_client.requestAirDrop(self.allocator, pubkey, lamports, .{});
+                const response = try self.rpc_client.requestAirdrop(
+                    .{ .pubkey = pubkey, .lamports = lamports },
+                );
                 defer response.deinit();
-                const signature_string = try response.result();
-                break :blk try Signature.parseBase58String(signature_string);
+                break :blk try response.result();
             };
             const signature_confirmed = try self.waitForSignatureConfirmation(
                 signature,

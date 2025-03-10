@@ -89,6 +89,9 @@ pub fn build(b: *Build) !void {
     const zig_cli_dep = b.dependency("zig-cli", dep_opts);
     const zig_cli_mod = zig_cli_dep.module("zig-cli");
 
+    const httpz_dep = b.dependency("httpz", dep_opts);
+    const httpz_mod = httpz_dep.module("httpz");
+
     const zstd_dep = b.dependency("zstd", dep_opts);
     const zstd_mod = zstd_dep.module("zstd");
 
@@ -97,6 +100,9 @@ pub fn build(b: *Build) !void {
 
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
+
+    const secp256k1_dep = b.dependency("secp256k1", dep_opts);
+    const secp256k1_mod = secp256k1_dep.module("secp256k1");
 
     const lsquic_dep = b.dependency("lsquic", dep_opts);
     const lsquic_mod = lsquic_dep.module("lsquic");
@@ -120,7 +126,10 @@ pub fn build(b: *Build) !void {
     sig_mod.addImport("zig-network", zig_network_mod);
     sig_mod.addImport("base58", base58_mod);
     sig_mod.addImport("zig-cli", zig_cli_mod);
+    sig_mod.addImport("secp256k1", secp256k1_mod);
+    sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
+
     sig_mod.addImport("poseidon", poseidon_mod);
 
     switch (config.blockstore_db) {
@@ -149,10 +158,12 @@ pub fn build(b: *Build) !void {
 
     sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.root_module.addImport("base58", base58_mod);
+    sig_exe.root_module.addImport("httpz", httpz_mod);
     sig_exe.root_module.addImport("zig-cli", zig_cli_mod);
     sig_exe.root_module.addImport("zig-network", zig_network_mod);
     sig_exe.root_module.addImport("zstd", zstd_mod);
     sig_exe.root_module.addImport("lsquic", lsquic_mod);
+    sig_exe.root_module.addImport("secp256k1", secp256k1_mod);
     sig_exe.root_module.addImport("ssl", ssl_mod);
     sig_exe.root_module.addImport("xev", xev_mod);
     switch (config.blockstore_db) {
@@ -178,9 +189,12 @@ pub fn build(b: *Build) !void {
 
     unit_tests_exe.root_module.addImport("xev", xev_mod);
     unit_tests_exe.root_module.addImport("base58", base58_mod);
+    unit_tests_exe.root_module.addImport("httpz", httpz_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_mod);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     unit_tests_exe.root_module.addImport("poseidon", poseidon_mod);
+    unit_tests_exe.root_module.addImport("secp256k1", secp256k1_mod);
+
     switch (config.blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -203,7 +217,9 @@ pub fn build(b: *Build) !void {
 
     fuzz_exe.root_module.addImport("xev", xev_mod);
     fuzz_exe.root_module.addImport("base58", base58_mod);
+    fuzz_exe.root_module.addImport("secp256k1", secp256k1_mod);
     fuzz_exe.root_module.addImport("zig-network", zig_network_mod);
+    fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
     switch (config.blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -232,8 +248,10 @@ pub fn build(b: *Build) !void {
 
     b.installArtifact(benchmark_exe);
 
+    benchmark_exe.root_module.addImport("secp256k1", secp256k1_mod);
     benchmark_exe.root_module.addImport("base58", base58_mod);
     benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
+    benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
     switch (config.blockstore_db) {
@@ -292,6 +310,7 @@ fn addInstallAndRun(
     if (config.install or (config.ssh_host != null and config.run)) {
         const install = b.addInstallArtifact(exe, .{});
         step.dependOn(&install.step);
+        b.getInstallStep().dependOn(&install.step);
 
         if (config.ssh_host) |host| {
             const install_dir = if (config.ssh_install_dir[0] == '/')
@@ -301,17 +320,15 @@ fn addInstallAndRun(
             defer b.allocator.free(install_dir);
 
             const send = try ssh.addSendArtifact(b, install, host, install_dir);
+            send.step.dependOn(&install.step);
+            step.dependOn(&send.step);
             send_step = &send.step;
-            b.getInstallStep().dependOn(&send.step);
-        } else {
-            b.getInstallStep().dependOn(&install.step);
         }
     }
 
     if (config.run) {
         if (config.ssh_host) |host| {
-            const exe_path =
-                b.fmt("{s}/{s}", .{ config.ssh_install_dir, exe.name });
+            const exe_path = b.fmt("{s}/{s}", .{ config.ssh_install_dir, exe.name });
             defer b.allocator.free(exe_path);
 
             const run = try ssh.addRemoteCommand(b, host, config.ssh_workdir, exe_path);
@@ -445,6 +462,7 @@ const ssh = struct {
             .name = "send-file",
             .root_source_file = b.path("scripts/send-file.zig"),
             .target = b.host,
+            .link_libc = true,
         });
 
         const run = b.addRunArtifact(exe);

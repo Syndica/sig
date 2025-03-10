@@ -121,7 +121,7 @@ pub const LeaderSchedule = struct {
 
     pub fn fromMap(
         allocator: Allocator,
-        leader_to_slots: std.StringArrayHashMap([]const u64),
+        leader_to_slots: std.AutoArrayHashMapUnmanaged(Pubkey, []const u64),
     ) !LeaderSchedule {
         var num_leaders: u64 = 0;
         for (leader_to_slots.values()) |leader_slots| {
@@ -136,9 +136,8 @@ pub const LeaderSchedule = struct {
 
         var rpc_leader_iter = leader_to_slots.iterator();
         while (rpc_leader_iter.next()) |entry| {
-            const key = try Pubkey.parseBase58String(entry.key_ptr.*);
             for (entry.value_ptr.*) |slot| {
-                leaders[leaders_index] = .{ .slot = slot, .key = key };
+                leaders[leaders_index] = .{ .slot = slot, .key = entry.key_ptr.* };
                 leaders_index += 1;
             }
         }

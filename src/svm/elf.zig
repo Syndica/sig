@@ -62,7 +62,7 @@ pub const Elf = struct {
             };
         }
 
-        pub fn shdrSlice(self: Headers, index: u32) ![]const u8 {
+        pub fn shdrSlice(self: Headers, index: u64) ![]const u8 {
             if (index >= self.shdrs.len) return error.OutOfBounds;
             const shdr = self.shdrs[index];
             if (shdr.sh_type == elf.SHT_NOBITS) return &.{};
@@ -71,7 +71,7 @@ pub const Elf = struct {
             return try safeSlice(self.bytes, sh_offset, sh_size);
         }
 
-        fn phdrSlice(self: Headers, index: u32) ![]const u8 {
+        fn phdrSlice(self: Headers, index: u64) ![]const u8 {
             if (index >= self.phdrs.len) return error.OutOfBounds;
             const phdr = self.phdrs[index];
             const p_offset = phdr.p_offset;
@@ -113,6 +113,10 @@ pub const Elf = struct {
         fn parse(headers: Headers) !Data {
             const strtab = try headers.shdrSlice(headers.header.e_shstrndx);
 
+            for (headers.shdrs) |shdr| {
+                if (shdr.sh_name >= strtab.len) return error.InvalidOffset;
+            }
+
             const dynamic_table = try parseDynamic(headers);
 
             const relocations_table, const symbol_table = if (dynamic_table) |table| blk: {
@@ -145,10 +149,9 @@ pub const Elf = struct {
                 for (headers.shdrs, 0..) |shdr, i| {
                     // if PT_DYNAMIC doesn't exist or is invalid, fallback to parsing SHT_DYNAMIC
                     if (shdr.sh_type == elf.SHT_DYNAMIC) {
-                        dynamic_table = std.mem.bytesAsSlice(
-                            elf.Elf64_Dyn,
-                            try headers.shdrSlice(@intCast(i)),
-                        );
+                        const slice = try headers.shdrSlice(i);
+                        if (slice.len % @sizeOf(elf.Elf64_Dyn) != 0) return error.InvalidSize;
+                        dynamic_table = std.mem.bytesAsSlice(elf.Elf64_Dyn, slice);
                         break;
                     }
                 }
@@ -183,13 +186,15 @@ pub const Elf = struct {
 
             const offset = for (headers.phdrs) |phdr| {
                 if (inRangeOfPhdrVm(phdr, vaddr)) {
-                    break vaddr - phdr.p_vaddr + phdr.p_offset;
+                    const offset = try std.math.sub(u64, vaddr, phdr.p_vaddr);
+                    break try std.math.add(u64, offset, phdr.p_offset);
                 }
             } else for (headers.shdrs) |shdr| {
                 if (shdr.sh_addr == vaddr) break shdr.sh_offset;
             } else return error.InvalidDynamicSectionTable;
 
-            return std.mem.bytesAsSlice(elf.Elf64_Rel, headers.bytes[offset..][0..size]);
+            const bytes = try safeSlice(headers.bytes, offset, size);
+            return std.mem.bytesAsSlice(elf.Elf64_Rel, bytes);
         }
 
         fn parseDynamicSymbolTable(
@@ -204,7 +209,9 @@ pub const Elf = struct {
                 if (shdr.sh_type != elf.SHT_SYMTAB and shdr.sh_type != elf.SHT_DYNSYM) {
                     return error.InvalidSectionHeader;
                 }
-                return std.mem.bytesAsSlice(elf.Elf64_Sym, try headers.shdrSlice(@intCast(i)));
+                const slice = try headers.shdrSlice(i);
+                if (slice.len % @sizeOf(elf.Elf64_Sym) != 0) return error.InvalidSize;
+                return std.mem.bytesAsSlice(elf.Elf64_Sym, slice);
             } else return error.InvalidDynamicSectionTable;
         }
 
@@ -285,7 +292,7 @@ pub const Elf = struct {
                     return error.ValueOutOfBounds;
                 }
 
-                const section_data = try headers.shdrSlice(@intCast(i));
+                const section_data = try headers.shdrSlice(i);
                 lowest_addr = @min(lowest_addr, section_addr);
                 highest_addr = @max(highest_addr, section_addr +| section_data.len);
                 ro_fill_length +|= section_data.len;
@@ -433,6 +440,7 @@ pub const Elf = struct {
 
                         const addr_slice = try safeSlice(bytes, imm_offset, 4);
                         const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
+                        if (reloc.r_sym() >= self.symbol_table.len) return error.UnknownSymbol;
                         const symbol = self.symbol_table[reloc.r_sym()];
                         var addr = symbol.st_value +| ref_addr;
 
@@ -541,6 +549,7 @@ pub const Elf = struct {
                         const dynstr_index = self.getShdrIndexByName(headers, ".dynstr") orelse
                             return error.NoDynStrSection;
                         const dynstr = try headers.shdrSlice(dynstr_index);
+                        if (symbol.st_name >= dynstr.len) return error.UnknownSymbol;
                         const symbol_name = std.mem.sliceTo(dynstr[symbol.st_name..], 0);
 
                         // If the symbol is defined, this is a bpf-to-bpf call.
@@ -808,6 +817,7 @@ pub const Elf = struct {
 
         var function_registry: Registry(u64) = .{};
         errdefer function_registry.deinit(allocator);
+
         try data.relocate(
             headers,
             bytes,
@@ -818,6 +828,24 @@ pub const Elf = struct {
             config,
         );
 
+        if (!sbpf_version.enableStaticSyscalls()) {
+            const hash = sbpf.hashSymbolName("entrypoint");
+            if (function_registry.map.fetchOrderedRemove(hash)) |entry| {
+                allocator.free(entry.value.name);
+            }
+        }
+
+        _ = try function_registry.registerHashedLegacy(
+            allocator,
+            loader,
+            !sbpf_version.enableStaticSyscalls(),
+            "entrypoint",
+            entry_pc,
+        );
+
+        const ro_section = try data.parseRoSections(headers, config, sbpf_version, allocator);
+        errdefer ro_section.deinit(allocator);
+
         var self: Elf = .{
             .bytes = bytes,
             .headers = headers,
@@ -826,26 +854,31 @@ pub const Elf = struct {
             .version = sbpf_version,
             .function_registry = function_registry,
             .config = config,
-            .ro_section = try data.parseRoSections(headers, config, sbpf_version, allocator),
+            .ro_section = ro_section,
         };
-        errdefer self.deinit(allocator);
-
-        if (!sbpf_version.enableStaticSyscalls()) {
-            _ = self.function_registry.map.remove(sbpf.hashSymbolName("entrypoint"));
-        }
-
-        _ = try self.function_registry.registerHashedLegacy(
-            allocator,
-            loader,
-            !sbpf_version.enableStaticSyscalls(),
-            "entrypoint",
-            entry_pc,
-        );
 
         try self.validate();
 
         return self;
     }
+
+    const SectionAttributes = packed struct(u64) {
+        write: bool = false,
+        alloc: bool = false,
+        execinstr: bool = false,
+        _3: u1 = 0,
+        merge: bool = false,
+        strings: bool = false,
+        info_link: bool = false,
+        link_order: bool = false,
+        os_nonconforming: bool = false,
+        group: bool = false,
+        tls: bool = false,
+        _11: u19 = 0,
+        ordered: bool = false,
+        exclude: bool = false,
+        _32: u32 = 0,
+    };
 
     /// Validates the Elf. Returns errors for issues encountered.
     fn validate(self: *Elf) !void {
@@ -896,10 +929,8 @@ pub const Elf = struct {
             if (std.mem.startsWith(u8, name, ".data") and
                 !std.mem.startsWith(u8, name, ".data.rel"))
             {
-                // TODO: use a packed struct here, this is ugly
-                if (shdr.sh_flags & (elf.SHF_ALLOC | elf.SHF_WRITE) ==
-                    elf.SHF_ALLOC | elf.SHF_WRITE)
-                {
+                const flags: SectionAttributes = @bitCast(shdr.sh_flags);
+                if (flags.alloc or flags.write) {
                     return error.WritableSectionsNotSupported;
                 }
             }
@@ -946,13 +977,15 @@ pub const Elf = struct {
         const shdr = self.headers.shdrs[index];
         const sh_addr = shdr.sh_addr;
         const sh_size = shdr.sh_size;
-        return addr >= sh_addr and addr < sh_addr + sh_size;
+        const offset = std.math.add(u64, sh_addr, sh_size) catch return false;
+        return addr >= sh_addr and addr < offset;
     }
 
     fn inRangeOfPhdrVm(phdr: elf.Elf64_Phdr, addr: usize) bool {
         const p_vaddr = phdr.p_vaddr;
         const p_memsz = phdr.p_memsz;
-        return addr >= p_vaddr and addr < p_vaddr + p_memsz;
+        const offset = std.math.add(u64, p_vaddr, p_memsz) catch return false;
+        return addr >= p_vaddr and addr < offset;
     }
 
     fn safeSlice(base: anytype, start: usize, len: usize) error{OutOfBounds}!@TypeOf(base) {
@@ -1202,4 +1235,28 @@ test "owned ro sections with sh offset" {
     const owned = result.owned;
     try expectEqual(memory.RODATA_START + 10, owned.offset);
     try expectEqual(20, owned.data.len);
+}
+
+test "SHT_DYNAMIC fallback" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(
+        sig.ELF_DATA_DIR ++ "struct_func_pointer_sbpfv0.so",
+        .{},
+    );
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    // we set the p_type of the PT_DYNAMIC header to PT_NULL, in order for the
+    // parsing to skip past it and fallback to the SHT_DYNAMIC section. For this
+    // specific input, the p_type is 232 bytes from the start.
+    @as(*align(1) u32, @ptrCast(bytes[232..][0..4])).* = elf.PT_NULL;
+
+    var loader: BuiltinProgram = .{};
+    var parsed = try Elf.parse(
+        allocator,
+        bytes,
+        &loader,
+        .{ .maximum_version = .v0 },
+    );
+    defer parsed.deinit(allocator);
 }

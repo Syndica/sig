@@ -2,8 +2,10 @@ const std = @import("std");
 const sig = @import("sig.zig");
 
 comptime {
+    @setEvalBranchQuota(10_000);
     refAllDeclsRecursive(sig, 2);
     refAllDeclsRecursive(sig.ledger, 2);
+    refAllDeclsRecursive(sig.runtime.program, 2);
 }
 
 /// Like std.testing.refAllDeclsRecursive, except:
@@ -11,6 +13,7 @@ comptime {
 /// - runs at comptime to avoid compiler errors for hypothetical
 ///   code paths that would never actually run.
 pub inline fn refAllDeclsRecursive(comptime T: type, comptime depth: usize) void {
+    @setEvalBranchQuota(2000); // Raise as required
     if (depth == 0) return;
     inline for (comptime std.meta.declarations(T)) |decl| {
         if (@TypeOf(@field(T, decl.name)) == type) {

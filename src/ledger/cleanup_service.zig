@@ -89,14 +89,18 @@ pub fn cleanBlockstore(
     purge_interval: u64,
 ) !Slot {
     const logger = logger_.withScope(LOG_SCOPE);
+
     // // TODO: add back when max_root is implemented with consensus
     // const root = blockstore_reader.max_root.load(.acquire);
-    // if (root - last_purge_slot <= purge_interval) return last_purge_slot;
-    _ = last_purge_slot;
-    _ = purge_interval;
 
-    // NOTE: this will clean everything past the lowest slot in the blockstore
-    const root: Slot = try blockstore_reader.lowestSlot();
+    // hack to get a conservative estimate of a recent slot that is almost definitely rooted
+    const root = if (try blockstore_reader.highestSlot()) |highest|
+        highest -| 100
+    else
+        try blockstore_reader.lowestSlot();
+
+    if (root - last_purge_slot <= purge_interval) return last_purge_slot;
+
     const result = try findSlotsToClean(blockstore_reader, root, max_ledger_shreds);
     logger.info().logf("findSlotsToClean result: {any}", .{result});
 
@@ -399,9 +403,49 @@ fn purgeFileRangeWithCount(
 const Blockstore = ledger.BlockstoreDB;
 const TestDB = ledger.tests.TestDB;
 
+test cleanBlockstore {
+    // test setup
+    const allocator = std.testing.allocator;
+    const logger = sig.trace.DirectPrintLogger.init(allocator, .warn).logger();
+    const registry = sig.prometheus.globalRegistry();
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader
+        .init(allocator, logger, db, registry, &lowest_cleanup_slot, &max_root);
+
+    // insert data
+    var batch = try db.initWriteBatch();
+    defer batch.deinit();
+    for (0..1_000) |i| {
+        for (0..10) |j| try batch.put(ledger.schema.schema.data_shred, .{ i, j }, &.{});
+        try batch.put(ledger.schema.schema.slot_meta, i, undefined);
+    }
+    try db.commit(&batch);
+    try db.flush(ledger.schema.schema.data_shred);
+
+    // run test subject
+    const slot = try cleanBlockstore(logger, &reader, &db, &lowest_cleanup_slot, 100, 0, 0);
+    try std.testing.expectEqual(899, slot);
+
+    // verify correct data was purged
+    var shred_iter = try db.iterator(ledger.schema.schema.data_shred, .forward, .{ 0, 0 });
+    defer shred_iter.deinit();
+    var meta_iter = try db.iterator(ledger.schema.schema.slot_meta, .forward, 0);
+    defer meta_iter.deinit();
+    for (900..1_000) |i| {
+        for (0..10) |j| try std.testing.expectEqual(.{ i, j }, (try shred_iter.nextKey()).?);
+        try std.testing.expectEqual(i, (try meta_iter.nextKey()).?);
+    }
+    try std.testing.expectEqual(null, shred_iter.nextKey());
+    try std.testing.expectEqual(null, meta_iter.nextKey());
+}
+
 test "findSlotsToClean" {
     const allocator = std.testing.allocator;
-    const registry = sig.prometheus.globalRegistry();
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
     const logger = .noop;
 
     var db = try TestDB.init(@src());
@@ -414,7 +458,7 @@ test "findSlotsToClean" {
         allocator,
         logger,
         db,
-        registry,
+        &registry,
         &lowest_cleanup_slot,
         &max_root,
     );
@@ -474,7 +518,8 @@ test "findSlotsToClean" {
 test "purgeSlots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
-    const registry = sig.prometheus.globalRegistry();
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
 
     var db = try TestDB.init(@src());
     defer db.deinit();

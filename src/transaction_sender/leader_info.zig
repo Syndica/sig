@@ -47,7 +47,7 @@ pub const LeaderInfo = struct {
             .allocator = allocator,
             .config = config,
             .logger = logger.withScope(@typeName(Self)),
-            .rpc_client = RpcClient.init(
+            .rpc_client = try RpcClient.init(
                 allocator,
                 config.cluster,
                 .{ .max_retries = config.rpc_retries, .logger = logger },
@@ -59,9 +59,8 @@ pub const LeaderInfo = struct {
     }
 
     pub fn getLeaderAddresses(self: *LeaderInfo, allocator: Allocator) ![]const SocketAddr {
-        const current_slot_response = try self.rpc_client.getSlot(allocator, .{
-            .commitment = .processed,
-        });
+        const current_slot_response = try self.rpc_client
+            .getSlot(.{ .config = .{ .commitment = .processed } });
         defer current_slot_response.deinit();
         const current_slot = try current_slot_response.result();
 
@@ -141,9 +140,9 @@ pub const LeaderInfo = struct {
 
     fn getLeaderSchedule(self: *LeaderInfo, slot: Slot) !LeaderSchedule {
         const rpc_leader_schedule_response = try self.rpc_client
-            .getLeaderSchedule(self.allocator, slot, .{});
+            .getLeaderSchedule(.{ .slot = slot });
         defer rpc_leader_schedule_response.deinit();
         const rpc_leader_schedule = try rpc_leader_schedule_response.result();
-        return try LeaderSchedule.fromMap(self.allocator, rpc_leader_schedule);
+        return try LeaderSchedule.fromMap(self.allocator, rpc_leader_schedule.value);
     }
 };

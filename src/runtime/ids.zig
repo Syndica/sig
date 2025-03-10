@@ -7,6 +7,9 @@ const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 
+pub const NATIVE_LOADER_ID =
+    Pubkey.parseBase58String("NativeLoader1111111111111111111111111111111") catch unreachable;
+
 pub const SYSVAR_INSTRUCTIONS_ID =
     Pubkey.parseBase58String("Sysvar1nstructions1111111111111111111111111") catch unreachable;
 
@@ -43,8 +46,6 @@ pub const PRECOMPILE_SECP256R1_PROGRAM_ID =
 pub const STAKE_PROGRAM_ID =
     Pubkey.parseBase58String("Stake11111111111111111111111111111111111111") catch unreachable;
 
-pub const VOTE_PROGRAM_ID =
-    Pubkey.parseBase58String("Vote111111111111111111111111111111111111111") catch unreachable;
 pub const ZK_ELGAMAL_PROOF_PROGRAM_ID =
     Pubkey.parseBase58String("ZkE1Gama1Proof11111111111111111111111111111") catch unreachable;
 pub const ZK_TOKEN_PROOF_PROGRAM_ID =

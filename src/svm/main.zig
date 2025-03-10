@@ -89,11 +89,12 @@ pub fn main() !void {
     var executable = if (assemble)
         try Executable.fromAsm(allocator, bytes, config)
     else exec: {
-        var elf = try Elf.parse(allocator, bytes, &loader, config);
-        errdefer elf.deinit(allocator);
-        break :exec try Executable.fromElf(elf);
+        const elf = try Elf.parse(allocator, bytes, &loader, config);
+        break :exec Executable.fromElf(elf);
     };
     defer executable.deinit(allocator);
+
+    try executable.verify(&loader);
 
     const heap_mem = try allocator.alloc(u8, 0x40000);
     defer allocator.free(heap_mem);

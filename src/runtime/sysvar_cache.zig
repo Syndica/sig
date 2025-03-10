@@ -34,7 +34,7 @@ pub const SysvarCache = struct {
             sysvar.StakeHistory => self.stake_history,
             sysvar.Fees => self.fees,
             sysvar.RecentBlockhashes => self.recent_blockhashes,
-            else => @panic("Unsupported sysvar"),
+            else => @compileError("Invalid sysvar type"),
         };
     }
 };

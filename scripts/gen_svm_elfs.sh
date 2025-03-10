@@ -2,7 +2,12 @@
 
 CC="../toolchain/llvm/bin/clang"
 LD="../toolchain/llvm/bin/ld.lld"
-ZIG="zig"
+ZIG=${ZIG:-zig}
+
+if [ "$($ZIG version)" != "0.13.0" ]; then
+    echo "Need Zig 0.13.0 to compile these tests"
+    exit 1
+fi
 
 LD_FLAGS="${LD} -z notext -shared --Bdynamic -entry entrypoint"
 C_FLAGS="-Werror -target sbf -O2 -fno-builtin -fPIC -Wno-override-module"

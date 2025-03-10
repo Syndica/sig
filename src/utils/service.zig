@@ -61,42 +61,26 @@ pub const ServiceManager = struct {
         comptime function: anytype,
         args: anytype,
     ) !void {
-        try self.spawnCustom(
-            name,
-            self.default_run_config,
-            self.default_spawn_config,
-            function,
-            args,
-        );
+        try self.spawnCustom(name, .{}, function, args);
     }
 
     /// Spawn a thread to be managed.
     /// The function may be restarted periodically, according to the provided config.
-    fn spawnCustom(
+    pub fn spawnCustom(
         self: *Self,
         comptime name: []const u8,
-        run_config: ?RunConfig,
-        spawn_config: std.Thread.SpawnConfig,
+        config: struct {
+            run_config: ?RunConfig = null,
+            spawn_config: ?std.Thread.SpawnConfig = null,
+        },
         comptime function: anytype,
         args: anytype,
     ) !void {
-        const allocator = self.arena.allocator();
-
-        var thread = try std.Thread.spawn(
-            spawn_config,
-            runService,
-            .{
-                self.logger,
-                self.exit,
-                name,
-                run_config orelse self.default_run_config,
-                function,
-                args,
-            },
-        );
-
-        thread.setName(name) catch {};
-        try self.threads.append(allocator, thread);
+        const thread = try spawnService(self.logger, self.exit, name, .{
+            .run_config = config.run_config orelse self.default_run_config,
+            .spawn_config = config.spawn_config orelse self.default_spawn_config,
+        }, function, args);
+        try self.threads.append(self.arena.allocator(), thread);
     }
 
     /// Wait for all threads to exit, then return.
@@ -143,6 +127,36 @@ pub const ReturnHandler = struct {
     log_exit: bool = true,
 };
 
+/// Spawn a thread with a looping/restart policy using runService.
+/// The function may be restarted periodically, according to the provided config.
+pub fn spawnService(
+    any_logger: anytype,
+    exit: *Atomic(bool),
+    name: []const u8,
+    config: struct {
+        run_config: RunConfig = .{},
+        spawn_config: std.Thread.SpawnConfig = .{},
+    },
+    function: anytype,
+    args: anytype,
+) std.Thread.SpawnError!std.Thread {
+    const logger = any_logger.withScope(ServiceManager.LOG_SCOPE);
+    var thread = try std.Thread.spawn(
+        config.spawn_config,
+        runService,
+        .{ logger, exit, name, config.run_config, function, args },
+    );
+
+    const thread_name = if (name.len > std.Thread.max_name_len)
+        name[0..std.Thread.max_name_len]
+    else
+        name;
+    thread.setName(thread_name) catch |e|
+        logger.err().logf("failed to set name for thread '{s}' - {}", .{ thread_name, e });
+
+    return thread;
+}
+
 /// Convert a short-lived task into a long-lived service by looping it,
 /// or make a service resilient by restarting it on failure.
 ///
@@ -176,14 +190,15 @@ pub fn runService(
 
         // identify result
         if (result) |_| num_oks += 1 else |_| num_errors += 1;
-        const handler, const num_events, const event_name, const level_logger = if (result) |_|
-            .{ config.return_handler, num_oks, "return", logger.info() }
+        const handler, const num_events, const event_name, const level_logger, const trace //
+        = if (result) |_|
+            .{ config.return_handler, num_oks, "return", logger.info(), null }
         else |_|
-            .{ config.error_handler, num_errors, "error", logger.warn() };
+            .{ config.error_handler, num_errors, "error", logger.err(), @errorReturnTrace() };
 
         // handle result
         if (handler.log_return) {
-            level_logger.logf("{s} has {s}ed: {any}", .{ name, event_name, result });
+            level_logger.logf("{s} has {s}ed: {any} {?}", .{ name, event_name, result, trace });
         }
         if (handler.max_iterations) |max| if (num_events >= max) {
             if (handler.set_exit_on_completion) {

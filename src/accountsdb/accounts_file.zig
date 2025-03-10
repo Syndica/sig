@@ -3,13 +3,13 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Account = sig.core.account.Account;
-const Hash = sig.core.hash.Hash;
-const Slot = sig.core.time.Slot;
-const Epoch = sig.core.time.Epoch;
-const Pubkey = sig.core.pubkey.Pubkey;
-const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
+const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
+const Epoch = sig.core.time.Epoch;
+const Hash = sig.core.hash.Hash;
+const Pubkey = sig.core.pubkey.Pubkey;
+const Slot = sig.core.time.Slot;
 
 const writeIntLittleMem = sig.core.account.writeIntLittleMem;
 
@@ -323,7 +323,7 @@ pub const AccountFile = struct {
         return number_of_accounts;
     }
 
-    /// get account without reading data (a lot faster if the data field isnt used anyway)
+    /// get account without reading the data field (a lot faster)
     /// (used when computing account hashes for snapshot validation)
     pub fn getAccountHashAndLamports(
         self: *const Self,
@@ -336,12 +336,31 @@ pub const AccountFile = struct {
         offset += @sizeOf(AccountInFile.StorageInfo);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        const lamports = try self.getType(metadata_allocator, buffer_pool, &offset, u64);
+        const buf_size = @sizeOf(AccountInFile.AccountInfo) + @sizeOf(Hash);
 
-        offset += @sizeOf(AccountInFile.AccountInfo) - @sizeOf(u64);
-        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+        const read = try self.getSlice(
+            metadata_allocator,
+            buffer_pool,
+            &offset,
+            buf_size,
+        );
+        defer read.deinit(metadata_allocator);
 
-        const hash = try self.getType(metadata_allocator, buffer_pool, &offset, Hash);
+        var buf: [buf_size]u8 = undefined;
+        read.readAll(&buf);
+
+        var account_info: AccountInFile.AccountInfo = undefined;
+        @memcpy(
+            std.mem.asBytes(&account_info),
+            buf[0..][0..@sizeOf(AccountInFile.AccountInfo)],
+        );
+        const lamports = account_info.lamports;
+
+        var hash: Hash = undefined;
+        @memcpy(
+            std.mem.asBytes(&hash),
+            buf[@sizeOf(AccountInFile.AccountInfo)..][0..@sizeOf(Hash)],
+        );
 
         return .{
             .hash = hash,
