@@ -1119,17 +1119,17 @@ test "vote_state.convertToCurrent" {
         ) };
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator);
         defer vote_state.deinit();
-        try std.testing.expect(vote_state.authorized_voters.count() == 1);
+        try std.testing.expectEqual(1, vote_state.authorized_voters.count());
         var authorized_voter = vote_state.authorized_voters;
         try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
         try std.testing.expect(vote_state.authorized_withdrawer.equals(&Pubkey.ZEROES));
-        try std.testing.expect(vote_state.commission == 10);
-        try std.testing.expect(vote_state.votes.items.len == 0);
-        try std.testing.expect(vote_state.root_slot == null);
-        try std.testing.expect(vote_state.prior_voters.is_empty == true);
-        try std.testing.expect(vote_state.epoch_credits.items.len == 0);
-        try std.testing.expect(vote_state.last_timestamp.slot == 0);
-        try std.testing.expect(vote_state.last_timestamp.timestamp == 0);
+        try std.testing.expectEqual(10, vote_state.commission);
+        try std.testing.expectEqual(0, vote_state.votes.items.len);
+        try std.testing.expectEqual(null, vote_state.root_slot);
+        try std.testing.expect(vote_state.prior_voters.is_empty);
+        try std.testing.expectEqual(0, vote_state.epoch_credits.items.len);
+        try std.testing.expectEqual(0, vote_state.last_timestamp.slot);
+        try std.testing.expectEqual(0, vote_state.last_timestamp.timestamp);
     }
     // VoteStatev1_14_11 -> Current
     {
@@ -1149,17 +1149,17 @@ test "vote_state.convertToCurrent" {
         ) };
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
         defer vote_state.deinit();
-        try std.testing.expect(vote_state.authorized_voters.count() == 1);
+        try std.testing.expectEqual(1, vote_state.authorized_voters.count());
         var authorized_voter = vote_state.authorized_voters;
         try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
         try std.testing.expect(vote_state.authorized_withdrawer.equals(&Pubkey.ZEROES));
-        try std.testing.expect(vote_state.commission == 10);
-        try std.testing.expect(vote_state.votes.items.len == 0);
-        try std.testing.expect(vote_state.root_slot == null);
-        try std.testing.expect(vote_state.prior_voters.is_empty == true);
-        try std.testing.expect(vote_state.epoch_credits.items.len == 0);
-        try std.testing.expect(vote_state.last_timestamp.slot == 0);
-        try std.testing.expect(vote_state.last_timestamp.timestamp == 0);
+        try std.testing.expectEqual(10, vote_state.commission);
+        try std.testing.expectEqual(0, vote_state.votes.items.len);
+        try std.testing.expectEqual(null, vote_state.root_slot);
+        try std.testing.expect(vote_state.prior_voters.is_empty);
+        try std.testing.expectEqual(0, vote_state.epoch_credits.items.len);
+        try std.testing.expectEqual(0, vote_state.last_timestamp.slot);
+        try std.testing.expectEqual(0, vote_state.last_timestamp.timestamp);
     }
 
     // Current -> Current
@@ -1182,27 +1182,35 @@ test "vote_state.convertToCurrent" {
         const vote_state_1_14_1 = VoteStateVersions{ .current = expected };
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
         defer vote_state.deinit();
-        try std.testing.expect(
-            vote_state.authorized_voters.count() == expected.authorized_voters.count(),
+        try std.testing.expectEqual(
+            expected.authorized_voters.count(),
+            vote_state.authorized_voters.count(),
         );
         var authorized_voter = vote_state.authorized_voters;
         var expected_authorized_voter = expected.authorized_voters;
-        try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(
-            &expected_authorized_voter.getAuthorizedVoter(0).?,
-        ));
-        try std.testing.expect(
-            vote_state.authorized_withdrawer.equals(&expected.authorized_withdrawer),
+        try std.testing.expectEqual(
+            expected_authorized_voter.getAuthorizedVoter(0).?,
+            authorized_voter.getAuthorizedVoter(0).?,
         );
-        try std.testing.expect(vote_state.commission == expected.commission);
-        try std.testing.expect(vote_state.votes.items.len == expected.votes.items.len);
-        try std.testing.expect(vote_state.root_slot == expected.root_slot);
-        try std.testing.expect(vote_state.prior_voters.is_empty == expected.prior_voters.is_empty);
-        try std.testing.expect(
-            vote_state.epoch_credits.items.len == expected.epoch_credits.items.len,
+        try std.testing.expectEqual(
+            expected.authorized_withdrawer,
+            vote_state.authorized_withdrawer,
         );
-        try std.testing.expect(vote_state.last_timestamp.slot == expected.last_timestamp.slot);
-        try std.testing.expect(
-            vote_state.last_timestamp.timestamp == expected.last_timestamp.timestamp,
+        try std.testing.expectEqual(expected.commission, vote_state.commission);
+        try std.testing.expectEqual(expected.votes.items.len, vote_state.votes.items.len);
+        try std.testing.expectEqual(expected.root_slot, vote_state.root_slot);
+        try std.testing.expectEqual(
+            expected.prior_voters.is_empty,
+            vote_state.prior_voters.is_empty,
+        );
+        try std.testing.expectEqual(
+            expected.epoch_credits.items.len,
+            vote_state.epoch_credits.items.len,
+        );
+        try std.testing.expectEqual(expected.last_timestamp.slot, vote_state.last_timestamp.slot);
+        try std.testing.expectEqual(
+            expected.last_timestamp.timestamp,
+            vote_state.last_timestamp.timestamp,
         );
     }
 }
