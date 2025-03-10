@@ -90,6 +90,7 @@ fn execute(
             &vote_account,
             args,
         ),
+        .update_validator_identity => executeUpdateValidatorIdentity(allocator, ic, &vote_account),
     };
 }
 
@@ -440,6 +441,17 @@ fn executeAuthorizeChecked(
         clock,
         null,
     );
+}
+
+fn executeUpdateValidatorIdentity(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+) InstructionError!void {
+    try ic.info.checkNumberOfAccounts(2);
+    _ = &allocator;
+    _ = &ic;
+    _ = &vote_account;
 }
 
 // TODO: Move this to instruction_context.zig
