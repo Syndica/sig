@@ -498,7 +498,8 @@ pub const VoteState = struct {
         // first slot `S` of an epoch in which to set a new voter for
         // the epoch at `S` + `n`
         if (self.authorized_voters.contains(target_epoch)) {
-            return VoteError.too_soon_to_reauthorize.toInstructionError();
+            ic.tc.custom_error = @intFromError(VoteError.TooSoonToReauthorize);
+            return InstructionError.Custom;
         }
 
         const epoch, const pubkey = self.authorized_voters.last() orelse
