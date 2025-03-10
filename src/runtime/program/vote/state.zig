@@ -117,6 +117,10 @@ pub const AuthorizedVoters = struct {
             _ = self.authorized_voters.orderedRemove(key);
         }
 
+        // Have to uphold this invariant b/c this is
+        // 1) The check for whether the vote state is initialized
+        // 2) How future authorized voters for uninitialized epochs are set
+        //    by this function
         std.debug.assert(self.authorized_voters.count() != 0);
         return true;
     }
@@ -125,10 +129,10 @@ pub const AuthorizedVoters = struct {
         return self.authorized_voters.count() == 0;
     }
 
-    pub fn first(self: *const AuthorizedVoters) ?struct { epoch: Epoch, pubkey: Pubkey } {
+    pub fn first(self: *AuthorizedVoters) ?struct { Epoch, Pubkey } {
         var voter_iter = self.authorized_voters.iterator();
         if (voter_iter.next()) |entry| {
-            return .{ .epoch = entry.key_ptr.*, .pubkey = entry.value_ptr.* };
+            return .{ entry.key_ptr.*, entry.value_ptr.* };
         }
 
         return null;
