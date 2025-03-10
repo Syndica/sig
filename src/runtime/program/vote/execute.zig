@@ -218,15 +218,15 @@ fn authorize(
         VoteStateVersions,
     );
     var vote_state = versioned_state.convertToCurrent(allocator) catch {
-        // TODO okay to convert out of memory to custom error?
-        return InstructionError.Custom;
+        // TODO okay to convert out of memory to InvalidAccountData?
+        return InstructionError.InvalidAccountData;
     };
     defer vote_state.deinit();
 
     switch (vote_authorize) {
         .voter => {
             const authorized_withdrawer_signer = if (signers) |signers_|
-                try verifyAuthorizedSigner(authorized, signers_)
+                try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
             else
                 ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
 
@@ -234,7 +234,9 @@ fn authorize(
                 allocator,
                 authorized,
                 clock.epoch,
-                (clock.leader_schedule_epoch +| 1),
+                std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
+                    return InstructionError.InvalidAccountData;
+                },
                 authorized_withdrawer_signer,
                 ic,
             );

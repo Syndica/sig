@@ -27,7 +27,9 @@ pub const IntializeAccount = struct {
 };
 
 pub const Authorize = struct {
+    /// Public Key to be made the new authority for the vote account.
     pubkey: Pubkey,
+    /// Type of autorization to grant.
     vote_authorize: sig.runtime.program.vote_program.state.VoteAuthorize,
 
     pub const AccountIndex = enum(u8) {
@@ -107,7 +109,7 @@ pub const Instruction = union(enum) {
     /// # Account references
     ///   0. `[WRITE]` Vote account to be updated with the Pubkey for authorization
     ///   1. `[]` Clock sysvar
-    ///   2. `[SIGNER]` Vote or withdraw authority
+    ///   2. `[SIGNER]` Current vote or withdraw authority
     authorize: Authorize,
 
     /// Given that the current Voter or Withdrawer authority is a derived key,
