@@ -476,7 +476,7 @@ pub const VoteState = struct {
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
-        authorized_pubkey: Pubkey,
+        new_authorized_voter: Pubkey,
         target_epoch: Epoch,
     ) (InstructionError || VoteError)!void {
 
@@ -492,7 +492,7 @@ pub const VoteState = struct {
         const epoch, const pubkey = self.authorized_voters.last() orelse
             return InstructionError.InvalidAccountData;
 
-        if (!pubkey.equals(&authorized_pubkey)) {
+        if (!pubkey.equals(&new_authorized_voter)) {
             const epoch_of_last_authorized_switch = if (self.prior_voters.last()) |prior_voter|
                 prior_voter.end
             else
@@ -509,7 +509,7 @@ pub const VoteState = struct {
             });
         }
 
-        self.authorized_voters.insert(target_epoch, authorized_pubkey) catch
+        self.authorized_voters.insert(target_epoch, new_authorized_voter) catch
         // TODO: Is it okay to convert out of memory to InvalidAccountData?
             return InstructionError.InvalidAccountData;
     }
