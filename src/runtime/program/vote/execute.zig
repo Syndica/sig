@@ -90,6 +90,7 @@ fn execute(
             &vote_account,
             args,
         ),
+        .update_validator_identity => executeUpdateValidatorIdentity(allocator, ic, &vote_account),
     };
 }
 
@@ -440,6 +441,57 @@ fn executeAuthorizeChecked(
         clock,
         null,
     );
+}
+
+fn executeUpdateValidatorIdentity(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+) InstructionError!void {
+    try ic.info.checkNumberOfAccounts(2);
+
+    const new_identity = ic.info.getAccountMetaAtIndex(
+        @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity),
+    ) orelse {
+        return InstructionError.NotEnoughAccountKeys;
+    };
+
+    try updateValidatorIdentity(
+        allocator,
+        ic,
+        vote_account,
+        new_identity.pubkey,
+    );
+}
+
+fn updateValidatorIdentity(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    new_identity: Pubkey,
+) InstructionError!void {
+    const versioned_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+
+    // current authorized withdrawer must say "yay"
+    const vote_state = versioned_state.convertToCurrent(allocator) catch {
+        // TODO okay to convert out of memory to InvalidAccountData?
+        return InstructionError.InvalidAccountData;
+    };
+
+    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    // new node must say "yay"
+    if (!ic.info.isPubkeySigner(new_identity)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    vote_state.node_pubkey = new_identity;
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
 // TODO: Move this to instruction_context.zig

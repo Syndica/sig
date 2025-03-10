@@ -93,6 +93,17 @@ pub const VoteAuthorize = enum {
     };
 };
 
+pub const UpdateVoteIdentity = enum {
+    pub const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated with the given authority public key
+        account = 0,
+        /// `[SIGNER]` New validator identity (node_pubkey)
+        new_identity = 1,
+        ///  `[SIGNER]` Withdraw authority
+        current_authority = 2,
+    };
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum) {
     /// Initialize a vote account
@@ -147,4 +158,12 @@ pub const Instruction = union(enum) {
     ///   2. `[SIGNER]` Vote or withdraw authority
     ///   3. `[SIGNER]` New vote or withdraw authority
     authorize_checked: VoteAuthorize,
+
+    /// Update the vote account's validator identity (node_pubkey)
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated with the given authority public key
+    ///   1. `[SIGNER]` New validator identity (node_pubkey)
+    ///   2. `[SIGNER]` Withdraw authority
+    update_validator_identity,
 };
