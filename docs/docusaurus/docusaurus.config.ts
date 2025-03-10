@@ -83,7 +83,7 @@ const config: Config = {
     footer: {
       style: "dark",
       links: [],
-      copyright: `Copyright © ${new Date().getFullYear()} Syndica.`,
+      copyright: `© Copyright ${new Date().getFullYear()} Syndica Inc.`,
     },
     prism: {
       theme: prismThemes.palenight,
