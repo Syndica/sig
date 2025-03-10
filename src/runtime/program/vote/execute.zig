@@ -1096,7 +1096,7 @@ test "vote_program: authorizeChecked withdrawer" {
 // TODO Ideally these tests should be in state.zig but noticed they were not being ran when they are there
 // so need to fix that and move them back to state.zig
 // TODO Add more tests to increase code coverage
-test "vote_state.convert_to_current" {
+test "vote_state.convertToCurrent" {
     const VoteState0_23_5 = vote_program.state.VoteState0_23_5;
     const VoteState1_14_11 = vote_program.state.VoteState1_14_11;
 
@@ -1205,4 +1205,108 @@ test "vote_state.convert_to_current" {
             vote_state.last_timestamp.timestamp == expected.last_timestamp.timestamp,
         );
     }
+}
+
+test "vote_state.setNewAuthorizedVoter: success" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    const target_epoch: Epoch = 5;
+    try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
+
+    const retrived_voter = vote_state.authorized_voters.getAuthorizedVoter(target_epoch).?;
+    try std.testing.expectEqual(new_voter, retrived_voter);
+}
+
+test "vote_state.setNewAuthorizedVoter: too soon to reauthorize" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    // Same as initial epoch
+    const target_epoch: Epoch = 0;
+    try std.testing.expectError(
+        VoteError.TooSoonToReauthorize,
+        vote_state.setNewAuthorizedVoter(new_voter, target_epoch),
+    );
+}
+
+test "vote_state.setNewAuthorizedVoter: invalid account data" {
+    // Test attempt to set a voter with an invalid target epoch
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 2, // epoch of current authorized voter
+        .leader_schedule_epoch = 1,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    const target_epoch: Epoch = 1;
+    try std.testing.expectError(
+        InstructionError.InvalidAccountData,
+        vote_state.setNewAuthorizedVoter(new_voter, target_epoch),
+    );
 }
