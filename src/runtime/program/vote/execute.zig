@@ -346,6 +346,7 @@ fn authorizeWithSeed(
     if (try ic.info.isIndexSigner(signer_index)) {
         var signer_account = try ic.borrowInstructionAccount(signer_index);
         defer signer_account.release();
+
         const created = pubkey_utils.createWithSeed(
             signer_account.pubkey,
             seed,
@@ -354,6 +355,7 @@ fn authorizeWithSeed(
             ic.tc.custom_error = @intFromError(err);
             return InstructionError.Custom;
         };
+
         expected_authority_keys.put(created, {}) catch |err| {
             // TODO okay to convert out of memory to custom error?
             ic.tc.custom_error = @intFromError(err);
@@ -427,9 +429,9 @@ fn executeAuthorizeChecked(
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.clock_sysvar),
     );
 
-    const autorize = switch (vote_authorize) {
-        .Voter => VoteAuthorize.voter,
-        .Withdrawer => VoteAuthorize.withdrawer,
+    const authorize_pubkey = switch (vote_authorize) {
+        .voter => VoteAuthorize.voter,
+        .withdrawer => VoteAuthorize.withdrawer,
     };
 
     try authorize(
@@ -437,7 +439,7 @@ fn executeAuthorizeChecked(
         ic,
         vote_account,
         new_authority.pubkey,
-        autorize,
+        authorize_pubkey,
         clock,
         null,
     );
@@ -1098,7 +1100,7 @@ test "vote_program: authorizeChecked withdrawer" {
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
-            .authorize_checked = vote_program.vote_instruction.VoteAuthorize.Withdrawer,
+            .authorize_checked = vote_program.vote_instruction.VoteAuthorize.withdrawer,
         },
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1148,7 +1150,7 @@ test "vote_program: authorizeChecked withdrawer" {
 // TODO Ideally these tests should be in state.zig but noticed they were not being ran when they are there
 // so need to fix that and move them back to state.zig
 // TODO Add more tests to increase code coverage
-test "vote_state.convertToCurrent" {
+test "VoteState.convertToCurrent" {
     const VoteState0_23_5 = vote_program.state.VoteState0_23_5;
     const VoteState1_14_11 = vote_program.state.VoteState1_14_11;
 
@@ -1267,7 +1269,7 @@ test "vote_state.convertToCurrent" {
     }
 }
 
-test "vote_state.setNewAuthorizedVoter: success" {
+test "VoteState.setNewAuthorizedVoter: success" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const node_publey = Pubkey.initRandom(prng.random());
@@ -1301,7 +1303,7 @@ test "vote_state.setNewAuthorizedVoter: success" {
     try std.testing.expectEqual(new_voter, retrived_voter);
 }
 
-test "vote_state.setNewAuthorizedVoter: too soon to reauthorize" {
+test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const node_publey = Pubkey.initRandom(prng.random());
@@ -1336,7 +1338,7 @@ test "vote_state.setNewAuthorizedVoter: too soon to reauthorize" {
     );
 }
 
-test "vote_state.setNewAuthorizedVoter: invalid account data" {
+test "VoteState.setNewAuthorizedVoter: invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1371,7 +1373,7 @@ test "vote_state.setNewAuthorizedVoter: invalid account data" {
     );
 }
 
-test "vote_state.isUninitialized: invalid account data" {
+test "VoteState.isUninitialized: invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1409,4 +1411,123 @@ test "vote_state.isUninitialized: invalid account data" {
     );
 
     try std.testing.expect(uninitialized_state.isUninitialized());
+}
+
+const AuthorizedVoters = sig.runtime.program.vote_program.state.AuthorizedVoters;
+test "AuthorizedVoters.init" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 10, voter_pubkey);
+    defer authorized_voters.deinit();
+    try std.testing.expectEqual(authorized_voters.count(), 1);
+}
+
+test "AuthorizedVoters.getAuthorizedVoter" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    const new_pubkey = Pubkey.initRandom(prng.random());
+
+    var authorized_voters = try AuthorizedVoters.init(allocator, 10, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    const epoch: Epoch = 15;
+    try authorized_voters.insert(epoch, new_pubkey);
+    try std.testing.expectEqual(new_pubkey, authorized_voters.getAuthorizedVoter(epoch).?);
+}
+
+test "AuthorizedVoters.purgeAuthorizedVoters" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+
+    try std.testing.expectEqual(authorized_voters.count(), 3);
+    _ = authorized_voters.purgeAuthorizedVoters(allocator, 12);
+    // Only epoch 15 should remain
+    try std.testing.expectEqual(authorized_voters.count(), 1);
+}
+
+test "AuthorizedVoters.first" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+
+    const epoch, const pubkey = authorized_voters.first().?;
+    try std.testing.expectEqual(5, epoch);
+    try std.testing.expectEqual(voter_pubkey, pubkey);
+}
+
+test "AuthorizedVoters.last" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(
+        allocator,
+        5,
+        Pubkey.initRandom(prng.random()),
+    );
+    defer authorized_voters.deinit();
+
+    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(15, voter_pubkey);
+
+    const epoch, const pubkey = authorized_voters.last().?;
+    try std.testing.expectEqual(15, epoch);
+    try std.testing.expectEqual(voter_pubkey, pubkey);
+}
+
+test "AuthorizedVoters.isEmpty" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var authorized_voters = try AuthorizedVoters.init(
+        allocator,
+        5,
+        Pubkey.initRandom(prng.random()),
+    );
+    defer authorized_voters.deinit();
+    try std.testing.expect(!authorized_voters.isEmpty());
+}
+
+test "AuthorizedVoters.len" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    try std.testing.expectEqual(authorized_voters.count(), 1);
+
+    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+
+    try std.testing.expectEqual(authorized_voters.count(), 3);
+}
+
+test "AuthorizedVoters.contains" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    try std.testing.expect(authorized_voters.contains(5));
+    try std.testing.expect(!authorized_voters.contains(15));
 }
