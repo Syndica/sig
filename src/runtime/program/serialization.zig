@@ -118,8 +118,20 @@ pub const Serializer = struct {
         };
 
         if (self.aligned) {
-            // TODO: Implement
+            const align_offset = std.mem.alignForward(
+                usize,
+                account.constAccountData().len,
+                BPF_ALIGN_OF_U128,
+            ) - account.constAccountData().len;
             // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/serialization.rs#L107-L123
+            if (self.copy_account_data) {
+                // TODO: Implement
+            } else {
+                self.buffer.appendNTimes(self.allocator, 0, MAX_PERMITTED_DATA_INCREASE + align_offset) catch {
+                    return InstructionError.InvalidArgument;
+                };
+                // self.region_start += BPF_ALIGN_OF_U128 -| std.mem.alignForward(comptime T: type, addr: T, alignment: T)
+            }
         }
 
         return vm_data_addr;
@@ -257,10 +269,14 @@ fn serializeParametersAligned(
             },
             .duplicate => size += 7, // padding for 64 bit alignment
         }
+        std.debug.print("size={d}\n", .{size});
     }
+    std.debug.print("instruction_data.len={d}\n", .{instruction_data.len});
     size += @sizeOf(u64) // instruction data len
     + instruction_data.len // instruction data
     + @sizeOf(Pubkey); // program id
+
+    std.debug.print("size={d}\n", .{size});
 
     var serializer = Serializer.init(
         allocator,
@@ -491,7 +507,7 @@ test "serializeParameters" {
         copy_account_data,
     );
 
-    _ = memory;
-    _ = regions;
-    _ = account_metas;
+    std.debug.print("memory: {d}\n", .{memory.len});
+    std.debug.print("regions: {d}\n", .{regions.len});
+    std.debug.print("account_metas: {d}\n", .{account_metas.len});
 }
