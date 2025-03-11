@@ -280,7 +280,7 @@ fn checkAuthority(
     vote_state: *VoteState,
     signers: ?std.AutoHashMap(Pubkey, void),
     current_epoch: Epoch,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const authorized_withdrawer_signer = if (signers) |signers_|
         try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
     else
