@@ -1048,7 +1048,7 @@ test "vote_program: authorizeChecked withdrawer" {
         std.testing.allocator,
         vote_program,
         VoteProgramInstruction{
-            .authorize_checked = vote_program.vote_instruction.VoteAuthorize.Withdrawer,
+            .authorize_checked = vote_program.vote_instruction.VoteAuthorize.withdrawer,
         },
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
