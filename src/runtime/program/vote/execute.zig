@@ -64,7 +64,7 @@ fn execute(
             allocator,
             ic,
             &vote_account,
-            args.pubkey,
+            args.new_authority,
             args.vote_authorize,
         ),
         .authorize_with_seed => |args| try executeAuthorizeWithSeed(
@@ -321,7 +321,9 @@ fn executeAuthorizeWithSeed(
         authorization_type,
         current_authority_derived_key_owner,
         current_authority_derived_key_seed,
-        @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.signer),
+        @intFromEnum(
+            vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.current_base_authority,
+        ),
         @intFromEnum(vote_instruction.VoteAuthorizeWithSeedArgs.AccountIndex.clock_sysvar),
     );
 }
@@ -404,7 +406,9 @@ fn executeAuthorizeCheckedWithSeed(
         authorization_type,
         current_authority_derived_key_owner,
         current_authority_derived_key_seed,
-        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.base_key),
+        @intFromEnum(
+            vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.current_base_authority,
+        ),
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.clock_sysvar),
     );
 }
@@ -419,7 +423,7 @@ fn executeAuthorizeChecked(
     try ic.info.checkNumberOfAccounts(4);
 
     var new_authority = try ic.borrowInstructionAccount(
-        @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_signer),
+        @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_authority),
     );
     defer new_authority.release();
 

@@ -28,7 +28,7 @@ pub const IntializeAccount = struct {
 
 pub const Authorize = struct {
     /// Public Key to be made the new authority for the vote account.
-    pubkey: Pubkey,
+    new_authority: Pubkey,
     /// Type of autorization to grant.
     vote_authorize: sig.runtime.program.vote_program.state.VoteAuthorize,
 
@@ -38,7 +38,7 @@ pub const Authorize = struct {
         /// `[]` Clock sysvar
         clock_sysvar = 1,
         /// `[SIGNER]` Vote or withdraw authority
-        signer = 2,
+        current_authority = 2,
     };
 };
 
@@ -54,7 +54,7 @@ pub const VoteAuthorizeWithSeedArgs = struct {
         /// `[]` Clock sysvar
         clock_sysvar = 1,
         /// `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
-        signer = 2,
+        current_base_authority = 2,
     };
 };
 
@@ -69,9 +69,8 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
         /// `[]` Clock sysvar
         clock_sysvar = 1,
         ///  `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
-        base_key = 2,
+        current_base_authority = 2,
         /// `[SIGNER]` New vote or withdraw authority
-        // TODO make this uniform.
         new_authority = 3,
     };
 };
@@ -86,9 +85,9 @@ pub const VoteAuthorize = enum {
         /// `[]` Clock sysvar
         clock_sysvar = 1,
         ///  `[SIGNER]` Vote or withdraw authority
-        current_signer = 2,
+        current_authority = 2,
         /// `[SIGNER]` New vote or withdraw authority
-        new_signer = 3,
+        new_authority = 3,
     };
 };
 
