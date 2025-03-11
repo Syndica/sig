@@ -104,14 +104,14 @@ pub const AuthorizedVoters = struct {
         self: *AuthorizedVoters,
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
-    ) bool {
+    ) (error{OutOfMemory} || InstructionError)!bool {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
         defer expired_keys.deinit();
 
         var voter_iter = self.authorized_voters.iterator();
         while (voter_iter.next()) |entry| {
             if (entry.key_ptr.* < current_epoch) {
-                expired_keys.append(entry.key_ptr.*) catch unreachable;
+                try expired_keys.append(entry.key_ptr.*);
             }
         }
 
@@ -525,7 +525,7 @@ pub const VoteState = struct {
         self: *VoteState,
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
-    ) InstructionError!Pubkey {
+    ) (error{OutOfMemory} || InstructionError)!Pubkey {
         const pubkey = self.authorized_voters
             .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch |err| {
             return switch (err) {
@@ -533,7 +533,7 @@ pub const VoteState = struct {
                 error.OutOfMemory => InstructionError.InvalidAccountData,
             };
         } orelse return InstructionError.InvalidAccountData;
-        _ = self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
+        _ = try self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
         return pubkey;
     }
 
@@ -873,7 +873,7 @@ test "AuthorizedVoters.purgeAuthorizedVoters" {
     try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
 
     try std.testing.expectEqual(authorized_voters.count(), 3);
-    _ = authorized_voters.purgeAuthorizedVoters(allocator, 12);
+    _ = try authorized_voters.purgeAuthorizedVoters(allocator, 12);
     // Only epoch 15 should remain
     try std.testing.expectEqual(authorized_voters.count(), 1);
 }
