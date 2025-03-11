@@ -576,3 +576,381 @@ pub fn createTestVoteState(
         .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
     };
 }
+
+test "VoteState.convertToCurrent" {
+    const allocator = std.testing.allocator;
+    // VoteState0_23_5 -> Current
+    {
+        const vote_state_0_23_5 = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            10,
+            Clock{
+                .slot = 0,
+                .epoch_start_timestamp = 0,
+                .epoch = 0,
+                .leader_schedule_epoch = 0,
+                .unix_timestamp = 0,
+            },
+        ) };
+        const vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator);
+        defer vote_state.deinit();
+        try std.testing.expectEqual(1, vote_state.authorized_voters.count());
+        var authorized_voter = vote_state.authorized_voters;
+        try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
+        try std.testing.expect(vote_state.authorized_withdrawer.equals(&Pubkey.ZEROES));
+        try std.testing.expectEqual(10, vote_state.commission);
+        try std.testing.expectEqual(0, vote_state.votes.items.len);
+        try std.testing.expectEqual(null, vote_state.root_slot);
+        try std.testing.expect(vote_state.prior_voters.is_empty);
+        try std.testing.expectEqual(0, vote_state.epoch_credits.items.len);
+        try std.testing.expectEqual(0, vote_state.last_timestamp.slot);
+        try std.testing.expectEqual(0, vote_state.last_timestamp.timestamp);
+    }
+    // VoteStatev1_14_11 -> Current
+    {
+        const vote_state_1_14_1 = VoteStateVersions{ .v1_14_11 = try VoteState1_14_11.init(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            10,
+            Clock{
+                .slot = 0,
+                .epoch_start_timestamp = 0,
+                .epoch = 0,
+                .leader_schedule_epoch = 0,
+                .unix_timestamp = 0,
+            },
+        ) };
+        const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
+        defer vote_state.deinit();
+        try std.testing.expectEqual(1, vote_state.authorized_voters.count());
+        var authorized_voter = vote_state.authorized_voters;
+        try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
+        try std.testing.expect(vote_state.authorized_withdrawer.equals(&Pubkey.ZEROES));
+        try std.testing.expectEqual(10, vote_state.commission);
+        try std.testing.expectEqual(0, vote_state.votes.items.len);
+        try std.testing.expectEqual(null, vote_state.root_slot);
+        try std.testing.expect(vote_state.prior_voters.is_empty);
+        try std.testing.expectEqual(0, vote_state.epoch_credits.items.len);
+        try std.testing.expectEqual(0, vote_state.last_timestamp.slot);
+        try std.testing.expectEqual(0, vote_state.last_timestamp.timestamp);
+    }
+
+    // Current -> Current
+    {
+        const expected = try VoteState.init(
+            allocator,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            Pubkey.ZEROES,
+            10,
+            Clock{
+                .slot = 0,
+                .epoch_start_timestamp = 0,
+                .epoch = 0,
+                .leader_schedule_epoch = 0,
+                .unix_timestamp = 0,
+            },
+        );
+
+        const vote_state_1_14_1 = VoteStateVersions{ .current = expected };
+        const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
+        defer vote_state.deinit();
+        try std.testing.expectEqual(
+            expected.authorized_voters.count(),
+            vote_state.authorized_voters.count(),
+        );
+        var authorized_voter = vote_state.authorized_voters;
+        var expected_authorized_voter = expected.authorized_voters;
+        try std.testing.expectEqual(
+            expected_authorized_voter.getAuthorizedVoter(0).?,
+            authorized_voter.getAuthorizedVoter(0).?,
+        );
+        try std.testing.expectEqual(
+            expected.authorized_withdrawer,
+            vote_state.authorized_withdrawer,
+        );
+        try std.testing.expectEqual(expected.commission, vote_state.commission);
+        try std.testing.expectEqual(expected.votes.items.len, vote_state.votes.items.len);
+        try std.testing.expectEqual(expected.root_slot, vote_state.root_slot);
+        try std.testing.expectEqual(
+            expected.prior_voters.is_empty,
+            vote_state.prior_voters.is_empty,
+        );
+        try std.testing.expectEqual(
+            expected.epoch_credits.items.len,
+            vote_state.epoch_credits.items.len,
+        );
+        try std.testing.expectEqual(expected.last_timestamp.slot, vote_state.last_timestamp.slot);
+        try std.testing.expectEqual(
+            expected.last_timestamp.timestamp,
+            vote_state.last_timestamp.timestamp,
+        );
+    }
+}
+
+test "VoteState.setNewAuthorizedVoter: success" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    const target_epoch: Epoch = 5;
+    try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
+
+    const retrived_voter = vote_state.authorized_voters.getAuthorizedVoter(target_epoch).?;
+    try std.testing.expectEqual(new_voter, retrived_voter);
+}
+
+test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    // Same as initial epoch
+    const target_epoch: Epoch = 0;
+    try std.testing.expectError(
+        VoteError.TooSoonToReauthorize,
+        vote_state.setNewAuthorizedVoter(new_voter, target_epoch),
+    );
+}
+
+test "VoteState.setNewAuthorizedVoter: invalid account data" {
+    // Test attempt to set a voter with an invalid target epoch
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const new_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 2, // epoch of current authorized voter
+        .leader_schedule_epoch = 1,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    const target_epoch: Epoch = 1;
+    try std.testing.expectError(
+        InstructionError.InvalidAccountData,
+        vote_state.setNewAuthorizedVoter(new_voter, target_epoch),
+    );
+}
+
+test "VoteState.isUninitialized: invalid account data" {
+    // Test attempt to set a voter with an invalid target epoch
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 2, // epoch of current authorized voter
+        .leader_schedule_epoch = 1,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    try std.testing.expect(!vote_state.isUninitialized());
+
+    const uninitialized_state = createTestVoteState(
+        allocator,
+        node_publey,
+        null, // Authorized voters not set
+        authorized_withdrawer,
+        commission,
+    );
+
+    try std.testing.expect(uninitialized_state.isUninitialized());
+}
+
+test "AuthorizedVoters.init" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 10, voter_pubkey);
+    defer authorized_voters.deinit();
+    try std.testing.expectEqual(authorized_voters.count(), 1);
+}
+
+test "AuthorizedVoters.getAuthorizedVoter" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    const new_pubkey = Pubkey.initRandom(prng.random());
+
+    var authorized_voters = try AuthorizedVoters.init(allocator, 10, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    const epoch: Epoch = 15;
+    try authorized_voters.insert(epoch, new_pubkey);
+    try std.testing.expectEqual(new_pubkey, authorized_voters.getAuthorizedVoter(epoch).?);
+}
+
+test "AuthorizedVoters.purgeAuthorizedVoters" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+
+    try std.testing.expectEqual(authorized_voters.count(), 3);
+    _ = authorized_voters.purgeAuthorizedVoters(allocator, 12);
+    // Only epoch 15 should remain
+    try std.testing.expectEqual(authorized_voters.count(), 1);
+}
+
+test "AuthorizedVoters.first" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+
+    const epoch, const pubkey = authorized_voters.first().?;
+    try std.testing.expectEqual(5, epoch);
+    try std.testing.expectEqual(voter_pubkey, pubkey);
+}
+
+test "AuthorizedVoters.last" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(
+        allocator,
+        5,
+        Pubkey.initRandom(prng.random()),
+    );
+    defer authorized_voters.deinit();
+
+    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(15, voter_pubkey);
+
+    const epoch, const pubkey = authorized_voters.last().?;
+    try std.testing.expectEqual(15, epoch);
+    try std.testing.expectEqual(voter_pubkey, pubkey);
+}
+
+test "AuthorizedVoters.isEmpty" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var authorized_voters = try AuthorizedVoters.init(
+        allocator,
+        5,
+        Pubkey.initRandom(prng.random()),
+    );
+    defer authorized_voters.deinit();
+    try std.testing.expect(!authorized_voters.isEmpty());
+}
+
+test "AuthorizedVoters.len" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    try std.testing.expectEqual(authorized_voters.count(), 1);
+
+    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+
+    try std.testing.expectEqual(authorized_voters.count(), 3);
+}
+
+test "AuthorizedVoters.contains" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const voter_pubkey = Pubkey.initRandom(prng.random());
+    var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
+    defer authorized_voters.deinit();
+
+    try std.testing.expect(authorized_voters.contains(5));
+    try std.testing.expect(!authorized_voters.contains(15));
+}
