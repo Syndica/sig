@@ -229,13 +229,27 @@ fn authorize(
                 return InstructionError.InvalidAccountData;
             };
 
-            try checkAuthority(
-                allocator,
-                ic,
-                &vote_state,
-                signers,
-                current_epoch,
-            );
+            // Analogous to
+            // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L691-L692
+            // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L701-L707
+            // https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
+            {
+                const authorized_withdrawer_signer = if (signers) |signers_|
+                    try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
+                else
+                    ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
+
+                // current authorized withdrawer or epoch authorized voter must say "yay"
+                if (!authorized_withdrawer_signer) {
+                    const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
+                        allocator,
+                        current_epoch,
+                    );
+                    if (!ic.info.isPubkeySigner(epoch_authorized_voter)) {
+                        return InstructionError.MissingRequiredSignature;
+                    }
+                }
+            }
 
             vote_state.setNewAuthorizedVoter(
                 authorized,
@@ -266,36 +280,6 @@ fn authorize(
         },
     }
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
-}
-
-/// Analogous to
-/// https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L691-L692
-/// https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L701-L707
-/// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
-///
-/// Check if the current authorized withdrawer or epoch authorized voter is a signer.
-fn checkAuthority(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-    vote_state: *VoteState,
-    signers: ?std.AutoHashMap(Pubkey, void),
-    current_epoch: Epoch,
-) (error{OutOfMemory} || InstructionError)!void {
-    const authorized_withdrawer_signer = if (signers) |signers_|
-        try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
-    else
-        ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
-
-    // current authorized withdrawer or epoch authorized voter must say "yay"
-    if (!authorized_withdrawer_signer) {
-        const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
-            allocator,
-            current_epoch,
-        );
-        if (!ic.info.isPubkeySigner(epoch_authorized_voter)) {
-            return InstructionError.MissingRequiredSignature;
-        }
-    }
 }
 
 /// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
