@@ -199,6 +199,10 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             allocator,
             ic,
         ),
+        .close => executeV3Close(
+            allocator,
+            ic,
+        ),
         // TODO: Implement the following instructions
         // .upgrade => executeV3Upgrade(),
         // .close => executeV3Close(),
@@ -655,6 +659,133 @@ pub fn executeV3SetAuthorityChecked(
     }
 
     try ic.tc.log("New authority {?}", .{new_authority});
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1033-L1138
+pub fn executeV3Close(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) !void {
+    try ic.checkNumberOfAccounts(2);
+    if (ic.getAccountMetaAtIndex(0).?.index_in_transaction ==
+        ic.getAccountMetaAtIndex(1).?.index_in_transaction)
+    {
+        try ic.tc.log("Recipient is the same as the account being closed", .{});
+        return InstructionError.InvalidArgument;
+    }
+
+    var close_account = try ic.borrowInstructionAccount(0);
+    var close_account_released = false; // NOTE: used to simulate drop(close_account) below.
+    defer if (!close_account_released) close_account.release();
+
+    const close_key = close_account.pubkey;
+    const close_account_state = try close_account.deserializeFromAccountData(
+        allocator,
+        bpf_loader_program.v3.State,
+    );
+    try close_account.setDataLength(allocator, ic.tc, bpf_loader_program.v3.State.UNINITIALIZED_SIZE);
+    switch (close_account_state) {
+        .uninitialized => {
+            var recipient_account = try ic.borrowInstructionAccount(1);
+            defer recipient_account.release();
+
+            try recipient_account.addLamports(close_account.getLamports());
+            try close_account.setLamports(0);
+            try ic.tc.log("Closed Uninitialized {any}", .{close_key});
+        },
+        .buffer => |data| {
+            try ic.checkNumberOfAccounts(3);
+            close_account.release();
+            close_account_released = true;
+
+            try commonCloseAccount(ic, data.authority_address);
+            try ic.tc.log("Closed Buffer {any}", .{close_key});
+        },
+        .program_data => |data| {
+            try ic.checkNumberOfAccounts(4);
+            close_account.release();
+            close_account_released = true;
+
+            var program_account = try ic.borrowInstructionAccount(3); // NOTE: named program, but inst?
+            var program_account_released = false; // NOTE: used to simulate drop(program_account) below.
+            defer if (!program_account_released) program_account.release();
+
+            const program_key = program_account.pubkey;
+            const authority_address = data.upgrade_authority_address;
+
+            if (!program_account.isWritable()) {
+                try ic.tc.log("Program account is not writable", .{});
+                return InstructionError.InvalidArgument;
+            }
+            if (!program_account.isOwnedByCurrentProgram()) { // NOTE: getOwner() == ic.getLastProgramKey()
+                try ic.tc.log("Program account is not owned by the loader", .{});
+                return InstructionError.IncorrectProgramId;
+            }
+
+            var clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse return InstructionError.UnsupportedSysvar;
+            if (clock.slot == data.slot) {
+                try ic.tc.log("Program was deployed in this block already", .{});
+                return InstructionError.InvalidArgument;
+            }
+
+            switch (try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+                .program => |program_data| {
+                    if (!program_data.programdata_address.equals(&close_key)) {
+                        try ic.tc.log("PRogramData account does not match ProgramData account", .{});
+                        return InstructionError.InvalidArgument;
+                    }
+
+                    program_account.release();
+                    program_account_released = true;
+                    try commonCloseAccount(ic, authority_address);
+
+                    clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse return InstructionError.UnsupportedSysvar;
+                    // TODO: This depends on program cache which isn't implemented yet.
+                    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
+                },
+                else => {
+                    try ic.tc.log("Invalid Program Account", .{});
+                    return InstructionError.InvalidArgument;
+                },
+            }
+
+            try ic.tc.log("Closed Program {any}", .{program_key});
+        },
+        else => {
+            try ic.tc.log("Account does not support closing", .{});
+            return InstructionError.InvalidArgument;
+        },
+    }
+}
+
+fn commonCloseAccount(
+    ic: *InstructionContext,
+    authority_address: ?Pubkey,
+) !void {
+    if (authority_address == null) {
+        try ic.tc.log("Account is immutable", .{});
+        return InstructionError.Immutable;
+    }
+
+    const auth_account = ic.getAccountMetaAtIndex(2) orelse return InstructionError.MissingAccount;
+    if (!authority_address.?.equals(&auth_account.pubkey)) {
+        try ic.tc.log("Incorrect authority provided", .{});
+        return InstructionError.IncorrectAuthority;
+    }
+    if (!(try ic.isIndexSigner(2))) {
+        try ic.tc.log("Authority did not sign", .{});
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    var close_account = try ic.borrowInstructionAccount(0);
+    defer close_account.release();
+
+    var recipient_account = try ic.borrowInstructionAccount(1);
+    defer recipient_account.release();
+
+    try recipient_account.addLamports(close_account.getLamports());
+    try close_account.setLamports(0);
+    try close_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .uninitialized = {} });
 }
 
 /// TODO: This function depends on syscalls and program cache implementations
@@ -1176,7 +1307,7 @@ test "executeV3SetAuthorityChecked" {
     var feature_set = FeatureSet{ .active = .{}, .inactive = .{} };
     defer feature_set.active.deinit(allocator);
     defer feature_set.inactive.deinit(allocator);
-    
+
     try feature_set.active.putNoClobber(allocator, FeatureSet.enable_bpf_loader_set_authority_checked_ix, 0);
 
     // test with State.buffer (1 and 2 must be signers).
@@ -1302,4 +1433,150 @@ test "executeV3SetAuthorityChecked" {
             },
         },
     );
+}
+
+test "executeV3Close" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const buffer_account_key = Pubkey.initRandom(prng.random());
+    const buffer_recipient_key = Pubkey.initRandom(prng.random());
+    const buffer_authority_key = Pubkey.initRandom(prng.random());
+
+    const initial_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(initial_account_data);
+    const final_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(final_account_data);
+
+    const num_lamports = 42 + prng.random().uintAtMost(u64, 1337);
+
+    // uninitialized
+    {
+        const uninitialized_data = try bincode.writeToSlice(
+            initial_account_data,
+            bpf_loader_program.v3.State{ .uninitialized = {} },
+            .{},
+        );
+
+        try expectProgramExecuteResult(
+            allocator,
+            bpf_loader_program.v3,
+            bpf_loader_program.v3.Instruction{
+                .close = {},
+            },
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = buffer_account_key,
+                        .data = uninitialized_data,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = num_lamports,
+                    },
+                    .{
+                        .pubkey = buffer_recipient_key,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = buffer_account_key,
+                        .data = uninitialized_data,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = 0,
+                    },
+                    .{
+                        .pubkey = buffer_recipient_key,
+                        .lamports = num_lamports,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+            },
+        );
+    }
+
+    // buffer
+    {
+        const initial_data = try bincode.writeToSlice(
+            initial_account_data,
+            bpf_loader_program.v3.State{ .buffer = .{ .authority_address = buffer_authority_key } },
+            .{},
+        );
+
+        const final_data = try bincode.writeToSlice(
+            final_account_data,
+            bpf_loader_program.v3.State{ .uninitialized = {} },
+            .{},
+        );
+
+        try expectProgramExecuteResult(
+            allocator,
+            bpf_loader_program.v3,
+            bpf_loader_program.v3.Instruction{
+                .close = {},
+            },
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = buffer_account_key,
+                        .data = initial_data,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = num_lamports,
+                    },
+                    .{
+                        .pubkey = buffer_recipient_key,
+                    },
+                    .{
+                        .pubkey = buffer_authority_key,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = buffer_account_key,
+                        .data = final_data,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = 0,
+                    },
+                    .{
+                        .pubkey = buffer_recipient_key,
+                        .lamports = num_lamports,
+                    },
+                    .{
+                        .pubkey = buffer_authority_key,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+            },
+        );
+    }
 }

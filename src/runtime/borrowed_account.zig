@@ -92,6 +92,11 @@ pub const BorrowedAccount = struct {
         return null;
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L770
+    pub fn getLamports(self: *const BorrowedAccount) u64 {
+        return self.account.lamports;
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L825
     pub fn setLamports(self: *BorrowedAccount, lamports: u64) InstructionError!void {
         if (lamports < self.account.lamports and
