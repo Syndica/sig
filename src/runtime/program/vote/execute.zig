@@ -672,7 +672,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
         vote_program,
         VoteProgramInstruction{
             .authorize = .{
-                .pubkey = new_authorized_withdrawer,
+                .new_authority = new_authorized_withdrawer,
                 .vote_authorize = VoteAuthorize.withdrawer,
             },
         },
@@ -784,7 +784,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         vote_program,
         VoteProgramInstruction{
             .authorize = .{
-                .pubkey = new_authorized_voter,
+                .new_authority = new_authorized_voter,
                 .vote_authorize = VoteAuthorize.voter,
             },
         },
