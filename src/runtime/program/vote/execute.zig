@@ -345,6 +345,7 @@ fn authorizeWithSeed(
     if (try ic.info.isIndexSigner(signer_index)) {
         var signer_account = try ic.borrowInstructionAccount(signer_index);
         defer signer_account.release();
+
         const created = pubkey_utils.createWithSeed(
             signer_account.pubkey,
             seed,
@@ -353,6 +354,7 @@ fn authorizeWithSeed(
             ic.tc.custom_error = @intFromError(err);
             return InstructionError.Custom;
         };
+
         expected_authority_keys.put(created, {}) catch |err| {
             // TODO okay to convert out of memory to custom error?
             ic.tc.custom_error = @intFromError(err);
@@ -426,9 +428,9 @@ fn executeAuthorizeChecked(
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.clock_sysvar),
     );
 
-    const autorize = switch (vote_authorize) {
-        .Voter => VoteAuthorize.voter,
-        .Withdrawer => VoteAuthorize.withdrawer,
+    const authorize_pubkey = switch (vote_authorize) {
+        .voter => VoteAuthorize.voter,
+        .withdrawer => VoteAuthorize.withdrawer,
     };
 
     try authorize(
@@ -436,7 +438,7 @@ fn executeAuthorizeChecked(
         ic,
         vote_account,
         new_authority.pubkey,
-        autorize,
+        authorize_pubkey,
         clock,
         null,
     );

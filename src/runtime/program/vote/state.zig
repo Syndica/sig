@@ -77,8 +77,9 @@ pub const AuthorizedVoters = struct {
     ) ?Pubkey {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
             return entry[0];
+        } else {
+            return null;
         }
-        return null;
     }
 
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L27
@@ -89,26 +90,27 @@ pub const AuthorizedVoters = struct {
                 try self.authorized_voters.put(epoch, pubkey);
             }
             return pubkey;
+        } else {
+            return null;
         }
-        return null;
     }
 
-    pub fn insert(self: *AuthorizedVoters, epoch: Epoch, authorizedVoter: Pubkey) !void {
-        try self.authorized_voters.put(epoch, authorizedVoter);
+    pub fn insert(self: *AuthorizedVoters, epoch: Epoch, authorized_voter: Pubkey) !void {
+        try self.authorized_voters.put(epoch, authorized_voter);
     }
 
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L42
     pub fn purgeAuthorizedVoters(
         self: *AuthorizedVoters,
         allocator: std.mem.Allocator,
-        currentEpoch: Epoch,
+        current_epoch: Epoch,
     ) bool {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
         defer expired_keys.deinit();
 
         var voter_iter = self.authorized_voters.iterator();
         while (voter_iter.next()) |entry| {
-            if (entry.key_ptr.* < currentEpoch) {
+            if (entry.key_ptr.* < current_epoch) {
                 expired_keys.append(entry.key_ptr.*) catch unreachable;
             }
         }
@@ -133,17 +135,18 @@ pub const AuthorizedVoters = struct {
         var voter_iter = self.authorized_voters.iterator();
         if (voter_iter.next()) |entry| {
             return .{ entry.key_ptr.*, entry.value_ptr.* };
+        } else {
+            return null;
         }
-
-        return null;
     }
 
     pub fn last(self: *const AuthorizedVoters) ?struct { Epoch, Pubkey } {
         const last_epoch = self.authorized_voters.max orelse return null;
         if (self.authorized_voters.get(last_epoch)) |last_pubkey| {
             return .{ last_epoch, last_pubkey };
+        } else {
+            return null;
         }
-        return null;
     }
 
     pub fn len(self: *const AuthorizedVoters) usize {
@@ -189,17 +192,17 @@ pub const VoteStateVersions = union(enum) {
         allocator: std.mem.Allocator,
         lockouts: std.ArrayList(Lockout),
     ) !std.ArrayList(LandedVote) {
-        var landedVotes = std.ArrayList(LandedVote).init(allocator);
-        errdefer landedVotes.deinit();
+        var landed_votes = std.ArrayList(LandedVote).init(allocator);
+        errdefer landed_votes.deinit();
 
         for (lockouts.items) |lockout| {
-            try landedVotes.append(LandedVote{
+            try landed_votes.append(LandedVote{
                 .latency = 0,
                 .lockout = lockout,
             });
         }
 
-        return landedVotes;
+        return landed_votes;
     }
 
     pub fn deinit(self: VoteStateVersions) void {
@@ -492,21 +495,21 @@ pub const VoteState = struct {
             return VoteError.TooSoonToReauthorize;
         }
 
-        const epoch, const pubkey = self.authorized_voters.last() orelse
+        const latest_epoch, const latest_pubkey = self.authorized_voters.last() orelse
             return InstructionError.InvalidAccountData;
 
-        if (!pubkey.equals(&new_authorized_voter)) {
+        if (!latest_pubkey.equals(&new_authorized_voter)) {
             const epoch_of_last_authorized_switch = if (self.prior_voters.last()) |prior_voter|
                 prior_voter.end
             else
                 0;
 
-            if (target_epoch <= epoch) {
+            if (target_epoch <= latest_epoch) {
                 return InstructionError.InvalidAccountData;
             }
 
             self.prior_voters.append(PriorVote{
-                .key = pubkey,
+                .key = latest_pubkey,
                 .start = epoch_of_last_authorized_switch,
                 .end = target_epoch,
             });
