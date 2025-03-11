@@ -1576,6 +1576,7 @@ test "executeV3Close" {
                         .owner = ids.NATIVE_LOADER_ID,
                     },
                 },
+                .accounts_resize_delta = -@as(i64, @intCast(initial_data.len - final_data.len)),
             },
         );
     }
