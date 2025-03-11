@@ -85,9 +85,16 @@ pub fn createInstructionContext(
     };
 
     var account_metas = std.BoundedArray(InstructionContextAccountMeta, Transaction.MAX_ACCOUNTS){};
-    for (accounts_params) |account_params| {
+    for (accounts_params, 0..) |account_params, i| {
         if (account_params.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
+
+        for (accounts_params[0..i]) |seen_account_params| {
+            if (seen_account_params.index_in_transaction == account_params.index_in_transaction) {
+                return error.AccountIndexRepeated;
+            }
+        }
+
         try account_metas.append(.{
             .pubkey = tc.accounts[account_params.index_in_transaction].pubkey,
             .is_signer = account_params.is_signer,
