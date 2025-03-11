@@ -40,7 +40,7 @@ After downloading a snapshots, you can dump the accounts to a csv using the
 
 ```bash
 # in terminal 1 -- read the snapshot accounts to geyser
-./zig-out/bin/sig snapshot-validate -n testnet --enable-geyser
+./zig-out/bin/sig snapshot-validate -c testnet --enable-geyser
 
 # in terminal 2 -- dump accounts to a csv (validator/accounts.csv)
 ./zig-out/bin/geyser csv

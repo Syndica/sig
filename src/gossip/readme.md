@@ -51,7 +51,7 @@ try service.start(.{
 ```
 
 *Note:* a `spy_node` is a node that listens to gossip messages but does not send any.
-This is useful for debugging and monitoring the network.
+This is useful for debugging and monitoring the cluster.
 
 *Note:* `dump` is a flag to print out the gossip table to a file every 10 seconds
 (see `dump_service.zig` for more).
