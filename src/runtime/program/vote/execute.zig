@@ -392,6 +392,10 @@ fn executeAuthorizeCheckedWithSeed(
     );
     defer new_authority.release();
 
+    if (!ic.info.isPubkeySigner(new_authority.pubkey)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
     try authorizeWithSeed(
         allocator,
         ic,
@@ -896,7 +900,6 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
 
     // Insturction data.
     const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
-
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
