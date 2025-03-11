@@ -55,7 +55,7 @@ need to also modify the prometheus `target` to point to the different port.
 To collect logs of the running sig client (which can then be viewed in
 Grafana), run the following command:
 
-`./zig-out/bin/sig gossip -n testnet 2>&1 | tee -a logs/sig.log`
+`./zig-out/bin/sig gossip -c testnet 2>&1 | tee -a logs/sig.log`
 
 This will pipe the logs to `logs/sig.log` and also display them in the terminal.
 
