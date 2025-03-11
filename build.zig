@@ -74,7 +74,7 @@ pub fn build(b: *Build) !void {
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
-    const svm_step = b.step("svm", "Run the SVM client");
+    const vm_step = b.step("vm", "Run the VM client");
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
 
     // Dependencies
@@ -275,18 +275,18 @@ pub fn build(b: *Build) !void {
     geyser_reader_exe.root_module.addImport("zig-cli", zig_cli_mod);
     try addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
 
-    const svm_exe = b.addExecutable(.{
-        .name = "svm",
-        .root_source_file = b.path("src/svm/main.zig"),
+    const vm_exe = b.addExecutable(.{
+        .name = "vm",
+        .root_source_file = b.path("src/vm/main.zig"),
         .target = config.target,
         .optimize = config.optimize,
         .sanitize_thread = config.enable_tsan,
     });
-    svm_step.dependOn(&svm_exe.step);
-    install_step.dependOn(&svm_exe.step);
+    vm_step.dependOn(&vm_exe.step);
+    install_step.dependOn(&vm_exe.step);
 
-    svm_exe.root_module.addImport("sig", sig_mod);
-    try addInstallAndRun(b, svm_step, svm_exe, config);
+    vm_exe.root_module.addImport("sig", sig_mod);
+    try addInstallAndRun(b, vm_step, vm_exe, config);
 
     // docs for the Sig library
     const install_sig_docs = b.addInstallDirectory(.{
