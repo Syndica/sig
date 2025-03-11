@@ -184,7 +184,7 @@ fn executeAuthorize(
     vote_account: *BorrowedAccount,
     pubkey: Pubkey,
     vote_authorize: VoteAuthorize,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
@@ -214,15 +214,12 @@ fn authorize(
     vote_authorize: VoteAuthorize,
     clock: Clock,
     signers: ?std.AutoHashMap(Pubkey, void),
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
-    var vote_state = versioned_state.convertToCurrent(allocator) catch {
-        // TODO okay to convert out of memory to InvalidAccountData?
-        return InstructionError.InvalidAccountData;
-    };
+    var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
     switch (vote_authorize) {
@@ -310,7 +307,7 @@ fn executeAuthorizeWithSeed(
     authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(3);
 
     try authorizeWithSeed(
@@ -339,7 +336,7 @@ fn authorizeWithSeed(
     seed: []const u8,
     signer_index: u8,
     clock_index: u8,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
     var expected_authority_keys = std.AutoHashMap(Pubkey, void).init(allocator);
@@ -357,11 +354,7 @@ fn authorizeWithSeed(
             return InstructionError.Custom;
         };
 
-        expected_authority_keys.put(created, {}) catch |err| {
-            // TODO okay to convert out of memory to custom error?
-            ic.tc.custom_error = @intFromError(err);
-            return InstructionError.Custom;
-        };
+        try expected_authority_keys.put(created, {});
     }
 
     try authorize(
@@ -386,7 +379,7 @@ fn executeAuthorizeCheckedWithSeed(
     authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
     var new_authority = try ic.borrowInstructionAccount(
@@ -419,7 +412,7 @@ fn executeAuthorizeChecked(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote_authorize: vote_instruction.VoteAuthorize,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
     var new_authority = try ic.borrowInstructionAccount(
