@@ -374,6 +374,10 @@ fn executeAuthorizeCheckedWithSeed(
         return InstructionError.MissingRequiredSignature;
     }
 
+    if (!ic.info.isPubkeySigner(new_authority.pubkey)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
     try authorizeWithSeed(
         allocator,
         ic,
