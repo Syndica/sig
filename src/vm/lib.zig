@@ -4,7 +4,7 @@ pub const elf = @import("elf.zig");
 pub const memory = @import("memory.zig");
 pub const syscalls = @import("syscalls.zig");
 pub const tests = @import("tests.zig");
-pub const vm = @import("vm.zig");
+pub const vm = @import("interpreter.zig");
 
 pub const Executable = executable.Executable;
 pub const BuiltinProgram = executable.BuiltinProgram;
