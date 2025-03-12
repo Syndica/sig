@@ -428,7 +428,6 @@ fn executeAuthorizeChecked(
     );
 }
 
-// TODO: Move this to instruction_context.zig
 fn validateIsSigner(
     authorized: Pubkey,
     signers: std.AutoHashMap(Pubkey, void),
