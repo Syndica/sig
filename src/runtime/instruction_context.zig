@@ -67,4 +67,11 @@ pub const InstructionContext = struct {
 
         return self.tc.sysvar_cache.get(T) orelse InstructionError.UnsupportedSysvar;
     }
+
+    pub fn getSysvar(
+        self: *const InstructionContext,
+        comptime T: type,
+    ) InstructionError!T {
+        return self.tc.sysvar_cache.get(T) orelse InstructionError.UnsupportedSysvar;
+    }
 };
