@@ -496,22 +496,14 @@ fn executeUpdateCommission(
     const epoch_schedule = try ic.getSysvar(EpochSchedule);
     const clock = try ic.getSysvar(Clock);
 
-    const versioned_state = try vote_account.deserializeFromAccountData(
+    try updateCommission(
         allocator,
-        VoteStateVersions,
+        ic,
+        vote_account,
+        commission,
+        epoch_schedule,
+        clock,
     );
-
-    var vote_state = versioned_state.convertToCurrent(allocator) catch {
-        return InstructionError.InvalidAccountData;
-    };
-    defer vote_state.deinit();
-
-    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
-        return InstructionError.MissingRequiredSignature;
-    }
-
-    vote_state.commission = commission;
-    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
 fn updateCommission(
@@ -521,15 +513,75 @@ fn updateCommission(
     commission: u8,
     epoch_schedule: EpochSchedule,
     clock: Clock,
-    feature_set: FeatureSet,
 ) InstructionError!void {
-    _ = allocator;
-    _ = ic;
-    _ = vote_account;
-    _ = commission;
-    _ = epoch_schedule;
-    _ = clock;
-    _ = feature_set;
+    // Decode vote state only once, and only if needed
+    var maybe_vote_state: ?VoteState = null;
+    var enforce_commission_update_rule = true;
+
+    if (ic.tc.feature_set.isActive(FeatureSet.allow_commission_decrease_at_any_time)) {
+        const versioned_state = try vote_account.deserializeFromAccountData(
+            allocator,
+            VoteStateVersions,
+        );
+
+        const vote_state_ = versioned_state.convertToCurrent(allocator) catch {
+            return InstructionError.InvalidAccountData;
+        };
+        defer vote_state_.deinit();
+        enforce_commission_update_rule = vote_state_.isCommissionIncrease(commission);
+        maybe_vote_state = vote_state_;
+    } else {
+        enforce_commission_update_rule = true;
+    }
+
+    if (enforce_commission_update_rule and ic.tc.feature_set.isActive(
+        FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+    )) {
+        if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
+            ic.tc.custom_error = @intFromError(VoteError.CommissionUpdateTooLate);
+            return InstructionError.Custom;
+        }
+    }
+
+    var vote_state = blk: {
+        if (maybe_vote_state) |vote_state| {
+            break :blk vote_state;
+        } else {
+            const versioned_state = try vote_account.deserializeFromAccountData(
+                allocator,
+                VoteStateVersions,
+            );
+
+            break :blk versioned_state.convertToCurrent(allocator) catch {
+                return InstructionError.InvalidAccountData;
+            };
+        }
+    };
+
+    // current authorized withdrawer must say "yay"
+    if (ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    vote_state.commission = commission;
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+}
+
+/// Given the current slot and epoch schedule, determine if a commission change
+/// is allowed
+pub fn isCommissionUpdateAllowed(slot: u64, epoch_schedule: *const EpochSchedule) bool {
+    // Always allowed during warmup epochs
+    const relative_slot: ?u64 = std.math.rem(
+        u64,
+        (slot -| epoch_schedule.first_normal_slot),
+        epoch_schedule.slots_per_epoch,
+    ) catch null;
+
+    if (relative_slot) |r_slot| {
+        return (r_slot *| 2 <= epoch_schedule.slots_per_epoch);
+    } else {
+        return true;
+    }
 }
 
 // TODO: Move this to instruction_context.zig
