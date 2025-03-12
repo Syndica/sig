@@ -234,7 +234,7 @@ fn authorize(
             // https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
             {
                 const authorized_withdrawer_signer = if (signers) |signers_|
-                    try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
+                    try validateIsSigner(vote_state.authorized_withdrawer, signers_)
                 else
                     ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
 
@@ -268,7 +268,7 @@ fn authorize(
         .withdrawer => {
             // current authorized withdrawer must say "yay".
             const authorized_withdrawer_signer = if (signers) |signers_|
-                try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
+                try validateIsSigner(vote_state.authorized_withdrawer, signers_)
             else
                 ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
 
@@ -429,7 +429,7 @@ fn executeAuthorizeChecked(
 }
 
 // TODO: Move this to instruction_context.zig
-fn verifyAuthorizedSigner(
+fn validateIsSigner(
     authorized: Pubkey,
     signers: std.AutoHashMap(Pubkey, void),
 ) InstructionError!bool {
