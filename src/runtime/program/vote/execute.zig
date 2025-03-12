@@ -484,8 +484,7 @@ fn updateValidatorIdentity(
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
-// TODO: Move this to instruction_context.zig
-fn verifyAuthorizedSigner(
+fn validateIsSigner(
     authorized: Pubkey,
     signers: std.AutoHashMap(Pubkey, void),
 ) InstructionError!bool {
