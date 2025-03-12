@@ -16,6 +16,8 @@ const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
+const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
+const FeatureSet = sig.runtime.FeatureSet;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 
@@ -90,6 +92,7 @@ fn execute(
             args,
         ),
         .update_validator_identity => executeUpdateValidatorIdentity(allocator, ic, &vote_account),
+        .update_commission => |args| executeUpdateCommission(allocator, ic, &vote_account, args),
     };
 }
 
@@ -482,6 +485,51 @@ fn updateValidatorIdentity(
 
     vote_state.node_pubkey = new_identity;
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+}
+
+fn executeUpdateCommission(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    commission: u8,
+) InstructionError!void {
+    const epoch_schedule = try ic.getSysvar(EpochSchedule);
+    const clock = try ic.getSysvar(Clock);
+
+    const versioned_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+
+    var vote_state = versioned_state.convertToCurrent(allocator) catch {
+        return InstructionError.InvalidAccountData;
+    };
+    defer vote_state.deinit();
+
+    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    vote_state.commission = commission;
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+}
+
+fn updateCommission(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    commission: u8,
+    epoch_schedule: EpochSchedule,
+    clock: Clock,
+    feature_set: FeatureSet,
+) InstructionError!void {
+    _ = allocator;
+    _ = ic;
+    _ = vote_account;
+    _ = commission;
+    _ = epoch_schedule;
+    _ = clock;
+    _ = feature_set;
 }
 
 // TODO: Move this to instruction_context.zig
