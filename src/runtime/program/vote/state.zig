@@ -213,11 +213,6 @@ pub const VoteStateVersions = union(enum) {
         }
     }
 
-    // For bincode
-    pub fn serializedSize(self: VoteStateVersions) !usize {
-        return sig.bincode.sizeOf(self, .{});
-    }
-
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
     pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
         switch (self) {
@@ -313,11 +308,6 @@ pub const VoteState0_23_5 = struct {
         self.votes.deinit();
         self.epoch_credits.deinit();
     }
-
-    // For bincode.
-    pub fn serializedSize(self: VoteState0_23_5) !usize {
-        return sig.bincode.sizeOf(self, .{});
-    }
 };
 
 /// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_1_14_11.rs#L16
@@ -391,16 +381,9 @@ pub const VoteState1_14_11 = struct {
     pub fn sizeOf() usize {
         return 3731;
     }
-
-    // For bincode.
-    pub fn serializedSize(self: VoteState1_14_11) !usize {
-        return sig.bincode.sizeOf(self, .{});
-    }
 };
 
 /// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
-///
-/// Must support `bincode` and `serializedSize` methods for writing to the account data.
 pub const VoteState = struct {
     /// the node that votes in this account
     node_pubkey: Pubkey,
@@ -532,11 +515,6 @@ pub const VoteState = struct {
         } orelse return InstructionError.InvalidAccountData;
         _ = try self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
         return pubkey;
-    }
-
-    // For bincode.
-    pub fn serializedSize(self: VoteState) !usize {
-        return sig.bincode.sizeOf(self, .{});
     }
 };
 
