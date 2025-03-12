@@ -467,7 +467,6 @@ fn updateValidatorIdentity(
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
-    // current authorized withdrawer must say "yay"
     if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
