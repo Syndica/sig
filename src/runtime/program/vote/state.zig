@@ -104,14 +104,14 @@ pub const AuthorizedVoters = struct {
         self: *AuthorizedVoters,
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
-    ) bool {
+    ) (error{OutOfMemory} || InstructionError)!bool {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
         defer expired_keys.deinit();
 
         var voter_iter = self.authorized_voters.iterator();
         while (voter_iter.next()) |entry| {
             if (entry.key_ptr.* < current_epoch) {
-                expired_keys.append(entry.key_ptr.*) catch unreachable;
+                try expired_keys.append(entry.key_ptr.*);
             }
         }
 
@@ -213,11 +213,6 @@ pub const VoteStateVersions = union(enum) {
         }
     }
 
-    // For bincode
-    pub fn serializedSize(self: VoteStateVersions) !usize {
-        return sig.bincode.sizeOf(self, .{});
-    }
-
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
     pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
         switch (self) {
@@ -313,11 +308,6 @@ pub const VoteState0_23_5 = struct {
         self.votes.deinit();
         self.epoch_credits.deinit();
     }
-
-    // For bincode.
-    pub fn serializedSize(self: VoteState0_23_5) !usize {
-        return sig.bincode.sizeOf(self, .{});
-    }
 };
 
 /// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_1_14_11.rs#L16
@@ -391,16 +381,9 @@ pub const VoteState1_14_11 = struct {
     pub fn sizeOf() usize {
         return 3731;
     }
-
-    // For bincode.
-    pub fn serializedSize(self: VoteState1_14_11) !usize {
-        return sig.bincode.sizeOf(self, .{});
-    }
 };
 
 /// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
-///
-/// Must support `bincode` and `serializedSize` methods for writing to the account data.
 pub const VoteState = struct {
     /// the node that votes in this account
     node_pubkey: Pubkey,
@@ -484,7 +467,7 @@ pub const VoteState = struct {
         self: *VoteState,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
-    ) (InstructionError || VoteError)!void {
+    ) (error{OutOfMemory} || InstructionError || VoteError)!void {
 
         // The offset in slots `n` on which the target_epoch
         // (default value `DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET`) is
@@ -515,9 +498,7 @@ pub const VoteState = struct {
             });
         }
 
-        self.authorized_voters.insert(target_epoch, new_authorized_voter) catch
-        // TODO: Is it okay to convert out of memory to InvalidAccountData?
-            return InstructionError.InvalidAccountData;
+        try self.authorized_voters.insert(target_epoch, new_authorized_voter);
     }
 
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
@@ -525,21 +506,15 @@ pub const VoteState = struct {
         self: *VoteState,
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
-    ) InstructionError!Pubkey {
+    ) (error{OutOfMemory} || InstructionError)!Pubkey {
         const pubkey = self.authorized_voters
             .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch |err| {
             return switch (err) {
-                // TODO: Okay to convert out of memory to InvalidAccountData?
-                error.OutOfMemory => InstructionError.InvalidAccountData,
+                error.OutOfMemory => err,
             };
         } orelse return InstructionError.InvalidAccountData;
-        _ = self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
+        _ = try self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
         return pubkey;
-    }
-
-    // For bincode.
-    pub fn serializedSize(self: VoteState) !usize {
-        return sig.bincode.sizeOf(self, .{});
     }
 };
 
@@ -873,7 +848,7 @@ test "AuthorizedVoters.purgeAuthorizedVoters" {
     try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
 
     try std.testing.expectEqual(authorized_voters.count(), 3);
-    _ = authorized_voters.purgeAuthorizedVoters(allocator, 12);
+    _ = try authorized_voters.purgeAuthorizedVoters(allocator, 12);
     // Only epoch 15 should remain
     try std.testing.expectEqual(authorized_voters.count(), 1);
 }
