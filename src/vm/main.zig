@@ -2,14 +2,13 @@ const std = @import("std");
 const sig = @import("sig");
 const builtin = @import("builtin");
 
-const svm = sig.svm;
-const Elf = svm.Elf;
-const memory = svm.memory;
-const Executable = svm.Executable;
-const Vm = svm.Vm;
-const sbpf = svm.sbpf;
-const syscalls = svm.syscalls;
-const Config = svm.Config;
+const Elf = sig.vm.Elf;
+const memory = sig.vm.memory;
+const Executable = sig.vm.Executable;
+const Vm = sig.vm.Vm;
+const sbpf = sig.vm.sbpf;
+const syscalls = sig.vm.syscalls;
+const Config = sig.vm.Config;
 
 const MemoryMap = memory.MemoryMap;
 
@@ -58,7 +57,7 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: svm.BuiltinProgram = .{};
+    var loader: sig.vm.BuiltinProgram = .{};
     defer loader.deinit(allocator);
 
     inline for (.{

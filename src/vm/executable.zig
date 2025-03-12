@@ -3,7 +3,7 @@ const sbpf = @import("sbpf.zig");
 const Elf = @import("elf.zig").Elf;
 const memory = @import("memory.zig");
 const syscalls = @import("syscalls.zig");
-const Vm = @import("vm.zig").Vm;
+const Vm = @import("interpreter.zig").Vm;
 
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
