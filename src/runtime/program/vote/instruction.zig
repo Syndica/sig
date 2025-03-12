@@ -91,7 +91,7 @@ pub const VoteAuthorize = enum {
     };
 };
 
-pub const UpdateVoteIdentity = enum {
+pub const UpdateVoteIdentity = struct {
     pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated with the given authority public key
         account = 0,
