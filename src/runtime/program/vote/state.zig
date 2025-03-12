@@ -484,7 +484,7 @@ pub const VoteState = struct {
         self: *VoteState,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
-    ) (InstructionError || VoteError)!void {
+    ) (error{OutOfMemory} || InstructionError || VoteError)!void {
 
         // The offset in slots `n` on which the target_epoch
         // (default value `DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET`) is
@@ -515,9 +515,7 @@ pub const VoteState = struct {
             });
         }
 
-        self.authorized_voters.insert(target_epoch, new_authorized_voter) catch
-        // TODO: Is it okay to convert out of memory to InvalidAccountData?
-            return InstructionError.InvalidAccountData;
+        try self.authorized_voters.insert(target_epoch, new_authorized_voter);
     }
 
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
@@ -529,8 +527,7 @@ pub const VoteState = struct {
         const pubkey = self.authorized_voters
             .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch |err| {
             return switch (err) {
-                // TODO: Okay to convert out of memory to InvalidAccountData?
-                error.OutOfMemory => InstructionError.InvalidAccountData,
+                error.OutOfMemory => err,
             };
         } orelse return InstructionError.InvalidAccountData;
         _ = try self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
