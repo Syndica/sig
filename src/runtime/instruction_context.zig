@@ -106,4 +106,11 @@ pub const InstructionContext = struct {
             signers,
         );
     }
+
+    pub fn getSysvar(
+        self: *const InstructionContext,
+        comptime T: type,
+    ) InstructionError!T {
+        return self.tc.sysvar_cache.get(T) orelse InstructionError.UnsupportedSysvar;
+    }
 };
