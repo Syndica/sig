@@ -434,7 +434,7 @@ fn executeUpdateValidatorIdentity(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
 
     var new_identity = try ic.borrowInstructionAccount(
@@ -458,16 +458,13 @@ fn updateValidatorIdentity(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
 
-    var vote_state = versioned_state.convertToCurrent(allocator) catch {
-        // TODO okay to convert out of memory to InvalidAccountData?
-        return InstructionError.InvalidAccountData;
-    };
+    var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
     // current authorized withdrawer must say "yay"
