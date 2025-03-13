@@ -486,7 +486,7 @@ fn executeUpdateCommission(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     commission: u8,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const epoch_schedule = try ic.getSysvar(EpochSchedule);
     const clock = try ic.getSysvar(Clock);
 
@@ -507,31 +507,34 @@ fn updateCommission(
     commission: u8,
     epoch_schedule: EpochSchedule,
     clock: Clock,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     // Decode vote state only once, and only if needed
     var maybe_vote_state: ?VoteState = null;
-    var enforce_commission_update_rule = true;
 
-    if (ic.tc.feature_set.isActive(FeatureSet.allow_commission_decrease_at_any_time)) {
-        const versioned_state = try vote_account.deserializeFromAccountData(
-            allocator,
-            VoteStateVersions,
-        );
-
-        const vote_state_ = versioned_state.convertToCurrent(allocator) catch {
-            return InstructionError.InvalidAccountData;
-        };
-        defer vote_state_.deinit();
-        enforce_commission_update_rule = vote_state_.isCommissionIncrease(commission);
-        maybe_vote_state = vote_state_;
-    } else {
-        enforce_commission_update_rule = true;
-    }
+    const enforce_commission_update_rule = blk: {
+        if (ic.tc.feature_set.isActive(FeatureSet.allow_commission_decrease_at_any_time)) {
+            const versioned_state = vote_account.deserializeFromAccountData(
+                allocator,
+                VoteStateVersions,
+            ) catch {
+                break :blk true;
+            };
+            const vote_state_ = try versioned_state.convertToCurrent(allocator);
+            maybe_vote_state = vote_state_;
+            break :blk vote_state_.isCommissionIncrease(commission);
+        } else {
+            break :blk true;
+        }
+    };
 
     if (enforce_commission_update_rule and ic.tc.feature_set.isActive(
         FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
+            // Clean up before returning, if we have a vote_state already.
+            if (maybe_vote_state) |*vote_state| {
+                vote_state.deinit();
+            }
             ic.tc.custom_error = @intFromError(VoteError.CommissionUpdateTooLate);
             return InstructionError.Custom;
         }
@@ -551,9 +554,10 @@ fn updateCommission(
             };
         }
     };
+    defer vote_state.deinit();
 
-    // current authorized withdrawer must say "yay"
-    if (ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
+    // Current authorized withdrawer must sign transaction.
+    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -1507,4 +1511,613 @@ test "vote_program: update_validator_identity current authority did not sign" {
     );
 
     try std.testing.expectError(InstructionError.MissingRequiredSignature, result);
+}
+
+test "vote_program: update_commission increasing commission" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const epoch_schedule = EpochSchedule{
+        .slots_per_epoch = 8192,
+        .leader_schedule_slot_offset = 0,
+        .warmup = false,
+        .first_normal_epoch = 0,
+        .first_normal_slot = 0,
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const initial_commission: u8 = 10;
+    const final_commission: u8 = 20;
+
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        initial_commission,
+        clock,
+    ) };
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        final_commission,
+        clock,
+    ) };
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .update_commission = final_commission,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+    );
+}
+
+test "vote_program: update_commission decreasing commission" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const epoch_schedule = EpochSchedule{
+        .slots_per_epoch = 8192,
+        .leader_schedule_slot_offset = 0,
+        .warmup = false,
+        .first_normal_epoch = 0,
+        .first_normal_slot = 0,
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const initial_commission: u8 = 10;
+    const final_commission: u8 = 5;
+
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        initial_commission,
+        clock,
+    ) };
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        final_commission,
+        clock,
+    ) };
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .update_commission = final_commission,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+    );
+}
+
+test "vote_program: update_commission commission update too late passes with feature set off" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 1060, // needed to make isCommissionUpdateAllowed return false
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const epoch_schedule = EpochSchedule{
+        .slots_per_epoch = 100, // needed to make isCommissionUpdateAllowed return false
+        .leader_schedule_slot_offset = 0,
+        .warmup = false,
+        .first_normal_epoch = 0,
+        .first_normal_slot = 100, // needed to make isCommissionUpdateAllowed return false
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const initial_commission: u8 = 10;
+    const final_commission: u8 = 15;
+
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        initial_commission,
+        clock,
+    ) };
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        final_commission,
+        clock,
+    ) };
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .update_commission = final_commission,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{}, // None of the required feature_set is set,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{}, // None of the required feature_set is set,
+        },
+    );
+}
+
+test "vote_program: update_commission error commission update too late failure" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 1060, // needed to make isCommissionUpdateAllowed return false
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const epoch_schedule = EpochSchedule{
+        .slots_per_epoch = 100, // needed to make isCommissionUpdateAllowed return false
+        .leader_schedule_slot_offset = 0,
+        .warmup = false,
+        .first_normal_epoch = 0,
+        .first_normal_slot = 100, // needed to make isCommissionUpdateAllowed return false
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const initial_commission: u8 = 10;
+    const final_commission: u8 = 15;
+
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        initial_commission,
+        clock,
+    ) };
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        final_commission,
+        clock,
+    ) };
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .update_commission = final_commission,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+    ) catch |err| {
+        // TODO is there a way to assert VoteError.CommissionUpdateTooLate
+        // is stored in ic.tc.custom_error
+        try std.testing.expectEqual(InstructionError.Custom, err);
+    };
+}
+
+test "vote_program: update_commission missing signature" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    const epoch_schedule = EpochSchedule{
+        .slots_per_epoch = 8192,
+        .leader_schedule_slot_offset = 0,
+        .warmup = false,
+        .first_normal_epoch = 0,
+        .first_normal_slot = 0,
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const initial_commission: u8 = 10;
+    const final_commission: u8 = 20;
+
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        initial_commission,
+        clock,
+    ) };
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        final_commission,
+        clock,
+    ) };
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .update_commission = final_commission,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            // missing signature.
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .epoch_schedule = epoch_schedule,
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .slot = 0,
+                },
+                .{
+                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .slot = 0,
+                },
+            },
+        },
+    ) catch |err| {
+        try std.testing.expectEqual(InstructionError.MissingRequiredSignature, err);
+    };
 }
