@@ -191,6 +191,10 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             ic,
             args.max_data_len,
         ),
+        .upgrade => executeV3Upgrade(
+            allocator,
+            ic,
+        ),
         .set_authority => executeV3SetAuthority(
             allocator,
             ic,
@@ -203,11 +207,11 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             allocator,
             ic,
         ),
-        // TODO: Implement the following instructions
-        // .upgrade => executeV3Upgrade(),
-        // .close => executeV3Close(),
-        // .extend_program => executeV3ExtendProgram(),
-        else => @panic("Instruction not implemented"),
+        .extend_program => |args| executeV3ExtendProgram(
+            allocator,
+            ic,
+            args.additional_bytes,
+        ),
     };
 }
 
@@ -521,6 +525,208 @@ pub fn executeV3DeployWithMaxDataLen(
     try ic.tc.log("Deployed program {}", .{new_program_id});
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L705-L894
+pub fn executeV3Upgrade(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) !void {
+    try ic.checkNumberOfAccounts(3);
+
+    const programdata_key = ic.getAccountMetaAtIndex(0).?.pubkey;
+    const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, 4);
+    const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 5);
+    try ic.checkNumberOfAccounts(7);
+    const authority_key = ic.getAccountMetaAtIndex(6).?.pubkey;
+
+    // verify program
+
+    const new_program_id = blk: {
+        const program_account = try ic.borrowInstructionAccount(1);
+        defer program_account.release();
+
+        if (!program_account.isExecutable()) {
+            try ic.tc.log("Program account not executable", .{});
+            return InstructionError.AccountNotExecutable;
+        }
+        if (!program_account.isWritable()) {
+            try ic.tc.log("Program account not writeable", .{});
+            return InstructionError.InvalidArgument;
+        }
+        if (!program_account.isOwnedByCurrentProgram()) { // TODO: get_owner() != program_id
+            try ic.tc.log("Program account not owned by loader", .{});
+            return InstructionError.IncorrectProgramId;
+        }
+        switch (try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+            .program => |data| {
+                if (!data.programdata_address.equals(&programdata_key)) {
+                    try ic.tc.log("Program and ProgramData account mismatch", .{});
+                    return InstructionError.InvalidArgument;
+                }
+            },
+            else => {
+                try ic.tc.log("Invalid Program account", .{});
+                return InstructionError.InvalidAccountData;
+            },
+        }
+        break :blk program_account.pubkey;
+    };
+
+    // Verify buffer account
+
+    const buf = blk: {
+        const buffer = try ic.borrowInstructionAccount(2);
+        defer buffer.release();
+
+        switch (try buffer.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+            .buffer => |data| {
+                if (data.authority_address == null or !data.authority_address.?.equals(&authority_key)) {
+                    try ic.tc.log("Buffer and upgrade authority don't match", .{});
+                    return InstructionError.IncorrectAuthority;
+                }
+                if (!(try ic.isIndexSigner(6))) {
+                    try ic.tc.log("Upgrade authority did not sign", .{});
+                    return InstructionError.MissingRequiredSignature;
+                }
+            },
+            else => {
+                try ic.tc.log("Invalid Buffer account", .{});
+                return InstructionError.InvalidArgument;
+            },
+        }
+
+        const buf = .{
+            .lamports = buffer.getLamports(),
+            .data_offset = bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
+            .data_len = buffer.getData().len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
+        };
+        if (buffer.getData().len < buf.data_offset or buf.data_len == 0) {
+            try ic.tc.log("Buffer account too small", .{});
+            return InstructionError.InvalidAccountData;
+        }
+        break :blk buf;
+    };
+
+    // Verify ProgramData account
+
+    const progdata = blk: {
+        const programdata = try ic.borrowInstructionAccount(0);
+        defer programdata.release();
+
+        const offset = bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE;
+        const balance_required = @max(1, rent.minimumBalance(programdata.getData().len));
+        if (programdata.getData().len < bpf_loader_program.v3.State.sizeOfProgramData(buf.data_len)) {
+            try ic.tc.log("ProgramData account not large enough", .{});
+            return InstructionError.AccountDataTooSmall;
+        }
+        if (programdata.getLamports() +| buf.lamports < balance_required) {
+            try ic.tc.log("Buffer account balance too low to fund upgrade", .{});
+            return InstructionError.InsufficientFunds;
+        }
+
+        switch (try programdata.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+            .program_data => |data| {
+                if (clock.slot == data.slot) {
+                    try ic.tc.log("Program was deployed in this block already", .{});
+                    return InstructionError.InvalidArgument;
+                }
+                if (data.upgrade_authority_address == null) {
+                    try ic.tc.log("Program not upgradeable", .{});
+                    return InstructionError.Immutable;
+                }
+                if (!data.upgrade_authority_address.?.equals(&authority_key)) {
+                    try ic.tc.log("Incorrect upgrade authority provided", .{});
+                    return InstructionError.IncorrectAuthority;
+                }
+                if (!(try ic.isIndexSigner(6))) {
+                    try ic.tc.log("Upgrade authority did not sign", .{});
+                    return InstructionError.MissingRequiredSignature;
+                }
+            },
+            else => {
+                try ic.tc.log("Invalid ProgramData account", .{});
+                return InstructionError.InvalidAccountData;
+            },
+        }
+
+        break :blk .{
+            .len = programdata.getData().len,
+            .offset = offset,
+            .balance_required = balance_required,
+        };
+    };
+
+    // Load and verify the program bits
+
+    {
+        const buffer = try ic.borrowInstructionAccount(2);
+        defer buffer.release();
+
+        if (buffer.getData().len < buf.data_offset) {
+            return InstructionError.AccountDataTooSmall;
+        }
+
+        try deployProgram(
+            allocator,
+            new_program_id,
+            ic.program_meta.pubkey,
+            bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
+            buffer.getData()[buf.data_offset..],
+            clock.slot,
+            ic.tc.feature_set,
+            if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
+        );
+    }
+
+    // Update the ProgramData account, record the upgraded data, and zero the rest:
+
+    var programdata = try ic.borrowInstructionAccount(0);
+    defer programdata.release();
+
+    {
+        try programdata.serializeIntoAccountData(bpf_loader_program.v3.State{ .program_data = .{
+            .slot = clock.slot,
+            .upgrade_authority_address = authority_key,
+        } });
+
+        const dst_slice = try programdata.getDataMutable();
+        if (dst_slice.len < progdata.offset +| buf.data_len) {
+            return InstructionError.AccountDataTooSmall;
+        }
+
+        const buffer = try ic.borrowInstructionAccount(2);
+        defer buffer.release();
+
+        const src_slice = buffer.getData();
+        if (src_slice.len < buf.data_offset) {
+            return InstructionError.AccountDataTooSmall;
+        }
+
+        // copy_from_slice (not using @memcpy as idk if they alias)
+        std.mem.copyForwards(
+            u8,
+            dst_slice[progdata.offset..][0..buf.data_len],
+            src_slice[buf.data_offset..],
+        );
+
+        // Happens outside this scope but should be the same thing.
+        @memset(dst_slice[progdata.offset +| buf.data_len..], 0);
+    }
+
+    // Fund ProgramData to rent-exemption, spill the rest
+    var buffer = try ic.borrowInstructionAccount(2);
+    defer buffer.release();
+
+    var spill = try ic.borrowInstructionAccount(3);
+    defer spill.release();
+
+    try spill.addLamports(programdata.getLamports() +| buf.lamports +| progdata.balance_required);
+    try buffer.setLamports(0);
+    try programdata.setLamports(progdata.balance_required);
+    try buffer.setDataLength(allocator, ic.tc, bpf_loader_program.v3.State.sizeOfBuffer(0));
+
+    try ic.tc.log("Upgraded program {any}", .{new_program_id});
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010
 pub fn executeV3SetAuthority(
     allocator: std.mem.Allocator,
@@ -786,6 +992,173 @@ fn commonCloseAccount(
     try recipient_account.addLamports(close_account.getLamports());
     try close_account.setLamports(0);
     try close_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .uninitialized = {} });
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1139-L1296
+pub fn executeV3ExtendProgram(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    additional_bytes: u32,
+) !void {
+    if (additional_bytes == 0) {
+        try ic.tc.log("Additional bytes must be greater than 0", .{});
+        return InstructionError.InvalidInstructionData;
+    }
+
+    const program_data_account_index = 0;
+    const program_account_index = 1;
+    // System program is only required when a CPI is performed
+    const optional_system_program_account_index = 2;
+    _ = &optional_system_program_account_index; // allow(unused)
+    const optional_payer_account_index = 3;
+
+    var programdata = try ic.borrowInstructionAccount(program_data_account_index);
+    var programdata_released = false; // simulate drop(program_data) down below.
+    defer if (!programdata_released) programdata.release();
+
+    const programdata_key = programdata.pubkey;
+    if (!programdata.isOwnedByCurrentProgram()) {
+        try ic.tc.log("ProgramData owner is invalid", .{});
+        return InstructionError.InvalidAccountOwner;
+    }
+    if (!programdata.isWritable()) {
+        try ic.tc.log("ProgramData owner is invalid", .{});
+        return InstructionError.InvalidArgument;
+    }
+
+    const program_key = blk: {
+        var program_account = try ic.borrowInstructionAccount(program_account_index);
+        defer program_account.release();
+
+        if (!program_account.isWritable()) {
+            try ic.tc.log("Program account is not writeable", .{});
+            return InstructionError.InvalidArgument;
+        }
+        if (!program_account.isOwnedByCurrentProgram()) {
+            try ic.tc.log("Program account not owned by loader", .{});
+            return InstructionError.InvalidAccountOwner;
+        }
+
+        switch (try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+            .program => |data| {
+                if (!data.programdata_address.equals(&programdata_key)) {
+                    try ic.tc.log("Program account does not match PRogramData account", .{});
+                    return InstructionError.InvalidArgument;
+                }
+            },
+            else => {
+                try ic.tc.log("Invalid Program account", .{});
+                return InstructionError.InvalidAccountData;
+            },
+        }
+
+        break :blk program_account.pubkey;
+    };
+
+    const new_len = programdata.getData().len +| additional_bytes;
+    if (new_len > system_program.MAX_PERMITTED_DATA_LENGTH) {
+        try ic.tc.log(
+            "Extended ProgramData length of {} bytes exceeds max account data length of {}",
+            .{ new_len, system_program.MAX_PERMITTED_DATA_LENGTH },
+        );
+        return InstructionError.InvalidRealloc;
+    }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
+    const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse return InstructionError.UnsupportedSysvar;
+
+    const upgrade_authority_address =
+        switch (try programdata.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+        .program_data => |data| blk: {
+            if (clock.slot == data.slot) {
+                try ic.tc.log("Program was extended in this block already", .{});
+                return InstructionError.InvalidArgument;
+            }
+            if (data.upgrade_authority_address == null) {
+                try ic.tc.log("Cannot extend ProgramData accounts that are not upgradeable", .{});
+                return InstructionError.Immutable;
+            }
+            break :blk data.upgrade_authority_address;
+        },
+        else => {
+            try ic.tc.log("ProgramData state is invalid", .{});
+            return InstructionError.InvalidAccountData;
+        },
+    };
+
+    const required_payment = blk: {
+        const balance = programdata.getLamports();
+        // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
+        const rent = ic.tc.sysvar_cache.get(sysvar.Rent) orelse return InstructionError.UnsupportedSysvar;
+        const min_balance = @max(1, rent.minimumBalance(new_len));
+        break :blk min_balance -| balance;
+    };
+
+    // Borrowed accounts need to be dropped before native_invoke
+    programdata.release();
+    programdata_released = true;
+
+    // Determine the program ID to prevent overlapping mutable/immutable borrow of invoke context.
+    if (required_payment > 0) {
+        // [agave] https://github.com/anza-xyz/agave/blob/ad0983afd4efa711cf2258aa9630416ed6716d2a/transaction-context/src/lib.rs#L260-L267
+        const payer = ic.getAccountMetaAtIndex(optional_payer_account_index) orelse return InstructionError.NotEnoughAccountKeys;
+
+        const data = bincode.writeAlloc(
+            allocator,
+            system_program.Instruction{
+                .transfer = .{ .lamports = required_payment },
+            },
+            .{},
+        ) catch |err| {
+            ic.tc.custom_error = @intFromError(err);
+            return InstructionError.Custom;
+        };
+        defer allocator.free(data);
+
+        try native_cpi.execute(
+            allocator,
+            ic,
+            Instruction{
+                .program_pubkey = system_program.ID,
+                .account_metas = &.{
+                    .{ .pubkey = payer.pubkey, .is_signer = true, .is_writable = true },
+                    .{ .pubkey = programdata_key, .is_signer = false, .is_writable = true },
+                },
+                .serialized = data,
+            },
+            &.{},
+        );
+    }
+
+    {
+        programdata = try ic.borrowInstructionAccount(program_data_account_index);
+        defer programdata.release();
+
+        try programdata.setDataLength(allocator, ic.tc, new_len);
+
+        try deployProgram(
+            allocator,
+            program_key,
+            ic.program_meta.pubkey,
+            bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
+            programdata.getData()[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
+            clock.slot,
+            ic.tc.feature_set,
+            if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
+        );
+    }
+
+    programdata = try ic.borrowInstructionAccount(program_data_account_index);
+    defer programdata.release();
+
+    try programdata.serializeIntoAccountData(bpf_loader_program.v3.State{
+        .program_data = .{
+            .slot = clock.slot,
+            .upgrade_authority_address = upgrade_authority_address,
+        },
+    });
+
+    try ic.tc.log("Extended ProgramData account by {} bytes", .{additional_bytes});
 }
 
 /// TODO: This function depends on syscalls and program cache implementations
