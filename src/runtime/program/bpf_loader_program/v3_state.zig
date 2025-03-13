@@ -41,4 +41,14 @@ pub const State = union(enum) {
             .program_data => PROGRAM_DATA_METADATA_SIZE,
         };
     }
+
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/c07f692e41d757057c8700211a9300cdcd6d33b1/loader-v3-interface/src/state.rs#L57
+    pub fn sizeOfBuffer(program_len: usize) usize {
+        return BUFFER_METADATA_SIZE +| program_len;
+    }
+
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/c07f692e41d757057c8700211a9300cdcd6d33b1/loader-v3-interface/src/state.rs#L62
+    pub fn sizeOfProgramData(program_len: usize) usize {
+        return PROGRAM_DATA_METADATA_SIZE +| program_len;
+    }
 };
