@@ -32,13 +32,16 @@ pub const COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH =
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/feature-set/src/lib.rs#L1188
 pub const FeatureSet = struct {
     active: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    inactive: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
 
     pub const EMPTY = FeatureSet{
         .active = .{},
+        .inactive = .{},
     };
 
     pub fn deinit(self: *FeatureSet, allocator: std.mem.Allocator) void {
         self.active.deinit(allocator);
+        self.inactive.deinit(allocator);
     }
 
     pub fn isActive(self: *const FeatureSet, feature: Pubkey) bool {
