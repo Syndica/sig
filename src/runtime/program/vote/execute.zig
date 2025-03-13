@@ -238,7 +238,7 @@ fn authorize(
             // https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
             {
                 const authorized_withdrawer_signer = if (signers) |signers_|
-                    try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
+                    try validateIsSigner(vote_state.authorized_withdrawer, signers_)
                 else
                     ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
 
@@ -272,7 +272,7 @@ fn authorize(
         .withdrawer => {
             // current authorized withdrawer must say "yay".
             const authorized_withdrawer_signer = if (signers) |signers_|
-                try verifyAuthorizedSigner(vote_state.authorized_withdrawer, signers_)
+                try validateIsSigner(vote_state.authorized_withdrawer, signers_)
             else
                 ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
 
@@ -437,7 +437,7 @@ fn executeUpdateValidatorIdentity(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
 
     var new_identity = try ic.borrowInstructionAccount(
@@ -461,25 +461,19 @@ fn updateValidatorIdentity(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
     );
 
-    var vote_state = versioned_state.convertToCurrent(allocator) catch {
-        // TODO okay to convert out of memory to InvalidAccountData?
-        return InstructionError.InvalidAccountData;
-    };
+    var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
-    // current authorized withdrawer must say "yay"
-    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
-        return InstructionError.MissingRequiredSignature;
-    }
-
-    // new node must say "yay"
-    if (!ic.info.isPubkeySigner(new_identity)) {
+    // Both the current authorized withdrawer and new identity must sign.
+    if (!(ic.info.isPubkeySigner(vote_state.authorized_withdrawer) and
+        ic.info.isPubkeySigner(new_identity)))
+    {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -584,8 +578,7 @@ pub fn isCommissionUpdateAllowed(slot: u64, epoch_schedule: *const EpochSchedule
     }
 }
 
-// TODO: Move this to instruction_context.zig
-fn verifyAuthorizedSigner(
+fn validateIsSigner(
     authorized: Pubkey,
     signers: std.AutoHashMap(Pubkey, void),
 ) InstructionError!bool {
