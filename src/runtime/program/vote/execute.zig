@@ -467,12 +467,10 @@ fn updateValidatorIdentity(
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
-    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
-        return InstructionError.MissingRequiredSignature;
-    }
-
-    // new node must say "yay"
-    if (!ic.info.isPubkeySigner(new_identity)) {
+    // Both the current authorized withdrawer and new identity must sign.
+    if (!(ic.info.isPubkeySigner(vote_state.authorized_withdrawer) and
+        ic.info.isPubkeySigner(new_identity)))
+    {
         return InstructionError.MissingRequiredSignature;
     }
 
