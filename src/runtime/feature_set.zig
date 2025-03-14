@@ -17,12 +17,25 @@ pub const REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS =
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/feature-set/src/lib.rs#L1188
 pub const FeatureSet = struct {
     active: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    inactive: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
 
     pub const EMPTY = FeatureSet{
         .active = .{},
+        .inactive = .{},
     };
 
     pub fn deinit(self: *FeatureSet, allocator: std.mem.Allocator) void {
         self.active.deinit(allocator);
+        self.inactive.deinit(allocator);
     }
+
+    pub fn isActive(self: *const FeatureSet, feature: Pubkey) bool {
+        return self.active.contains(feature);
+    }
+
+    pub const allow_commission_decrease_at_any_time =
+        Pubkey.parseBase58String("5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL") catch unreachable;
+
+    pub const commission_updates_only_allowed_in_first_half_of_epoch =
+        Pubkey.parseBase58String("noRuG2kzACwgaY7TVmLRnUNPLKNVQE1fb7X55YWBehp") catch unreachable;
 };

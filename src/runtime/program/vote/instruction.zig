@@ -102,6 +102,15 @@ pub const UpdateVoteIdentity = struct {
     };
 };
 
+pub const UpdateCommission = struct {
+    pub const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated
+        account = 0,
+        /// `[SIGNER]` Withdraw authority
+        current_authority = 1,
+    };
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum) {
     /// Initialize a vote account
@@ -164,4 +173,11 @@ pub const Instruction = union(enum) {
     ///   1. `[SIGNER]` New validator identity (node_pubkey)
     ///   2. `[SIGNER]` Withdraw authority
     update_validator_identity,
+
+    /// Update the commission for the vote account
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated
+    ///   1. `[SIGNER]` Withdraw authority
+    update_commission: u8,
 };
