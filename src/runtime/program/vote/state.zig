@@ -116,8 +116,9 @@ pub const AuthorizedVoters = struct {
         }
 
         for (expired_keys.items) |key| {
-            _ = self.authorized_voters.orderedRemove(key);
+            _ = self.authorized_voters.swapRemoveNoSort(key);
         }
+        self.authorized_voters.sort();
 
         // Have to uphold this invariant b/c this is
         // 1) The check for whether the vote state is initialized

@@ -12,3 +12,36 @@ Sig is a reads-optimized Solana validator client written in Zig.
 Visit our full [website](https://www.syndica.io/sig) to learn more about Sig and Syndica.
 
 Read our source code on [GitHub](https://github.com/Syndica/sig).
+
+## Motivation
+
+Our motivation to build Sig focuses on enhancing system efficiency and resilience through
+three key pillars:
+- Performance → improved RPS (Reads-Per-Second)
+- Client Diversity → improved Network Fault Tolerance
+- Readability → improved Accessibility
+
+## Roadmap
+
+- [x] Gossip - P2P Communication
+- [x] AccountsDb - Account State Representation
+- [x] Repair Stage - Fetching Blocks
+- 🔜 SVM - Solana's Virtual Machine
+- 🔜 Consensus - TowerBFT
+- 🔜 RPC - Reading Chain Data
+- [   ] Block Production - Packing Transactions
+- [   ] Block Propagation - Turbine
+
+## Build and Run
+
+Build and run Sig using the following command:
+
+```bash
+zig build -Doptimize=ReleaseSafe sig -- --help
+```
+
+## Learn More
+
+Below are some resources to help you learn more about Sig:
+- [Sig Code-Docs Site](https://syndica.github.io/sig/)
+- [Engineering Blog Posts](https://blog.syndica.io/tag/engineering/)

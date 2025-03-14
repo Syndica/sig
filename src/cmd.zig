@@ -67,7 +67,7 @@ pub fn main() !void {
 
     var shred_version_option: cli.Option = .{
         .long_name = "shred-version",
-        .help = "The shred version for the network",
+        .help = "The shred version for the cluster",
         .value_ref = cli.mkRef(&current_config.shred_version),
         .required = false,
         .value_name = "Shred Version",
@@ -177,13 +177,13 @@ pub fn main() !void {
         .value_name = "Entrypoints",
     };
 
-    var network_option: cli.Option = .{
-        .long_name = "network",
+    var cluster_option: cli.Option = .{
+        .long_name = "cluster",
         .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
-        .short_alias = 'n',
-        .value_ref = cli.mkRef(&current_config.gossip.network),
+        .short_alias = 'c',
+        .value_ref = cli.mkRef(&current_config.gossip.cluster),
         .required = false,
-        .value_name = "Network for Entrypoints",
+        .value_name = "Cluster for Entrypoints",
     };
 
     var trusted_validators_option: cli.Option = .{
@@ -312,7 +312,7 @@ pub fn main() !void {
     var genesis_file_path_option: cli.Option = .{
         .long_name = "genesis-file-path",
         .help = "path to the genesis file." ++
-            " defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
+            " defaults to 'data/genesis-files/<cluster>_genesis.bin' if --cluster option is set",
         .short_alias = 'g',
         .value_ref = cli.mkRef(&current_config.genesis_file_path),
         .required = false,
@@ -409,7 +409,7 @@ pub fn main() !void {
         &gossip_host_option,
         &gossip_port_option,
         &gossip_entrypoints_option,
-        &network_option,
+        &cluster_option,
     };
     const gossip_options_node = [_]*cli.Option{
         &gossip_spy_node_option,
@@ -600,7 +600,7 @@ pub fn main() !void {
                         .options = &[_]*cli.Option{} ++
                             accounts_db_options_base ++
                             accounts_db_options_index ++ .{
-                            &network_option,
+                            &cluster_option,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -888,7 +888,7 @@ fn validator() !void {
     });
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
-    var rpc_client = sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
     defer rpc_client.deinit();
 
     var rpc_epoch_ctx_service = sig.adapter.RpcEpochContextService.init(
@@ -944,12 +944,12 @@ fn shredNetwork() !void {
         return error.GenesisPathNotProvided;
     const genesis_config = try GenesisConfig.init(allocator, genesis_path);
 
-    var rpc_client = sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
+    var rpc_client = try sig.rpc.Client.init(allocator, genesis_config.cluster_type, .{});
     defer rpc_client.deinit();
 
     const shred_network_conf = current_config.shred_network.toConfig(
         current_config.shred_network.start_slot orelse blk: {
-            const response = try rpc_client.getSlot(allocator, .{});
+            const response = try rpc_client.getSlot(.{});
             break :blk try response.result();
         },
     );
@@ -1241,7 +1241,7 @@ pub fn testTransactionSenderService() !void {
         .testnet => .Testnet,
         .localnet => .LocalHost,
     } else {
-        @panic("network option (-n) not provided");
+        @panic("cluster option (-c) not provided");
     };
     app_base.logger.warn().logf(
         "Starting transaction sender service on {s}...",
@@ -1270,7 +1270,7 @@ pub fn testTransactionSenderService() !void {
     );
 
     // rpc is used to get blockhashes and other balance information
-    var rpc_client = sig.rpc.Client.init(allocator, rpc_cluster, .{
+    var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster, .{
         .logger = app_base.logger.unscoped(),
     });
     defer rpc_client.deinit();
