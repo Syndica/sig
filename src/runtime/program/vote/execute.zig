@@ -100,6 +100,7 @@ pub fn execute(
             args,
         ),
         .update_commission => |args| executeUpdateCommission(allocator, ic, &vote_account, args),
+        .withdraw => |args| executeWithdraw(allocator, ic, &vote_account, args),
     };
 }
 
