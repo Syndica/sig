@@ -46,6 +46,7 @@ pub const Pubkey = extern struct {
 
     pub const BASE58_MAX_SIZE = base58.encodedMaxSize(SIZE);
     pub const Base58String = std.BoundedArray(u8, BASE58_MAX_SIZE);
+
     pub fn base58String(self: Pubkey) Base58String {
         return BASE58_ENDEC.encodeArray(SIZE, self.data);
     }
@@ -58,6 +59,10 @@ pub const Pubkey = extern struct {
     ) !void {
         const str = self.base58String();
         return writer.writeAll(str.constSlice());
+    }
+
+    pub fn jsonStringify(self: Pubkey, write_stream: anytype) !void {
+        try write_stream.write(self.base58String().slice());
     }
 
     pub fn jsonParse(

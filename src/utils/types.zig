@@ -77,6 +77,11 @@ pub fn ReturnType(comptime FnPtr: type) type {
     };
 }
 
+/// Gets the error set from the return type of a function
+pub fn ErrorReturn(function: anytype) type {
+    return @typeInfo(ReturnType(@TypeOf(function))).ErrorUnion.error_set;
+}
+
 /// Casts the item's type into an optional if it is not optional. Otherwise the
 /// type in unchanged.
 ///
@@ -349,7 +354,7 @@ pub const EqlConfig = struct {
 ///
 /// see eqlCustom for more information.
 /// use eqlCustom to customize the behavior.
-pub inline fn eql(a: anytype, b: @TypeOf(a)) bool {
+pub fn eql(a: anytype, b: @TypeOf(a)) bool {
     return eqlCustom(a, b, .{});
 }
 
@@ -360,8 +365,8 @@ pub inline fn eql(a: anytype, b: @TypeOf(a)) bool {
 /// - treats Allocators as equal
 /// - uses an `eql` method if defined for the type
 /// - compares only the `items` field in ArrayLists
-pub fn eqlCustom(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
-    var config = config_;
+pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
+    comptime var config = config_;
     const T: type = @TypeOf(a);
 
     // custom handlers for specific types -- TODO: ideally these would be part of EqlConfig
@@ -446,6 +451,11 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
             } else {
                 return a.len == b.len and a.ptr == b.ptr;
             },
+            .Many => if (config.follow_pointers == .yes) {
+                @compileError("cannot compare data behind many item pointers: " ++ @typeName(T));
+            } else {
+                return a == b;
+            },
             else => if (config.follow_pointers == .yes) {
                 return eqlCustom(a.*, b.*, config);
             } else {
@@ -460,7 +470,7 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
 }
 
 /// copy of `std.mem.eql` except it uses `eql` (above) instead of `==`
-fn sliceEql(comptime T: type, a: []const T, b: []const T, config: EqlConfig) bool {
+fn sliceEql(comptime T: type, a: []const T, b: []const T, comptime config: EqlConfig) bool {
     if (@sizeOf(T) == 0) return true;
 
     if (!@inComptime() and
