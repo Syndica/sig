@@ -74,6 +74,11 @@ pub const BorrowedAccount = struct {
         return self.borrow_context.is_writable;
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/ad0983afd4efa711cf2258aa9630416ed6716d2a/transaction-context/src/lib.rs#L1048
+    pub fn isExecutable(self: BorrowedAccount) bool {
+        return self.account.executable;
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
     pub fn checkDataIsMutable(self: BorrowedAccount) ?InstructionError {
         if (self.account.executable) return InstructionError.ExecutableDataModified;
@@ -105,6 +110,11 @@ pub const BorrowedAccount = struct {
             return InstructionError.MaxAccountsDataAllocationsExceeded;
 
         return null;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L770
+    pub fn getLamports(self: *const BorrowedAccount) u64 {
+        return self.account.lamports;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L825

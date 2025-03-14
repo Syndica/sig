@@ -88,6 +88,7 @@ pub fn createInstructionContext(
     for (accounts_params) |account_params| {
         if (account_params.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
+
         try account_metas.append(.{
             .pubkey = tc.accounts[account_params.index_in_transaction].pubkey,
             .is_signer = account_params.is_signer,
@@ -143,7 +144,7 @@ pub fn expectProgramExecuteResult(
 
     try program.execute(allocator, &instruction_context);
 
-    const expected_transaction_context = try createTransactionContext(
+    var expected_transaction_context = try createTransactionContext(
         allocator,
         expected_transaction_context_params,
     );

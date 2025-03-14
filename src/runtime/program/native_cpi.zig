@@ -132,6 +132,7 @@ pub fn prepareInstruction(
     for (deduped_indexes.slice()) |index| {
         const deduped_account = deduped_instruction_accounts.buffer[index];
         instruction_accounts.appendAssumeCapacity(.{
+            .is_duplicate = false,
             .pubkey = deduped_account.pubkey,
             .is_signer = deduped_account.is_signer,
             .is_writable = deduped_account.is_writable,
