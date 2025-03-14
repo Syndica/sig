@@ -614,6 +614,7 @@ pub fn executeV3Upgrade(
 
         const offset = bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE;
         const balance_required = @max(1, rent.minimumBalance(programdata.getData().len));
+
         if (programdata.getData().len < bpf_loader_program.v3.State.sizeOfProgramData(buf.data_len)) {
             try ic.tc.log("ProgramData account not large enough", .{});
             return InstructionError.AccountDataTooSmall;
@@ -1042,7 +1043,7 @@ pub fn executeV3ExtendProgram(
         switch (try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
             .program => |data| {
                 if (!data.programdata_address.equals(&programdata_key)) {
-                    try ic.tc.log("Program account does not match PRogramData account", .{});
+                    try ic.tc.log("Program account does not match ProgramData account", .{});
                     return InstructionError.InvalidArgument;
                 }
             },
@@ -1953,4 +1954,310 @@ test "executeV3Close" {
             },
         );
     }
+}
+
+test "executeV3Upgrade" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const spill_account_key = Pubkey.initRandom(prng.random());
+    const upgrade_authority_key = Pubkey.initRandom(prng.random());
+    const buffer_account_key = Pubkey.initRandom(prng.random());
+
+    const program_account_key = Pubkey.initRandom(prng.random());
+    const program_data_account_key = try pubkey_utils.createProgramAddress(
+        &.{&program_account_key.data},
+        &.{255},
+        bpf_loader_program.v3.ID,
+    );
+
+    const rent = sysvar.Rent.DEFAULT;
+    var clock = sysvar.Clock.DEFAULT;
+    clock.slot += 1337;
+
+    const buffer_size = 512;
+
+    const program_data_buffer = try allocator.alloc(u8, bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE + buffer_size);
+    defer allocator.free(program_data_buffer);
+    _ = try bincode.writeToSlice(
+        program_data_buffer,
+        bpf_loader_program.v3.State{
+            .program_data = .{
+                .slot = clock.slot - 1, // must be before the current clock's slot.
+                .upgrade_authority_address = upgrade_authority_key,
+            },
+        },
+        .{},
+    );
+
+    const updated_program_data_buffer = try allocator.alloc(u8, program_data_buffer.len);
+    defer allocator.free(updated_program_data_buffer);
+    _ = try bincode.writeToSlice(
+        updated_program_data_buffer,
+        bpf_loader_program.v3.State{ .program_data = .{
+            .slot = clock.slot,
+            .upgrade_authority_address = upgrade_authority_key,
+        } },
+        .{},
+    );
+
+    const program_account_buffer = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(program_account_buffer);
+    _ = try bincode.writeToSlice(
+        program_account_buffer,
+        bpf_loader_program.v3.State{ .program = .{ .programdata_address = program_data_account_key } },
+        .{},
+    );
+
+    const buffer_account_data = try allocator.alloc(u8, bpf_loader_program.v3.State.BUFFER_METADATA_SIZE + buffer_size);
+    defer allocator.free(buffer_account_data);
+    _ = try bincode.writeToSlice(
+        buffer_account_data,
+        bpf_loader_program.v3.State{ .buffer = .{ .authority_address = upgrade_authority_key } },
+        .{},
+    );
+
+    const buffer_aid_balance = 42;
+    const spill_balance = 100;
+    const buffer_balance = rent.minimumBalance(buffer_account_data.len) + buffer_aid_balance;
+    const program_data_balance = rent.minimumBalance(program_data_buffer.len) - buffer_aid_balance;
+
+    try expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3,
+        bpf_loader_program.v3.Instruction{
+            .upgrade = {},
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 }, // programdata
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 }, // program
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 2 }, // buffer written account
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 3 }, // spill account
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 }, // sysvar rent
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 }, // sysvar clock
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 6 }, // upgrade account
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_data_account_key,
+                    .data = program_data_buffer,
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = program_data_balance,
+                },
+                .{
+                    .pubkey = program_account_key,
+                    .data = program_account_buffer,
+                    .owner = bpf_loader_program.v3.ID,
+                    .executable = true,
+                },
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = buffer_account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = buffer_balance,
+                },
+                .{
+                    .pubkey = spill_account_key,
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = spill_balance,
+                },
+                .{
+                    .pubkey = sysvar.Rent.ID,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = sysvar.Clock.ID,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = upgrade_authority_key,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = rent,
+                .clock = clock,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_data_account_key,
+                    .data = updated_program_data_buffer,
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = rent.minimumBalance(program_data_buffer.len),
+                },
+                .{
+                    .pubkey = program_account_key,
+                    .data = program_account_buffer,
+                    .owner = bpf_loader_program.v3.ID,
+                    .executable = true,
+                },
+                .{
+                    .pubkey = buffer_account_key,
+                    .data = buffer_account_data[0..bpf_loader_program.v3.State.BUFFER_METADATA_SIZE],
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = 0,
+                },
+                .{
+                    .pubkey = spill_account_key,
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = spill_balance + buffer_balance + program_data_balance + rent.minimumBalance(program_data_buffer.len),
+                },
+                .{
+                    .pubkey = sysvar.Rent.ID,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = sysvar.Clock.ID,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = upgrade_authority_key,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+            .accounts_resize_delta = -buffer_size,
+        },
+    );
+}
+
+test "executeV3ExtendProgram" {
+    const expectProgramExecuteResult =
+        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const payer_account_key = Pubkey.initRandom(prng.random());
+    const upgrade_authority_key = Pubkey.initRandom(prng.random());
+
+    const program_account_key = Pubkey.initRandom(prng.random());
+    const program_data_account_key = try pubkey_utils.createProgramAddress(
+        &.{&program_account_key.data},
+        &.{255},
+        bpf_loader_program.v3.ID,
+    );
+
+    var clock = sysvar.Clock.DEFAULT;
+    clock.slot += 1337;
+
+    const program_data_account_buffer = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(program_data_account_buffer);
+    const program_data = try bincode.writeToSlice(
+        program_data_account_buffer,
+        bpf_loader_program.v3.State{
+            .program_data = .{
+                .slot = clock.slot - 1, // must be before the current clock's slot.
+                .upgrade_authority_address = upgrade_authority_key,
+            },
+        },
+        .{},
+    );
+
+    const additional_bytes = 512;
+    const help_pay = 0; // TODO
+    const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
+    const program_data_lamports =
+        sysvar.Rent.DEFAULT.minimumBalance(program_data.len + additional_bytes) -
+        help_pay;
+
+    const extended_program_data_buffer = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State) + additional_bytes);
+    defer allocator.free(extended_program_data_buffer);
+    @memset(extended_program_data_buffer, 0); // important
+    const extended_program_data = try bincode.writeToSlice(
+        extended_program_data_buffer,
+        bpf_loader_program.v3.State{ .program_data = .{
+            .slot = clock.slot,
+            .upgrade_authority_address = upgrade_authority_key,
+        } },
+        .{},
+    );
+
+    const program_account_buffer = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    defer allocator.free(program_account_buffer);
+    const program_account = try bincode.writeToSlice(
+        program_account_buffer,
+        bpf_loader_program.v3.State{ .program = .{ .programdata_address = program_data_account_key } },
+        .{},
+    );
+
+    try expectProgramExecuteResult(
+        allocator,
+        bpf_loader_program.v3,
+        bpf_loader_program.v3.Instruction{
+            .extend_program = .{ .additional_bytes = additional_bytes },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 }, // programdata
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 }, // program
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 }, // loader
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 3 }, // payer
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_data_account_key,
+                    .data = program_data,
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = program_data_lamports,
+                },
+                .{
+                    .pubkey = program_account_key,
+                    .data = program_account,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+                .{
+                    .pubkey = payer_account_key,
+                    .lamports = payer_balance,
+                },
+            },
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .rent = sysvar.Rent.DEFAULT,
+                .clock = clock,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = program_data_account_key,
+                    .data = extended_program_data_buffer[0 .. extended_program_data.len + additional_bytes],
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = program_data_lamports + help_pay,
+                },
+                .{
+                    .pubkey = program_account_key,
+                    .data = program_account,
+                    .owner = bpf_loader_program.v3.ID,
+                },
+                .{
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+                .{
+                    .pubkey = payer_account_key,
+                    .lamports = payer_balance - help_pay,
+                },
+            },
+            .accounts_resize_delta = additional_bytes,
+        },
+    );
 }
