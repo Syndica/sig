@@ -116,8 +116,9 @@ pub const AuthorizedVoters = struct {
         }
 
         for (expired_keys.items) |key| {
-            _ = self.authorized_voters.orderedRemove(key);
+            _ = self.authorized_voters.swapRemoveNoSort(key);
         }
+        self.authorized_voters.sort();
 
         // Have to uphold this invariant b/c this is
         // 1) The check for whether the vote state is initialized
@@ -392,6 +393,7 @@ pub const VoteState = struct {
     node_pubkey: Pubkey,
 
     /// the signer for withdrawals
+    // TODO rename to withdrawer
     authorized_withdrawer: Pubkey,
     /// percentage (0-100) that represents what part of a rewards
     ///  payout should be given to this VoteAccount
@@ -405,6 +407,7 @@ pub const VoteState = struct {
     root_slot: ?Slot,
 
     /// the signer for vote transactions
+    // TODO rename to voters
     authorized_voters: AuthorizedVoters,
 
     /// history of prior authorized voters and the epochs for which

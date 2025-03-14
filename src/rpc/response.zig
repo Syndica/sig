@@ -1,49 +1,65 @@
 const std = @import("std");
 
-/// Wraps a parsed response from the RPC server with an arena
-/// used for request, response, and json parsing allocations
-/// The bytes field contains the raw bytes from the response
-/// The value field contains a ParsedResponse which may reference
-/// memory from the bytes field to avoid copying and hence the
-/// bytes field must remain valid for the lifetime of the value field.
-pub fn Response(comptime T: type) type {
+const Allocator = std.mem.Allocator;
+
+pub const ParseError = std.json.ParseError(std.json.Scanner) || error{MissingResult};
+
+/// Wraps a parsed response from the RPC server with an arena that owns all
+/// contained pointers.
+pub fn Response(comptime Method: type) type {
     return struct {
         arena: *std.heap.ArenaAllocator,
-        bytes: std.ArrayList(u8),
-        parsed: ParsedResponse(T),
-        parse_options: std.json.ParseOptions,
+        id: u64,
+        jsonrpc: []const u8,
+        payload: Payload,
 
-        pub fn init(
-            allocator: std.mem.Allocator,
-            parse_options: std.json.ParseOptions,
-        ) !Response(T) {
+        pub const Payload = union(enum) {
+            result: Method.Response,
+            err: Error,
+        };
+
+        pub fn fromJson(
+            allocator: Allocator,
+            response_json: []const u8,
+        ) ParseError!Response(Method) {
             const arena = try allocator.create(std.heap.ArenaAllocator);
+            errdefer allocator.destroy(arena);
             arena.* = std.heap.ArenaAllocator.init(allocator);
+            errdefer arena.deinit();
+            const raw_response = try std.json.parseFromSliceLeaky(
+                struct {
+                    id: u64,
+                    jsonrpc: []const u8,
+                    result: ?Method.Response = null,
+                    @"error": ?Error = null,
+                },
+                arena.allocator(),
+                response_json,
+                .{},
+            );
             return .{
                 .arena = arena,
-                .bytes = std.ArrayList(u8).init(arena.allocator()),
-                .parsed = undefined,
-                .parse_options = parse_options,
+                .id = raw_response.id,
+                .jsonrpc = raw_response.jsonrpc,
+                .payload = if (raw_response.@"error") |err| .{
+                    .err = err,
+                } else .{
+                    .result = raw_response.result orelse return error.MissingResult,
+                },
             };
         }
 
-        pub fn deinit(self: *const Response(T)) void {
+        pub fn deinit(self: Response(Method)) void {
             const allocator = self.arena.child_allocator;
             self.arena.deinit();
             allocator.destroy(self.arena);
         }
 
-        pub fn parse(self: *Response(T)) !void {
-            self.parsed = try std.json.parseFromSliceLeaky(
-                ParsedResponse(T),
-                self.arena.allocator(),
-                self.bytes.items,
-                self.parse_options,
-            );
-        }
-
-        pub fn result(self: *const Response(T)) !T {
-            return if (self.parsed.result) |res| res else error.RpcRequestFailed;
+        pub fn result(self: Response(Method)) !Method.Response {
+            return switch (self.payload) {
+                .result => |r| r,
+                .err => error.RpcRequestFailed,
+            };
         }
     };
 }
@@ -57,13 +73,8 @@ pub const Error = struct {
     pub fn dataAsString(self: *const Error, allocator: std.mem.Allocator) ![]const u8 {
         return std.json.stringifyAlloc(allocator, self.data.?, .{});
     }
-};
 
-pub fn ParsedResponse(comptime T: type) type {
-    return struct {
-        id: ?u64,
-        jsonrpc: []const u8,
-        result: ?T = null,
-        @"error": ?Error = null,
-    };
-}
+    pub fn eql(self: Error, other: Error) bool {
+        return self.code == other.code and std.mem.eql(u8, self.message, other.message);
+    }
+};

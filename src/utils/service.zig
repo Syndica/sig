@@ -147,7 +147,12 @@ pub fn spawnService(
         .{ logger, exit, name, config.run_config, function, args },
     );
 
-    thread.setName(name) catch logger.err().logf("failed to set name for thread '{s}'", .{name});
+    const thread_name = if (name.len > std.Thread.max_name_len)
+        name[0..std.Thread.max_name_len]
+    else
+        name;
+    thread.setName(thread_name) catch |e|
+        logger.err().logf("failed to set name for thread '{s}' - {}", .{ thread_name, e });
 
     return thread;
 }
@@ -189,7 +194,7 @@ pub fn runService(
         = if (result) |_|
             .{ config.return_handler, num_oks, "return", logger.info(), null }
         else |_|
-            .{ config.error_handler, num_errors, "error", logger.warn(), @errorReturnTrace() };
+            .{ config.error_handler, num_errors, "error", logger.err(), @errorReturnTrace() };
 
         // handle result
         if (handler.log_return) {
