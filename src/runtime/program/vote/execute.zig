@@ -88,6 +88,7 @@ pub fn execute(
             &vote_account,
         ),
         .update_commission => |args| executeUpdateCommission(allocator, ic, &vote_account, args),
+        .withdraw => |args| executeWithdraw(allocator, ic, &vote_account, args),
     };
 }
 
@@ -574,6 +575,48 @@ pub fn isCommissionUpdateAllowed(slot: u64, epoch_schedule: *const EpochSchedule
     } else {
         return true;
     }
+}
+
+fn executeWithdraw(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    lamports: u8,
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
+    const rent = try ic.getSysvar(Rent);
+    const clock = try ic.getSysvar(Clock);
+
+    // TODO agave drops the vote_account here. Why?
+    try widthraw(
+        allocator,
+        ic,
+        vote_account,
+        lamports,
+        rent,
+        clock,
+    );
+}
+
+fn widthraw(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    lamports: u8,
+    rent: Rent,
+    clock: Clock,
+) (error{OutOfMemory} || InstructionError)!void {
+    const versioned_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+
+    var vote_state = try versioned_state.convertToCurrent(allocator);
+    defer vote_state.deinit();
+    _ = ic;
+    _ = lamports;
+    _ = rent;
+    _ = clock;
 }
 
 fn validateIsSigner(
