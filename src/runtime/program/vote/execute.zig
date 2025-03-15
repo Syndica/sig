@@ -653,6 +653,14 @@ fn widthraw(
             return InstructionError.InsufficientFunds;
         }
     }
+
+    try vote_account.subtractLamports(lamports);
+    // TODO Agave manually drops the vote_account here. Why?
+    var recipient_account = try ic.borrowInstructionAccount(
+        @intFromEnum(vote_instruction.Withdraw.AccountIndex.recipient_authority),
+    );
+    defer recipient_account.release();
+    try recipient_account.addLamports(lamports);
 }
 
 fn validateIsSigner(
