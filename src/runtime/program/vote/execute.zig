@@ -581,7 +581,7 @@ fn executeWithdraw(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    lamports: u8,
+    lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
     const rent = try ic.getSysvar(Rent);
@@ -602,7 +602,7 @@ fn widthraw(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    lamports: u8,
+    lamports: u64,
     rent: Rent,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
@@ -613,10 +613,46 @@ fn widthraw(
 
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
-    _ = ic;
-    _ = lamports;
-    _ = rent;
-    _ = clock;
+
+    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    const remaining_balance = std.math.sub(u64, vote_account.account.lamports, lamports) catch {
+        return InstructionError.InsufficientFunds;
+    };
+
+    if (remaining_balance == 0) {
+        const reject_active_vote_account_close = blk: {
+            if (vote_state.epoch_credits.getLastOrNull()) |last_epoch_credit| {
+                const current_epoch = clock.epoch;
+                const last_epoch_with_credits = last_epoch_credit.epoch;
+                // if current_epoch - last_epoch_with_credits < 2 then the validator has received credits
+                // either in the current epoch or the previous epoch. If it's >= 2 then it has been at least
+                // one full epoch since the validator has received credits.
+                break :blk (current_epoch -| last_epoch_with_credits) < 2;
+            } else {
+                break :blk false;
+            }
+        };
+
+        if (reject_active_vote_account_close) {
+            ic.tc.custom_error = @intFromError(VoteError.ActiveVoteAccountClose);
+            return InstructionError.Custom;
+        } else {
+            // Deinitialize upon zero-balance
+            const default_vote_state = VoteState.default(allocator);
+            defer vote_state.deinit();
+            try vote_account.serializeIntoAccountData(
+                VoteStateVersions{ .current = default_vote_state },
+            );
+        }
+    } else {
+        const min_rent_exempt_balance = rent.minimumBalance(vote_account.constAccountData().len);
+        if (remaining_balance < min_rent_exempt_balance) {
+            return InstructionError.InsufficientFunds;
+        }
+    }
 }
 
 fn validateIsSigner(
