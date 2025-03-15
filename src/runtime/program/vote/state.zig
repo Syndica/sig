@@ -422,6 +422,22 @@ pub const VoteState = struct {
     /// most recent timestamp submitted with a vote
     last_timestamp: BlockTimestamp,
 
+    pub fn default(allocator: std.mem.Allocator) VoteState {
+        return .{
+            .node_pubkey = Pubkey.ZEROES,
+            .authorized_withdrawer = Pubkey.ZEROES,
+            .commission = 0,
+            .votes = std.ArrayList(LandedVote).init(allocator),
+            .root_slot = null,
+            .authorized_voters = AuthorizedVoters{
+                .authorized_voters = SortedMap(Epoch, Pubkey).init(allocator),
+            },
+            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
+            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+        };
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
