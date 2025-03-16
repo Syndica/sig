@@ -2425,50 +2425,50 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 //     const allocator = std.testing.allocator;
 //     var prng = std.Random.DefaultPrng.init(5083);
 
-//     const rent = Rent.DEFAULT;
-//     const clock = Clock{
-//         .slot = 0,
-//         .epoch_start_timestamp = 0,
-//         .epoch = 30, // current_epoch
-//         .leader_schedule_epoch = 0,
-//         .unix_timestamp = 0,
-//     };
+    const rent = Rent.DEFAULT;
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 30, // current_epoch
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
 
-//     // Account data.
-//     const node_pubkey = Pubkey.initRandom(prng.random());
-//     const authorized_voter = Pubkey.initRandom(prng.random());
-//     const authorized_withdrawer = Pubkey.initRandom(prng.random());
-//     const vote_account = Pubkey.initRandom(prng.random());
-//     const commission: u8 = 10;
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
 
-//     const recipient_withdrawer = Pubkey.initRandom(prng.random());
+    const recipient_withdrawer = Pubkey.initRandom(prng.random());
 
-//     var state = try VoteState.init(
-//         allocator,
-//         node_pubkey,
-//         authorized_voter,
-//         authorized_withdrawer,
-//         commission,
-//         clock,
-//     );
-//     try state.epoch_credits.append(EpochCredit{
-//         // Condition for account close down.
-//         // current_epoch - last_epoch_with_credits > 2
-//         .epoch = 10,
-//         .credits = 1000,
-//         .prev_credits = 1000,
-//     });
+    var state = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    try state.epoch_credits.append(EpochCredit{
+        // Condition for account close down.
+        // current_epoch - last_epoch_with_credits > 2
+        .epoch = 10,
+        .credits = 1000,
+        .prev_credits = 1000,
+    });
 
-//     const initial_vote_state = VoteStateVersions{ .current = state };
-//     defer initial_vote_state.deinit();
+    const initial_vote_state = VoteStateVersions{ .current = state };
+    defer initial_vote_state.deinit();
 
 //     // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
 //     // Do in a clean up PR after all instructions has been added.
 //     var initial_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
 //     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
-//     const final_vote_state = VoteStateVersions{ .current = VoteState.default(allocator) };
-//     defer final_vote_state.deinit();
+    // const final_vote_state = VoteStateVersions{ .current = VoteState.default(allocator) };
+    // defer final_vote_state.deinit();
 
 //     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
 //     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
