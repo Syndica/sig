@@ -8,6 +8,7 @@ const VoteError = sig.runtime.program.vote_program.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMap;
 const RingBuffer = sig.utils.collections.RingBuffer;
 
@@ -51,6 +52,15 @@ pub const EpochCredit = struct {
     epoch: Epoch,
     credits: u64,
     prev_credits: u64,
+};
+
+pub const Vote = struct {
+    /// A stack of votes starting with the oldest vote
+    slots: std.ArrayList(Slot),
+    /// signature of the bank's state at the last slot
+    hash: Hash,
+    /// processing timestamp of last slot
+    timestamp: ?i64,
 };
 
 pub const AuthorizedVoters = struct {
