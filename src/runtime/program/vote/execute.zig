@@ -642,7 +642,8 @@ fn widthraw(
         } else {
             // Deinitialize upon zero-balance
             const default_vote_state = VoteState.default(allocator);
-            defer vote_state.deinit();
+            defer default_vote_state.deinit();
+
             try vote_account.serializeIntoAccountData(
                 VoteStateVersions{ .current = default_vote_state },
             );
@@ -2214,5 +2215,582 @@ test "vote_program: update_commission missing signature" {
         },
     ) catch |err| {
         try std.testing.expectEqual(InstructionError.MissingRequiredSignature, err);
+    };
+}
+
+test "vote_program: widthdraw no changes" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    // TODO use constant in other tests.
+    // Do in a clean up PR after all instructions has been added.
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const rent = Rent.DEFAULT;
+    const clock = Clock.DEFAULT;
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const recipient_withdrawer = Pubkey.initRandom(prng.random());
+
+    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer vote_state.deinit();
+
+    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // Do in a clean up PR after all instructions has been added.
+    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .withdraw = 0,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = vote_state_bytes[0..],
+                },
+                .{ .pubkey = recipient_withdrawer },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = vote_state_bytes[0..],
+                },
+                // no lamports withdrawn
+                .{ .pubkey = recipient_withdrawer, .lamports = 0 },
+                .{ .pubkey = authorized_withdrawer, .lamports = 0 },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+    );
+}
+
+test "vote_program: widthdraw some amount below with balance above rent exempt" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    // TODO use constant in other tests.
+    // Do in a clean up PR after all instructions has been added.
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const rent = Rent.DEFAULT;
+    const clock = Clock.DEFAULT;
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const recipient_withdrawer = Pubkey.initRandom(prng.random());
+
+    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer vote_state.deinit();
+
+    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // Do in a clean up PR after all instructions has been added.
+    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
+
+    const withdraw_amount = 400;
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .withdraw = withdraw_amount,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD + withdraw_amount,
+                    .owner = vote_program.ID,
+                    .data = vote_state_bytes[0..],
+                },
+                .{ .pubkey = recipient_withdrawer, .lamports = 0 },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = vote_state_bytes[0..],
+                },
+                .{ .pubkey = recipient_withdrawer, .lamports = withdraw_amount },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+    );
+}
+
+// test "vote_program: widthdraw all and close account" {
+//     const EpochCredit = sig.runtime.program.vote_program.state.EpochCredit;
+//     const ids = sig.runtime.ids;
+//     const testing = sig.runtime.program.testing;
+//     // TODO use constant in other tests.
+//     // Do in a clean up PR after all instructions has been added.
+//     const RENT_EXEMPT_THRESHOLD = 27074400;
+//     const allocator = std.testing.allocator;
+//     var prng = std.Random.DefaultPrng.init(5083);
+
+//     const rent = Rent.DEFAULT;
+//     const clock = Clock{
+//         .slot = 0,
+//         .epoch_start_timestamp = 0,
+//         .epoch = 30, // current_epoch
+//         .leader_schedule_epoch = 0,
+//         .unix_timestamp = 0,
+//     };
+
+//     // Account data.
+//     const node_pubkey = Pubkey.initRandom(prng.random());
+//     const authorized_voter = Pubkey.initRandom(prng.random());
+//     const authorized_withdrawer = Pubkey.initRandom(prng.random());
+//     const vote_account = Pubkey.initRandom(prng.random());
+//     const commission: u8 = 10;
+
+//     const recipient_withdrawer = Pubkey.initRandom(prng.random());
+
+//     var state = try VoteState.init(
+//         allocator,
+//         node_pubkey,
+//         authorized_voter,
+//         authorized_withdrawer,
+//         commission,
+//         clock,
+//     );
+//     try state.epoch_credits.append(EpochCredit{
+//         // Condition for account close down.
+//         // current_epoch - last_epoch_with_credits > 2
+//         .epoch = 10,
+//         .credits = 1000,
+//         .prev_credits = 1000,
+//     });
+
+//     const initial_vote_state = VoteStateVersions{ .current = state };
+//     defer initial_vote_state.deinit();
+
+//     // TODO use VoteState.sizeOf() instead of hardcoding the size.
+//     // Do in a clean up PR after all instructions has been added.
+//     var initial_vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+//     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+//     const final_vote_state = VoteStateVersions{ .current = VoteState.default(allocator) };
+//     defer final_vote_state.deinit();
+
+//     var final_vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+//     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+//     testing.expectProgramExecuteResult(
+//         std.testing.allocator,
+//         vote_program,
+//         VoteProgramInstruction{
+//                 // withdrawal will close down account.
+//             .withdraw = RENT_EXEMPT_THRESHOLD,
+//         },
+//         &.{
+//             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+//             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+//             .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+//         },
+//         .{
+//             .accounts = &.{
+//                 .{
+//                     .pubkey = vote_account,
+//                     .lamports = RENT_EXEMPT_THRESHOLD,
+//                     .owner = vote_program.ID,
+//                     .data = initial_vote_state_bytes[0..],
+//                 },
+//                 .{ .pubkey = recipient_withdrawer, .lamports = 0 },
+//                 .{ .pubkey = authorized_withdrawer },
+//                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+//             },
+//             .compute_meter = vote_program.COMPUTE_UNITS,
+//             .sysvar_cache = .{
+//                 .clock = clock,
+//                 .rent = rent,
+//             },
+//         },
+//         .{
+//             .accounts = &.{
+//                 .{
+//                     .pubkey = vote_account,
+//                     .lamports = 0,
+//                     .owner = vote_program.ID,
+//                     .data = final_vote_state_bytes[0..], // account closed down,
+//                 },
+//                 .{ .pubkey = recipient_withdrawer, .lamports = RENT_EXEMPT_THRESHOLD },
+//                 .{ .pubkey = authorized_withdrawer },
+//                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+//             },
+//             .compute_meter = 0,
+//             .sysvar_cache = .{
+//                 .clock = clock,
+//                 .rent = rent,
+//             },
+//         },
+//     ) catch |err| {
+//         // TODO
+//         std.debug.print("===>{}", .{err});
+//         // try std.testing.expectEqual(InstructionError.AccountAlreadyClosed, err);
+//     };
+// }
+
+test "vote_program: widthdraw all and close account with active vote account" {
+    const EpochCredit = sig.runtime.program.vote_program.state.EpochCredit;
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    // TODO use constant in other tests.
+    // Do in a clean up PR after all instructions has been added.
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const rent = Rent.DEFAULT;
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 30, // current_epoch
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const recipient_withdrawer = Pubkey.initRandom(prng.random());
+
+    var state = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    try state.epoch_credits.append(EpochCredit{
+        // Condition for account close down not met.
+        // current_epoch - last_epoch_with_credits > 2
+        .epoch = 30,
+        .credits = 1000,
+        .prev_credits = 1000,
+    });
+
+    const initial_vote_state = VoteStateVersions{ .current = state };
+    defer initial_vote_state.deinit();
+
+    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // Do in a clean up PR after all instructions has been added.
+    var initial_vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    const final_vote_state = VoteStateVersions{ .current = VoteState.default(allocator) };
+    defer final_vote_state.deinit();
+
+    var final_vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .withdraw = RENT_EXEMPT_THRESHOLD, // withdrawal will close down account.
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = recipient_withdrawer, .lamports = 0 },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 0,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..], // account closed down,
+                },
+                .{ .pubkey = recipient_withdrawer, .lamports = RENT_EXEMPT_THRESHOLD },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+    ) catch |err| {
+        // TODO is there a way to assert VoteError.ActiveVoteAccountClose
+        // is stored in ic.tc.custom_error
+        try std.testing.expectEqual(InstructionError.Custom, err);
+    };
+}
+
+test "vote_program: widthdraw some amount below with balance below rent exempt" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    // TODO use constant in other tests.
+    // Do in a clean up PR after all instructions has been added.
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const rent = Rent.DEFAULT;
+    const clock = Clock.DEFAULT;
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const recipient_withdrawer = Pubkey.initRandom(prng.random());
+
+    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer vote_state.deinit();
+
+    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // Do in a clean up PR after all instructions has been added.
+    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
+
+    const withdraw_amount = 400;
+    testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .withdraw = withdraw_amount,
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    // withdrawal will leave account below rent exempt.
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = vote_state_bytes[0..],
+                },
+                .{ .pubkey = recipient_withdrawer, .lamports = 0 },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = vote_state_bytes[0..],
+                },
+                .{ .pubkey = recipient_withdrawer, .lamports = withdraw_amount },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+    ) catch |err| {
+        try std.testing.expectEqual(InstructionError.InsufficientFunds, err);
+    };
+}
+
+test "vote_program: widthdraw insufficient funds" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+    // TODO use constant in other tests.
+    // Do in a clean up PR after all instructions has been added.
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const rent = Rent.DEFAULT;
+    const clock = Clock.DEFAULT;
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const recipient_withdrawer = Pubkey.initRandom(prng.random());
+
+    const vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer vote_state.deinit();
+
+    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // Do in a clean up PR after all instructions has been added.
+    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
+
+    testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        vote_program,
+        VoteProgramInstruction{
+            .withdraw = RENT_EXEMPT_THRESHOLD + 1, // withdraw more than account balance
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = vote_state_bytes[0..],
+                },
+                .{ .pubkey = recipient_withdrawer, .lamports = 0 },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = vote_state_bytes[0..],
+                },
+                .{ .pubkey = recipient_withdrawer },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .rent = rent,
+            },
+        },
+    ) catch |err| {
+        try std.testing.expectEqual(InstructionError.InsufficientFunds, err);
     };
 }

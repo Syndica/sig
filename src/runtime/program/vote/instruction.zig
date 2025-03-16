@@ -177,5 +177,5 @@ pub const Instruction = union(enum) {
     ///   0. `[WRITE]` Vote account to withdraw from
     ///   1. `[WRITE]` Recipient account
     ///   2. `[SIGNER]` Withdraw authority
-    withdraw: u8,
+    withdraw: u64,
 };
