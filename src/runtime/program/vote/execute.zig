@@ -10,12 +10,14 @@ const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
+const Vote = vote_program.state.Vote;
 const VoteError = vote_program.VoteError;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const FeatureSet = sig.runtime.FeatureSet;
 
@@ -94,6 +96,13 @@ fn execute(
         .update_validator_identity => executeUpdateValidatorIdentity(allocator, ic, &vote_account),
         .update_commission => |args| executeUpdateCommission(allocator, ic, &vote_account, args),
         .withdraw => |args| executeWithdraw(allocator, ic, &vote_account, args),
+        .vote => |args| executeProcessVoteWithAccount(allocator, ic, &vote_account, args.vote),
+        .vote_switch => |args| executeProcessVoteWithAccount(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote,
+        ),
     };
 }
 
@@ -607,6 +616,50 @@ fn executeWithdraw(
         rent,
         clock,
     );
+}
+
+fn executeProcessVoteWithAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote: Vote,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (ic.tc.feature_set.isActive(FeatureSet.deprecate_legacy_vote_ixs) and
+        ic.tc.feature_set.isActive(FeatureSet.enable_tower_sync_ix))
+    {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    try processVoteWithAccount(
+        allocator,
+        ic,
+        vote_account,
+        vote,
+        try ic.getSysvarWithAccountCheck(
+            Clock,
+            @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
+        ),
+        try ic.getSysvarWithAccountCheck(
+            SlotHashes,
+            @intFromEnum(vote_instruction.Vote.AccountIndex.slot_hashes_sysvar),
+        ),
+    );
+}
+
+fn processVoteWithAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote: Vote,
+    clock: Clock,
+    slot_hashes: SlotHashes,
+) (error{OutOfMemory} || InstructionError)!void {
+    _ = allocator;
+    _ = ic;
+    _ = vote_account;
+    _ = vote;
+    _ = clock;
+    _ = slot_hashes;
 }
 
 fn widthraw(

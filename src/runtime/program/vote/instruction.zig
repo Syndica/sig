@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.hash.Hash;
 
 pub const IntializeAccount = struct {
     node_pubkey: Pubkey,
@@ -122,6 +123,26 @@ pub const Withdraw = struct {
     };
 };
 
+pub const Vote = struct {
+    vote: sig.runtime.program.vote_program.state.Vote,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to vote with
+        account = 0,
+        /// `[]` Slot hashes sysvar
+        slot_hashes_sysvar = 1,
+        /// `[]` Clock sysvar
+        clock_sysvar = 2,
+        /// `[SIGNER]` Vote authority
+        current_authority = 3,
+    };
+};
+
+pub const VoteSwitch = struct {
+    vote: sig.runtime.program.vote_program.state.Vote,
+    hash: Hash,
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum) {
     /// Initialize a vote account
@@ -198,4 +219,20 @@ pub const Instruction = union(enum) {
     ///   1. `[WRITE]` Recipient account
     ///   2. `[SIGNER]` Withdraw authority
     withdraw: u64,
+    /// A Vote instruction with recent votes
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to vote with
+    ///   1. `[]` Slot hashes sysvar
+    ///   2. `[]` Clock sysvar
+    ///   3. `[SIGNER]` Vote authority
+    vote: Vote,
+    /// A Vote instruction with recent votes
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to vote with
+    ///   1. `[]` Slot hashes sysvar
+    ///   2. `[]` Clock sysvar
+    ///   3. `[SIGNER]` Vote authority
+    vote_switch: VoteSwitch,
 };

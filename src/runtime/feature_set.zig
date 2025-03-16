@@ -38,4 +38,10 @@ pub const FeatureSet = struct {
 
     pub const commission_updates_only_allowed_in_first_half_of_epoch =
         Pubkey.parseBase58String("noRuG2kzACwgaY7TVmLRnUNPLKNVQE1fb7X55YWBehp") catch unreachable;
+
+    pub const deprecate_legacy_vote_ixs =
+        Pubkey.parseBase58String("depVvnQ2UysGrhwdiwU42tCadZL8GcBb1i2GYhMopQv") catch unreachable;
+
+    pub const enable_tower_sync_ix =
+        Pubkey.parseBase58String("tSynMCspg4xFiCj1v3TDb4c7crMR5tSBhLz4sF7rrNA") catch unreachable;
 };
