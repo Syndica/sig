@@ -363,7 +363,6 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_account| {
                 _, const borrowed_account = index_and_account;
-
                 size += @sizeOf(u8) // is_signer
                 + @sizeOf(u8) // is_writable
                 + @sizeOf(u8) // executable
@@ -414,7 +413,6 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_borrowed_account| {
                 _, const borrowed_account = index_and_borrowed_account;
-
                 _ = serializer.write(u8, std.math.maxInt(u8));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
