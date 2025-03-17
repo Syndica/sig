@@ -17,8 +17,17 @@ const SystemProgramError = system_program.Error;
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 
+/// Entrypoint maps calls `execute` and converts the error to an optional return value.
+pub fn entrypoint(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) ?(error{OutOfMemory} || InstructionError) {
+    execute(allocator, ic) catch |err| return err;
+    return null;
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
-pub fn execute(
+fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
