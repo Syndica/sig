@@ -231,7 +231,7 @@ fn prepareCpiInstructionInfo(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
     for (callee.accounts, 0..) |account, index| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
-            try tc.log("Instruction references unkown account {}", .{account.pubkey});
+            try tc.log("Instruction references unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
@@ -251,7 +251,8 @@ fn prepareCpiInstructionInfo(
             deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
         } else {
             const index_in_caller = caller.info.getAccountMetaIndex(account.pubkey) orelse {
-                try tc.log("Instruction references unkown account {}", .{account.pubkey});
+                std.debug.print("Instruction references unknown account {}", .{account.pubkey});
+                try tc.log("Instruction references unknown account {}", .{account.pubkey});
                 return InstructionError.MissingAccount;
             };
 
@@ -320,6 +321,7 @@ fn prepareCpiInstructionInfo(
         };
     } else blk: {
         const index_in_caller = caller.info.getAccountMetaIndex(callee.program_id) orelse {
+            std.debug.print("Unknown program {}\n", .{callee.program_id});
             try tc.log("Unknown program {}", .{callee.program_id});
             return InstructionError.MissingAccount;
         };

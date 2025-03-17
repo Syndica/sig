@@ -109,6 +109,7 @@ test "address-lookup-table create with missing signer" {
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = payer, .lamports = 9999999999999 },
         .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+        .{ .pubkey = sig.runtime.program.system_program.ID },
     };
 
     const meta: []const testing.InstructionContextAccountMetaParams = &.{
