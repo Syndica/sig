@@ -18,4 +18,4 @@ pub const COMPUTE_UNITS = 150;
 pub const Error = @import("error.zig").Error;
 pub const Instruction = @import("instruction.zig").Instruction;
 
-pub const entrypoint = @import("execute.zig").entrypoint;
+pub const execute = @import("execute.zig").execute;

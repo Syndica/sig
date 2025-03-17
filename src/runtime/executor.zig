@@ -24,11 +24,13 @@ pub fn executeInstruction(
     try pushInstruction(tc, instruction_info);
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L475
-    const maybe_execute_error = processNextInstruction(allocator, tc);
+    processNextInstruction(allocator, tc) catch |err| {
+        popInstruction(tc) catch {};
+        return err;
+    };
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L478
-    popInstruction(tc) catch |err| if (maybe_execute_error == null) return err;
-    if (maybe_execute_error) |err| return err;
+    try popInstruction(tc);
 }
 
 /// Execute a native CPI instruction\
@@ -117,7 +119,7 @@ fn pushInstruction(
 fn processNextInstruction(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
-) ?(error{OutOfMemory} || InstructionError) {
+) (error{OutOfMemory} || InstructionError)!void {
     // Get next instruction context from the stack
     if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
     const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
@@ -159,13 +161,11 @@ fn processNextInstruction(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
     try stable_log.programInvoke(&ic.tc.log_collector, program_id, ic.tc.instruction_stack.len);
-    if (native_program_fn(allocator, ic)) |execute_error| {
+    native_program_fn(allocator, ic) catch |execute_error| {
         try stable_log.programFailure(&ic.tc.log_collector, program_id, execute_error);
         return execute_error;
-    } else {
-        try stable_log.programSuccess(&ic.tc.log_collector, program_id);
-        return null;
-    }
+    };
+    try stable_log.programSuccess(&ic.tc.log_collector, program_id);
 }
 
 /// Pop an instruction from the instruction stack\
@@ -489,7 +489,7 @@ test "processNextInstruction" {
     // Failure: CallDepth
     try std.testing.expectEqual(
         InstructionError.CallDepth,
-        processNextInstruction(allocator, &tc).?,
+        processNextInstruction(allocator, &tc),
     );
 
     {
@@ -503,7 +503,7 @@ test "processNextInstruction" {
 
         try std.testing.expectEqual(
             InstructionError.UnsupportedProgramId,
-            processNextInstruction(allocator, &tc).?,
+            processNextInstruction(allocator, &tc),
         );
 
         _ = tc.instruction_stack.pop();
@@ -511,10 +511,7 @@ test "processNextInstruction" {
 
     // Success
     try pushInstruction(&tc, instruction_info);
-    try std.testing.expectEqual(
-        null,
-        processNextInstruction(allocator, &tc),
-    );
+    try processNextInstruction(allocator, &tc);
 }
 
 test "popInstruction" {
