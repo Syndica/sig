@@ -37,7 +37,6 @@ pub fn transfer(
         &.{
             .{ .pubkey = from, .is_signer = true, .is_writable = true },
             .{ .pubkey = to, .is_signer = false, .is_writable = true },
-            .{ .pubkey = ID, .is_signer = false, .is_writable = false }, // agave doesn't do this, why do I need it?
         },
         &.{ .transfer = .{ .lamports = lamports } },
     );

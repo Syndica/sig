@@ -35,7 +35,13 @@ pub fn createLookupTableSigned(
     payer_address: Pubkey,
     recent_slot: Slot,
 ) error{OutOfMemory}!struct { sig.core.Instruction, Pubkey } {
-    return try createLookupTableCommon(allocator, authority_address, payer_address, recent_slot, true);
+    return try createLookupTableCommon(
+        allocator,
+        authority_address,
+        payer_address,
+        recent_slot,
+        true,
+    );
 }
 
 fn createLookupTableCommon(
@@ -45,7 +51,10 @@ fn createLookupTableCommon(
     recent_slot: Slot,
     authority_is_signer: bool,
 ) error{OutOfMemory}!struct { sig.core.Instruction, Pubkey } {
-    const lookup_table_address, const bump_seed = deriveLookupTableAddress(authority_address, recent_slot);
+    const lookup_table_address, const bump_seed = deriveLookupTableAddress(
+        authority_address,
+        recent_slot,
+    );
 
     const accounts: []const sig.core.instruction.InstructionAccount = &.{
         .{ .pubkey = lookup_table_address, .is_signer = false, .is_writable = true },
@@ -141,7 +150,11 @@ test "address-lookup-table create" {
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = payer, .lamports = before_lamports },
         .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
-        .{ .pubkey = sig.runtime.program.system_program.ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{
+            .pubkey = sig.runtime.program.system_program.ID,
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            .executable = true,
+        },
     };
 
     const accounts_after: []const testing.TransactionContextAccountParams = &.{
@@ -154,7 +167,11 @@ test "address-lookup-table create" {
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = payer, .lamports = after_lamports },
         .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
-        .{ .pubkey = sig.runtime.program.system_program.ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{
+            .pubkey = sig.runtime.program.system_program.ID,
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            .executable = true,
+        },
     };
 
     const meta: []const testing.InstructionContextAccountMetaParams = &.{

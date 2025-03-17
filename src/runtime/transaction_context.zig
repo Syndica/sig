@@ -77,7 +77,11 @@ pub const TransactionContext = struct {
         self.feature_set.deinit(allocator);
     }
 
-    pub fn deinitWriteLogs(self: *TransactionContext, allocator: std.mem.Allocator, writer: anytype) !void {
+    pub fn deinitWriteLogs(
+        self: *TransactionContext,
+        allocator: std.mem.Allocator,
+        writer: anytype,
+    ) !void {
         if (self.log_collector) |collector| {
             try writer.print("logs:\n");
             for (collector.collect()) |log_line| {
