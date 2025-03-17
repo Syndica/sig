@@ -18,6 +18,8 @@ pub const REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS =
 pub const FeatureSet = struct {
     active: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
 
+    pub const enable_bpf_loader_set_authority_checked_ix = Pubkey.parseBase58String("HcW8ZjBezYYgvcbxNJwqv1t484Y2556qJsfNDWvJGZRH") catch unreachable;
+
     pub const EMPTY = FeatureSet{
         .active = .{},
     };

@@ -8,15 +8,15 @@ const Pubkey = sig.core.Pubkey;
 
 pub const Instruction = struct {
     /// Program address
-    program_pubkey: Pubkey,
+    program_id: Pubkey,
     /// Accounts that the command references
-    account_metas: []const InstructionAccountMeta,
+    accounts: []const InstructionAccount,
     /// Data is the binary encoding of the program instruction and its
     /// arguments. The lifetime of the data must outlive the instruction.
-    serialized: []const u8,
+    data: []const u8,
 };
 
-pub const InstructionAccountMeta = struct {
+pub const InstructionAccount = struct {
     /// An account's public key
     pubkey: Pubkey,
     /// True if account must sign the transaction

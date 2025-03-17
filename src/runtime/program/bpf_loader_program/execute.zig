@@ -3,11 +3,10 @@ const sig = @import("../../../sig.zig");
 
 const ids = sig.runtime.ids;
 const bincode = sig.bincode;
-const native_cpi = sig.runtime.program.native_cpi;
+const executor = sig.runtime.executor;
 const program = sig.runtime.program;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
-const svm = sig.svm;
 const system_program = sig.runtime.program.system_program;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 
@@ -23,21 +22,21 @@ const LogCollector = sig.runtime.LogCollector;
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) InstructionError!void {
-    var program_account = try ic.borrowProgramAccount(ic.program_meta.index_in_transaction);
+) (error{OutOfMemory} || InstructionError)!void {
+    var program_account = try ic.borrowProgramAccount();
 
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
     if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner)) {
         program_account.release();
-        if (bpf_loader_program.v1.ID.equals(&ic.program_meta.pubkey)) {
+        if (bpf_loader_program.v1.ID.equals(&ic.info.program_meta.pubkey)) {
             try ic.tc.consumeCompute(bpf_loader_program.v1.COMPUTE_UNITS);
             try ic.tc.log("Deprecated loader is no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_program.v2.ID.equals(&ic.program_meta.pubkey)) {
+        } else if (bpf_loader_program.v2.ID.equals(&ic.info.program_meta.pubkey)) {
             try ic.tc.consumeCompute(bpf_loader_program.v2.COMPUTE_UNITS);
             try ic.tc.log("BPF loader management instructions are no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_program.v3.ID.equals(&ic.program_meta.pubkey)) {
+        } else if (bpf_loader_program.v3.ID.equals(&ic.info.program_meta.pubkey)) {
             try ic.tc.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
             return executeBpfLoaderV3ProgramInstruction(allocator, ic);
         } else {
@@ -50,129 +49,16 @@ pub fn execute(
         try ic.tc.log("Program is not executable", .{});
         return InstructionError.IncorrectProgramId;
     }
-
-    // TODO: The following program invocation is simplified. The final implementation will depending on our approach
-    // to program caching and other features.
-
-    //
-    // Start Program Deployment
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L115
-    //
-
-    // Setup environment
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L127-L132
-    var environment = svm.BuiltinProgram{};
-    defer environment.deinit(allocator);
-    _ = environment.functions.registerHashed(allocator, "sol_log_", svm.syscalls.log) catch {
-        return InstructionError.ProgramEnvironmentSetupFailure;
-    };
-
-    // Parse ELF and create executable
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L136-L144
-    var executable = svm.Executable.fromBytes(allocator, program_account.account.data, &environment, .{}) catch |err| {
-        try ic.tc.log("{}", .{err});
-        return InstructionError.InvalidAccountData;
-    };
-    defer executable.deinit(allocator);
-
-    // Executable verification
-    // This logic is implemented during ELF parsing and executable creation TODO: @Rexicon226 to confirm please
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L147-L151
-
-    // Program caching
-    // Program caching is not implemented yet.
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L153-L176
-
-    //
-    // End Program Deployment
-    //
-
-    // Load program from cache
-    // Program caching is not implemented yet. (This load is subsituted by the deployment stage above)
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L461-L475
-
-    //
-    // Start Program Execution
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1557
-    //
-
-    // Serialize parameters
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
-
-    // Save account addresses (Low priority)
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1597
-
-    const execution_result = blk: {
-        const initial_compute_available = ic.tc.compute_meter;
-
-        // TODO: Create VM
-        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1615-L1623
-        const PAGE_SIZE: u64 = 32 * 1024;
-
-        const stack_size = executable.config.stackSize();
-        const heap_size = 10; // ic.tc.compute_budget.heap_size;
-        const cost = std.mem.alignBackward(u64, heap_size -| 1, PAGE_SIZE) / PAGE_SIZE;
-        const heap_cost = cost * 10; // ic.tc.compute_budget.heap_cost;
-
-        // TODO: Replace with mem pool similar to agave?
-        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L306-L307
-        const stack = allocator.alloc(u8, stack_size) catch {
-            return InstructionError.ProgramEnvironmentSetupFailure;
-        };
-        defer allocator.free(stack);
-        const heap = allocator.alloc(u8, heap_size) catch {
-            return InstructionError.ProgramEnvironmentSetupFailure;
-        };
-        defer allocator.free(heap);
-
-        // TODO: Create memory map
-        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
-        // const memory_mapping = createMemoryMapping(
-        //     executable,
-        //     stack,
-        //     heap,
-        //     regions,
-        // );
-
-        // TODO: Set syscall context
-        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L280-L285
-
-        // Create VM
-        // var vm = try svm.Vm.init(
-        //     allocator,
-        //     executable,
-        //     memory_map,
-        //     &environment,
-        //     .noop,
-        //     stack_size,
-        // );
-
-        // TODO: Execute VM
-        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1625-L1638
-
-        // TODO: Log return data
-        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1646-L1651
-
-        // TODO: Handle result
-        // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1651-L1725
-
-        _ = initial_compute_available;
-        _ = heap_cost;
-
-        break :blk null;
-    };
-
-    _ = execution_result;
 }
 
 pub fn executeBpfLoaderV3ProgramInstruction(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L477
-    const instruction = try ic.deserializeInstruction(allocator, bpf_loader_program.v3.Instruction);
+    const instruction = try ic.info.deserializeInstruction(allocator, bpf_loader_program.v3.Instruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -219,8 +105,8 @@ pub fn executeBpfLoaderV3ProgramInstruction(
 pub fn executeV3InitializeBuffer(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
-    try ic.checkNumberOfAccounts(2);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
 
     const buffer_account_index = 0;
     const buffer_authority_index = 1;
@@ -239,7 +125,7 @@ pub fn executeV3InitializeBuffer(
 
     try buffer_account.serializeIntoAccountData(bpf_loader_program.v3.State{
         .buffer = .{
-            .authority_address = ic.account_metas.buffer[buffer_authority_index].pubkey,
+            .authority_address = ic.info.account_metas.buffer[buffer_authority_index].pubkey,
         },
     });
 }
@@ -250,8 +136,8 @@ pub fn executeV3Write(
     ic: *InstructionContext,
     offset: u32,
     bytes: []const u8,
-) InstructionError!void {
-    try ic.checkNumberOfAccounts(2);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
 
     const buffer_account_index = 0;
     const buffer_authority_index = 1;
@@ -262,12 +148,12 @@ pub fn executeV3Write(
     switch (try buffer_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |state| {
             if (state.authority_address) |buffer_authority| {
-                if (!buffer_authority.equals(&ic.account_metas.buffer[buffer_authority_index].pubkey)) {
+                if (!buffer_authority.equals(&ic.info.account_metas.buffer[buffer_authority_index].pubkey)) {
                     try ic.tc.log("Incorrect buffer authority provided", .{});
                     return InstructionError.IncorrectAuthority;
                 }
 
-                if (!try ic.isIndexSigner(buffer_authority_index)) {
+                if (!try ic.info.isIndexSigner(buffer_authority_index)) {
                     try ic.tc.log("Buffer authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -287,7 +173,7 @@ pub fn executeV3Write(
     const start = bpf_loader_program.v3.State.BUFFER_METADATA_SIZE + @as(usize, offset);
     const end = start +| bytes.len;
 
-    if (end > buffer_account.getData().len) {
+    if (end > buffer_account.constAccountData().len) {
         try ic.tc.log("Write overflow: {} < {}", .{ bytes.len, end });
         return InstructionError.AccountDataTooSmall;
     }
@@ -300,7 +186,7 @@ pub fn executeV3DeployWithMaxDataLen(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     max_data_len: u64,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     const payer_index = 0;
     const program_data_index = 1;
     const program_index = 2;
@@ -311,20 +197,20 @@ pub fn executeV3DeployWithMaxDataLen(
     const authority_index = 7;
 
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L565
-    try ic.checkNumberOfAccounts(4);
+    try ic.info.checkNumberOfAccounts(4);
 
     // Safety: at least 4 accounts are present
-    const payer_key = ic.account_metas.buffer[payer_index].pubkey;
-    const program_data_key = ic.account_metas.buffer[program_data_index].pubkey;
+    const payer_key = ic.info.account_metas.buffer[payer_index].pubkey;
+    const program_data_key = ic.info.account_metas.buffer[program_data_index].pubkey;
 
     const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, rent_index);
     const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, clock_index);
 
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L575
-    try ic.checkNumberOfAccounts(8);
+    try ic.info.checkNumberOfAccounts(8);
 
     // Safety: at least 8 accounts are present
-    const authority_key = ic.account_metas.buffer[authority_index].pubkey;
+    const authority_key = ic.info.account_metas.buffer[authority_index].pubkey;
 
     // Verify program account and retrieve its program id
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L582-L597
@@ -339,12 +225,12 @@ pub fn executeV3DeployWithMaxDataLen(
             return InstructionError.AccountAlreadyInitialized;
         }
 
-        if (program_account.getData().len < bpf_loader_program.v3.State.PROGRAM_SIZE) {
+        if (program_account.constAccountData().len < bpf_loader_program.v3.State.PROGRAM_SIZE) {
             try ic.tc.log("Program account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
-        if (program_account.account.lamports < rent.minimumBalance(program_account.getData().len)) {
+        if (program_account.account.lamports < rent.minimumBalance(program_account.constAccountData().len)) {
             try ic.tc.log("Program account not rent-exempt", .{});
             return InstructionError.ExecutableAccountNotRentExempt;
         }
@@ -367,7 +253,7 @@ pub fn executeV3DeployWithMaxDataLen(
                 }
 
                 // Safety: at least 8 accounts are present
-                if (!ic.account_metas.buffer[authority_index].is_signer) {
+                if (!ic.info.account_metas.buffer[authority_index].is_signer) {
                     try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -378,12 +264,12 @@ pub fn executeV3DeployWithMaxDataLen(
             },
         }
 
-        if (buffer_account.getData().len <= bpf_loader_program.v3.State.BUFFER_METADATA_SIZE) {
+        if (buffer_account.constAccountData().len <= bpf_loader_program.v3.State.BUFFER_METADATA_SIZE) {
             try ic.tc.log("Buffer account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
-        const buffer_data_len = buffer_account.getData().len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE;
+        const buffer_data_len = buffer_account.constAccountData().len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE;
 
         if (max_data_len < buffer_data_len) {
             try ic.tc.log("Max data length is too small to hold Buffer data", .{});
@@ -401,8 +287,8 @@ pub fn executeV3DeployWithMaxDataLen(
     const derived_key, const bump_seed = pubkey_utils.findProgramAddress(
         &.{&new_program_id.data},
         bpf_loader_program.v3.ID,
-    ) catch |err| {
-        ic.tc.custom_error = @intFromError(err);
+    ) orelse {
+        ic.tc.custom_error = 12345; // TODO: Correct error behaviour here?
         return InstructionError.Custom;
     };
 
@@ -428,7 +314,7 @@ pub fn executeV3DeployWithMaxDataLen(
     const signer_derived_key = pubkey_utils.createProgramAddress(
         &.{&new_program_id.data},
         &.{bump_seed},
-        ic.program_meta.pubkey,
+        ic.info.program_meta.pubkey,
     ) catch |err| {
         ic.tc.custom_error = @intFromError(err);
         return InstructionError.Custom;
@@ -439,7 +325,7 @@ pub fn executeV3DeployWithMaxDataLen(
         .{ .pubkey = program_data_key, .is_signer = true, .is_writable = true },
         // pass an extra account to avoid the overly strict UnbalancedInstruction error
         // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L668-L669
-        .{ .pubkey = ic.account_metas.buffer[buffer_index].pubkey, .is_signer = false, .is_writable = true },
+        .{ .pubkey = ic.info.account_metas.buffer[buffer_index].pubkey, .is_signer = false, .is_writable = true },
     };
 
     const data = bincode.writeAlloc(
@@ -448,7 +334,7 @@ pub fn executeV3DeployWithMaxDataLen(
             .create_account = .{
                 .lamports = @max(1, rent.minimumBalance(program_data_len)),
                 .space = program_data_len,
-                .owner = ic.program_meta.pubkey,
+                .owner = ic.info.program_meta.pubkey,
             },
         },
         .{},
@@ -458,13 +344,13 @@ pub fn executeV3DeployWithMaxDataLen(
     };
     defer allocator.free(data);
 
-    try native_cpi.execute(
+    try executor.executeNativeCpiInstruction(
         allocator,
-        ic,
+        ic.tc,
         Instruction{
-            .program_pubkey = system_program.ID,
-            .account_metas = account_metas,
-            .serialized = data,
+            .program_id = system_program.ID,
+            .accounts = account_metas,
+            .data = data,
         },
         &.{signer_derived_key},
     );
@@ -475,15 +361,15 @@ pub fn executeV3DeployWithMaxDataLen(
         const buffer_account = try ic.borrowInstructionAccount(buffer_index);
         defer buffer_account.release();
 
-        if (buffer_account.getData().len < bpf_loader_program.v3.State.BUFFER_METADATA_SIZE)
+        if (buffer_account.constAccountData().len < bpf_loader_program.v3.State.BUFFER_METADATA_SIZE)
             return InstructionError.AccountDataTooSmall;
 
         try deployProgram(
             allocator,
             new_program_id,
-            ic.program_meta.pubkey,
+            ic.info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
-            buffer_account.getData()[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
+            buffer_account.constAccountData()[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
             clock.slot,
             ic.tc.feature_set,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
@@ -499,14 +385,14 @@ pub fn executeV3DeployWithMaxDataLen(
             .slot = clock.slot,
             .upgrade_authority_address = authority_key,
         } });
-        const program_data = try program_data_account.getDataMutable();
+        const program_data = try program_data_account.mutableAccountData();
 
         var buffer_account = try ic.borrowInstructionAccount(buffer_index);
         defer buffer_account.release();
 
-        @memcpy(program_data.ptr, buffer_account.getData());
+        @memcpy(program_data.ptr, buffer_account.constAccountData());
 
-        try buffer_account.setDataLength(allocator, ic.tc, bpf_loader_program.v3.State.BUFFER_METADATA_SIZE);
+        try buffer_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, bpf_loader_program.v3.State.BUFFER_METADATA_SIZE);
     }
 
     // Update the program account
@@ -530,13 +416,13 @@ pub fn executeV3Upgrade(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
-    try ic.checkNumberOfAccounts(3);
+    try ic.info.checkNumberOfAccounts(3);
 
-    const programdata_key = ic.getAccountMetaAtIndex(0).?.pubkey;
+    const programdata_key = ic.info.getAccountMetaAtIndex(0).?.pubkey;
     const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, 4);
     const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 5);
-    try ic.checkNumberOfAccounts(7);
-    const authority_key = ic.getAccountMetaAtIndex(6).?.pubkey;
+    try ic.info.checkNumberOfAccounts(7);
+    const authority_key = ic.info.getAccountMetaAtIndex(6).?.pubkey;
 
     // verify program
 
@@ -544,15 +430,15 @@ pub fn executeV3Upgrade(
         const program_account = try ic.borrowInstructionAccount(1);
         defer program_account.release();
 
-        if (!program_account.isExecutable()) {
+        if (!program_account.account.executable) {
             try ic.tc.log("Program account not executable", .{});
             return InstructionError.AccountNotExecutable;
         }
-        if (!program_account.isWritable()) {
+        if (!program_account.context.is_writable) {
             try ic.tc.log("Program account not writeable", .{});
             return InstructionError.InvalidArgument;
         }
-        if (!program_account.isOwnedByCurrentProgram()) { // TODO: get_owner() != program_id
+        if (!program_account.account.owner.equals(&program_account.context.program_id)) { // TODO: get_owner() != program_id
             try ic.tc.log("Program account not owned by loader", .{});
             return InstructionError.IncorrectProgramId;
         }
@@ -583,7 +469,7 @@ pub fn executeV3Upgrade(
                     try ic.tc.log("Buffer and upgrade authority don't match", .{});
                     return InstructionError.IncorrectAuthority;
                 }
-                if (!(try ic.isIndexSigner(6))) {
+                if (!(try ic.info.isIndexSigner(6))) {
                     try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -595,11 +481,11 @@ pub fn executeV3Upgrade(
         }
 
         const buf = .{
-            .lamports = buffer.getLamports(),
+            .lamports = buffer.account.lamports,
             .data_offset = bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
-            .data_len = buffer.getData().len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
+            .data_len = buffer.constAccountData().len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
         };
-        if (buffer.getData().len < buf.data_offset or buf.data_len == 0) {
+        if (buffer.constAccountData().len < buf.data_offset or buf.data_len == 0) {
             try ic.tc.log("Buffer account too small", .{});
             return InstructionError.InvalidAccountData;
         }
@@ -613,13 +499,13 @@ pub fn executeV3Upgrade(
         defer programdata.release();
 
         const offset = bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE;
-        const balance_required = @max(1, rent.minimumBalance(programdata.getData().len));
+        const balance_required = @max(1, rent.minimumBalance(programdata.constAccountData().len));
 
-        if (programdata.getData().len < bpf_loader_program.v3.State.sizeOfProgramData(buf.data_len)) {
+        if (programdata.constAccountData().len < bpf_loader_program.v3.State.sizeOfProgramData(buf.data_len)) {
             try ic.tc.log("ProgramData account not large enough", .{});
             return InstructionError.AccountDataTooSmall;
         }
-        if (programdata.getLamports() +| buf.lamports < balance_required) {
+        if (programdata.account.lamports +| buf.lamports < balance_required) {
             try ic.tc.log("Buffer account balance too low to fund upgrade", .{});
             return InstructionError.InsufficientFunds;
         }
@@ -638,7 +524,7 @@ pub fn executeV3Upgrade(
                     try ic.tc.log("Incorrect upgrade authority provided", .{});
                     return InstructionError.IncorrectAuthority;
                 }
-                if (!(try ic.isIndexSigner(6))) {
+                if (!(try ic.info.isIndexSigner(6))) {
                     try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -650,7 +536,7 @@ pub fn executeV3Upgrade(
         }
 
         break :blk .{
-            .len = programdata.getData().len,
+            .len = programdata.constAccountData().len,
             .offset = offset,
             .balance_required = balance_required,
         };
@@ -662,16 +548,16 @@ pub fn executeV3Upgrade(
         const buffer = try ic.borrowInstructionAccount(2);
         defer buffer.release();
 
-        if (buffer.getData().len < buf.data_offset) {
+        if (buffer.constAccountData().len < buf.data_offset) {
             return InstructionError.AccountDataTooSmall;
         }
 
         try deployProgram(
             allocator,
             new_program_id,
-            ic.program_meta.pubkey,
+            ic.info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
-            buffer.getData()[buf.data_offset..],
+            buffer.constAccountData()[buf.data_offset..],
             clock.slot,
             ic.tc.feature_set,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
@@ -689,7 +575,7 @@ pub fn executeV3Upgrade(
             .upgrade_authority_address = authority_key,
         } });
 
-        const dst_slice = try programdata.getDataMutable();
+        const dst_slice = try programdata.mutableAccountData();
         if (dst_slice.len < progdata.offset +| buf.data_len) {
             return InstructionError.AccountDataTooSmall;
         }
@@ -697,7 +583,7 @@ pub fn executeV3Upgrade(
         const buffer = try ic.borrowInstructionAccount(2);
         defer buffer.release();
 
-        const src_slice = buffer.getData();
+        const src_slice = buffer.constAccountData();
         if (src_slice.len < buf.data_offset) {
             return InstructionError.AccountDataTooSmall;
         }
@@ -720,10 +606,10 @@ pub fn executeV3Upgrade(
     var spill = try ic.borrowInstructionAccount(3);
     defer spill.release();
 
-    try spill.addLamports(programdata.getLamports() +| buf.lamports +| progdata.balance_required);
+    try spill.addLamports(programdata.account.lamports +| buf.lamports +| progdata.balance_required);
     try buffer.setLamports(0);
     try programdata.setLamports(progdata.balance_required);
-    try buffer.setDataLength(allocator, ic.tc, bpf_loader_program.v3.State.sizeOfBuffer(0));
+    try buffer.setDataLength(allocator, &ic.tc.accounts_resize_delta, bpf_loader_program.v3.State.sizeOfBuffer(0));
 
     try ic.tc.log("Upgraded program {any}", .{new_program_id});
 }
@@ -732,14 +618,14 @@ pub fn executeV3Upgrade(
 pub fn executeV3SetAuthority(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) InstructionError!void {
-    try ic.checkNumberOfAccounts(2);
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    const present_authority_key = ic.getAccountMetaAtIndex(1).?.pubkey;
-    const new_authority = if (ic.getAccountMetaAtIndex(2)) |meta| meta.pubkey else null;
+    const present_authority_key = ic.info.getAccountMetaAtIndex(1).?.pubkey;
+    const new_authority = if (ic.info.getAccountMetaAtIndex(2)) |meta| meta.pubkey else null;
 
     switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |buffer| {
@@ -755,7 +641,7 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.isIndexSigner(1))) {
+            if (!(try ic.info.isIndexSigner(1))) {
                 try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -774,7 +660,7 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.isIndexSigner(1))) {
+            if (!(try ic.info.isIndexSigner(1))) {
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -798,18 +684,18 @@ pub fn executeV3SetAuthority(
 pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) InstructionError!void {
-    if (!ic.tc.feature_set.isActive(FeatureSet.enable_bpf_loader_set_authority_checked_ix)) {
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!ic.tc.feature_set.active.contains(FeatureSet.enable_bpf_loader_set_authority_checked_ix)) {
         return InstructionError.InvalidInstructionData;
     }
 
-    try ic.checkNumberOfAccounts(3);
+    try ic.info.checkNumberOfAccounts(3);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    const present_authority_key = ic.getAccountMetaAtIndex(1).?.pubkey;
-    const new_authority = ic.getAccountMetaAtIndex(2).?.pubkey;
+    const present_authority_key = ic.info.getAccountMetaAtIndex(1).?.pubkey;
+    const new_authority = ic.info.getAccountMetaAtIndex(2).?.pubkey;
 
     switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |buffer| {
@@ -821,11 +707,11 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.isIndexSigner(1))) {
+            if (!(try ic.info.isIndexSigner(1))) {
                 try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!(try ic.isIndexSigner(2))) {
+            if (!(try ic.info.isIndexSigner(2))) {
                 try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -844,11 +730,11 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.isIndexSigner(1))) {
+            if (!(try ic.info.isIndexSigner(1))) {
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!(try ic.isIndexSigner(2))) {
+            if (!(try ic.info.isIndexSigner(2))) {
                 try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -873,9 +759,9 @@ pub fn executeV3Close(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
-    try ic.checkNumberOfAccounts(2);
-    if (ic.getAccountMetaAtIndex(0).?.index_in_transaction ==
-        ic.getAccountMetaAtIndex(1).?.index_in_transaction)
+    try ic.info.checkNumberOfAccounts(2);
+    if (ic.info.getAccountMetaAtIndex(0).?.index_in_transaction ==
+        ic.info.getAccountMetaAtIndex(1).?.index_in_transaction)
     {
         try ic.tc.log("Recipient is the same as the account being closed", .{});
         return InstructionError.InvalidArgument;
@@ -890,18 +776,18 @@ pub fn executeV3Close(
         allocator,
         bpf_loader_program.v3.State,
     );
-    try close_account.setDataLength(allocator, ic.tc, bpf_loader_program.v3.State.UNINITIALIZED_SIZE);
+    try close_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, bpf_loader_program.v3.State.UNINITIALIZED_SIZE);
     switch (close_account_state) {
         .uninitialized => {
             var recipient_account = try ic.borrowInstructionAccount(1);
             defer recipient_account.release();
 
-            try recipient_account.addLamports(close_account.getLamports());
+            try recipient_account.addLamports(close_account.account.lamports);
             try close_account.setLamports(0);
             try ic.tc.log("Closed Uninitialized {any}", .{close_key});
         },
         .buffer => |data| {
-            try ic.checkNumberOfAccounts(3);
+            try ic.info.checkNumberOfAccounts(3);
             close_account.release();
             close_account_released = true;
 
@@ -909,7 +795,7 @@ pub fn executeV3Close(
             try ic.tc.log("Closed Buffer {any}", .{close_key});
         },
         .program_data => |data| {
-            try ic.checkNumberOfAccounts(4);
+            try ic.info.checkNumberOfAccounts(4);
             close_account.release();
             close_account_released = true;
 
@@ -920,11 +806,11 @@ pub fn executeV3Close(
             const program_key = program_account.pubkey;
             const authority_address = data.upgrade_authority_address;
 
-            if (!program_account.isWritable()) {
+            if (!program_account.context.is_writable) {
                 try ic.tc.log("Program account is not writable", .{});
                 return InstructionError.InvalidArgument;
             }
-            if (!program_account.isOwnedByCurrentProgram()) { // NOTE: getOwner() == ic.getLastProgramKey()
+            if (!program_account.account.owner.equals(&program_account.context.program_id)) { // NOTE: getOwner() == ic.getLastProgramKey()
                 try ic.tc.log("Program account is not owned by the loader", .{});
                 return InstructionError.IncorrectProgramId;
             }
@@ -974,12 +860,12 @@ fn commonCloseAccount(
         return InstructionError.Immutable;
     }
 
-    const auth_account = ic.getAccountMetaAtIndex(2) orelse return InstructionError.MissingAccount;
+    const auth_account = ic.info.getAccountMetaAtIndex(2) orelse return InstructionError.MissingAccount;
     if (!authority_address.?.equals(&auth_account.pubkey)) {
         try ic.tc.log("Incorrect authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
-    if (!(try ic.isIndexSigner(2))) {
+    if (!(try ic.info.isIndexSigner(2))) {
         try ic.tc.log("Authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }
@@ -990,7 +876,7 @@ fn commonCloseAccount(
     var recipient_account = try ic.borrowInstructionAccount(1);
     defer recipient_account.release();
 
-    try recipient_account.addLamports(close_account.getLamports());
+    try recipient_account.addLamports(close_account.account.lamports);
     try close_account.setLamports(0);
     try close_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .uninitialized = {} });
 }
@@ -1018,11 +904,11 @@ pub fn executeV3ExtendProgram(
     defer if (!programdata_released) programdata.release();
 
     const programdata_key = programdata.pubkey;
-    if (!programdata.isOwnedByCurrentProgram()) {
+    if (!programdata.account.owner.equals(&programdata.context.program_id)) {
         try ic.tc.log("ProgramData owner is invalid", .{});
         return InstructionError.InvalidAccountOwner;
     }
-    if (!programdata.isWritable()) {
+    if (!programdata.context.is_writable) {
         try ic.tc.log("ProgramData owner is invalid", .{});
         return InstructionError.InvalidArgument;
     }
@@ -1031,11 +917,11 @@ pub fn executeV3ExtendProgram(
         var program_account = try ic.borrowInstructionAccount(program_account_index);
         defer program_account.release();
 
-        if (!program_account.isWritable()) {
+        if (!program_account.context.is_writable) {
             try ic.tc.log("Program account is not writeable", .{});
             return InstructionError.InvalidArgument;
         }
-        if (!program_account.isOwnedByCurrentProgram()) {
+        if (!program_account.account.owner.equals(&program_account.context.program_id)) {
             try ic.tc.log("Program account not owned by loader", .{});
             return InstructionError.InvalidAccountOwner;
         }
@@ -1056,7 +942,7 @@ pub fn executeV3ExtendProgram(
         break :blk program_account.pubkey;
     };
 
-    const new_len = programdata.getData().len +| additional_bytes;
+    const new_len = programdata.constAccountData().len +| additional_bytes;
     if (new_len > system_program.MAX_PERMITTED_DATA_LENGTH) {
         try ic.tc.log(
             "Extended ProgramData length of {} bytes exceeds max account data length of {}",
@@ -1088,7 +974,7 @@ pub fn executeV3ExtendProgram(
     };
 
     const required_payment = blk: {
-        const balance = programdata.getLamports();
+        const balance = programdata.account.lamports;
         // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
         const rent = ic.tc.sysvar_cache.get(sysvar.Rent) orelse return InstructionError.UnsupportedSysvar;
         const min_balance = @max(1, rent.minimumBalance(new_len));
@@ -1102,7 +988,7 @@ pub fn executeV3ExtendProgram(
     // Determine the program ID to prevent overlapping mutable/immutable borrow of invoke context.
     if (required_payment > 0) {
         // [agave] https://github.com/anza-xyz/agave/blob/ad0983afd4efa711cf2258aa9630416ed6716d2a/transaction-context/src/lib.rs#L260-L267
-        const payer = ic.getAccountMetaAtIndex(optional_payer_account_index) orelse return InstructionError.NotEnoughAccountKeys;
+        const payer = ic.info.getAccountMetaAtIndex(optional_payer_account_index) orelse return InstructionError.NotEnoughAccountKeys;
 
         const data = bincode.writeAlloc(
             allocator,
@@ -1116,16 +1002,16 @@ pub fn executeV3ExtendProgram(
         };
         defer allocator.free(data);
 
-        try native_cpi.execute(
+        try executor.executeNativeCpiInstruction(
             allocator,
-            ic,
+            ic.tc,
             Instruction{
-                .program_pubkey = system_program.ID,
-                .account_metas = &.{
+                .program_id = system_program.ID,
+                .accounts = &.{
                     .{ .pubkey = payer.pubkey, .is_signer = true, .is_writable = true },
                     .{ .pubkey = programdata_key, .is_signer = false, .is_writable = true },
                 },
-                .serialized = data,
+                .data = data,
             },
             &.{},
         );
@@ -1135,14 +1021,14 @@ pub fn executeV3ExtendProgram(
         programdata = try ic.borrowInstructionAccount(program_data_account_index);
         defer programdata.release();
 
-        try programdata.setDataLength(allocator, ic.tc, new_len);
+        try programdata.setDataLength(allocator, &ic.tc.accounts_resize_delta, new_len);
 
         try deployProgram(
             allocator,
             program_key,
-            ic.program_meta.pubkey,
+            ic.info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
-            programdata.getData()[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
+            programdata.constAccountData()[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
             ic.tc.feature_set,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
@@ -1176,7 +1062,7 @@ pub fn deployProgram(
     slot: u64,
     feature_set: FeatureSet,
     maybe_log_collector: ?*LogCollector,
-) InstructionError!void {
+) (error{OutOfMemory} || InstructionError)!void {
     _ = allocator;
     _ = program_id;
     _ = owner_id;
@@ -1188,8 +1074,7 @@ pub fn deployProgram(
 }
 
 test "executeV3InitializeBuffer" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
 
@@ -1212,7 +1097,7 @@ test "executeV3InitializeBuffer" {
     @memset(final_buffer_account_data, 0);
     _ = try bincode.writeToSlice(final_buffer_account_data, final_buffer_account_state, .{});
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.initialize_buffer,
@@ -1257,8 +1142,7 @@ test "executeV3InitializeBuffer" {
 }
 
 test "executeV3Write" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
 
@@ -1284,7 +1168,7 @@ test "executeV3Write" {
     const end = start +| source.len;
     @memcpy(final_buffer_account_data[start..end], &source);
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         std.testing.allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction{
@@ -1334,8 +1218,7 @@ test "executeV3Write" {
 }
 
 test "executeDeployWithMaxDataLen" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
 
@@ -1385,7 +1268,7 @@ test "executeDeployWithMaxDataLen" {
     const log_collector = sig.runtime.LogCollector.default(allocator);
     defer log_collector.deinit();
 
-    expectProgramExecuteResult(
+    testing.expectProgramExecuteResult(
         allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction{
@@ -1494,8 +1377,7 @@ test "executeDeployWithMaxDataLen" {
 }
 
 test "executeV3SetAuthority" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1525,7 +1407,7 @@ test "executeV3SetAuthority" {
     );
 
     // test with State.buffer
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority,
@@ -1596,7 +1478,7 @@ test "executeV3SetAuthority" {
     );
 
     // test with State.program_data
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority,
@@ -1648,8 +1530,7 @@ test "executeV3SetAuthority" {
 }
 
 test "executeV3SetAuthorityChecked" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1678,14 +1559,8 @@ test "executeV3SetAuthorityChecked" {
         .{},
     );
 
-    var feature_set = FeatureSet{ .active = .{}, .inactive = .{} };
-    defer feature_set.active.deinit(allocator);
-    defer feature_set.inactive.deinit(allocator);
-
-    try feature_set.active.putNoClobber(allocator, FeatureSet.enable_bpf_loader_set_authority_checked_ix, 0);
-
     // test with State.buffer (1 and 2 must be signers).
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority_checked,
@@ -1713,7 +1588,9 @@ test "executeV3SetAuthorityChecked" {
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
-            .feature_set = feature_set,
+            .feature_set = &.{
+                .{ .pubkey = FeatureSet.enable_bpf_loader_set_authority_checked_ix, .slot = 0 },
+            },
         },
         .{
             .accounts = &.{
@@ -1757,7 +1634,7 @@ test "executeV3SetAuthorityChecked" {
     );
 
     // test with State.program_data (1 and 2 must be signers).
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority_checked,
@@ -1785,7 +1662,9 @@ test "executeV3SetAuthorityChecked" {
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
-            .feature_set = feature_set,
+            .feature_set = &.{
+                .{ .pubkey = FeatureSet.enable_bpf_loader_set_authority_checked_ix, .slot = 0 },
+            },
         },
         .{
             .accounts = &.{
@@ -1810,8 +1689,7 @@ test "executeV3SetAuthorityChecked" {
 }
 
 test "executeV3Close" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1835,7 +1713,7 @@ test "executeV3Close" {
             .{},
         );
 
-        try expectProgramExecuteResult(
+        try testing.expectProgramExecuteResult(
             allocator,
             bpf_loader_program.v3,
             bpf_loader_program.v3.Instruction{
@@ -1898,7 +1776,7 @@ test "executeV3Close" {
             .{},
         );
 
-        try expectProgramExecuteResult(
+        try testing.expectProgramExecuteResult(
             allocator,
             bpf_loader_program.v3,
             bpf_loader_program.v3.Instruction{
@@ -1957,8 +1835,7 @@ test "executeV3Close" {
 }
 
 test "executeV3Upgrade" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -2025,7 +1902,7 @@ test "executeV3Upgrade" {
     const buffer_balance = rent.minimumBalance(buffer_account_data.len) + buffer_aid_balance;
     const program_data_balance = rent.minimumBalance(program_data_buffer.len) - buffer_aid_balance;
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction{
@@ -2136,8 +2013,7 @@ test "executeV3Upgrade" {
 }
 
 test "executeV3ExtendProgram" {
-    const expectProgramExecuteResult =
-        sig.runtime.program.test_program_execute.expectProgramExecuteResult;
+    const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -2195,7 +2071,7 @@ test "executeV3ExtendProgram" {
         .{},
     );
 
-    try expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction{

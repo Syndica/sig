@@ -2,8 +2,6 @@ const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 
-pub const serialization = @import("./serialize.zig");
-
 pub const v1 = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/sdk-ids/src/lib.rs#L11
     pub const ID =

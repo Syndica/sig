@@ -4,6 +4,7 @@ const sig = @import("../../sig.zig");
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 
+pub const bpf_loader_program = @import("bpf_loader_program/lib.zig");
 pub const precompile_programs = @import("precompile_programs/lib.zig");
 pub const system_program = @import("system_program/lib.zig");
 pub const testing = @import("testing.zig");
