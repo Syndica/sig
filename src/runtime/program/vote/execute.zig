@@ -641,7 +641,9 @@ fn widthraw(
             return InstructionError.Custom;
         } else {
             // Deinitialize upon zero-balance
-            const deinitialized_state = VoteStateVersions{ .current = VoteState.default(allocator) };
+            const deinitialized_state = VoteStateVersions{
+                .current = VoteState.default(allocator),
+            };
             defer deinitialized_state.deinit();
 
             try vote_account.serializeIntoAccountData(deinitialized_state);
