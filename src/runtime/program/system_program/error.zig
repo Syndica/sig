@@ -1,5 +1,5 @@
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/error.rs#L12
-pub const Error = error{
+pub const Error = enum(u8) {
     /// An account with the same address already exists.
     AccountAlreadyInUse,
     /// Account does not have enough SOL to perform the operation.
