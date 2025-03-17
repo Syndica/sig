@@ -115,6 +115,12 @@ pub fn bytesAreCurvePoint(bytes: []const u8) bool {
     return true;
 }
 
+test "mapError" {
+    try std.testing.expectEqual(mapError(PubkeyError.MaxSeedLenExceeded), 0);
+    try std.testing.expectEqual(mapError(PubkeyError.InvalidSeeds), 1);
+    try std.testing.expectEqual(mapError(PubkeyError.IllegalOwner), 2);
+}
+
 // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L1336
 test "findProgramAddress" {
     var prng = std.Random.DefaultPrng.init(5083);
