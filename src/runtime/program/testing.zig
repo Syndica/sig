@@ -15,6 +15,7 @@ pub const expectTransactionContextEqual = runtime_testing.expectTransactionConte
 
 pub fn expectProgramExecuteResult(
     allocator: std.mem.Allocator,
+    log_writer: anytype,
     program: anytype,
     instruction: anytype,
     instruction_accounts_params: []const InstructionContextAccountMetaParams,
@@ -31,6 +32,17 @@ pub fn expectProgramExecuteResult(
         transaction_context_params,
     );
     defer transaction_context.deinit(allocator);
+
+    defer {
+        if (@TypeOf(log_writer) != void) {
+            if (transaction_context.log_collector) |collector| {
+                log_writer.writeAll("logs:\n") catch {};
+                for (collector.collect()) |log| {
+                    log_writer.print("    log: {s}\n", .{log}) catch {};
+                }
+            }
+        }
+    }
 
     var prng_1 = std.rand.DefaultPrng.init(0);
     var expected_transaction_context = try createTransactionContext(

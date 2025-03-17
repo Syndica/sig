@@ -16,7 +16,7 @@ pub fn execute(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     // agave: consumed in declare_process_instruction
-    try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
+    try ic.tc.consumeCompute(program.COMPUTE_UNITS);
 
     const instruction = try ic.info.deserializeInstruction(allocator, program.Instruction);
     defer sig.bincode.free(allocator, instruction);

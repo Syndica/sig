@@ -10,6 +10,10 @@ pub const ID = sig.runtime.ids.ADDRESS_LOOKUP_TABLE_PROGRAM_ID;
 
 pub const execute = @import("execute.zig").execute;
 
+pub const entrypoint = @import("execute.zig").entrypoint;
+pub const ProgramState = @import("execute.zig").ProgramState;
+pub const LookupTableMeta = @import("execute.zig").LookupTableMeta;
+
 // https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L30
 /// The maximum number of addresses that a lookup table can hold
 pub const LOOKUP_TABLE_MAX_ADDRESSES: usize = 256;
@@ -77,6 +81,7 @@ pub fn deriveLookupTableAddress(
 test "bad execute" {
     _ = sig.runtime.program.testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         @This(),
         Instruction{
             .CreateLookupTable = .{ .bump_seed = 0, .recent_slot = 0 },
@@ -87,8 +92,7 @@ test "bad execute" {
     ) catch {};
 }
 
-test "address-lookup-table create with missing signer" {
-    // const testing = sig.runtime.testing;
+test "address-lookup-table create" {
     const testing = sig.runtime.program.testing;
 
     const allocator = std.testing.allocator;
@@ -104,12 +108,53 @@ test "address-lookup-table create with missing signer" {
         recent_slot,
     );
 
+    const before_lamports = 9999999999999;
+    // table meta (56 bytes) stored for a year. cross-verified with real instructions
+    const required_lamports = 1280640;
+    const after_lamports = before_lamports - required_lamports;
+
+    const before_compute_meter = 9999999;
+    const expected_used_compute = COMPUTE_UNITS +
+        sig.runtime.program.system_program.COMPUTE_UNITS + // transfer
+        sig.runtime.program.system_program.COMPUTE_UNITS + // allocate
+        sig.runtime.program.system_program.COMPUTE_UNITS; //  assign
+
+    // cross-verified with real instructions
+    // note: real instructions also call SetComputeUnitLimit and SetComputeUnitPrice,
+    // which cost 150 each, for a total of 1500.
+    try std.testing.expectEqual(expected_used_compute, 1200);
+    const after_compute_meter = before_compute_meter - expected_used_compute;
+
+    const new_state: ProgramState = .{
+        .LookupTable = LookupTableMeta.new(unsigned_authority_address),
+    };
+    const expected_state = try sig.bincode.writeAlloc(std.testing.allocator, new_state, .{});
+    defer std.testing.allocator.free(expected_state);
+
     const accounts: []const testing.TransactionContextAccountParams = &.{
-        .{ .pubkey = lookup_table_address },
+        .{
+            .pubkey = lookup_table_address,
+            .owner = sig.runtime.program.system_program.ID,
+            .lamports = 0,
+            .data = &.{},
+        },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = payer, .lamports = 9999999999999 },
-        .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
-        .{ .pubkey = sig.runtime.program.system_program.ID },
+        .{ .pubkey = payer, .lamports = before_lamports },
+        .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = sig.runtime.program.system_program.ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
+    };
+
+    const accounts_after: []const testing.TransactionContextAccountParams = &.{
+        .{
+            .pubkey = lookup_table_address,
+            .owner = ID,
+            .lamports = required_lamports,
+            .data = expected_state,
+        },
+        .{ .pubkey = unsigned_authority_address },
+        .{ .pubkey = payer, .lamports = after_lamports },
+        .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
+        .{ .pubkey = sig.runtime.program.system_program.ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
     };
 
     const meta: []const testing.InstructionContextAccountMetaParams = &.{
@@ -117,6 +162,7 @@ test "address-lookup-table create with missing signer" {
         .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
         .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
     const sysvar_cache = sig.runtime.SysvarCache{
@@ -127,12 +173,26 @@ test "address-lookup-table create with missing signer" {
         .rent = sig.runtime.sysvar.Rent.DEFAULT,
     };
 
+    var log_out = std.ArrayList(u8).init(std.testing.allocator);
+    defer log_out.deinit();
+    errdefer std.debug.print("{s}", .{log_out.items});
+
     try testing.expectProgramExecuteResult(
         allocator,
+        log_out.writer(),
         @This(),
         Instruction{ .CreateLookupTable = .{ .bump_seed = bump_seed, .recent_slot = recent_slot } },
         meta,
-        .{ .accounts = accounts, .compute_meter = 9999999, .sysvar_cache = sysvar_cache },
-        .{ .accounts = accounts },
+        .{
+            .log_collector = sig.runtime.LogCollector.default(std.testing.allocator),
+            .accounts = accounts,
+            .compute_meter = 9999999,
+            .sysvar_cache = sysvar_cache,
+        },
+        .{
+            .accounts = accounts_after,
+            .accounts_resize_delta = 56,
+            .compute_meter = after_compute_meter,
+        },
     );
 }

@@ -56,16 +56,12 @@ fn pushInstruction(
 ) InstructionError!void {
     var instruction_info = instruction_info_;
     const program_id = instruction_info.program_meta.pubkey;
-    std.debug.print("pushInstruction: program id: {s}\n", .{program_id});
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
     // [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_executor.c#L1001-L101
     if (program_id.equals(&ids.NATIVE_LOADER_ID)) {
-        std.debug.print("{s}=={s}\n", .{ program_id, ids.NATIVE_LOADER_ID });
-
         return InstructionError.UnsupportedProgramId;
     }
-    std.debug.print("{s}!={s}\n", .{ program_id, ids.NATIVE_LOADER_ID });
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
@@ -135,8 +131,6 @@ fn processNextInstruction(
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
-        std.debug.print("borrowed program_account: {any}\n", .{program_account});
-
         break :blk if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
             program_account.pubkey
         else
@@ -149,8 +143,6 @@ fn processNextInstruction(
     // TODO:
     // - precompile feature gate move to svm otherwise noop
     // - precompile entrypoints
-
-    std.debug.print("processNextInstruction: {s}\n", .{program_id});
 
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(program_id.base58String().slice());
@@ -251,7 +243,6 @@ fn prepareCpiInstructionInfo(
             deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
         } else {
             const index_in_caller = caller.info.getAccountMetaIndex(account.pubkey) orelse {
-                std.debug.print("Instruction references unknown account {}", .{account.pubkey});
                 try tc.log("Instruction references unknown account {}", .{account.pubkey});
                 return InstructionError.MissingAccount;
             };
@@ -321,7 +312,6 @@ fn prepareCpiInstructionInfo(
         };
     } else blk: {
         const index_in_caller = caller.info.getAccountMetaIndex(callee.program_id) orelse {
-            std.debug.print("Unknown program {}\n", .{callee.program_id});
             try tc.log("Unknown program {}", .{callee.program_id});
             return InstructionError.MissingAccount;
         };
