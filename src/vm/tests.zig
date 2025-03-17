@@ -1745,6 +1745,32 @@ test "subnet" {
     }, 0x1);
 }
 
+test "fib" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov r0, 10
+        \\  call function_fib ; Compute the 10th Fibonacci number
+        \\  exit ; Returns the computed value
+        \\
+        \\; Passes N in r0
+        \\; Returns the Nth Fibonacci number in r0
+        \\function_fib: 
+        \\  mov r1, 0       ; Fib(0) = 0
+        \\  mov r2, 1       ; Fib(1) = 1
+        \\  jle r0, 1, done ; If N <= 1, return r0 (Fib(0) or Fib(1))
+        \\loop:
+        \\  add r1, r2      ; r1 = r1 + r2 (next Fib number)
+        \\  mov r3, r2      ; Store the old r2 value
+        \\  mov r2, r1      ; Update r2 to new Fib number
+        \\  mov r1, r3      ; Move the previous r2 into r1
+        \\  add r0, -1      ; Decrement N
+        \\  jgt r0, 1, loop ; Continue the loop if N > 1
+        \\done:
+        \\  mov r0, r2      ; Return the last computed Fibonacci number
+        \\  exit
+    , 55);
+}
+
 test "pqr" {
     const allocator = std.testing.allocator;
     var program: [48]u8 = .{0} ** 48;
