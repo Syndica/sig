@@ -1226,11 +1226,10 @@ test "executeDeployWithMaxDataLen" {
 
     const payer_account_key = Pubkey.initRandom(prng.random());
     const program_account_key = Pubkey.initRandom(prng.random());
-    const program_data_account_key = try pubkey_utils.createProgramAddress(
+    const program_data_account_key, _ = pubkey_utils.findProgramAddress(
         &.{&program_account_key.data},
-        &.{255},
         bpf_loader_program.v3.ID,
-    );
+    ) orelse @panic("findProgramAddress failed");
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
 
@@ -1846,11 +1845,10 @@ test "executeV3Upgrade" {
     const buffer_account_key = Pubkey.initRandom(prng.random());
 
     const program_account_key = Pubkey.initRandom(prng.random());
-    const program_data_account_key = try pubkey_utils.createProgramAddress(
+    const program_data_account_key, _ = pubkey_utils.findProgramAddress(
         &.{&program_account_key.data},
-        &.{255},
         bpf_loader_program.v3.ID,
-    );
+    ) orelse @panic("findProgramAddress failed");
 
     const rent = sysvar.Rent.DEFAULT;
     var clock = sysvar.Clock.DEFAULT;
@@ -2023,11 +2021,10 @@ test "executeV3ExtendProgram" {
     const upgrade_authority_key = Pubkey.initRandom(prng.random());
 
     const program_account_key = Pubkey.initRandom(prng.random());
-    const program_data_account_key = try pubkey_utils.createProgramAddress(
+    const program_data_account_key, _ = pubkey_utils.findProgramAddress(
         &.{&program_account_key.data},
-        &.{255},
         bpf_loader_program.v3.ID,
-    );
+    ) orelse @panic("findProgramAddress failed");
 
     var clock = sysvar.Clock.DEFAULT;
     clock.slot += 1337;
