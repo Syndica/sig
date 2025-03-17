@@ -9,8 +9,6 @@ pub const v1 = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L56
     pub const COMPUTE_UNITS = 1_140;
-
-    pub const execute = @import("execute.zig").execute;
 };
 
 pub const v2 = struct {
@@ -20,8 +18,6 @@ pub const v2 = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L55
     pub const COMPUTE_UNITS = 570;
-
-    pub const execute = @import("execute.zig").execute;
 };
 
 pub const v3 = struct {
@@ -34,8 +30,6 @@ pub const v3 = struct {
 
     pub const Instruction = @import("v3_instruction.zig").Instruction;
     pub const State = @import("v3_state.zig").State;
-
-    pub const execute = @import("execute.zig").execute;
 };
 
 pub const execute = @import("execute.zig").execute;

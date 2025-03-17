@@ -606,7 +606,7 @@ pub fn executeV3Upgrade(
     var spill = try ic.borrowInstructionAccount(3);
     defer spill.release();
 
-    try spill.addLamports(programdata.account.lamports +| buf.lamports +| progdata.balance_required);
+    try spill.addLamports(programdata.account.lamports +| buf.lamports -| progdata.balance_required);
     try buffer.setLamports(0);
     try programdata.setLamports(progdata.balance_required);
     try buffer.setDataLength(allocator, &ic.tc.accounts_resize_delta, bpf_loader_program.v3.State.sizeOfBuffer(0));
@@ -1292,6 +1292,7 @@ test "executeDeployWithMaxDataLen" {
                 },
                 .{
                     .pubkey = program_data_account_key,
+                    .owner = system_program.ID,
                 },
                 .{
                     .pubkey = program_account_key,
@@ -1988,7 +1989,7 @@ test "executeV3Upgrade" {
                 .{
                     .pubkey = spill_account_key,
                     .owner = bpf_loader_program.v3.ID,
-                    .lamports = spill_balance + buffer_balance + program_data_balance + rent.minimumBalance(program_data_buffer.len),
+                    .lamports = spill_balance + buffer_balance + program_data_balance - rent.minimumBalance(program_data_buffer.len),
                 },
                 .{
                     .pubkey = sysvar.Rent.ID,
@@ -2045,7 +2046,7 @@ test "executeV3ExtendProgram" {
     );
 
     const additional_bytes = 512;
-    const help_pay = 0; // TODO
+    const help_pay = 100; // TODO
     const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
     const program_data_lamports =
         sysvar.Rent.DEFAULT.minimumBalance(program_data.len + additional_bytes) -
@@ -2082,6 +2083,7 @@ test "executeV3ExtendProgram" {
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 }, // program
             .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 }, // loader
             .{ .is_signer = true, .is_writable = true, .index_in_transaction = 3 }, // payer
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 }, // system program
         },
         .{
             .accounts = &.{
@@ -2104,8 +2106,13 @@ test "executeV3ExtendProgram" {
                     .pubkey = payer_account_key,
                     .lamports = payer_balance,
                 },
+                .{
+                    .pubkey = system_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                    .executable = true,
+                },
             },
-            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+            .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS + system_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .rent = sysvar.Rent.DEFAULT,
                 .clock = clock,
