@@ -21,6 +21,16 @@ pub const PubkeyError = error{
     IllegalOwner,
 };
 
+/// Maps the `PubkeyError` to a `u8` to match Agave's `PubkeyError` enum.
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L35
+pub fn mapError(err: PubkeyError) u8 {
+    return switch (err) {
+        error.MaxSeedLenExceeded => 0,
+        error.InvalidSeeds => 1,
+        error.IllegalOwner => 2,
+    };
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L200
 pub fn createWithSeed(
     base: Pubkey,
