@@ -14,17 +14,8 @@ const Clock = sig.runtime.sysvar.Clock;
 const VoteState = vote_program.VoteState;
 const VoteProgramInstruction = vote_instruction.Instruction;
 
-/// Entrypoint maps calls `execute` and converts the error to an optional return value.
-pub fn entrypoint(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-) ?(error{OutOfMemory} || InstructionError) {
-    execute(allocator, ic) catch |err| return err;
-    return null;
-}
-
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
-fn execute(
+pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
