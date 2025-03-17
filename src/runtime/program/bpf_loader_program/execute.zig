@@ -9,6 +9,7 @@ const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
 const system_program = sig.runtime.program.system_program;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
+const feature_set = sig.runtime.feature_set;
 
 const Pubkey = sig.core.Pubkey;
 const Instruction = sig.core.instruction.Instruction;
@@ -685,7 +686,7 @@ pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.feature_set.active.contains(FeatureSet.enable_bpf_loader_set_authority_checked_ix)) {
+    if (!ic.tc.feature_set.active.contains(feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX)) {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -824,7 +825,7 @@ pub fn executeV3Close(
             switch (try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
                 .program => |program_data| {
                     if (!program_data.programdata_address.equals(&close_key)) {
-                        try ic.tc.log("PRogramData account does not match ProgramData account", .{});
+                        try ic.tc.log("ProgramData account does not match ProgramData account", .{});
                         return InstructionError.InvalidArgument;
                     }
 
@@ -1060,7 +1061,7 @@ pub fn deployProgram(
     program_len: usize,
     program_data: []const u8,
     slot: u64,
-    feature_set: FeatureSet,
+    features: FeatureSet,
     maybe_log_collector: ?*LogCollector,
 ) (error{OutOfMemory} || InstructionError)!void {
     _ = allocator;
@@ -1069,7 +1070,7 @@ pub fn deployProgram(
     _ = program_len;
     _ = program_data;
     _ = slot;
-    _ = feature_set;
+    _ = features;
     _ = maybe_log_collector;
 }
 
@@ -1589,7 +1590,7 @@ test "executeV3SetAuthorityChecked" {
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
             .feature_set = &.{
-                .{ .pubkey = FeatureSet.enable_bpf_loader_set_authority_checked_ix, .slot = 0 },
+                .{ .pubkey = feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
             },
         },
         .{
@@ -1657,13 +1658,13 @@ test "executeV3SetAuthorityChecked" {
                     .pubkey = new_authority_key,
                 },
                 .{
-                    .pubkey = bpf_loader_program.v3.ID, // id of program u wanna run
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID, // bpf_loader_program.v3.ID,
+                    .pubkey = bpf_loader_program.v3.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
             .feature_set = &.{
-                .{ .pubkey = FeatureSet.enable_bpf_loader_set_authority_checked_ix, .slot = 0 },
+                .{ .pubkey = feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
             },
         },
         .{
@@ -1694,9 +1695,10 @@ test "executeV3Close" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const buffer_account_key = Pubkey.initRandom(prng.random());
-    const buffer_recipient_key = Pubkey.initRandom(prng.random());
-    const buffer_authority_key = Pubkey.initRandom(prng.random());
+    const close_account_key = Pubkey.initRandom(prng.random());
+    const repicient_key = Pubkey.initRandom(prng.random());
+    const authority_key = Pubkey.initRandom(prng.random());
+    const program_key = Pubkey.initRandom(prng.random());
 
     const initial_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
     defer allocator.free(initial_account_data);
@@ -1726,13 +1728,13 @@ test "executeV3Close" {
             .{
                 .accounts = &.{
                     .{
-                        .pubkey = buffer_account_key,
+                        .pubkey = close_account_key,
                         .data = uninitialized_data,
                         .owner = bpf_loader_program.v3.ID,
                         .lamports = num_lamports,
                     },
                     .{
-                        .pubkey = buffer_recipient_key,
+                        .pubkey = repicient_key,
                     },
                     .{
                         .pubkey = bpf_loader_program.v3.ID,
@@ -1744,13 +1746,13 @@ test "executeV3Close" {
             .{
                 .accounts = &.{
                     .{
-                        .pubkey = buffer_account_key,
+                        .pubkey = close_account_key,
                         .data = uninitialized_data,
                         .owner = bpf_loader_program.v3.ID,
                         .lamports = 0,
                     },
                     .{
-                        .pubkey = buffer_recipient_key,
+                        .pubkey = repicient_key,
                         .lamports = num_lamports,
                     },
                     .{
@@ -1766,7 +1768,11 @@ test "executeV3Close" {
     {
         const initial_data = try bincode.writeToSlice(
             initial_account_data,
-            bpf_loader_program.v3.State{ .buffer = .{ .authority_address = buffer_authority_key } },
+            bpf_loader_program.v3.State{
+                .buffer = .{
+                    .authority_address = authority_key,
+                },
+            },
             .{},
         );
 
@@ -1790,16 +1796,16 @@ test "executeV3Close" {
             .{
                 .accounts = &.{
                     .{
-                        .pubkey = buffer_account_key,
+                        .pubkey = close_account_key,
                         .data = initial_data,
                         .owner = bpf_loader_program.v3.ID,
                         .lamports = num_lamports,
                     },
                     .{
-                        .pubkey = buffer_recipient_key,
+                        .pubkey = repicient_key,
                     },
                     .{
-                        .pubkey = buffer_authority_key,
+                        .pubkey = authority_key,
                     },
                     .{
                         .pubkey = bpf_loader_program.v3.ID,
@@ -1811,17 +1817,120 @@ test "executeV3Close" {
             .{
                 .accounts = &.{
                     .{
-                        .pubkey = buffer_account_key,
+                        .pubkey = close_account_key,
                         .data = final_data,
                         .owner = bpf_loader_program.v3.ID,
                         .lamports = 0,
                     },
                     .{
-                        .pubkey = buffer_recipient_key,
+                        .pubkey = repicient_key,
                         .lamports = num_lamports,
                     },
                     .{
-                        .pubkey = buffer_authority_key,
+                        .pubkey = authority_key,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .accounts_resize_delta = -@as(i64, @intCast(initial_data.len - final_data.len)),
+            },
+        );
+    }
+
+    // program_data
+    {
+        var clock = sysvar.Clock.DEFAULT;
+        clock.slot = 1337;
+
+        const initial_data = try bincode.writeToSlice(
+            initial_account_data,
+            bpf_loader_program.v3.State{
+                .program_data = .{
+                    .slot = clock.slot - 1,
+                    .upgrade_authority_address = authority_key,
+                },
+            },
+            .{},
+        );
+
+        const final_data = try bincode.writeToSlice(
+            final_account_data,
+            bpf_loader_program.v3.State{ .uninitialized = {} },
+            .{},
+        );
+
+        const program_data_buffer = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+        defer allocator.free(program_data_buffer);
+        const program_data = try bincode.writeToSlice(
+            program_data_buffer,
+            bpf_loader_program.v3.State{
+                .program = .{ .programdata_address = close_account_key },
+            },
+            .{},
+        );
+
+        try testing.expectProgramExecuteResult(
+            allocator,
+            bpf_loader_program.v3,
+            bpf_loader_program.v3.Instruction{
+                .close = {},
+            },
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 3 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = close_account_key,
+                        .data = initial_data,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = num_lamports,
+                    },
+                    .{
+                        .pubkey = repicient_key,
+                    },
+                    .{
+                        .pubkey = authority_key,
+                    },
+                    .{
+                        .pubkey = program_key,
+                        .data = program_data,
+                        .owner = bpf_loader_program.v3.ID,
+                    },
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+                .sysvar_cache = .{
+                    .clock = clock,
+                },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = close_account_key,
+                        .data = final_data,
+                        .owner = bpf_loader_program.v3.ID,
+                        .lamports = 0,
+                    },
+                    .{
+                        .pubkey = repicient_key,
+                        .lamports = num_lamports,
+                    },
+                    .{
+                        .pubkey = authority_key,
+                    },
+                    .{
+                        .pubkey = program_key,
+                        .data = program_data,
+                        .owner = bpf_loader_program.v3.ID,
                     },
                     .{
                         .pubkey = bpf_loader_program.v3.ID,
