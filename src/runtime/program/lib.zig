@@ -14,10 +14,7 @@ pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
 const EntrypointFn =
-    *const fn (
-    std.mem.Allocator,
-    *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void;
+*const fn (std.mem.Allocator, *InstructionContext) ?(error{OutOfMemory} || InstructionError);
 
 // reviewer's note: does this have to be a string map? might be better to keep as pubkeys
 fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {

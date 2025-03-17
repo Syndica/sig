@@ -24,13 +24,11 @@ pub fn executeInstruction(
     try pushInstruction(tc, instruction_info);
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L475
-    processNextInstruction(allocator, tc) catch |err| {
-        popInstruction(tc) catch {};
-        return err;
-    };
+    const maybe_execute_error = processNextInstruction(allocator, tc);
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L478
-    try popInstruction(tc);
+    popInstruction(tc) catch |err| if (maybe_execute_error == null) return err;
+    if (maybe_execute_error) |err| return err;
 }
 
 /// Execute a native CPI instruction\
@@ -69,9 +67,9 @@ fn pushInstruction(
         // If the program is on the stack, it must be the last entry otherwise it is a reentrancy violation
         if (program_id.equals(&ic.info.program_meta.pubkey) and
             level != tc.instruction_stack.len - 1)
-        {
-            return InstructionError.ReentrancyNotAllowed;
-        }
+            {
+                return InstructionError.ReentrancyNotAllowed;
+            }
     }
 
     // TODO: syscall_context.push(None)
@@ -119,7 +117,7 @@ fn pushInstruction(
 fn processNextInstruction(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
-) (error{OutOfMemory} || InstructionError)!void {
+) ?(error{OutOfMemory} || InstructionError) {
     // Get next instruction context from the stack
     if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
     const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
@@ -162,11 +160,13 @@ fn processNextInstruction(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
     try stable_log.programInvoke(&ic.tc.log_collector, program_id, ic.tc.instruction_stack.len);
-    native_program_fn(allocator, ic) catch |execute_error| {
+    if (native_program_fn(allocator, ic)) |execute_error| {
         try stable_log.programFailure(&ic.tc.log_collector, program_id, execute_error);
         return execute_error;
-    };
-    try stable_log.programSuccess(&ic.tc.log_collector, program_id);
+    } else {
+        try stable_log.programSuccess(&ic.tc.log_collector, program_id);
+        return null;
+    }
 }
 
 /// Pop an instruction from the instruction stack\
@@ -323,10 +323,10 @@ fn prepareCpiInstructionInfo(
 
         if (!tc.feature_set.active.contains(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
             !borrowed_account.account.executable)
-        {
-            try tc.log("Account {} is not executable", .{callee.program_id});
-            return InstructionError.AccountNotExecutable;
-        }
+            {
+                try tc.log("Account {} is not executable", .{callee.program_id});
+                return InstructionError.AccountNotExecutable;
+            }
 
         break :blk program_meta.index_in_transaction;
     };
@@ -490,7 +490,7 @@ test "processNextInstruction" {
     // Failure: CallDepth
     try std.testing.expectError(
         InstructionError.CallDepth,
-        processNextInstruction(allocator, &tc),
+        processNextInstruction(allocator, &tc).?,
     );
 
     {
@@ -504,7 +504,7 @@ test "processNextInstruction" {
 
         try std.testing.expectError(
             InstructionError.UnsupportedProgramId,
-            processNextInstruction(allocator, &tc),
+            processNextInstruction(allocator, &tc).?,
         );
 
         _ = tc.instruction_stack.pop();
@@ -512,7 +512,10 @@ test "processNextInstruction" {
 
     // Success
     try pushInstruction(&tc, instruction_info);
-    try processNextInstruction(allocator, &tc);
+    try std.testing.expectEqual(
+        null,
+        processNextInstruction(allocator, &tc),
+    );
 }
 
 test "popInstruction" {
@@ -561,10 +564,10 @@ test "popInstruction" {
     {
         // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = Pubkey.ZEROES,
-            .is_signer = false,
-            .is_writable = false,
-        });
+        .program_id = Pubkey.ZEROES,
+        .is_signer = false,
+        .is_writable = false,
+    });
         defer borrowed_account.release();
         try std.testing.expectError(
             InstructionError.AccountBorrowOutstanding,
@@ -766,11 +769,11 @@ test "sumAccountLamports" {
     {
         // Success: 0 + 1 + 2 + 3 = 6
         const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-        });
+        .{ .index_in_transaction = 0 },
+        .{ .index_in_transaction = 1 },
+        .{ .index_in_transaction = 2 },
+        .{ .index_in_transaction = 3 },
+    });
         try std.testing.expectEqual(
             6,
             try sumAccountLamports(&tc, account_metas.constSlice()),
@@ -781,11 +784,11 @@ test "sumAccountLamports" {
         // Success: 0 + 1 + 2 + 0 = 3
         // First and last instruction account metas reference the same transaction account
         const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 0 },
-        });
+        .{ .index_in_transaction = 0 },
+        .{ .index_in_transaction = 1 },
+        .{ .index_in_transaction = 2 },
+        .{ .index_in_transaction = 0 },
+    });
 
         try std.testing.expectEqual(
             3,
@@ -796,11 +799,11 @@ test "sumAccountLamports" {
     {
         // Failure: NotEnoughAccountKeys
         var account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
-            .{ .index_in_transaction = 0 },
-            .{ .index_in_transaction = 1 },
-            .{ .index_in_transaction = 2 },
-            .{ .index_in_transaction = 3 },
-        });
+        .{ .index_in_transaction = 0 },
+        .{ .index_in_transaction = 1 },
+        .{ .index_in_transaction = 2 },
+        .{ .index_in_transaction = 3 },
+    });
 
         account_metas.buffer[0].index_in_transaction = 4;
 
@@ -813,10 +816,10 @@ test "sumAccountLamports" {
     {
         // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
-            .program_id = Pubkey.ZEROES,
-            .is_signer = false,
-            .is_writable = false,
-        });
+        .program_id = Pubkey.ZEROES,
+        .is_signer = false,
+        .is_writable = false,
+    });
         defer borrowed_account.release();
 
         const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
