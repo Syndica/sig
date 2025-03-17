@@ -21,6 +21,16 @@ pub const PubkeyError = error{
     IllegalOwner,
 };
 
+/// Maps the `PubkeyError` to a `u8` to match Agave's `PubkeyError` enum.
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L35
+pub fn mapError(err: PubkeyError) u8 {
+    return switch (err) {
+        error.MaxSeedLenExceeded => 0,
+        error.InvalidSeeds => 1,
+        error.IllegalOwner => 2,
+    };
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L200
 pub fn createWithSeed(
     base: Pubkey,
@@ -103,6 +113,12 @@ pub fn bytesAreCurvePoint(bytes: []const u8) bool {
     if (encoded_length != bytes.len) return false;
     _ = std.crypto.ecc.Edwards25519.fromBytes(bytes[0..encoded_length].*) catch return false;
     return true;
+}
+
+test "mapError" {
+    try std.testing.expectEqual(mapError(PubkeyError.MaxSeedLenExceeded), 0);
+    try std.testing.expectEqual(mapError(PubkeyError.InvalidSeeds), 1);
+    try std.testing.expectEqual(mapError(PubkeyError.IllegalOwner), 2);
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L1336

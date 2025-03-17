@@ -202,7 +202,7 @@ fn executeAdvanceNonceAccount(
     const recent_blockhashes = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
     if (recent_blockhashes.isEmpty()) {
         try ic.tc.log("Advance nonce account: recent blockhash list is empty", .{});
-        ic.tc.custom_error = @intFromError(SystemProgramError.NonceNoRecentBlockhashes);
+        ic.tc.custom_error = @intFromEnum(SystemProgramError.NonceNoRecentBlockhashes);
         return InstructionError.Custom;
     }
 
@@ -239,7 +239,7 @@ fn executeInitializeNonceAccount(
     const recent_blockhashes = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
     if (recent_blockhashes.isEmpty()) {
         try ic.tc.log("Initialize nonce account: recent blockhash list is empty", .{});
-        ic.tc.custom_error = @intFromError(SystemProgramError.NonceNoRecentBlockhashes);
+        ic.tc.custom_error = @intFromEnum(SystemProgramError.NonceNoRecentBlockhashes);
         return InstructionError.Custom;
     }
 
@@ -419,7 +419,7 @@ fn allocate(
 
     if (account.constAccountData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
         try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
-        ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
+        ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
     }
 
@@ -428,7 +428,7 @@ fn allocate(
             "Allocate: requested {}, max allowed {}",
             .{ space, system_program.MAX_PERMITTED_DATA_LENGTH },
         );
-        ic.tc.custom_error = @intFromError(SystemProgramError.InvalidAccountDataLength);
+        ic.tc.custom_error = @intFromEnum(SystemProgramError.InvalidAccountDataLength);
         return InstructionError.Custom;
     }
 
@@ -469,7 +469,7 @@ fn createAccount(
 
         if (account.account.lamports > 0) {
             try ic.tc.log("Create Account: account {} already in use", .{account.pubkey});
-            ic.tc.custom_error = @intFromError(SystemProgramError.AccountAlreadyInUse);
+            ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
             return InstructionError.Custom;
         }
 
@@ -530,7 +530,7 @@ fn transferVerified(
                 .{ account.account.lamports, lamports },
             );
             ic.tc.custom_error =
-                @intFromError(SystemProgramError.ResultWithNegativeLamports);
+                @intFromEnum(SystemProgramError.ResultWithNegativeLamports);
             return InstructionError.Custom;
         }
 
@@ -580,7 +580,7 @@ fn advanceNonceAccount(
             if (data.durable_nonce.eql(next_durable_nonce)) {
                 try ic.tc.log("Advance nonce account: nonce can only advance once per slot", .{});
                 ic.tc.custom_error =
-                    @intFromError(SystemProgramError.NonceBlockhashNotExpired);
+                    @intFromEnum(SystemProgramError.NonceBlockhashNotExpired);
                 return InstructionError.Custom;
             }
 
@@ -641,7 +641,7 @@ fn withdrawNonceAccount(
                             .{},
                         );
                         ic.tc.custom_error =
-                            @intFromError(SystemProgramError.NonceBlockhashNotExpired);
+                            @intFromEnum(SystemProgramError.NonceBlockhashNotExpired);
                         return InstructionError.Custom;
                     }
                     try from_account.serializeIntoAccountData(
@@ -779,12 +779,12 @@ fn checkSeedAddress(
     comptime log_err_fmt: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
     const created = pubkey_utils.createWithSeed(base, seed, owner) catch |err| {
-        ic.tc.custom_error = @intFromError(err);
+        ic.tc.custom_error = pubkey_utils.mapError(err);
         return InstructionError.Custom;
     };
     if (!expected.equals(&created)) {
         try ic.tc.log(log_err_fmt, .{ expected, created });
-        ic.tc.custom_error = @intFromError(SystemProgramError.AddressWithSeedMismatch);
+        ic.tc.custom_error = @intFromEnum(SystemProgramError.AddressWithSeedMismatch);
         return InstructionError.Custom;
     }
 }
