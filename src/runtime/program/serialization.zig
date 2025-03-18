@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
@@ -13,44 +14,16 @@ const BorrowedAccount = sig.runtime.BorrowedAccount;
 
 const Region = vm.memory.Region;
 
-/// Solana BPF version flag
-pub const EF_SBPF_V2: u32 = 0x20;
-/// Maximum number of instructions in an eBPF program.
-pub const PROG_MAX_INSNS: usize = 65_536;
-/// Size of an eBPF instructions, in bytes.
-pub const INSN_SIZE: usize = 8;
-/// Frame pointer register
-pub const FRAME_PTR_REG: usize = 10;
-/// First scratch register
-pub const FIRST_SCRATCH_REG: usize = 6;
-/// Number of scratch registers
-pub const SCRATCH_REGS: usize = 4;
-/// Alignment of the memory regions in host address space in bytes
-pub const HOST_ALIGN: usize = 16;
-/// Upper half of a pointer is the region index, lower half the virtual address inside that region.
-pub const VIRTUAL_ADDRESS_BITS: usize = 32;
+const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITTED_DATA_LENGTH;
 
-/// Size (and alignment) of a memory region
-pub const MM_REGION_SIZE: u64 = 1 << VIRTUAL_ADDRESS_BITS;
-/// Virtual address of the bytecode region (in SBPFv3)
-pub const MM_BYTECODE_START: u64 = 0;
-/// Virtual address of the readonly data region (also contains the bytecode until SBPFv3)
-pub const MM_RODATA_START: u64 = MM_REGION_SIZE;
-/// Virtual address of the stack region
-pub const MM_STACK_START: u64 = MM_REGION_SIZE * 2;
-/// Virtual address of the heap region
-pub const MM_HEAP_START: u64 = MM_REGION_SIZE * 3;
-/// Virtual address of the input region
-pub const MM_INPUT_START: u64 = MM_REGION_SIZE * 4;
+const INPUT_START = sig.vm.memory.INPUT_START;
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/program-entrypoint/src/lib.rs#L316
 /// `assert_eq(std::mem::align_of::<u128>(), 8)` is true for BPF but not for some host machines
 pub const BPF_ALIGN_OF_U128: usize = 8;
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
-
-/// [agave] https://github.com/solana-program/system/blob/17d70bc0e56354cc7811e22a28776e7f379bcd04/interface/src/lib.rs#L18
-pub const MAX_PERMITTED_DATA_LENGTH: u64 = 10 * 1024 * 1024;
 
 pub const SerializedAccount = union(enum) {
     account: struct { u16, BorrowedAccount },
@@ -131,11 +104,19 @@ pub const Serializer = struct {
             ) - account.constAccountData().len;
 
             if (self.copy_account_data) {
-                self.buffer.appendNTimes(self.allocator, 0, MAX_PERMITTED_DATA_INCREASE + align_offset) catch {
+                self.buffer.appendNTimes(
+                    self.allocator,
+                    0,
+                    MAX_PERMITTED_DATA_INCREASE + align_offset,
+                ) catch {
                     return InstructionError.InvalidArgument;
                 };
             } else {
-                self.buffer.appendNTimes(self.allocator, 0, MAX_PERMITTED_DATA_INCREASE + BPF_ALIGN_OF_U128) catch {
+                self.buffer.appendNTimes(
+                    self.allocator,
+                    0,
+                    MAX_PERMITTED_DATA_INCREASE + BPF_ALIGN_OF_U128,
+                ) catch {
                     return InstructionError.InvalidArgument;
                 };
                 self.region_start += BPF_ALIGN_OF_U128 -| align_offset;
@@ -164,10 +145,13 @@ pub const Serializer = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L133-L134
-    pub fn pushAccountDataRegion(self: *Serializer, account: *const BorrowedAccount) InstructionError!void {
+    pub fn pushAccountDataRegion(
+        self: *Serializer,
+        account: *const BorrowedAccount,
+    ) InstructionError!void {
         // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L134
         if (account.constAccountData().len > 0) {
-            const state = try getAccountDataRegionMemoryState(account);
+            const state = getAccountDataRegionMemoryState(account);
             const region = switch (state) {
                 inline .constant, .mutable => |s| Region.init(
                     s,
@@ -184,13 +168,13 @@ pub const Serializer = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L172
-    pub fn finish(self: *Serializer) !struct { []u8, []Region } {
+    pub fn finish(self: *Serializer) error{OutOfMemory}!struct { []u8, []Region } {
         self.pushRegion(true);
         std.debug.assert(self.region_start == self.buffer.items.len);
         return .{ try self.buffer.toOwnedSlice(self.allocator), self.regions.slice() };
     }
 
-    pub fn getAccountDataRegionMemoryState(account: *const BorrowedAccount) !vm.memory.MemoryState {
+    pub fn getAccountDataRegionMemoryState(account: *const BorrowedAccount) vm.memory.MemoryState {
         // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L608
         if (account.checkDataIsMutable() != null) return .constant;
         return .mutable;
@@ -226,7 +210,10 @@ pub fn serializeParameters(
         } else {
             const account = try ic.borrowInstructionAccount(account_meta.index_in_transaction);
             defer account.release();
-            accounts.appendAssumeCapacity(.{ .account = .{ @intCast(index_in_instruction), account } });
+            accounts.appendAssumeCapacity(.{ .account = .{
+                @intCast(index_in_instruction),
+                account,
+            } });
         }
     }
 
@@ -259,12 +246,99 @@ fn serializeParametersUnaligned(
     []Region,
     []SerializedAccountMeta,
 } {
-    _ = allocator;
-    _ = accounts;
-    _ = instruction_data;
-    _ = program_id;
-    _ = copy_account_data;
-    @panic("Not implemented");
+    var size: usize = @sizeOf(u64);
+    for (accounts) |account| {
+        size += 1; // dup
+        switch (account) {
+            .account => |index_and_account| {
+                _, const borrowed_account = index_and_account;
+                size += @sizeOf(u8) // is_signer
+                + @sizeOf(u8) // is_writable
+                + @sizeOf(Pubkey) // key
+                + @sizeOf(u64) // lamports
+                + @sizeOf(u64) // data len
+                + @sizeOf(Pubkey) // owner
+                + @sizeOf(u8) // executable
+                + @sizeOf(u64); // rent_epoch
+                if (copy_account_data) {
+                    size += borrowed_account.constAccountData().len;
+                }
+            },
+            .duplicate => {},
+        }
+    }
+    size += @sizeOf(u64) // instruction data len
+    + instruction_data.len // instruction data
+    + @sizeOf(Pubkey); // program id
+
+    var serializer = try Serializer.init(
+        allocator,
+        size,
+        INPUT_START,
+        false,
+        copy_account_data,
+    );
+
+    var account_metas = try std.ArrayListUnmanaged(SerializedAccountMeta).initCapacity(
+        allocator,
+        accounts.len,
+    );
+    defer account_metas.deinit(allocator);
+
+    _ = serializer.write(u64, std.mem.nativeToLittle(u64, accounts.len));
+    for (accounts) |account| {
+        switch (account) {
+            .account => |index_and_account| {
+                _, const borrowed_account = index_and_account;
+
+                _ = serializer.write(u8, std.math.maxInt(u8));
+                _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
+                _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
+
+                const vm_key_addr = serializer.writeAll(&borrowed_account.pubkey.data);
+                const vm_lamports_addr = serializer.write(
+                    u64,
+                    std.mem.nativeToLittle(u64, borrowed_account.account.lamports),
+                );
+
+                _ = serializer.write(
+                    u64,
+                    std.mem.nativeToLittle(u64, borrowed_account.constAccountData().len),
+                );
+                const vm_data_addr = try serializer.writeAccount(&borrowed_account);
+                const vm_owner_addr = serializer.writeAll(&borrowed_account.account.owner.data);
+
+                _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
+                _ = serializer.write(
+                    u64,
+                    std.mem.nativeToLittle(u64, borrowed_account.account.rent_epoch),
+                );
+
+                account_metas.appendAssumeCapacity(.{
+                    .original_data_len = borrowed_account.constAccountData().len,
+                    .vm_key_addr = vm_key_addr,
+                    .vm_owner_addr = vm_owner_addr,
+                    .vm_lamports_addr = vm_lamports_addr,
+                    .vm_data_addr = vm_data_addr,
+                });
+            },
+            .duplicate => |index| {
+                account_metas.appendAssumeCapacity(account_metas.items[index]);
+                _ = serializer.write(u8, @intCast(index));
+            },
+        }
+    }
+    _ = serializer.write(u64, std.mem.nativeToLittle(u64, instruction_data.len));
+    _ = serializer.writeAll(instruction_data);
+    _ = serializer.writeAll(&program_id.data);
+
+    const memory, const regions = try serializer.finish();
+
+    return .{
+        memory,
+        regions,
+        try account_metas.toOwnedSlice(allocator),
+    };
 }
 
 fn serializeParametersAligned(
@@ -284,6 +358,7 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_account| {
                 _, const borrowed_account = index_and_account;
+
                 size += @sizeOf(u8) // is_signer
                 + @sizeOf(u8) // is_writable
                 + @sizeOf(u8) // executable
@@ -294,14 +369,15 @@ fn serializeParametersAligned(
                 + @sizeOf(u64) // data len
                 + MAX_PERMITTED_DATA_INCREASE //
                 + @sizeOf(u64); // rent_epoch
+
                 if (copy_account_data) {
-                    const data_len = borrowed_account.account.data.len;
+                    const data_len = borrowed_account.constAccountData().len;
                     const align_offset = std.mem.alignForward(
                         usize,
                         data_len,
                         BPF_ALIGN_OF_U128,
                     ) - data_len;
-                    size += borrowed_account.account.data.len + align_offset;
+                    size += borrowed_account.constAccountData().len + align_offset;
                 } else {
                     size += BPF_ALIGN_OF_U128;
                 }
@@ -316,7 +392,7 @@ fn serializeParametersAligned(
     var serializer = try Serializer.init(
         allocator,
         size,
-        MM_INPUT_START,
+        INPUT_START,
         true,
         copy_account_data,
     );
@@ -333,6 +409,7 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_borrowed_account| {
                 _, const borrowed_account = index_and_borrowed_account;
+
                 _ = serializer.write(u8, std.math.maxInt(u8));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
@@ -341,15 +418,24 @@ fn serializeParametersAligned(
 
                 const vm_key_addr = serializer.writeAll(&borrowed_account.pubkey.data);
                 const vm_owner_addr = serializer.writeAll(&borrowed_account.account.owner.data);
-                const vm_lamports_addr = serializer.write(u64, std.mem.nativeToLittle(u64, borrowed_account.account.lamports));
+                const vm_lamports_addr = serializer.write(
+                    u64,
+                    std.mem.nativeToLittle(u64, borrowed_account.account.lamports),
+                );
 
-                _ = serializer.write(u64, std.mem.nativeToLittle(u64, borrowed_account.account.data.len));
+                _ = serializer.write(
+                    u64,
+                    std.mem.nativeToLittle(u64, borrowed_account.constAccountData().len),
+                );
                 const vm_data_addr = try serializer.writeAccount(&borrowed_account);
 
-                _ = serializer.write(u64, std.mem.nativeToLittle(u64, borrowed_account.account.rent_epoch));
+                _ = serializer.write(
+                    u64,
+                    std.mem.nativeToLittle(u64, borrowed_account.account.rent_epoch),
+                );
 
                 account_metas.appendAssumeCapacity(.{
-                    .original_data_len = borrowed_account.account.data.len,
+                    .original_data_len = borrowed_account.constAccountData().len,
                     .vm_key_addr = vm_key_addr,
                     .vm_owner_addr = vm_owner_addr,
                     .vm_lamports_addr = vm_lamports_addr,
@@ -368,17 +454,13 @@ fn serializeParametersAligned(
     _ = serializer.writeAll(instruction_data);
     _ = serializer.writeAll(&program_id.data);
 
-    const memory, const regions = serializer.finish() catch {
-        return InstructionError.ProgramEnvironmentSetupFailure;
-    };
+    const memory, const regions = try serializer.finish();
     errdefer allocator.free(memory);
 
     return .{
         memory,
         regions,
-        account_metas.toOwnedSlice(allocator) catch {
-            return InstructionError.ProgramEnvironmentSetupFailure;
-        },
+        try account_metas.toOwnedSlice(allocator),
     };
 }
 
@@ -428,12 +510,60 @@ fn deserializeParametersUnaligned(
     memory: []u8,
     account_lengths: []const usize,
 ) (error{OutOfMemory} || InstructionError)!void {
-    _ = allocator;
-    _ = ic;
-    _ = copy_account_data;
-    _ = memory;
-    _ = account_lengths;
-    @panic("Not implemented");
+    var start: usize = @sizeOf(u64);
+    for (0..ic.info.account_metas.len) |index_in_instruction_| {
+        const index_in_instruction: u16 = @intCast(index_in_instruction_);
+        const account_meta = ic.info.account_metas.buffer[index_in_instruction];
+        const pre_len = account_lengths[index_in_instruction];
+
+        start += 1; // is_dup
+        if (account_meta.index_in_callee == index_in_instruction) {
+            var borrowed_account = try ic.borrowInstructionAccount(index_in_instruction);
+            defer borrowed_account.release();
+
+            start += @sizeOf(u8) // is_signer
+            + @sizeOf(u8) // is_writable
+            + @sizeOf(Pubkey); // key
+
+            // read and update Lamports
+            if (start + @sizeOf(u64) > memory.len) return InstructionError.InvalidArgument;
+            const lamports = std.mem.readInt(
+                u64,
+                memory[start .. start + @sizeOf(u64)][0..@sizeOf(u64)],
+                .little,
+            );
+            start += @sizeOf(u64);
+            if (borrowed_account.account.lamports != lamports) {
+                try borrowed_account.setLamports(lamports);
+            }
+
+            // add data length
+            start += @sizeOf(u64);
+            if (copy_account_data) {
+                if (start + pre_len > memory.len) return InstructionError.InvalidArgument;
+                const data = memory[start .. start + pre_len];
+                const can_data_be_resized =
+                    borrowed_account.checkCanSetDataLength(ic.tc.accounts_resize_delta, pre_len);
+                const can_data_be_mutated = borrowed_account.checkDataIsMutable();
+                if (can_data_be_resized == null and can_data_be_mutated == null) {
+                    try borrowed_account.setDataFromSlice(
+                        allocator,
+                        &ic.tc.accounts_resize_delta,
+                        data,
+                    );
+                } else {
+                    if (!std.mem.eql(u8, borrowed_account.account.data, data)) {
+                        if (can_data_be_resized) |err| return err;
+                        if (can_data_be_mutated) |err| return err;
+                    }
+                }
+            }
+        }
+
+        start += @sizeOf(Pubkey) // owner
+        + @sizeOf(u8) // executable
+        + @sizeOf(u64); // rent_epoch
+    }
 }
 
 fn deserializeParametersAligned(
@@ -506,8 +636,11 @@ fn deserializeParametersAligned(
                     borrowed_account.checkCanSetDataLength(ic.tc.accounts_resize_delta, post_len);
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
-                    // TODO: https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L562
-                    @panic("Unimplemented");
+                    try borrowed_account.setDataFromSlice(
+                        allocator,
+                        &ic.tc.accounts_resize_delta,
+                        data,
+                    );
                 } else {
                     if (!std.mem.eql(u8, borrowed_account.account.data, data)) {
                         if (can_data_be_resized) |err| return err;
@@ -522,7 +655,11 @@ fn deserializeParametersAligned(
                     borrowed_account.checkCanSetDataLength(ic.tc.accounts_resize_delta, post_len);
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
-                    try borrowed_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, post_len);
+                    try borrowed_account.setDataLength(
+                        allocator,
+                        &ic.tc.accounts_resize_delta,
+                        post_len,
+                    );
                     const allocated_bytes = post_len -| pre_len;
                     if (allocated_bytes > 0) {
                         const account_data = try borrowed_account.mutableAccountData();
@@ -538,7 +675,7 @@ fn deserializeParametersAligned(
                         );
                     }
                 } else {
-                    if (borrowed_account.account.data.len != post_len) {
+                    if (borrowed_account.constAccountData().len != post_len) {
                         if (can_data_be_resized) |err| return err;
                         if (can_data_be_mutated) |err| return err;
                     }
@@ -566,208 +703,251 @@ test "serializeParameters" {
     const allocator = std.heap.page_allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
-    for ([_]bool{ false, true }) |copy_account_data| {
-        const program_id = Pubkey.initRandom(prng.random());
+    for ([_]Pubkey{
+        ids.BPF_LOADER_V1_PROGRAM_ID,
+        ids.BPF_LOADER_V2_PROGRAM_ID,
+        ids.BPF_LOADER_V3_PROGRAM_ID,
+    }) |loader_id| {
+        for ([_]bool{
+            false,
+            true,
+        }) |copy_account_data| {
+            const program_id = Pubkey.initRandom(prng.random());
 
-        var tc = try createTransactionContext(
-            allocator,
-            prng.random(),
-            .{
-                .accounts = &.{
-                    .{
-                        .pubkey = program_id,
-                        .lamports = 0,
-                        .owner = ids.BPF_LOADER_V2_PROGRAM_ID,
-                        .executable = true,
-                        .rent_epoch = 0,
-                    },
-                    .{
-                        .pubkey = Pubkey.initRandom(prng.random()),
-                        .lamports = 1,
-                        .data = try allocator.dupe(u8, &.{ 1, 2, 3, 4, 5 }),
-                        .owner = ids.BPF_LOADER_V2_PROGRAM_ID,
-                        .executable = false,
-                        .rent_epoch = 100,
-                    },
-                    .{
-                        .pubkey = Pubkey.initRandom(prng.random()),
-                        .lamports = 2,
-                        .data = try allocator.dupe(u8, &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19 }),
-                        .owner = ids.BPF_LOADER_V2_PROGRAM_ID,
-                        .executable = true,
-                        .rent_epoch = 200,
-                    },
-                    .{
-                        .pubkey = Pubkey.initRandom(prng.random()),
-                        .lamports = 3,
-                        .data = try allocator.dupe(u8, &.{}),
-                        .owner = ids.BPF_LOADER_V2_PROGRAM_ID,
-                        .executable = false,
-                        .rent_epoch = 3100,
-                    },
-                    .{
-                        .pubkey = Pubkey.initRandom(prng.random()),
-                        .lamports = 4,
-                        .data = try allocator.dupe(u8, &.{ 1, 2, 3, 4, 5 }),
-                        .owner = ids.BPF_LOADER_V2_PROGRAM_ID,
-                        .executable = false,
-                        .rent_epoch = 100,
-                    },
-                    .{
-                        .pubkey = Pubkey.initRandom(prng.random()),
-                        .lamports = 5,
-                        .data = try allocator.dupe(u8, &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19 }),
-                        .owner = ids.BPF_LOADER_V2_PROGRAM_ID,
-                        .executable = true,
-                        .rent_epoch = 200,
-                    },
-                    .{
-                        .pubkey = Pubkey.initRandom(prng.random()),
-                        .lamports = 6,
-                        .data = try allocator.dupe(u8, &.{}),
-                        .owner = ids.BPF_LOADER_V2_PROGRAM_ID,
-                        .executable = false,
-                        .rent_epoch = 3100,
+            var tc = try createTransactionContext(
+                allocator,
+                prng.random(),
+                .{
+                    .accounts = &.{
+                        .{
+                            .pubkey = program_id,
+                            .lamports = 0,
+                            .owner = loader_id,
+                            .executable = true,
+                            .rent_epoch = 0,
+                        },
+                        .{
+                            .pubkey = Pubkey.initRandom(prng.random()),
+                            .lamports = 1,
+                            .data = try allocator.dupe(u8, &.{ 1, 2, 3, 4, 5 }),
+                            .owner = loader_id,
+                            .executable = false,
+                            .rent_epoch = 100,
+                        },
+                        .{
+                            .pubkey = Pubkey.initRandom(prng.random()),
+                            .lamports = 2,
+                            .data = try allocator.dupe(
+                                u8,
+                                &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19 },
+                            ),
+                            .owner = loader_id,
+                            .executable = true,
+                            .rent_epoch = 200,
+                        },
+                        .{
+                            .pubkey = Pubkey.initRandom(prng.random()),
+                            .lamports = 3,
+                            .data = try allocator.dupe(u8, &.{}),
+                            .owner = loader_id,
+                            .executable = false,
+                            .rent_epoch = 3100,
+                        },
+                        .{
+                            .pubkey = Pubkey.initRandom(prng.random()),
+                            .lamports = 4,
+                            .data = try allocator.dupe(u8, &.{ 1, 2, 3, 4, 5 }),
+                            .owner = loader_id,
+                            .executable = false,
+                            .rent_epoch = 100,
+                        },
+                        .{
+                            .pubkey = Pubkey.initRandom(prng.random()),
+                            .lamports = 5,
+                            .data = try allocator.dupe(
+                                u8,
+                                &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19 },
+                            ),
+                            .owner = loader_id,
+                            .executable = true,
+                            .rent_epoch = 200,
+                        },
+                        .{
+                            .pubkey = Pubkey.initRandom(prng.random()),
+                            .lamports = 6,
+                            .data = try allocator.dupe(u8, &.{}),
+                            .owner = loader_id,
+                            .executable = false,
+                            .rent_epoch = 3100,
+                        },
                     },
                 },
-            },
-        );
-        defer tc.deinit(allocator);
+            );
+            defer tc.deinit(allocator);
 
-        const instruction_info = try createInstructionInfo(
-            allocator,
-            &tc,
-            program_id,
-            [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 },
-            &.{
-                .{
-                    .index_in_transaction = 1,
-                    .index_in_caller = 1,
-                    .index_in_callee = 0,
-                    .is_signer = false,
-                    .is_writable = false,
+            const instruction_info = try createInstructionInfo(
+                allocator,
+                &tc,
+                program_id,
+                [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 },
+                &.{
+                    .{
+                        .index_in_transaction = 1,
+                        .index_in_caller = 1,
+                        .index_in_callee = 0,
+                        .is_signer = false,
+                        .is_writable = false,
+                    },
+                    .{
+                        .index_in_transaction = 1,
+                        .index_in_caller = 1,
+                        .index_in_callee = 0,
+                        .is_signer = false,
+                        .is_writable = false,
+                    },
+                    .{
+                        .index_in_transaction = 2,
+                        .index_in_caller = 2,
+                        .index_in_callee = 1,
+                        .is_signer = false,
+                        .is_writable = false,
+                    },
+                    .{
+                        .index_in_transaction = 3,
+                        .index_in_caller = 3,
+                        .index_in_callee = 2,
+                        .is_signer = false,
+                        .is_writable = false,
+                    },
+                    .{
+                        .index_in_transaction = 4,
+                        .index_in_caller = 4,
+                        .index_in_callee = 3,
+                        .is_signer = false,
+                        .is_writable = true,
+                    },
+                    .{
+                        .index_in_transaction = 4,
+                        .index_in_caller = 4,
+                        .index_in_callee = 3,
+                        .is_signer = false,
+                        .is_writable = true,
+                    },
+                    .{
+                        .index_in_transaction = 5,
+                        .index_in_caller = 5,
+                        .index_in_callee = 4,
+                        .is_signer = false,
+                        .is_writable = true,
+                    },
+                    .{
+                        .index_in_transaction = 6,
+                        .index_in_caller = 6,
+                        .index_in_callee = 5,
+                        .is_signer = false,
+                        .is_writable = true,
+                    },
                 },
-                .{
-                    .index_in_transaction = 1,
-                    .index_in_caller = 1,
-                    .index_in_callee = 0,
-                    .is_signer = false,
-                    .is_writable = false,
-                },
-                .{
-                    .index_in_transaction = 2,
-                    .index_in_caller = 2,
-                    .index_in_callee = 1,
-                    .is_signer = false,
-                    .is_writable = false,
-                },
-                .{
-                    .index_in_transaction = 3,
-                    .index_in_caller = 3,
-                    .index_in_callee = 2,
-                    .is_signer = false,
-                    .is_writable = false,
-                },
-                .{
-                    .index_in_transaction = 4,
-                    .index_in_caller = 4,
-                    .index_in_callee = 3,
-                    .is_signer = false,
-                    .is_writable = true,
-                },
-                .{
-                    .index_in_transaction = 4,
-                    .index_in_caller = 4,
-                    .index_in_callee = 3,
-                    .is_signer = false,
-                    .is_writable = true,
-                },
-                .{
-                    .index_in_transaction = 5,
-                    .index_in_caller = 5,
-                    .index_in_callee = 4,
-                    .is_signer = false,
-                    .is_writable = true,
-                },
-                .{
-                    .index_in_transaction = 6,
-                    .index_in_caller = 6,
-                    .index_in_callee = 5,
-                    .is_signer = false,
-                    .is_writable = true,
-                },
-            },
-        );
+            );
 
-        var ic = InstructionContext{
-            .tc = &tc,
-            .info = instruction_info,
-            .depth = 0,
-        };
+            var ic = InstructionContext{
+                .tc = &tc,
+                .info = instruction_info,
+                .depth = 0,
+            };
 
-        const pre_accounts = blk: {
-            var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
-            errdefer {
-                for (accounts.items) |account| account.deinit(allocator);
-                accounts.deinit();
+            const pre_accounts = blk: {
+                var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
+                errdefer {
+                    for (accounts.items) |account| account.deinit(allocator);
+                    accounts.deinit();
+                }
+                for (tc.accounts) |account| {
+                    try accounts.append(TransactionContextAccount.init(account.pubkey, .{
+                        .lamports = account.account.lamports,
+                        .owner = account.account.owner,
+                        .data = try allocator.dupe(u8, account.account.data),
+                        .executable = account.account.executable,
+                        .rent_epoch = account.account.rent_epoch,
+                    }));
+                }
+                break :blk try accounts.toOwnedSlice();
+            };
+            defer {
+                for (pre_accounts) |account| account.deinit(allocator);
+                allocator.free(pre_accounts);
             }
-            for (tc.accounts) |account| {
-                try accounts.append(TransactionContextAccount.init(account.pubkey, .{
-                    .lamports = account.account.lamports,
-                    .owner = account.account.owner,
-                    .data = try allocator.dupe(u8, account.account.data),
-                    .executable = account.account.executable,
-                    .rent_epoch = account.account.rent_epoch,
-                }));
+
+            const memory, const regions, const account_metas = try serializeParameters(
+                allocator,
+                &ic,
+                copy_account_data,
+            );
+
+            const serialized_regions = try concatRegions(allocator, regions);
+            if (copy_account_data) {
+                try std.testing.expectEqualSlices(u8, memory, serialized_regions);
             }
-            break :blk try accounts.toOwnedSlice();
-        };
-        defer {
-            for (pre_accounts) |account| account.deinit(allocator);
-            allocator.free(pre_accounts);
-        }
 
-        const memory, const regions, const account_metas = try serializeParameters(
-            allocator,
-            &ic,
-            copy_account_data,
-        );
+            // TODO: deserialize and compare
+            // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L981
+            // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L893-L894
 
-        const serialized_regions = try concatRegions(allocator, regions);
-        if (copy_account_data) {
-            try std.testing.expectEqualSlices(u8, memory, serialized_regions);
-        }
-
-        // TODO: Deserialize and compare
-        // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L893-L940
-        try deserializeParameters(
-            allocator,
-            &ic,
-            copy_account_data,
-            memory,
-            account_metas,
-        );
-        for (pre_accounts, 0..) |pre_account, index_in_transaction| {
-            const post_account = tc.accounts[index_in_transaction];
-            try std.testing.expectEqual(pre_account.read_refs, post_account.read_refs);
-            try std.testing.expectEqual(pre_account.write_ref, post_account.write_ref);
-            try std.testing.expect(pre_account.pubkey.equals(&post_account.pubkey));
-            try std.testing.expectEqual(pre_account.account.lamports, post_account.account.lamports);
-            try std.testing.expect(pre_account.account.owner.equals(&post_account.account.owner));
-            try std.testing.expectEqualSlices(u8, pre_account.account.data, post_account.account.data);
-            try std.testing.expectEqual(pre_account.account.executable, post_account.account.executable);
-            try std.testing.expectEqual(pre_account.account.rent_epoch, post_account.account.rent_epoch);
+            try deserializeParameters(
+                allocator,
+                &ic,
+                copy_account_data,
+                memory,
+                account_metas,
+            );
+            for (pre_accounts, 0..) |pre_account, index_in_transaction| {
+                const post_account = tc.accounts[index_in_transaction];
+                try std.testing.expectEqual(
+                    pre_account.read_refs,
+                    post_account.read_refs,
+                );
+                try std.testing.expectEqual(
+                    pre_account.write_ref,
+                    post_account.write_ref,
+                );
+                try std.testing.expect(
+                    pre_account.pubkey.equals(&post_account.pubkey),
+                );
+                try std.testing.expectEqual(
+                    pre_account.account.lamports,
+                    post_account.account.lamports,
+                );
+                try std.testing.expect(
+                    pre_account.account.owner.equals(&post_account.account.owner),
+                );
+                try std.testing.expectEqualSlices(
+                    u8,
+                    pre_account.account.data,
+                    post_account.account.data,
+                );
+                try std.testing.expectEqual(
+                    pre_account.account.executable,
+                    post_account.account.executable,
+                );
+                try std.testing.expectEqual(
+                    pre_account.account.rent_epoch,
+                    post_account.account.rent_epoch,
+                );
+            }
         }
     }
 }
 
 fn concatRegions(allocator: std.mem.Allocator, regions: []Region) ![]u8 {
+    if (!builtin.is_test) {
+        @panic("concatRegions should only be called in test mode");
+    }
     var size: u64 = 0;
     for (regions) |region| size += region.constSlice().len;
     var memory = try allocator.alloc(u8, size);
     for (regions) |region| {
         @memcpy(
-            memory[region.vm_addr_start - MM_INPUT_START ..][0..region.constSlice().len],
+            memory[region.vm_addr_start - INPUT_START ..][0..region.constSlice().len],
             region.constSlice(),
         );
     }
