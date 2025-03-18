@@ -527,7 +527,29 @@ pub const Assembler = struct {
                             const is_label = operands[2] == .label;
 
                             if (is_label) {
-                                @panic("TODO: label jump");
+                                break :inst if (is_immediate) .{
+                                    .opcode = @enumFromInt(bind.opc | Instruction.k),
+                                    .dst = operands[0].register,
+                                    .src = .r0,
+                                    .off = @intCast(resolveLabel(
+                                        inst_ptr,
+                                        &labels,
+                                        operands[2].label,
+                                        version,
+                                    )),
+                                    .imm = @bitCast(@as(i32, @intCast(operands[1].integer))),
+                                } else .{
+                                    .opcode = @enumFromInt(bind.opc | Instruction.x),
+                                    .dst = operands[0].register,
+                                    .src = operands[1].register,
+                                    .off = @intCast(resolveLabel(
+                                        inst_ptr,
+                                        &labels,
+                                        operands[2].label,
+                                        version,
+                                    )),
+                                    .imm = 0,
+                                };
                             } else {
                                 break :inst if (is_immediate) .{
                                     .opcode = @enumFromInt(bind.opc | Instruction.k),
@@ -544,16 +566,22 @@ pub const Assembler = struct {
                                 };
                             }
                         },
-                        .jump_unconditional => if (operands[0] == .label)
-                            @panic("TODO: jump_unconditional label")
-                        else
-                            .{
-                                .opcode = @enumFromInt(bind.opc),
-                                .dst = .r0,
-                                .src = .r0,
-                                .off = @intCast(operands[0].integer),
-                                .imm = 0,
+                        .jump_unconditional => .{
+                            .opcode = @enumFromInt(bind.opc),
+                            .dst = .r0,
+                            .src = .r0,
+                            .off = switch (operands[0]) {
+                                .label => |label| @intCast(resolveLabel(
+                                    inst_ptr,
+                                    &labels,
+                                    label,
+                                    version,
+                                )),
+                                .integer => |int| @intCast(int),
+                                else => unreachable,
                             },
+                            .imm = 0,
+                        },
                         .load_dw_imm => .{
                             .opcode = .ld_dw_imm,
                             .dst = operands[0].register,
@@ -602,17 +630,17 @@ pub const Assembler = struct {
                             const is_label = operands[0] == .label;
                             if (is_label) {
                                 const label = operands[0].label;
-                                var target_pc: i64 = labels.get(label) orelse
-                                    std.debug.panic("label not found: {s}", .{label});
-                                if (version.enableStaticSyscalls()) {
-                                    target_pc = target_pc - inst_ptr - 1;
-                                }
                                 break :inst .{
                                     .opcode = @enumFromInt(bind.opc),
                                     .dst = .r0,
                                     .src = .r1,
                                     .off = 0,
-                                    .imm = @bitCast(@as(i32, @intCast(target_pc))),
+                                    .imm = @bitCast(resolveLabel(
+                                        inst_ptr,
+                                        &labels,
+                                        label,
+                                        version,
+                                    )),
                                 };
                             } else {
                                 const offset = operands[0].integer;
@@ -686,15 +714,29 @@ pub const Assembler = struct {
         };
     }
 
+    fn resolveLabel(
+        inst_ptr: u32,
+        labels: *const std.StringHashMapUnmanaged(u32),
+        name: []const u8,
+        version: sbpf.Version,
+    ) i32 {
+        var target_pc: i64 = labels.get(name) orelse
+            std.debug.panic("label not found: {s}", .{name});
+        if (version.enableStaticSyscalls()) {
+            target_pc = target_pc - inst_ptr - 1;
+        }
+        return @intCast(target_pc);
+    }
+
     fn tokenize(self: *Assembler, allocator: std.mem.Allocator) ![]const Statement {
         var statements: std.ArrayListUnmanaged(Statement) = .{};
         defer statements.deinit(allocator);
 
         var lines = std.mem.splitScalar(u8, self.source, '\n');
         while (lines.next()) |line| {
-            if (line.len == 0) continue; // empty line, skip
-
-            const trimmed_line = std.mem.trim(u8, line, " ");
+            const comment = std.mem.indexOfScalar(u8, line, ';') orelse line.len;
+            var trimmed_line = std.mem.trim(u8, line[0..comment], " ");
+            if (trimmed_line.len == 0) continue; // empty line, skip
 
             // is it a label? "ident:"
             if (std.mem.indexOfScalar(u8, trimmed_line, ':')) |index| {
@@ -711,9 +753,7 @@ pub const Assembler = struct {
             const name = iter.next() orelse @panic("no mnem");
 
             while (iter.next()) |op| {
-                if (std.mem.startsWith(u8, op, "r")) {
-                    const reg = std.meta.stringToEnum(Register, op) orelse
-                        @panic("unknown register");
+                if (std.meta.stringToEnum(Register, op)) |reg| {
                     try operands.append(allocator, .{ .register = reg });
                 } else if (std.mem.startsWith(u8, op, "[")) {
                     const left_bracket = std.mem.indexOfScalar(u8, op, '[').?;
@@ -740,12 +780,10 @@ pub const Assembler = struct {
                         .base = reg,
                         .offset = offset,
                     } });
-                } else if (std.mem.startsWith(u8, op, "function_")) {
-                    try operands.append(allocator, .{ .label = op });
+                } else if (std.fmt.parseInt(i64, op, 0) catch null) |int| {
+                    try operands.append(allocator, .{ .integer = int });
                 } else {
-                    if (std.fmt.parseInt(i64, op, 0)) |int| {
-                        try operands.append(allocator, .{ .integer = int });
-                    } else |err| std.debug.panic("err: {s}", .{@errorName(err)});
+                    try operands.append(allocator, .{ .label = op });
                 }
             }
 

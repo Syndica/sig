@@ -8,15 +8,15 @@
     },
     .dependencies = .{
         .@"zig-network" = .{
-            .url = "https://github.com/ikskuh/zig-network/archive/d4506cd1950de8a6e6d3f28aed68a0b4f64e0b44.tar.gz",
+            .url = "git+https://github.com/ikskuh/zig-network#d4506cd1950de8a6e6d3f28aed68a0b4f64e0b44",
             .hash = "122080b2675fa7fdd7410af5f62942dec99e0ea766827c8c6506e6672b575fb0a50e",
         },
         .@"zig-cli" = .{
-            .url = "https://github.com/sam701/zig-cli/archive/8c7a798c0f7fa0358d7ab41106fc872fca4cd995.tar.gz",
+            .url = "git+https://github.com/sam701/zig-cli#8c7a798c0f7fa0358d7ab41106fc872fca4cd995",
             .hash = "1220c008492d9460c3be2b209600a948181e6efb3bf0d79a1633def499632e708f4b",
         },
         .httpz = .{
-            .url = "https://github.com/karlseguin/http.zig/archive/79dad0f0cc652830cd8e49bf3e73aa77155ad4b2.tar.gz",
+            .url = "git+https://github.com/karlseguin/http.zig#79dad0f0cc652830cd8e49bf3e73aa77155ad4b2",
             .hash = "1220b8a918dfcee4fc8326ec337776e2ffd3029511c35f6b96d10aa7be98ca2faf99",
         },
         .zstd = .{
@@ -24,19 +24,19 @@
             .hash = "122030ebe280b73693963a67ed656226a67b7f00a0a05665155da00c9fcdee90de88",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/cd747a88e66539e37585cccacb5ae311be2ad527.tar.gz",
+            .url = "git+https://github.com/Syndica/rocksdb-zig#cd747a88e66539e37585cccacb5ae311be2ad527",
             .hash = "1220d917ac77a71426253d31e6c2b6db40494aa4e18c7284dfca9dc1eed5c7864274",
         },
         .lsquic = .{
-            .url = "https://github.com/Syndica/lsquic/archive/ed6ced0cbc6447f7135a32db491e398debdf8af7.tar.gz",
+            .url = "git+https://github.com/Syndica/lsquic#ed6ced0cbc6447f7135a32db491e398debdf8af7",
             .hash = "12207247a06ac1e7f4ddd6f0fbca4bcdcdf78655432a07928a96c8ec456bdfca71e3",
         },
         .xev = .{
-            .url = "https://github.com/mitchellh/libxev/archive/b8d1d93e5c899b27abbaa7df23b496c3e6a178c7.tar.gz",
+            .url = "git+https://github.com/mitchellh/libxev#b8d1d93e5c899b27abbaa7df23b496c3e6a178c7",
             .hash = "1220612bc023c21d75234882ec9a8c6a1cbd9d642da3dfb899297f14bb5bd7b6cd78",
         },
         .prettytable = .{
-            .url = "https://github.com/dying-will-bullet/prettytable-zig/archive/46b6ad9b5970def35fa43c9613cd244f28862fa9.tar.gz",
+            .url = "git+https://github.com/dying-will-bullet/prettytable-zig#46b6ad9b5970def35fa43c9613cd244f28862fa9",
             .hash = "122098d444c9c7112c66481e7655bb5389829c67e04b280a029200545e1971187443",
         },
         .base58 = .{

@@ -111,25 +111,25 @@ const Slice = extern struct {
 pub fn poseidon(vm: *Vm) Error!void {
     // const parameters: Parameters = @enumFromInt(vm.registers.get(.r1));
     const endianness: std.builtin.Endian = @enumFromInt(vm.registers.get(.r2));
-    const vals_addr = vm.registers.get(.r3);
-    const vals_len = vm.registers.get(.r4);
+    const addr = vm.registers.get(.r3);
+    const len = vm.registers.get(.r4);
     const result_addr = vm.registers.get(.r5);
 
-    if (vals_len > 12) {
+    if (len > 12) {
         return error.InvalidLength;
     }
 
     const hash_result = try vm.memory_map.vmap(.mutable, result_addr, 32);
     const input_bytes = try vm.memory_map.vmap(
         .constant,
-        vals_addr,
-        vals_len * @sizeOf(Slice),
+        addr,
+        len * @sizeOf(Slice),
     );
     const inputs = std.mem.bytesAsSlice(Slice, input_bytes);
 
     var hasher = phash.Hasher.init(endianness);
     for (inputs) |input| {
-        var slice = try vm.memory_map.vmap(
+        const slice = try vm.memory_map.vmap(
             .constant,
             @intFromPtr(input.addr),
             input.len,
