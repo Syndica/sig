@@ -8,10 +8,12 @@ const VoteError = sig.runtime.program.vote_program.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMap;
 const RingBuffer = sig.utils.collections.RingBuffer;
 
 const Clock = sig.runtime.sysvar.Clock;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 pub const MAX_PRIOR_VOTERS: usize = 32;
 
@@ -51,6 +53,15 @@ pub const EpochCredit = struct {
     epoch: Epoch,
     credits: u64,
     prev_credits: u64,
+};
+
+pub const Vote = struct {
+    /// A stack of votes starting with the oldest vote
+    slots: std.ArrayList(Slot),
+    /// signature of the bank's state at the last slot
+    hash: Hash,
+    /// processing timestamp of last slot
+    timestamp: ?i64,
 };
 
 pub const AuthorizedVoters = struct {
@@ -250,6 +261,15 @@ pub const VoteStateVersions = union(enum) {
                 .last_timestamp = state.last_timestamp,
             },
             .current => |state| return state,
+        }
+    }
+
+    /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
+    pub fn isUninitialized(self: VoteStateVersions) bool {
+        switch (self) {
+            .v0_23_5 => |state| return state.authorized_voter.equals(&Pubkey.ZEROES),
+            .v1_14_11 => |state| return state.authorized_voters.count() == 0,
+            .current => |state| return state.authorized_voters.count() == 0,
         }
     }
 };
@@ -473,11 +493,6 @@ pub const VoteState = struct {
         self.epoch_credits.deinit();
     }
 
-    /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
-    pub fn isUninitialized(self: VoteState) bool {
-        return self.authorized_voters.count() == 0;
-    }
-
     /// Upper limit on the size of the Vote State
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub fn sizeOf() usize {
@@ -545,6 +560,64 @@ pub const VoteState = struct {
     pub fn isCommissionIncrease(self: *const VoteState, commission: u8) bool {
         return commission > self.commission;
     }
+
+    pub fn processVote(
+        self: *VoteState,
+        allocator: std.mem.Allocator,
+        vote: *const Vote,
+        slot_hashes: SlotHashes,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) (error{OutOfMemory} || VoteError)!void {
+        if (vote.slots.items.len == 0) {
+            return VoteError.EmptySlots;
+        }
+
+        const earliest_slot_in_history = blk: {
+            if (slot_hashes.entries.len > 0) {
+                const slot, _ = slot_hashes.entries[slot_hashes.entries.len - 1];
+                break :blk slot;
+            } else {
+                break :blk 0;
+            }
+        };
+        var vote_slots = std.ArrayList(Slot).init(allocator);
+        defer vote_slots.deinit();
+
+        for (vote.slots.items) |slot| {
+            if (slot >= earliest_slot_in_history) {
+                try vote_slots.append(slot);
+            }
+        }
+
+        if (vote_slots.items.len == 0) {
+            return VoteError.VotesTooOldAllFiltered;
+        }
+
+        try self.processVoteUnfiltered(
+            vote_slots.items,
+            vote,
+            &slot_hashes,
+            epoch,
+            current_slot,
+        );
+    }
+
+    pub fn processVoteUnfiltered(
+        self: *VoteState,
+        vote_slots: []const Slot,
+        vote: *const Vote,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) VoteError!void {
+        _ = self;
+        _ = vote_slots;
+        _ = vote;
+        _ = slot_hashes;
+        _ = epoch;
+        _ = current_slot;
+    }
 };
 
 pub const VoteAuthorize = enum {
@@ -579,6 +652,31 @@ pub fn createTestVoteState(
         .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
         .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
     };
+}
+
+// TODO how can InstructionContext be easily passed/mocked for testing?
+pub fn verifyAndGetVoteState(
+    allocator: std.mem.Allocator,
+    ic: *sig.runtime.InstructionContext,
+    vote_account: *sig.runtime.BorrowedAccount,
+    clock: *const Clock,
+) (error{OutOfMemory} || InstructionError)!VoteState {
+    const versioned_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+
+    if (!versioned_state.isUninitialized()) {
+        return (InstructionError.UninitializedAccount);
+    }
+    var vote_state = try versioned_state.convertToCurrent(allocator);
+
+    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
+    if (!ic.info.isPubkeySigner(authorized_voter)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    return vote_state;
 }
 
 test "VoteState.convertToCurrent" {
@@ -818,25 +916,27 @@ test "VoteState.isUninitialized: invalid account data" {
         .unix_timestamp = 0,
     };
 
-    var vote_state = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_publey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer vote_state.deinit();
 
     try std.testing.expect(!vote_state.isUninitialized());
 
-    const uninitialized_state = createTestVoteState(
-        allocator,
-        node_publey,
-        null, // Authorized voters not set
-        authorized_withdrawer,
-        commission,
-    );
+    const uninitialized_state = VoteStateVersions{
+        .current = createTestVoteState(
+            allocator,
+            node_publey,
+            null, // Authorized voters not set
+            authorized_withdrawer,
+            commission,
+        ),
+    };
 
     try std.testing.expect(uninitialized_state.isUninitialized());
 }

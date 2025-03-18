@@ -10,12 +10,14 @@ const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
+const Vote = vote_program.state.Vote;
 const VoteError = vote_program.VoteError;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const FeatureSet = sig.runtime.FeatureSet;
 
@@ -94,6 +96,13 @@ fn execute(
         .update_validator_identity => executeUpdateValidatorIdentity(allocator, ic, &vote_account),
         .update_commission => |args| executeUpdateCommission(allocator, ic, &vote_account, args),
         .withdraw => |args| executeWithdraw(allocator, ic, &vote_account, args),
+        .vote => |args| executeProcessVoteWithAccount(allocator, ic, &vote_account, args.vote),
+        .vote_switch => |args| executeProcessVoteWithAccount(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote,
+        ),
     };
 }
 
@@ -159,7 +168,7 @@ fn intializeAccount(
 
     const deserialized_state = try vote_account.deserializeFromAccountData(allocator, VoteState);
 
-    if (!deserialized_state.isUninitialized()) {
+    if (!(VoteStateVersions{ .current = deserialized_state }).isUninitialized()) {
         return (InstructionError.AccountAlreadyInitialized);
     }
 
@@ -607,6 +616,69 @@ fn executeWithdraw(
         rent,
         clock,
     );
+}
+
+fn executeProcessVoteWithAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote: Vote,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (ic.tc.feature_set.isActive(FeatureSet.deprecate_legacy_vote_ixs) and
+        ic.tc.feature_set.isActive(FeatureSet.enable_tower_sync_ix))
+    {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    try processVoteWithAccount(
+        allocator,
+        ic,
+        vote_account,
+        vote,
+        try ic.getSysvarWithAccountCheck(
+            Clock,
+            @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
+        ),
+        try ic.getSysvarWithAccountCheck(
+            SlotHashes,
+            @intFromEnum(vote_instruction.Vote.AccountIndex.slot_hashes_sysvar),
+        ),
+    );
+}
+
+fn processVoteWithAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote: Vote,
+    clock: Clock,
+    slot_hashes: SlotHashes,
+) (error{OutOfMemory} || InstructionError)!void {
+    var vote_state = try vote_program.state.verifyAndGetVoteState(
+        allocator,
+        ic,
+        vote_account,
+        &clock,
+    );
+    defer vote_state.deinit();
+
+    vote_state.processVote(
+        allocator,
+        &vote,
+        slot_hashes,
+        clock.epoch,
+        clock.slot,
+    ) catch |err| {
+        switch (err) {
+            VoteError.EmptySlots, VoteError.VotesTooOldAllFiltered => {
+                ic.tc.custom_error = @intFromError(err);
+                return InstructionError.Custom;
+            },
+            else => {
+                return InstructionError.InvalidAccountData;
+            },
+        }
+    };
 }
 
 fn widthraw(
