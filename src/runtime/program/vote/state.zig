@@ -578,6 +578,31 @@ pub fn createTestVoteState(
     };
 }
 
+// TODO how can InstructionContext be easily passed/mocked for testing?
+fn verifyAndGetVoteState(
+    allocator: std.mem.Allocator,
+    vote_account: *sig.runtime.BorrowedAccount,
+    ic: *sig.runtime.InstructionContext,
+    clock: *Clock,
+) InstructionError!VoteState {
+    const versioned_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+
+    if (!versioned_state.isUninitialized()) {
+        return (InstructionError.UninitializedAccount);
+    }
+    var vote_state = try versioned_state.convertToCurrent(allocator);
+
+    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
+    if (!ic.info.isPubkeySigner(authorized_voter)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    return vote_state;
+}
+
 test "VoteState.convertToCurrent" {
     const allocator = std.testing.allocator;
     // VoteState0_23_5 -> Current
