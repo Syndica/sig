@@ -13,6 +13,7 @@ const SortedMap = sig.utils.collections.SortedMap;
 const RingBuffer = sig.utils.collections.RingBuffer;
 
 const Clock = sig.runtime.sysvar.Clock;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 pub const MAX_PRIOR_VOTERS: usize = 32;
 
@@ -542,6 +543,64 @@ pub const VoteState = struct {
         _ = try self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
         return pubkey;
     }
+
+    pub fn processVote(
+        self: *VoteState,
+        allocator: std.mem.Allocator,
+        vote: *const Vote,
+        slot_hashes: SlotHashes,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) (error{OutOfMemory} || VoteError)!void {
+        if (vote.slots.items.len == 0) {
+            return VoteError.EmptySlots;
+        }
+
+        const earliest_slot_in_history = blk: {
+            if (slot_hashes.entries.len > 0) {
+                const slot, _ = slot_hashes.entries[slot_hashes.entries.len - 1];
+                break :blk slot;
+            } else {
+                break :blk 0;
+            }
+        };
+        var vote_slots = std.ArrayList(Slot).init(allocator);
+        defer vote_slots.deinit();
+
+        for (vote.slots.items) |slot| {
+            if (slot >= earliest_slot_in_history) {
+                try vote_slots.append(slot);
+            }
+        }
+
+        if (vote_slots.items.len == 0) {
+            return VoteError.VotesTooOldAllFiltered;
+        }
+
+        try self.processVoteUnfiltered(
+            vote_slots.items,
+            vote,
+            &slot_hashes,
+            epoch,
+            current_slot,
+        );
+    }
+
+    pub fn processVoteUnfiltered(
+        self: *VoteState,
+        vote_slots: []const Slot,
+        vote: *const Vote,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) VoteError!void {
+        _ = self;
+        _ = vote_slots;
+        _ = vote;
+        _ = slot_hashes;
+        _ = epoch;
+        _ = current_slot;
+    }
 };
 
 pub const VoteAuthorize = enum {
@@ -579,12 +638,12 @@ pub fn createTestVoteState(
 }
 
 // TODO how can InstructionContext be easily passed/mocked for testing?
-fn verifyAndGetVoteState(
+pub fn verifyAndGetVoteState(
     allocator: std.mem.Allocator,
-    vote_account: *sig.runtime.BorrowedAccount,
     ic: *sig.runtime.InstructionContext,
-    clock: *Clock,
-) InstructionError!VoteState {
+    vote_account: *sig.runtime.BorrowedAccount,
+    clock: *const Clock,
+) (error{OutOfMemory} || InstructionError)!VoteState {
     const versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
