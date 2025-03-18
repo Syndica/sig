@@ -262,6 +262,15 @@ pub const VoteStateVersions = union(enum) {
             .current => |state| return state,
         }
     }
+
+    /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
+    pub fn isUninitialized(self: VoteStateVersions) bool {
+        switch (self) {
+            .v0_23_5 => |state| return state.authorized_voter.equals(&Pubkey.ZEROES),
+            .v1_14_11 => |state| return state.authorized_voters.count() == 0,
+            .current => |state| return state.authorized_voters.count() == 0,
+        }
+    }
 };
 
 /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_0_23_5.rs#L11
@@ -481,11 +490,6 @@ pub const VoteState = struct {
         self.votes.deinit();
         self.authorized_voters.deinit();
         self.epoch_credits.deinit();
-    }
-
-    /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
-    pub fn isUninitialized(self: VoteState) bool {
-        return self.authorized_voters.count() == 0;
     }
 
     /// Upper limit on the size of the Vote State
