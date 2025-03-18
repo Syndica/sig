@@ -293,7 +293,7 @@ pub const Vm = struct {
                 switch (@intFromEnum(opcode) & 0xF0) {
                     Instruction.add,
                     => if (!opcode.is64()) {
-                        result = @as(u32, @truncate(extend(result)));
+                        result = @as(u32, @truncate(result));
                     },
                     else => {},
                 }
