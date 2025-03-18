@@ -236,6 +236,15 @@ pub const Vm = struct {
                 const rhs: u64 = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
 
                 var result: u64 = switch (@intFromEnum(opcode) & 0xF0) {
+                    // zig fmt: off
+                    Instruction.add    => lhs +% rhs,
+                    Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
+                    Instruction.xor    => lhs ^ rhs,
+                    Instruction.@"or"  => lhs | rhs,
+                    Instruction.@"and" => lhs & rhs,
+                    Instruction.mov    => rhs,
+                    Instruction.mod => try std.math.mod(u64, lhs, rhs),
+                    // zig fmt: on
                     Instruction.sub => switch (opcode) {
                         .sub64_imm, .sub32_imm => if (version.swapSubRegImmOperands())
                             rhs -% lhs
@@ -244,17 +253,14 @@ pub const Vm = struct {
                         .sub64_reg, .sub32_reg => lhs -% rhs,
                         else => unreachable,
                     },
-                    // zig fmt: off
-                    Instruction.add    => lhs +% rhs,
-                    Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
-                    Instruction.xor    => lhs ^ rhs,
-                    Instruction.@"or"  => lhs | rhs,
-                    Instruction.@"and" => lhs & rhs,
-                    Instruction.lsh    => lhs << @truncate(rhs),
-                    Instruction.rsh    => lhs >> @truncate(rhs),
-                    Instruction.mov    => rhs,
-                    Instruction.mod => try std.math.mod(u64, lhs, rhs),
-                    // zig fmt: on
+                    Instruction.lsh => if (opcode.is64())
+                        lhs << @truncate(rhs)
+                    else
+                        @as(u32, @truncate(lhs)) << @truncate(rhs),
+                    Instruction.rsh => if (opcode.is64())
+                        lhs >> @truncate(rhs)
+                    else
+                        @as(u32, @truncate(lhs)) >> @truncate(rhs),
                     Instruction.mul => value: {
                         if (opcode.is64()) break :value lhs *% rhs;
                         const lhs_signed: i32 = @bitCast(@as(u32, @truncate(lhs)));
@@ -287,7 +293,7 @@ pub const Vm = struct {
                 switch (@intFromEnum(opcode) & 0xF0) {
                     Instruction.add,
                     => if (!opcode.is64()) {
-                        result = extend(result);
+                        result = @as(u32, @truncate(extend(result)));
                     },
                     else => {},
                 }
