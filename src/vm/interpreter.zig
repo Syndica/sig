@@ -227,78 +227,74 @@ pub const Vm = struct {
                     }
                 }
 
-                const lhs_large = registers.get(inst.dst);
-                const rhs_large = if (opcode.isReg())
-                    registers.get(inst.src)
-                else
-                    extend(inst.imm);
-                const lhs: u64 = if (opcode.is64()) lhs_large else @as(u32, @truncate(lhs_large));
-                const rhs: u64 = if (opcode.is64()) rhs_large else @as(u32, @truncate(rhs_large));
+                switch (opcode.is64()) {
+                    inline //
+                    true,
+                    false,
+                    => |is_64| {
+                        const Int = if (is_64) u64 else u32;
+                        const SignedInt = if (is_64) i64 else i32;
 
-                var result: u64 = switch (@intFromEnum(opcode) & 0xF0) {
-                    // zig fmt: off
-                    Instruction.add    => lhs +% rhs,
-                    Instruction.div    => try std.math.divTrunc(u64, lhs, rhs),
-                    Instruction.xor    => lhs ^ rhs,
-                    Instruction.@"or"  => lhs | rhs,
-                    Instruction.@"and" => lhs & rhs,
-                    Instruction.mov    => rhs,
-                    Instruction.mod => try std.math.mod(u64, lhs, rhs),
-                    // zig fmt: on
-                    Instruction.sub => switch (opcode) {
-                        .sub64_imm, .sub32_imm => if (version.swapSubRegImmOperands())
-                            rhs -% lhs
+                        const lhs: Int = @truncate(registers.get(inst.dst));
+                        const rhs: Int = @truncate(if (opcode.isReg())
+                            registers.get(inst.src)
                         else
-                            lhs -% rhs,
-                        .sub64_reg, .sub32_reg => lhs -% rhs,
-                        else => unreachable,
-                    },
-                    Instruction.lsh => if (opcode.is64())
-                        lhs << @truncate(rhs)
-                    else
-                        @as(u32, @truncate(lhs)) << @truncate(rhs),
-                    Instruction.rsh => if (opcode.is64())
-                        lhs >> @truncate(rhs)
-                    else
-                        @as(u32, @truncate(lhs)) >> @truncate(rhs),
-                    Instruction.mul => value: {
-                        if (opcode.is64()) break :value lhs *% rhs;
-                        const lhs_signed: i32 = @bitCast(@as(u32, @truncate(lhs)));
-                        const rhs_signed: i32 = @bitCast(@as(u32, @truncate(rhs)));
-                        break :value @bitCast(@as(i64, lhs_signed *% rhs_signed));
-                    },
-                    Instruction.neg => value: {
-                        if (version.disableNegation()) return error.UnknownInstruction;
-                        const signed: i64 = @bitCast(lhs);
-                        const negated: u64 = @bitCast(-signed);
-                        break :value if (opcode.is64()) negated else @as(u32, @truncate(negated));
-                    },
-                    Instruction.arsh => value: {
-                        if (opcode.is64()) {
-                            const signed: i64 = @bitCast(lhs);
-                            const shifted: u64 = @bitCast(signed >> @truncate(rhs));
-                            break :value shifted;
-                        } else {
-                            const signed: i32 = @bitCast(@as(u32, @truncate(lhs)));
-                            const shifted: u32 = @bitCast(signed >> @truncate(rhs));
-                            break :value shifted;
-                        }
-                    },
-                    Instruction.hor => if (version.disableLddw()) value: {
-                        break :value lhs_large | @as(u64, inst.imm) << 32;
-                    } else return error.UnknownInstruction,
-                    else => unreachable,
-                };
+                            extend(inst.imm));
 
-                switch (@intFromEnum(opcode) & 0xF0) {
-                    Instruction.add,
-                    => if (!opcode.is64()) {
-                        result = @as(u32, @truncate(result));
+                        const result: Int = switch (@intFromEnum(opcode) & 0b11110000) {
+                            // zig fmt: off
+                            Instruction.add    => lhs +% rhs,
+                            Instruction.div    => try std.math.divTrunc(Int, lhs, rhs),
+                            Instruction.xor    => lhs ^ rhs,
+                            Instruction.@"or"  => lhs | rhs,
+                            Instruction.@"and" => lhs & rhs,
+                            Instruction.mov    => rhs,
+                            Instruction.mod    => try std.math.mod(Int, lhs, rhs),
+                            Instruction.lsh    => lhs << @truncate(rhs),
+                            Instruction.rsh    => lhs >> @truncate(rhs),
+                            // zig fmt: on
+                            Instruction.sub => switch (opcode) {
+                                .sub64_imm, .sub32_imm => if (version.swapSubRegImmOperands())
+                                    rhs -% lhs
+                                else
+                                    lhs -% rhs,
+                                .sub64_reg, .sub32_reg => lhs -% rhs,
+                                else => unreachable,
+                            },
+                            Instruction.mul => value: {
+                                if (is_64) break :value lhs *% rhs;
+                                const lhs_signed: SignedInt = @bitCast(lhs);
+                                const rhs_signed: SignedInt = @bitCast(rhs);
+                                break :value @bitCast(lhs_signed *% rhs_signed);
+                            },
+                            Instruction.neg => value: {
+                                if (version.disableNegation()) return error.UnknownInstruction;
+                                const signed: SignedInt = @bitCast(lhs);
+                                break :value @bitCast(-signed);
+                            },
+                            Instruction.arsh => value: {
+                                const signed: SignedInt = @bitCast(lhs);
+                                break :value @bitCast(signed >> @truncate(rhs));
+                            },
+                            Instruction.hor => if (version.disableLddw()) value: {
+                                // The hor instruction only exists as hor64_imm, but Zig can't tell
+                                // that the the opcode can't possibly reach here. We'll nicely hint
+                                // to it, by specializing the rest of the function
+                                // behind the `is_64` boolean.
+                                if (!is_64) return error.UnknownInstruction;
+                                break :value lhs | @as(u64, inst.imm) << 32;
+                            } else return error.UnknownInstruction,
+                            else => std.debug.panic("{s}", .{@tagName(opcode)}),
+                        };
+
+                        const large_result: u64 = switch (@intFromEnum(opcode) & 0b11110000) {
+                            // The mul32 instruction requires a sign extension to u64 from i32.
+                            Instruction.mul => if (is_64) result else extend(result),
+                            else => result,
+                        };
+                        registers.set(inst.dst, large_result);
                     },
-                    else => {},
                 }
-
-                registers.set(inst.dst, result);
             },
 
             .lmul32_reg,

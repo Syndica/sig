@@ -370,7 +370,7 @@ test "sub32 imm" {
         \\  mov32 r0, 3
         \\  sub32 r0, 1
         \\  return
-    , 0xFFFFFFFFFFFFFFFE);
+    , 0xFFFFFFFE);
 }
 
 test "sub32 reg" {
@@ -1452,12 +1452,12 @@ test "jlt extend" {
         .{},
         \\entrypoint:
         \\  mov r0, 0
-        \\  add r0, -3  
-        \\  jlt r0, -2, +2 
-        \\  mov r0, 1             
-        \\  return                 
-        \\  mov r0, 2           
-        \\  return    
+        \\  add r0, -3
+        \\  jlt r0, -2, +2
+        \\  mov r0, 1
+        \\  return
+        \\  mov r0, 2
+        \\  return
     ,
         2,
     );
@@ -2132,7 +2132,7 @@ test "fixed stack out of bounds" {
 test "dynamic frame pointer" {
     const config: Config = .{};
     try testAsm(config,
-        \\entrypoint: 
+        \\entrypoint:
         \\  add r10, -64
         \\  stxdw [r10+8], r10
         \\  call function_foo
@@ -2143,7 +2143,7 @@ test "dynamic frame pointer" {
     , memory.STACK_START + config.stackSize() - 64);
 
     try testAsm(config,
-        \\entrypoint: 
+        \\entrypoint:
         \\  add r10, -64
         \\  call function_foo
         \\  return
@@ -2153,7 +2153,7 @@ test "dynamic frame pointer" {
     , memory.STACK_START + config.stackSize() - 64);
 
     try testAsm(config,
-        \\entrypoint: 
+        \\entrypoint:
         \\  call function_foo
         \\  mov r0, r10
         \\  return
