@@ -468,7 +468,7 @@ pub const VoteState = struct {
         self: *VoteState,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
-    ) (error{OutOfMemory} || InstructionError || VoteError)!void {
+    ) (error{OutOfMemory} || InstructionError)!struct { void, ?VoteError } {
 
         // The offset in slots `n` on which the target_epoch
         // (default value `DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET`) is
@@ -476,7 +476,7 @@ pub const VoteState = struct {
         // first slot `S` of an epoch in which to set a new voter for
         // the epoch at `S` + `n`
         if (self.authorized_voters.contains(target_epoch)) {
-            return VoteError.TooSoonToReauthorize;
+            return .{ {}, VoteError.too_soon_to_reauthorize };
         }
 
         const latest_epoch, const latest_pubkey = self.authorized_voters.last() orelse
@@ -499,7 +499,10 @@ pub const VoteState = struct {
             });
         }
 
-        try self.authorized_voters.insert(target_epoch, new_authorized_voter);
+        return .{
+            try self.authorized_voters.insert(target_epoch, new_authorized_voter),
+            null,
+        };
     }
 
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
@@ -697,7 +700,7 @@ test "VoteState.setNewAuthorizedVoter: success" {
     defer vote_state.deinit();
 
     const target_epoch: Epoch = 5;
-    try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
+    _ = try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
 
     const retrived_voter = vote_state.authorized_voters.getAuthorizedVoter(target_epoch).?;
     try std.testing.expectEqual(new_voter, retrived_voter);
@@ -732,9 +735,10 @@ test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
 
     // Same as initial epoch
     const target_epoch: Epoch = 0;
-    try std.testing.expectError(
-        VoteError.TooSoonToReauthorize,
-        vote_state.setNewAuthorizedVoter(new_voter, target_epoch),
+    _, const err = try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
+    try std.testing.expectEqual(
+        VoteError.too_soon_to_reauthorize,
+        err.?,
     );
 }
 

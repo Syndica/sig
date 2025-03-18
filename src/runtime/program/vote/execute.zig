@@ -10,7 +10,6 @@ const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
-const VoteError = vote_program.VoteError;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -241,20 +240,15 @@ fn authorize(
                 }
             }
 
-            vote_state.setNewAuthorizedVoter(
+            _, const err = try vote_state.setNewAuthorizedVoter(
                 authorized,
                 target_epoch,
-            ) catch |err| {
-                switch (err) {
-                    VoteError.TooSoonToReauthorize => {
-                        ic.tc.custom_error = @intFromError(err);
-                        return InstructionError.Custom;
-                    },
-                    else => {
-                        return InstructionError.InvalidAccountData;
-                    },
-                }
-            };
+            );
+
+            if (err) |err_| {
+                ic.tc.custom_error = @intFromEnum(err_);
+                return InstructionError.Custom;
+            }
         },
         .withdrawer => {
             // current authorized withdrawer must say "yay".
