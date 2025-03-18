@@ -832,25 +832,27 @@ test "VoteState.isUninitialized: invalid account data" {
         .unix_timestamp = 0,
     };
 
-    var vote_state = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_publey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer vote_state.deinit();
 
     try std.testing.expect(!vote_state.isUninitialized());
 
-    const uninitialized_state = createTestVoteState(
-        allocator,
-        node_publey,
-        null, // Authorized voters not set
-        authorized_withdrawer,
-        commission,
-    );
+    const uninitialized_state = VoteStateVersions{
+        .current = createTestVoteState(
+            allocator,
+            node_publey,
+            null, // Authorized voters not set
+            authorized_withdrawer,
+            commission,
+        ),
+    };
 
     try std.testing.expect(uninitialized_state.isUninitialized());
 }
