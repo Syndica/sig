@@ -176,7 +176,7 @@ fn intializeAccount(
 
     const deserialized_state = try vote_account.deserializeFromAccountData(allocator, VoteState);
 
-    if (!deserialized_state.isUninitialized()) {
+    if (!(VoteStateVersions { .current = deserialized_state }).isUninitialized()) {
         return (InstructionError.AccountAlreadyInitialized);
     }
 
