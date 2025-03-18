@@ -6,6 +6,11 @@ const Allocator = std.mem.Allocator;
 const ErrorReturn = sig.utils.types.ErrorReturn;
 const Logger = sig.trace.log.Logger;
 
+/// Sends HTTP POST requests with content type of application/json and awaits a
+/// response. Offers a retry mechanism to handle failures.
+///
+/// Not safe to use in multiple threads since the http client may be restarted
+/// by fetchWithRetries.
 pub const HttpPostFetcher = struct {
     http_client: std.http.Client,
     base_url: []const u8,
@@ -102,7 +107,8 @@ pub const HttpPostFetcher = struct {
     }
 
     fn restartHttpClient(self: *HttpPostFetcher) void {
+        const allocator = self.http_client.allocator;
         self.http_client.deinit();
-        self.http_client = std.http.Client{ .allocator = self.http_client.allocator };
+        self.http_client = std.http.Client{ .allocator = allocator };
     }
 };
