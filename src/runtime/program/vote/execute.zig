@@ -661,7 +661,7 @@ fn processVoteWithAccount(
         &clock,
     );
     defer vote_state.deinit();
-    
+
     vote_state.processVote(
         allocator,
         &vote,
