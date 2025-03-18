@@ -24,9 +24,6 @@ pub const BPF_ALIGN_OF_U128: usize = 8;
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
-/// [agave] https://github.com/solana-program/system/blob/17d70bc0e56354cc7811e22a28776e7f379bcd04/interface/src/lib.rs#L18
-pub const MAX_PERMITTED_DATA_LENGTH: u64 = 10 * 1024 * 1024;
-
 pub const SerializedAccount = union(enum) {
     account: struct { u16, BorrowedAccount },
     duplicate: u8,
@@ -370,6 +367,7 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_account| {
                 _, const borrowed_account = index_and_account;
+
                 size += @sizeOf(u8) // is_signer
                 + @sizeOf(u8) // is_writable
                 + @sizeOf(u8) // executable
@@ -420,6 +418,7 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_borrowed_account| {
                 _, const borrowed_account = index_and_borrowed_account;
+
                 _ = serializer.write(u8, std.math.maxInt(u8));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
