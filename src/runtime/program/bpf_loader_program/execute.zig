@@ -1344,7 +1344,7 @@ test "executeDeployWithMaxDataLen" {
     const final_buffer_account_data =
         initial_buffer_account_data[0..bpf_loader_program.v3.State.BUFFER_METADATA_SIZE];
 
-    const final_program_data_account_size = 
+    const final_program_data_account_size =
         bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE +| max_data_len;
     const final_program_data_account_data =
         try allocator.alloc(u8, final_program_data_account_size);
