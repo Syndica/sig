@@ -1213,6 +1213,17 @@ test "ja" {
     );
 }
 
+test "ja label" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  ja foo
+        \\  exit
+        \\foo:
+        \\  mov r0, 10
+        \\ exit
+    , 10);
+}
+
 test "jeq imm" {
     try testAsm(
         .{},
