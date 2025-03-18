@@ -1321,6 +1321,22 @@ test "jle reg" {
     );
 }
 
+test "jle label reg" {
+    try testAsm(
+        .{},
+        \\entrypoint:
+        \\  mov r2, 4
+        \\  mov r3, 3
+        \\  jle r3, r2, foo
+        \\  exit
+        \\foo:
+        \\  mov r0, 10
+        \\  exit
+    ,
+        10,
+    );
+}
+
 test "jgt imm" {
     try testAsm(
         .{},
