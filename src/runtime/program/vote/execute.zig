@@ -654,12 +654,31 @@ fn processVoteWithAccount(
     clock: Clock,
     slot_hashes: SlotHashes,
 ) (error{OutOfMemory} || InstructionError)!void {
-    _ = allocator;
-    _ = ic;
-    _ = vote_account;
-    _ = vote;
-    _ = clock;
-    _ = slot_hashes;
+    var vote_state = try vote_program.state.verifyAndGetVoteState(
+        allocator,
+        ic,
+        vote_account,
+        &clock,
+    );
+    defer vote_state.deinit();
+    
+    vote_state.processVote(
+        allocator,
+        &vote,
+        slot_hashes,
+        clock.epoch,
+        clock.slot,
+    ) catch |err| {
+        switch (err) {
+            VoteError.EmptySlots, VoteError.VotesTooOldAllFiltered => {
+                ic.tc.custom_error = @intFromError(err);
+                return InstructionError.Custom;
+            },
+            else => {
+                return InstructionError.InvalidAccountData;
+            },
+        }
+    };
 }
 
 fn widthraw(
