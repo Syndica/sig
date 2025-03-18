@@ -24,7 +24,9 @@ pub const BPF_ALIGN_OF_U128: usize = 8;
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L26
+/// [agave] https://github.com/solana-program/system/blob/17d70bc0e56354cc7811e22a28776e7f379bcd04/interface/src/lib.rs#L18
+pub const MAX_PERMITTED_DATA_LENGTH: u64 = 10 * 1024 * 1024;
+
 pub const SerializedAccount = union(enum) {
     account: struct { u16, BorrowedAccount },
     duplicate: u8,
@@ -475,7 +477,7 @@ fn serializeParametersAligned(
     };
 }
 
-/// https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L251
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L251
 pub fn deserializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
