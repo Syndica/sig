@@ -13,8 +13,7 @@ pub const vote_program = @import("vote/lib.zig");
 pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
-const EntrypointFn =
-    *const fn (
+const EntrypointFn = *const fn (
     std.mem.Allocator,
     *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void;
