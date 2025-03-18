@@ -78,13 +78,22 @@ test "mov32 imm large" {
     , 0xFFFFFFFF);
 }
 
-test "mov large" {
+test "mov32 large" {
     try testAsm(.{},
         \\entrypoint:
         \\  mov32 r1, -1
         \\  mov32 r0, r1
         \\  return
     , 0xFFFFFFFF);
+}
+
+test "mov large" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov64 r1, -1
+        \\  mov64 r0, r1
+        \\  exit
+    , 0xFFFFFFFFFFFFFFFF);
 }
 
 test "bounce" {
@@ -109,6 +118,15 @@ test "add32" {
         \\  add32 r0, r1
         \\  return
     , 3);
+}
+
+test "add32 negative" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov32 r0, 0
+        \\  add32 r0, -1
+        \\  exit
+    , 0xFFFFFFFF);
 }
 
 test "add64" {
@@ -666,6 +684,15 @@ test "lsh64 reg" {
         \\  lsh r0, r7
         \\  return
     , 0x10);
+}
+
+test "lsh32 overflow" {
+    try testAsm(.{},
+        \\entrypoint:
+        \\  mov32 r0, 5
+        \\  lsh32 r0, 30
+        \\  exit
+    , 0x40000000);
 }
 
 test "rhs32 imm" {
