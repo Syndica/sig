@@ -2,19 +2,22 @@ const std = @import("std");
 const lib = @import("lib.zig");
 const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
-const sig = @import("../sig.zig");
+const syscalls = @import("syscalls.zig");
+const transaction_context = @import("../runtime/transaction_context.zig");
 
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
 const Executable = lib.Executable;
 const BuiltinProgram = lib.BuiltinProgram;
+const TransactionContext = transaction_context.TransactionContext;
+
+pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
 
 pub const Vm = struct {
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
     executable: *const Executable,
 
-    registers: std.EnumArray(sbpf.Instruction.Register, u64),
+    registers: RegisterMap,
     memory_map: MemoryMap,
     loader: *const BuiltinProgram,
 
@@ -22,6 +25,8 @@ pub const Vm = struct {
     call_frames: std.ArrayListUnmanaged(CallFrame),
     depth: u64,
     instruction_count: u64,
+    transaction_context: *TransactionContext,
+    result: Result,
 
     const CallFrame = struct {
         caller_saved_regs: [4]u64,
@@ -34,9 +39,9 @@ pub const Vm = struct {
         executable: *const Executable,
         memory_map: MemoryMap,
         loader: *const BuiltinProgram,
-        logger: sig.trace.Logger,
         stack_len: u64,
-    ) !Vm {
+        ctx: *TransactionContext,
+    ) error{OutOfMemory}!Vm {
         const offset = if (executable.version.enableDynamicStackFrames())
             stack_len
         else
@@ -45,14 +50,15 @@ pub const Vm = struct {
         var self: Vm = .{
             .executable = executable,
             .allocator = allocator,
-            .registers = std.EnumArray(sbpf.Instruction.Register, u64).initFill(0),
+            .registers = RegisterMap.initFill(0),
             .memory_map = memory_map,
             .depth = 0,
             .call_frames = try std.ArrayListUnmanaged(CallFrame).initCapacity(allocator, 64),
             .instruction_count = 0,
             .vm_addr = executable.text_vaddr,
             .loader = loader,
-            .logger = logger,
+            .transaction_context = ctx,
+            .result = .{ .ok = 0 },
         };
 
         self.registers.set(.r10, stack_pointer);
@@ -66,14 +72,32 @@ pub const Vm = struct {
         self.call_frames.deinit(self.allocator);
     }
 
-    pub fn run(self: *Vm) !u64 {
-        while (try self.step()) {
-            self.instruction_count += 1;
+    pub fn run(self: *Vm) struct { Result, u64 } {
+        const initial_instruction_count = self.transaction_context.getRemaining();
+        while (true) {
+            const cont = self.step() catch |err| {
+                self.result = .{ .err = err };
+                break;
+            };
+            if (!cont) break;
         }
-        return self.registers.get(.r0);
+        // https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/vm.rs#L380-L385
+        const instruction_count = if (self.executable.config.enable_instruction_meter) blk: {
+            self.transaction_context.consumeUnchecked(self.instruction_count);
+            break :blk initial_instruction_count -| self.transaction_context.getRemaining();
+        } else 0;
+        return .{ self.result, instruction_count };
     }
 
-    fn step(self: *Vm) !bool {
+    fn step(self: *Vm) SbpfError!bool {
+        const config = self.executable.config;
+        if (config.enable_instruction_meter and
+            self.instruction_count >= self.transaction_context.getRemaining())
+        {
+            return error.ExceededMaxInstructions;
+        }
+
+        self.instruction_count += 1;
         const version = self.executable.version;
         const registers = &self.registers;
         const pc = registers.get(.pc);
@@ -534,7 +558,7 @@ pub const Vm = struct {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
-                        try entry.value(self);
+                        try entry.value(self.transaction_context, &self.memory_map, self.registers);
                     } else {
                         @panic("TODO: detect invalid syscall in verifier");
                     }
@@ -544,6 +568,12 @@ pub const Vm = struct {
                     }
 
                     if (self.depth == 0) {
+                        if (config.enable_instruction_meter and
+                            self.instruction_count > self.transaction_context.getRemaining())
+                        {
+                            return error.ExceededMaxInstructions;
+                        }
+                        self.result = .{ .ok = self.registers.get(.r0) };
                         return false;
                     }
                     self.depth -= 1;
@@ -551,7 +581,7 @@ pub const Vm = struct {
                     self.registers.set(.r10, frame.fp);
                     @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
                     if (!version.enableDynamicStackFrames()) {
-                        registers.getPtr(.r10).* -= self.executable.config.stack_frame_size;
+                        registers.getPtr(.r10).* -= config.stack_frame_size;
                     }
                     next_pc = frame.return_pc;
                 }
@@ -567,7 +597,7 @@ pub const Vm = struct {
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                         resolved = true;
                         const builtin_fn = entry.value;
-                        try builtin_fn(self);
+                        try builtin_fn(self.transaction_context, &self.memory_map, self.registers);
                     }
                 }
 
@@ -659,5 +689,34 @@ pub const Vm = struct {
         @setRuntimeSafety(false);
         if (denominator == 0) return error.DivisionByZero;
         return @rem(numerator, denominator);
+    }
+};
+
+pub const SbpfError = error{
+    ExceededMaxInstructions,
+    UnknownInstruction,
+    Overflow,
+    InvalidVirtualAddress,
+    AccessNotMapped,
+    VirtualAccessTooLong,
+    AccessViolation,
+    CallDepthExceeded,
+    UnresolvedFunction,
+    DivisionByZero,
+    PcOutOfBounds,
+} || syscalls.Error;
+
+/// Contains either an error encountered while executing the program, or the
+/// result, which is the value of the `r0` register at the time of exit.
+///
+/// https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/error.rs#L170-L171
+pub const Result = union(enum) {
+    err: SbpfError,
+    ok: u64,
+
+    /// Helper function for creating the `Result` from an inline value.
+    pub fn fromValue(val: anytype) Result {
+        if (!@import("builtin").is_test) @compileError("only used in tests");
+        return @unionInit(Result, if (@typeInfo(@TypeOf(val)) == .ErrorSet) "err" else "ok", val);
     }
 };

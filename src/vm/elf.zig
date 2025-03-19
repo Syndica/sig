@@ -10,11 +10,15 @@ const memory = @import("memory.zig");
 const lib = @import("lib.zig");
 const BuiltinProgram = lib.BuiltinProgram;
 const Config = lib.Config;
-const Executable = lib.Executable;
 const Registry = lib.Registry;
+const Section = lib.Section;
 
 const elf = std.elf;
 const assert = std.debug.assert;
+
+const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
 
 pub const Elf = struct {
     bytes: []u8,
@@ -23,7 +27,7 @@ pub const Elf = struct {
     entry_pc: u64,
     version: sbpf.Version,
     function_registry: Registry(u64),
-    ro_section: Executable.Section,
+    ro_section: Section,
     config: Config,
 
     /// Contains immutable headers parsed from the ELF file.
@@ -221,7 +225,7 @@ pub const Elf = struct {
             config: Config,
             version: sbpf.Version,
             allocator: std.mem.Allocator,
-        ) !Executable.Section {
+        ) !Section {
             const ro_names: []const []const u8 = &.{
                 ".text",
                 ".rodata",
@@ -307,7 +311,7 @@ pub const Elf = struct {
             const can_borrow = !invalid_offsets and
                 last_ro_section +| 1 -| first_ro_section == n_ro_sections and
                 config.optimize_rodata;
-            const ro_section: Executable.Section = if (can_borrow) ro: {
+            const ro_section: Section = if (can_borrow) ro: {
                 const file_offset = addr_file_offset orelse 0;
                 const start = lowest_addr -| file_offset;
                 const end = highest_addr -| file_offset;
@@ -750,7 +754,7 @@ pub const Elf = struct {
 
         const bytecode_hdr = headers.phdrs[0];
         const rodata_hdr = headers.phdrs[1];
-        const ro_section: Executable.Section = .{ .borrowed = .{
+        const ro_section: Section = .{ .borrowed = .{
             .offset = rodata_hdr.p_vaddr,
             .start = rodata_hdr.p_offset,
             .end = rodata_hdr.p_offset + rodata_hdr.p_filesz,
@@ -1001,10 +1005,6 @@ pub const Elf = struct {
         return self.data.getInstructions(self.headers) catch unreachable;
     }
 };
-
-const expect = std.testing.expect;
-const expectEqual = std.testing.expectEqual;
-const expectError = std.testing.expectError;
 
 test "parsing failing allocation" {
     const S = struct {
