@@ -10,7 +10,6 @@ const memory = @import("memory.zig");
 const lib = @import("lib.zig");
 const BuiltinProgram = lib.BuiltinProgram;
 const Config = lib.Config;
-const Executable = lib.Executable;
 const Registry = lib.Registry;
 const Section = lib.Section;
 const TestContextObject = lib.TestContextObject;

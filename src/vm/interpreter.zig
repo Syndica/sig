@@ -80,7 +80,7 @@ pub fn Vm(Context: type) type {
                 if (!cont) break;
             }
             const instruction_count = if (self.executable.config.enable_instruction_meter) blk: {
-                self.context.consumeCompute(self.instruction_count);
+                self.context.consumeUnchecked(self.instruction_count);
                 break :blk initial_instruction_count -| self.context.getRemaining();
             } else 0;
             return .{ self.result, instruction_count };
@@ -723,13 +723,20 @@ pub const TestContextObject = struct {
     remaining: u64,
     stdout: ?std.fs.File = null,
 
-    pub fn getComputeBudget(self: *TestContextObject) ComputeBudget {
-        _ = self;
-        return .{};
+    pub fn getComputeBudget(_: *TestContextObject) ComputeBudget {
+        return ComputeBudget.default(1_400_000);
     }
 
-    pub fn consumeCompute(self: *TestContextObject, amount: u64) void {
-        self.remaining -|= amount;
+    pub fn consumeCompute(self: *TestContextObject, compute: u64) !void {
+        if (self.remaining < compute) {
+            self.remaining = 0;
+            return error.ComputationalBudgetExceeded;
+        }
+        self.consumeUnchecked(compute);
+    }
+
+    pub fn consumeUnchecked(self: *TestContextObject, compute: u64) void {
+        self.remaining -|= compute;
     }
 
     pub fn getRemaining(self: *TestContextObject) u64 {
@@ -747,4 +754,68 @@ pub const TestContextObject = struct {
     }
 };
 
-const ComputeBudget = struct {};
+/// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/compute-budget/src/compute_budget.rs#L11-L119
+const ComputeBudget = struct {
+    /// Number of compute units that a transaction or individual instruction is
+    /// allowed to consume. Compute units are consumed by program execution,
+    /// resources they use, etc...
+    compute_unit_limit: u64,
+    /// Number of compute units consumed by a log_u64 call
+    log_64_units: u64,
+    /// Maximum SBF to BPF call depth
+    max_call_depth: usize,
+    /// Size of a stack frame in bytes, must match the size specified in the LLVM SBF backend
+    stack_frame_size: usize,
+    /// Number of compute units consumed by logging a `Pubkey`
+    log_pubkey_units: u64,
+    /// Number of compute units consumed to do a syscall without any work
+    syscall_base_cost: u64,
+    /// program heap region size, default: solana_sdk::entrypoint::HEAP_LENGTH
+    heap_size: u32,
+    /// Number of compute units per additional 32k heap above the default (~.5
+    /// us per 32k at 15 units/us rounded up)
+    heap_cost: u64,
+    /// Memory operation syscall base cost
+    mem_op_base_cost: u64,
+    /// Coefficient `a` of the quadratic function which determines the number
+    /// of compute units consumed to call poseidon syscall for a given number
+    /// of inputs.
+    poseidon_cost_coefficient_a: u64,
+    /// Coefficient `c` of the quadratic function which determines the number
+    /// of compute units consumed to call poseidon syscall for a given number
+    /// of inputs.
+    poseidon_cost_coefficient_c: u64,
+    /// Number of account data bytes per compute unit charged during a cross-program invocation
+    cpi_bytes_per_unit: u64,
+
+    pub fn default(compute_unit_limit: u64) ComputeBudget {
+        return .{
+            .compute_unit_limit = compute_unit_limit,
+            .log_64_units = 100,
+            .max_call_depth = 64,
+            .stack_frame_size = 4096,
+            .log_pubkey_units = 100,
+            .syscall_base_cost = 100,
+            .cpi_bytes_per_unit = 250, // ~50MB at 200,000 units
+            .heap_size = 32 * 1024,
+            .heap_cost = 8,
+            .mem_op_base_cost = 10,
+            .poseidon_cost_coefficient_a = 61,
+            .poseidon_cost_coefficient_c = 542,
+        };
+    }
+
+    pub fn poseidonCost(self: ComputeBudget, len: u64) !u64 {
+        const squared_inputs = try std.math.powi(u64, len, 2);
+        const mul_result = try std.math.mul(
+            u64,
+            squared_inputs,
+            self.poseidon_cost_coefficient_a,
+        );
+        return try std.math.add(
+            u64,
+            mul_result,
+            self.poseidon_cost_coefficient_c,
+        );
+    }
+};

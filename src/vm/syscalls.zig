@@ -15,9 +15,11 @@ pub const Error = error{
     AccessViolation,
     VirtualAccessTooLong,
     Overflow,
+    Underflow,
     InvalidLength,
     NonCanonical,
     Unexpected,
+    ComputationalBudgetExceeded,
 } || std.fs.File.WriteError;
 
 pub fn syscalls(Context: type) type {
@@ -31,12 +33,19 @@ pub fn syscalls(Context: type) type {
         pub fn log(vm: *Vm(Context)) Error!void {
             const vm_addr = vm.registers.get(.r1);
             const len = vm.registers.get(.r2);
+
+            const cost = @max(vm.context.getComputeBudget().syscall_base_cost, len);
+            try vm.context.consumeCompute(cost);
+
             const host_addr = try vm.memory_map.vmap(.constant, vm_addr, len);
             const string = std.mem.sliceTo(host_addr, 0);
             try vm.context.log("{s}", .{string});
         }
 
         pub fn log64(vm: *Vm(Context)) Error!void {
+            const cost = vm.context.getComputeBudget().log_64_units;
+            try vm.context.consumeCompute(cost);
+
             const arg1 = vm.registers.get(.r1);
             const arg2 = vm.registers.get(.r2);
             const arg3 = vm.registers.get(.r3);
@@ -50,6 +59,9 @@ pub fn syscalls(Context: type) type {
         }
 
         pub fn logPubkey(vm: *Vm(Context)) Error!void {
+            const cost = vm.context.getComputeBudget().log_pubkey_units;
+            try vm.context.consumeCompute(cost);
+
             const pubkey_addr = vm.registers.get(.r1);
             const pubkey_bytes = try vm.memory_map.vmap(.constant, pubkey_addr, @sizeOf(Pubkey));
             const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
@@ -57,34 +69,50 @@ pub fn syscalls(Context: type) type {
         }
 
         pub fn logComputeUnits(vm: *Vm(Context)) Error!void {
+            const cost = vm.context.getComputeBudget().syscall_base_cost;
+            try vm.context.consumeCompute(cost);
+
             try vm.context.log("TODO: compute budget calculations", .{});
         }
 
         // memory operators
+
+        /// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L130-L162
         pub fn memset(vm: *Vm(Context)) Error!void {
             const dst_addr = vm.registers.get(.r1);
             const scalar = vm.registers.get(.r2);
             const len = vm.registers.get(.r3);
 
+            // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L142
+            try consumeMemoryCompute(vm.context, len);
+
             const host_addr = try vm.memory_map.vmap(.mutable, dst_addr, len);
             @memset(host_addr, @truncate(scalar));
         }
 
+        /// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L31-L52
         pub fn memcpy(vm: *Vm(Context)) Error!void {
             const dst_addr = vm.registers.get(.r1);
             const src_addr = vm.registers.get(.r2);
             const len = vm.registers.get(.r3);
+
+            // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L43
+            try consumeMemoryCompute(vm.context, len);
 
             const dst_host = try vm.memory_map.vmap(.mutable, dst_addr, len);
             const src_host = try vm.memory_map.vmap(.constant, src_addr, len);
             @memcpy(dst_host, src_host);
         }
 
+        /// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L72-L128
         pub fn memcmp(vm: *Vm(Context)) Error!void {
             const a_addr = vm.registers.get(.r1);
             const b_addr = vm.registers.get(.r2);
             const n = vm.registers.get(.r3);
             const cmp_result_addr = vm.registers.get(.r4);
+
+            // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L84
+            try consumeMemoryCompute(vm.context, n);
 
             const a = try vm.memory_map.vmap(.constant, a_addr, n);
             const b = try vm.memory_map.vmap(.constant, b_addr, n);
@@ -97,6 +125,13 @@ pub fn syscalls(Context: type) type {
 
             const result = std.mem.order(u8, a, b);
             cmp_result.* = @intFromEnum(result);
+        }
+
+        /// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L8-L15
+        fn consumeMemoryCompute(ctx: *Context, length: u64) !void {
+            const budget = ctx.getComputeBudget();
+            const cost = @max(budget.mem_op_base_cost, length / budget.cpi_bytes_per_unit);
+            try ctx.consumeCompute(cost);
         }
 
         // hashing
@@ -119,6 +154,12 @@ pub fn syscalls(Context: type) type {
             if (len > 12) {
                 return error.InvalidLength;
             }
+
+            const budget = vm.context.getComputeBudget();
+            // TODO: Agave logs a specific message when this overflows.
+            // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1923-L1926
+            const cost = try budget.poseidonCost(len);
+            try vm.context.consumeCompute(cost);
 
             const hash_result = try vm.memory_map.vmap(.mutable, result_addr, 32);
             const input_bytes = try vm.memory_map.vmap(
@@ -166,7 +207,7 @@ pub fn syscalls(Context: type) type {
                     .{ .name = "log", .builtin_fn = log },
                     .{ .name = "sol_panic_", .builtin_fn = panic },
                 },
-                .{ 0, 800 },
+                .{ 0, 48526 },
             );
         }
     };

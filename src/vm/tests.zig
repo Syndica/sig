@@ -2357,7 +2357,7 @@ test "syscall reloc 64_32" {
         .{ .maximum_version = .v0 },
         sig.ELF_DATA_DIR ++ "syscall_reloc_64_32_sbpfv0.so",
         &.{.{ .name = "log", .builtin_fn = syscalls.log }},
-        .{ 0, 5 },
+        .{ 0, 105 },
     );
 }
 
@@ -2366,7 +2366,7 @@ test "static syscall" {
         .{},
         sig.ELF_DATA_DIR ++ "syscall_static.so",
         &.{.{ .name = "log", .builtin_fn = syscalls.log }},
-        .{ 0, 6 },
+        .{ 0, 106 },
     );
 }
 
