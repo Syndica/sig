@@ -1,5 +1,4 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 
 const AtomicU64 = std.atomic.Value(u64);
 const Random = std.rand.Random;
