@@ -34,6 +34,8 @@ def get_files(args):
     dirs = [*args.dirs]
     while len(dirs) > 0:
         d = dirs.pop()
+        if os.path.isfile(d): 
+            return [d]
         files = os.listdir(d)
         for file in files:
             full_path = os.path.join(d, file)
@@ -44,6 +46,10 @@ def get_files(args):
                     files_to_check.append(full_path)
     return files_to_check
 
+def remove_line(file_contents: str, line: int) -> str:
+    lines = file_contents.splitlines()
+    del lines[line]
+    return "\n".join(lines)
 
 def unused_imports(args, files_to_check):
     """Checks for unused imports in files."""
@@ -74,9 +80,8 @@ def unused_imports(args, files_to_check):
 
             # identify which imports are unused
             for name, line in imported_names:
-                match = re.findall(f"[^a-zA-Z0-9_.]{name}[^a-zA-Z0-9_]", orig_file)
-                assert len(match) > 0
-                if len(match) == 1:
+                match = re.findall(f"[^a-zA-Z0-9_.]{name}[^a-zA-Z0-9_]", remove_line(orig_file, line))
+                if len(match) == 0:
                     lines_to_drop.add(line)
                     num_lines_to_remove += 1
 
@@ -119,7 +124,6 @@ def unused_imports(args, files_to_check):
         print("Total unused imports removed:", total_lines_removed)
 
     return total_lines_removed
-
 
 files_excluded_from_line_length_check = [
     "src/accountsdb/bank.zig",
