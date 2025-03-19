@@ -158,8 +158,6 @@ pub const AuthorizedVoters = struct {
         return self.authorized_voters.contains(epoch);
     }
 
-    // TODO Add method that returns iterator over authorized_voters
-
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L90
     ///
     /// Returns the authorized voter at the given epoch if the epoch is >= the

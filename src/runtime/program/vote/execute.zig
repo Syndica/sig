@@ -625,7 +625,6 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
     const PriorVote = sig.runtime.program.vote_program.state.PriorVote;
-    _ = &PriorVote;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
