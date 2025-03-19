@@ -30,10 +30,12 @@ pub fn syscalls(Context: type) type {
         };
 
         // logging
+        /// https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
         pub fn log(vm: *Vm(Context)) Error!void {
             const vm_addr = vm.registers.get(.r1);
             const len = vm.registers.get(.r2);
 
+            // https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L15-L19
             const cost = @max(vm.context.getComputeBudget().syscall_base_cost, len);
             try vm.context.consumeCompute(cost);
 
@@ -42,7 +44,9 @@ pub fn syscalls(Context: type) type {
             try vm.context.log("{s}", .{string});
         }
 
+        /// https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
         pub fn log64(vm: *Vm(Context)) Error!void {
+            // https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L47-L48
             const cost = vm.context.getComputeBudget().log_64_units;
             try vm.context.consumeCompute(cost);
 
@@ -53,12 +57,14 @@ pub fn syscalls(Context: type) type {
             const arg5 = vm.registers.get(.r5);
 
             try vm.context.log(
-                "log: 0x{x} 0x{x} 0x{x} 0x{x} 0x{x}",
+                "0x{x} 0x{x} 0x{x} 0x{x} 0x{x}",
                 .{ arg1, arg2, arg3, arg4, arg5 },
             );
         }
 
+        /// https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
         pub fn logPubkey(vm: *Vm(Context)) Error!void {
+            // https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L94-L95
             const cost = vm.context.getComputeBudget().log_pubkey_units;
             try vm.context.consumeCompute(cost);
 
@@ -68,7 +74,9 @@ pub fn syscalls(Context: type) type {
             try vm.context.log("log: {}", .{pubkey});
         }
 
+        /// https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
         pub fn logComputeUnits(vm: *Vm(Context)) Error!void {
+            // https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L70-L71
             const cost = vm.context.getComputeBudget().syscall_base_cost;
             try vm.context.consumeCompute(cost);
 
