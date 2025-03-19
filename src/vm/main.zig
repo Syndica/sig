@@ -10,8 +10,8 @@ const Vm = sig.vm.Vm;
 const sbpf = sig.vm.sbpf;
 const syscalls = sig.vm.syscalls;
 const Config = sig.vm.Config;
-
 const MemoryMap = memory.MemoryMap;
+const tests = sig.vm.tests;
 
 pub fn main() !void {
     var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
@@ -91,21 +91,19 @@ pub fn main() !void {
         memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
-    var std_logger = sig.trace.DirectPrintLogger.init(gpa, .debug);
-    const logger = std_logger.logger();
-
+    var context = tests.TEST_TRANSACTION_CONTEXT;
     var vm = try Vm.init(
         gpa,
         &executable,
         m,
         &loader,
-        logger,
         stack_memory.len,
+        &context,
     );
     defer vm.deinit();
-    const result = try vm.run();
+    const result, const instruction_count = vm.run();
 
-    std.debug.print("result: {}, count: {}\n", .{ result, vm.instruction_count });
+    std.debug.print("result: {}, count: {}\n", .{ result, instruction_count });
 }
 
 const Cmd = struct {
