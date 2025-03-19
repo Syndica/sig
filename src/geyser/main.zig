@@ -6,15 +6,6 @@ const cli = @import("cli");
 const servePrometheus = sig.prometheus.servePrometheus;
 const globalRegistry = sig.prometheus.globalRegistry;
 
-pub const Config = struct {
-    pipe_path: []const u8 = sig.VALIDATOR_DIR ++ "geyser.pipe",
-    measure_rate_secs: u64 = 5,
-    geyser_bincode_buf_len: u64 = 1 << 29,
-    geyser_io_buf_len: u64 = 1 << 29,
-    csv_buf_len: u64 = 1 << 32,
-    owner_accounts: []const []const u8 = &.{},
-    accounts: []const []const u8 = &.{},
-};
 const Cmd = struct {
     subcmd: union(enum) {
         benchmark: Benchmark,
@@ -68,9 +59,9 @@ const Cmd = struct {
         pipe_path: []const u8,
         geyser_bincode_buf_len: u64,
         geyser_io_buf_len: u64,
-        csv_buf_len: u64,
         owner_accounts: []const []const u8,
         accounts: []const []const u8,
+        csv_buf_len: u64,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
