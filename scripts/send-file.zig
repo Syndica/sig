@@ -3,7 +3,7 @@ const std = @import("std");
 const send_script =
     \\ssh {[host]s} mkdir -p "$(dirname "{[remote_path]s}")"
     \\if which rsync; then
-    \\    rsync --progress '{[local_path]s}' '{[host]s}:{[remote_path]s}'
+    \\    rsync --compress --progress '{[local_path]s}' '{[host]s}:{[remote_path]s}'
     \\else
     \\    scp '{[local_path]s}' '{[host]s}:{[remote_path]s}'
     \\fi
