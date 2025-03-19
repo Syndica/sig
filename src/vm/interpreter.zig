@@ -10,12 +10,14 @@ const Instruction = sbpf.Instruction;
 const Executable = lib.Executable;
 const BuiltinProgram = lib.BuiltinProgram;
 
+pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
+
 pub fn Vm(Context: type) type {
     return struct {
         allocator: std.mem.Allocator,
         executable: *const Executable,
 
-        registers: std.EnumArray(sbpf.Instruction.Register, u64),
+        registers: RegisterMap,
         memory_map: MemoryMap,
         loader: *const BuiltinProgram(Context),
 
@@ -48,7 +50,7 @@ pub fn Vm(Context: type) type {
             var self: Vm(Context) = .{
                 .executable = executable,
                 .allocator = allocator,
-                .registers = std.EnumArray(sbpf.Instruction.Register, u64).initFill(0),
+                .registers = RegisterMap.initFill(0),
                 .memory_map = memory_map,
                 .depth = 0,
                 .call_frames = try std.ArrayListUnmanaged(CallFrame).initCapacity(allocator, 64),
@@ -79,6 +81,7 @@ pub fn Vm(Context: type) type {
                 };
                 if (!cont) break;
             }
+            // https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/vm.rs#L380-L385
             const instruction_count = if (self.executable.config.enable_instruction_meter) blk: {
                 self.context.consumeUnchecked(self.instruction_count);
                 break :blk initial_instruction_count -| self.context.getRemaining();
@@ -555,7 +558,7 @@ pub fn Vm(Context: type) type {
                     if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                         // SBPFv3 SYSCALL instruction
                         if (self.loader.functions.lookupKey(inst.imm)) |entry| {
-                            try entry.value(self);
+                            try entry.value(self.context, &self.memory_map, self.registers);
                         } else {
                             @panic("TODO: detect invalid syscall in verifier");
                         }
@@ -594,7 +597,7 @@ pub fn Vm(Context: type) type {
                         if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                             resolved = true;
                             const builtin_fn = entry.value;
-                            try builtin_fn(self);
+                            try builtin_fn(self.context, &self.memory_map, self.registers);
                         }
                     }
 
@@ -805,6 +808,9 @@ const ComputeBudget = struct {
         };
     }
 
+    /// https://github.com/anza-xyz/agave/blob/9fddc352aa300a194e5364298d445f3555cd5132/program-runtime/src/execution_budget.rs#L205-L232
+    ///
+    /// Returns the cost of a Poseidon hash syscall for a given input length.
     pub fn poseidonCost(self: ComputeBudget, len: u64) !u64 {
         const squared_inputs = try std.math.powi(u64, len, 2);
         const mul_result = try std.math.mul(

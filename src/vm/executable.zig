@@ -3,7 +3,6 @@ const sbpf = @import("sbpf.zig");
 const Elf = @import("elf.zig").Elf;
 const memory = @import("memory.zig");
 const syscalls = @import("syscalls.zig");
-const Vm = @import("interpreter.zig").Vm;
 
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
@@ -904,7 +903,7 @@ pub fn Registry(T: type) type {
 
 pub fn BuiltinProgram(Context: type) type {
     return struct {
-        functions: Registry(*const fn (*Vm(Context)) syscalls.Error!void) = .{},
+        functions: Registry(syscalls.syscalls(Context).Syscall) = .{},
 
         pub fn deinit(
             self: *BuiltinProgram(Context),

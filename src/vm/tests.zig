@@ -2236,7 +2236,7 @@ fn testElf(config: Config, path: []const u8, expected: anytype) !void {
 pub fn testElfWithSyscalls(
     config: Config,
     path: []const u8,
-    extra_syscalls: []const syscalls.Syscall,
+    extra_syscalls: []const syscalls.Entry,
     expected: anytype,
 ) !void {
     const allocator = std.testing.allocator;
@@ -2458,7 +2458,7 @@ fn testVerifyTextBytes(
 fn testVerifyTextBytesWithSyscalls(
     config: Config,
     program: []const u8,
-    extra_syscalls: []const syscalls.Syscall,
+    extra_syscalls: []const syscalls.Entry,
     expected: anytype,
 ) !void {
     const allocator = std.testing.allocator;
@@ -2492,7 +2492,7 @@ fn testVerifyTextBytesWithSyscalls(
 fn testVerifyWithSyscalls(
     config: Config,
     source: []const u8,
-    extra_syscalls: []const syscalls.Syscall,
+    extra_syscalls: []const syscalls.Entry,
     expected: anytype,
 ) !void {
     const allocator = std.testing.allocator;
