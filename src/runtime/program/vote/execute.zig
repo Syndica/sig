@@ -202,7 +202,7 @@ fn authorize(
     authorized: Pubkey,
     vote_authorize: VoteAuthorize,
     clock: Clock,
-    signers: ?std.AutoHashMap(Pubkey, void),
+    maybe_signers: ?[]const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     const versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
@@ -214,17 +214,13 @@ fn authorize(
     switch (vote_authorize) {
         .voter => {
             const current_epoch = clock.epoch;
-            const target_epoch = std.math.add(u64, current_epoch, 1) catch {
-                return InstructionError.InvalidAccountData;
-            };
-
             // Analogous to
             // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L691-L692
             // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L701-L707
             // https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
             {
-                const authorized_withdrawer_signer = if (signers) |signers_|
-                    try validateIsSigner(vote_state.authorized_withdrawer, signers_)
+                const authorized_withdrawer_signer = if (maybe_signers) |signers|
+                    try validateIsSigner(vote_state.authorized_withdrawer, signers)
                 else
                     ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
 
@@ -240,19 +236,20 @@ fn authorize(
                 }
             }
 
-            _, const err = try vote_state.setNewAuthorizedVoter(
+            _, const maybe_err = try vote_state.setNewAuthorizedVoter(
                 authorized,
-                target_epoch,
+                std.math.add(u64, current_epoch, 1) catch {
+                    return InstructionError.InvalidAccountData;
+                },
             );
-
-            if (err) |err_| {
-                ic.tc.custom_error = @intFromEnum(err_);
+            if (maybe_err) |err| {
+                ic.tc.custom_error = @intFromEnum(err);
                 return InstructionError.Custom;
             }
         },
         .withdrawer => {
             // current authorized withdrawer must say "yay".
-            const authorized_withdrawer_signer = if (signers) |signers_|
+            const authorized_withdrawer_signer = if (maybe_signers) |signers_|
                 try validateIsSigner(vote_state.authorized_withdrawer, signers_)
             else
                 ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
@@ -307,14 +304,14 @@ fn authorizeWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
-    var expected_authority_keys = std.AutoHashMap(Pubkey, void).init(allocator);
+    var expected_authority_keys = std.ArrayList(Pubkey).init(allocator);
     defer expected_authority_keys.deinit();
     if (try ic.info.isIndexSigner(signer_index)) {
-        var signer_account = try ic.borrowInstructionAccount(signer_index);
-        defer signer_account.release();
+        const signer_meta = ic.info.getAccountMetaAtIndex(signer_index) orelse
+            return InstructionError.NotEnoughAccountKeys;
 
         const created = pubkey_utils.createWithSeed(
-            signer_account.pubkey,
+            signer_meta.pubkey,
             seed,
             owner,
         ) catch |err| {
@@ -322,7 +319,7 @@ fn authorizeWithSeed(
             return InstructionError.Custom;
         };
 
-        try expected_authority_keys.put(created, {});
+        try expected_authority_keys.append(created);
     }
 
     try authorize(
@@ -332,8 +329,8 @@ fn authorizeWithSeed(
         new_authority,
         authorization_type,
         clock,
-        if (expected_authority_keys.count() > 0)
-            expected_authority_keys
+        if (expected_authority_keys.items.len > 0)
+            expected_authority_keys.items
         else
             null,
     );
@@ -415,13 +412,14 @@ fn executeAuthorizeChecked(
 
 fn validateIsSigner(
     authorized: Pubkey,
-    signers: std.AutoHashMap(Pubkey, void),
+    signers: []const Pubkey,
 ) InstructionError!bool {
-    if (signers.contains(authorized)) {
-        return true;
-    } else {
-        return InstructionError.MissingRequiredSignature;
+    for (signers) |signer| {
+        if (signer.equals(&authorized)) {
+            return true;
+        }
     }
+    return InstructionError.MissingRequiredSignature;
 }
 
 test "vote_program: executeIntializeAccount" {
