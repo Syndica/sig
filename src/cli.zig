@@ -1001,7 +1001,7 @@ fn CmdHelper(
                     },
                 }
             } else .subcmd_unset;
-            std.debug.assert(args_iter.peek() == null);
+            std.debug.assert(args_iter.peek() == null or parse_result == .help);
 
             switch (parse_result) {
                 .help => {
