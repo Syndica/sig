@@ -19,29 +19,6 @@ pub const Executable = struct {
     function_registry: Registry(u64),
     config: Config,
 
-    pub const Section = union(enum) {
-        owned: Owned,
-        borrowed: Borrowed,
-
-        const Owned = struct {
-            offset: u64,
-            data: []const u8,
-        };
-
-        const Borrowed = struct {
-            offset: u64,
-            start: u64,
-            end: u64,
-        };
-
-        pub fn deinit(section: Section, allocator: std.mem.Allocator) void {
-            switch (section) {
-                .owned => |owned| allocator.free(owned.data),
-                .borrowed => {},
-            }
-        }
-    };
-
     /// Takes ownership of the `Elf`.
     pub fn fromElf(elf: Elf) Executable {
         const text_section_addr = elf.getShdrByName(".text").?.sh_addr;
@@ -67,6 +44,7 @@ pub const Executable = struct {
     pub fn fromAsm(
         allocator: std.mem.Allocator,
         source: []const u8,
+        loader: anytype,
         config: Config,
     ) !Executable {
         var function_registry, const instructions = try Assembler.parse(
@@ -74,13 +52,10 @@ pub const Executable = struct {
             source,
             config,
         );
-        // loader isn't owned by the executable, so it's fine for it to
-        // die on the stack after the function returns
-        var loader: BuiltinProgram = .{};
         return fromTextBytes(
             allocator,
             std.mem.sliceAsBytes(instructions),
-            &loader,
+            loader,
             &function_registry,
             true,
             config,
@@ -90,7 +65,7 @@ pub const Executable = struct {
     pub fn fromTextBytes(
         allocator: std.mem.Allocator,
         source: []const u8,
-        loader: *BuiltinProgram,
+        loader: anytype,
         registry: *Registry(u64),
         from_asm: bool,
         config: Config,
@@ -133,7 +108,7 @@ pub const Executable = struct {
 
     pub fn verify(
         self: *const Executable,
-        loader: *const BuiltinProgram,
+        loader: anytype,
     ) !void {
         const version = self.version;
         const instructions = self.instructions;
@@ -397,6 +372,29 @@ pub const Executable = struct {
             .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
         };
         return memory.Region.init(.constant, ro_data, offset);
+    }
+};
+
+pub const Section = union(enum) {
+    owned: Owned,
+    borrowed: Borrowed,
+
+    const Owned = struct {
+        offset: u64,
+        data: []const u8,
+    };
+
+    const Borrowed = struct {
+        offset: u64,
+        start: u64,
+        end: u64,
+    };
+
+    pub fn deinit(section: Section, allocator: std.mem.Allocator) void {
+        switch (section) {
+            .owned => |owned| allocator.free(owned.data),
+            .borrowed => {},
+        }
     }
 };
 
@@ -839,7 +837,7 @@ pub fn Registry(T: type) type {
         pub fn registerHashedLegacy(
             self: *Self,
             allocator: std.mem.Allocator,
-            loader: *BuiltinProgram,
+            loader: anytype,
             hash_symbol_name: bool,
             name: []const u8,
             value: T,
@@ -904,19 +902,26 @@ pub fn Registry(T: type) type {
     };
 }
 
-pub const BuiltinProgram = struct {
-    functions: Registry(*const fn (*Vm) syscalls.Error!void) = .{},
+pub fn BuiltinProgram(Context: type) type {
+    return struct {
+        functions: Registry(*const fn (*Vm(Context)) syscalls.Error!void) = .{},
 
-    pub fn deinit(self: *BuiltinProgram, allocator: std.mem.Allocator) void {
-        self.functions.deinit(allocator);
-    }
-};
+        pub fn deinit(
+            self: *BuiltinProgram(Context),
+            allocator: std.mem.Allocator,
+        ) void {
+            self.functions.deinit(allocator);
+        }
+    };
+}
 
 pub const Config = struct {
     optimize_rodata: bool = true,
     reject_broken_elfs: bool = false,
     enable_symbol_and_section_labels: bool = false,
+    enable_instruction_meter: bool = true,
     minimum_version: sbpf.Version = .v0,
+
     maximum_version: sbpf.Version = .v3,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,

@@ -7,7 +7,8 @@ const memory = sig.vm.memory;
 const Executable = sig.vm.Executable;
 const Vm = sig.vm.Vm;
 const sbpf = sig.vm.sbpf;
-const syscalls = sig.vm.syscalls;
+const TestContextObject = sig.vm.TestContextObject;
+const syscalls = sig.vm.syscalls(TestContextObject);
 const Config = sig.vm.Config;
 
 const MemoryMap = memory.MemoryMap;
@@ -19,9 +20,6 @@ pub fn main() !void {
         gpa.allocator()
     else
         std.heap.c_allocator;
-
-    var std_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
-    const logger = std_logger.logger();
 
     var input_path: ?[]const u8 = null;
     var assemble: bool = false;
@@ -57,7 +55,7 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: sig.vm.BuiltinProgram = .{};
+    var loader: sig.vm.BuiltinProgram(TestContextObject) = .{};
     defer loader.deinit(allocator);
 
     inline for (.{
@@ -86,7 +84,7 @@ pub fn main() !void {
         .optimize_rodata = false,
     };
     var executable = if (assemble)
-        try Executable.fromAsm(allocator, bytes, config)
+        try Executable.fromAsm(allocator, bytes, &loader, config)
     else exec: {
         const elf = try Elf.parse(allocator, bytes, &loader, config);
         break :exec Executable.fromElf(elf);
@@ -110,18 +108,22 @@ pub fn main() !void {
         memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
-    var vm = try Vm.init(
+    var context: TestContextObject = .{
+        .remaining = std.math.maxInt(u64),
+        .stdout = std.io.getStdOut(),
+    };
+    var vm = try Vm(TestContextObject).init(
         allocator,
         &executable,
         m,
         &loader,
-        logger,
         stack_memory.len,
+        &context,
     );
     defer vm.deinit();
-    const result = try vm.run();
+    const result, const instruction_count = vm.run();
 
-    std.debug.print("result: {}, count: {}\n", .{ result, vm.instruction_count });
+    std.debug.print("result: {}, count: {}\n", .{ result, instruction_count });
 }
 
 fn fail(comptime fmt: []const u8, args: anytype) noreturn {

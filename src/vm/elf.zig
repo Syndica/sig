@@ -12,9 +12,15 @@ const BuiltinProgram = lib.BuiltinProgram;
 const Config = lib.Config;
 const Executable = lib.Executable;
 const Registry = lib.Registry;
+const Section = lib.Section;
+const TestContextObject = lib.TestContextObject;
 
 const elf = std.elf;
 const assert = std.debug.assert;
+
+const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
 
 pub const Elf = struct {
     bytes: []u8,
@@ -23,7 +29,7 @@ pub const Elf = struct {
     entry_pc: u64,
     version: sbpf.Version,
     function_registry: Registry(u64),
-    ro_section: Executable.Section,
+    ro_section: Section,
     config: Config,
 
     /// Contains immutable headers parsed from the ELF file.
@@ -221,7 +227,7 @@ pub const Elf = struct {
             config: Config,
             version: sbpf.Version,
             allocator: std.mem.Allocator,
-        ) !Executable.Section {
+        ) !Section {
             const ro_names: []const []const u8 = &.{
                 ".text",
                 ".rodata",
@@ -307,7 +313,7 @@ pub const Elf = struct {
             const can_borrow = !invalid_offsets and
                 last_ro_section +| 1 -| first_ro_section == n_ro_sections and
                 config.optimize_rodata;
-            const ro_section: Executable.Section = if (can_borrow) ro: {
+            const ro_section: Section = if (can_borrow) ro: {
                 const file_offset = addr_file_offset orelse 0;
                 const start = lowest_addr -| file_offset;
                 const end = highest_addr -| file_offset;
@@ -362,7 +368,7 @@ pub const Elf = struct {
             headers: Headers,
             bytes: []u8,
             allocator: std.mem.Allocator,
-            loader: *BuiltinProgram,
+            loader: anytype,
             function_registry: *Registry(u64),
             version: sbpf.Version,
             config: Config,
@@ -616,7 +622,7 @@ pub const Elf = struct {
     pub fn parse(
         allocator: std.mem.Allocator,
         bytes: []u8,
-        loader: *BuiltinProgram,
+        loader: anytype,
         config: Config,
     ) !Elf {
         const headers = try Headers.parse(bytes);
@@ -750,7 +756,7 @@ pub const Elf = struct {
 
         const bytecode_hdr = headers.phdrs[0];
         const rodata_hdr = headers.phdrs[1];
-        const ro_section: Executable.Section = .{ .borrowed = .{
+        const ro_section: Section = .{ .borrowed = .{
             .offset = rodata_hdr.p_vaddr,
             .start = rodata_hdr.p_offset,
             .end = rodata_hdr.p_offset + rodata_hdr.p_filesz,
@@ -808,7 +814,7 @@ pub const Elf = struct {
         data: Data,
         sbpf_version: sbpf.Version,
         config: Config,
-        loader: *BuiltinProgram,
+        loader: anytype,
     ) !Elf {
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
@@ -1002,10 +1008,6 @@ pub const Elf = struct {
     }
 };
 
-const expect = std.testing.expect;
-const expectEqual = std.testing.expectEqual;
-const expectError = std.testing.expectError;
-
 test "parsing failing allocation" {
     const S = struct {
         fn foo(allocator: std.mem.Allocator) !void {
@@ -1016,7 +1018,7 @@ test "parsing failing allocation" {
             const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
             defer allocator.free(bytes);
 
-            var loader: BuiltinProgram = .{};
+            var loader: BuiltinProgram(TestContextObject) = .{};
             var parsed = try Elf.parse(allocator, bytes, &loader, .{});
             defer parsed.deinit(allocator);
         }
@@ -1028,7 +1030,7 @@ test "parsing failing allocation" {
 
 test "strict header empty" {
     const allocator = std.testing.allocator;
-    var loader: BuiltinProgram = .{};
+    var loader: BuiltinProgram(TestContextObject) = .{};
     try expectEqual(
         error.OutOfBounds,
         Elf.parse(allocator, &.{}, &loader, .{}),
@@ -1044,7 +1046,7 @@ test "strict header version" {
     // set the e_flags to an invalid SBPF version
     bytes[0x0030] = 0xFF;
 
-    var loader: BuiltinProgram = .{};
+    var loader: BuiltinProgram(TestContextObject) = .{};
     try expectEqual(
         error.VersionUnsupported,
         Elf.parse(allocator, bytes, &loader, .{}),
@@ -1057,7 +1059,7 @@ test "strict header functions" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: BuiltinProgram = .{};
+    var loader: BuiltinProgram(TestContextObject) = .{};
     var parsed = try Elf.parse(
         allocator,
         bytes,
@@ -1100,7 +1102,7 @@ test "strict header corrupt file header" {
         defer allocator.free(copy);
         copy[offset] = 0xAF;
 
-        var loader: BuiltinProgram = .{};
+        var loader: BuiltinProgram(TestContextObject) = .{};
         var result = Elf.parse(allocator, copy, &loader, .{});
         defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
@@ -1148,7 +1150,7 @@ test "strict header corrupt program header" {
             defer allocator.free(copy);
             copy[true_offset] = 0xAF;
 
-            var loader: BuiltinProgram = .{};
+            var loader: BuiltinProgram(TestContextObject) = .{};
             var result = Elf.parse(allocator, copy, &loader, .{});
             defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
@@ -1170,7 +1172,7 @@ test "elf load" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: BuiltinProgram = .{};
+    var loader: BuiltinProgram(TestContextObject) = .{};
     var parsed = try Elf.parse(allocator, bytes, &loader, .{});
     defer parsed.deinit(allocator);
 }
@@ -1251,7 +1253,7 @@ test "SHT_DYNAMIC fallback" {
     // specific input, the p_type is 232 bytes from the start.
     @as(*align(1) u32, @ptrCast(bytes[232..][0..4])).* = elf.PT_NULL;
 
-    var loader: BuiltinProgram = .{};
+    var loader: BuiltinProgram(TestContextObject) = .{};
     var parsed = try Elf.parse(
         allocator,
         bytes,
