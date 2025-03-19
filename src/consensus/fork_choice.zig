@@ -2121,7 +2121,7 @@ pub fn setupDuplicateForks() !struct {
         .slot = 4,
         .hash = Hash.ZEROES,
     }).?;
-    std.mem.sort(SlotAndHash, @constCast(dup_children_4.keys()), {}, compareSlotHashKey);
+    std.mem.sort(SlotAndHash, dup_children_4.mutableKeys(), {}, compareSlotHashKey);
     // std.debug.assert(std.mem.eql(
     //     SlotAndHash,
     //     dup_children_4.keys(),
@@ -2133,7 +2133,7 @@ pub fn setupDuplicateForks() !struct {
         .slot = 5,
         .hash = Hash.ZEROES,
     }).?;
-    std.mem.sort(SlotAndHash, @constCast(dup_children_5.keys()), {}, compareSlotHashKey);
+    std.mem.sort(SlotAndHash, dup_children_5.mutableKeys(), {}, compareSlotHashKey);
     // std.debug.assert(
     //     std.mem.eql(SlotAndHash, dup_children_5.keys(), duplicate_leaves_descended_from_5.items),
     // );
@@ -2143,7 +2143,7 @@ pub fn setupDuplicateForks() !struct {
         .slot = 6,
         .hash = Hash.ZEROES,
     }).?;
-    std.mem.sort(SlotAndHash, @constCast(dup_children_6.keys()), {}, compareSlotHashKey);
+    std.mem.sort(SlotAndHash, dup_children_6.mutableKeys(), {}, compareSlotHashKey);
     // std.debug.assert(
     //     std.mem.eql(SlotAndHash, dup_children_6.keys(), duplicate_leaves_descended_from_6.items),
     // );

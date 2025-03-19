@@ -456,6 +456,11 @@ pub fn SortedMapCustom(
             return self.inner.keys();
         }
 
+        pub fn mutableKeys(self: *Self) []K {
+            self.sort();
+            return self.inner.keys();
+        }
+
         pub fn items(self: *Self) struct { []const K, []const V } {
             self.sort();
             return .{ self.inner.keys(), self.inner.values() };
