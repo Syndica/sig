@@ -111,11 +111,11 @@ pub const AccountsDB = struct {
 pub const Gossip = struct {
     host: ?[]const u8 = null,
     port: u16 = 8001,
-    entrypoints: [][]const u8 = &.{},
+    entrypoints: []const []const u8 = &.{},
     cluster: ?[]const u8 = null,
     spy_node: bool = false,
     dump: bool = false,
-    trusted_validators: [][]const u8 = &.{},
+    trusted_validators: []const []const u8 = &.{},
 
     pub fn getHost(config: Gossip) sig.net.IpAddr.ParseIpError!?sig.net.IpAddr {
         const host_str = config.host orelse return null;
