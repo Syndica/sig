@@ -901,18 +901,16 @@ pub fn Registry(T: type) type {
     };
 }
 
-pub fn BuiltinProgram(Context: type) type {
-    return struct {
-        functions: Registry(syscalls.syscalls(Context).Syscall) = .{},
+pub const BuiltinProgram = struct {
+    functions: Registry(syscalls.Syscall) = .{},
 
-        pub fn deinit(
-            self: *BuiltinProgram(Context),
-            allocator: std.mem.Allocator,
-        ) void {
-            self.functions.deinit(allocator);
-        }
-    };
-}
+    pub fn deinit(
+        self: *BuiltinProgram,
+        allocator: std.mem.Allocator,
+    ) void {
+        self.functions.deinit(allocator);
+    }
+};
 
 pub const Config = struct {
     optimize_rodata: bool = true,

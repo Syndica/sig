@@ -1017,7 +1017,7 @@ test "parsing failing allocation" {
             const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
             defer allocator.free(bytes);
 
-            var loader: BuiltinProgram(TestContextObject) = .{};
+            var loader: BuiltinProgram = .{};
             var parsed = try Elf.parse(allocator, bytes, &loader, .{});
             defer parsed.deinit(allocator);
         }
@@ -1029,7 +1029,7 @@ test "parsing failing allocation" {
 
 test "strict header empty" {
     const allocator = std.testing.allocator;
-    var loader: BuiltinProgram(TestContextObject) = .{};
+    var loader: BuiltinProgram = .{};
     try expectEqual(
         error.OutOfBounds,
         Elf.parse(allocator, &.{}, &loader, .{}),
@@ -1045,7 +1045,7 @@ test "strict header version" {
     // set the e_flags to an invalid SBPF version
     bytes[0x0030] = 0xFF;
 
-    var loader: BuiltinProgram(TestContextObject) = .{};
+    var loader: BuiltinProgram = .{};
     try expectEqual(
         error.VersionUnsupported,
         Elf.parse(allocator, bytes, &loader, .{}),
@@ -1058,7 +1058,7 @@ test "strict header functions" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: BuiltinProgram(TestContextObject) = .{};
+    var loader: BuiltinProgram = .{};
     var parsed = try Elf.parse(
         allocator,
         bytes,
@@ -1101,7 +1101,7 @@ test "strict header corrupt file header" {
         defer allocator.free(copy);
         copy[offset] = 0xAF;
 
-        var loader: BuiltinProgram(TestContextObject) = .{};
+        var loader: BuiltinProgram = .{};
         var result = Elf.parse(allocator, copy, &loader, .{});
         defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
@@ -1149,7 +1149,7 @@ test "strict header corrupt program header" {
             defer allocator.free(copy);
             copy[true_offset] = 0xAF;
 
-            var loader: BuiltinProgram(TestContextObject) = .{};
+            var loader: BuiltinProgram = .{};
             var result = Elf.parse(allocator, copy, &loader, .{});
             defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
@@ -1171,7 +1171,7 @@ test "elf load" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: BuiltinProgram(TestContextObject) = .{};
+    var loader: BuiltinProgram = .{};
     var parsed = try Elf.parse(allocator, bytes, &loader, .{});
     defer parsed.deinit(allocator);
 }
@@ -1252,7 +1252,7 @@ test "SHT_DYNAMIC fallback" {
     // specific input, the p_type is 232 bytes from the start.
     @as(*align(1) u32, @ptrCast(bytes[232..][0..4])).* = elf.PT_NULL;
 
-    var loader: BuiltinProgram(TestContextObject) = .{};
+    var loader: BuiltinProgram = .{};
     var parsed = try Elf.parse(
         allocator,
         bytes,

@@ -7,11 +7,13 @@ const memory = sig.vm.memory;
 const Executable = sig.vm.Executable;
 const Vm = sig.vm.Vm;
 const sbpf = sig.vm.sbpf;
-const TestContextObject = sig.vm.TestContextObject;
-const syscalls = sig.vm.syscalls(TestContextObject);
+const syscalls = sig.vm.syscalls;
 const Config = sig.vm.Config;
-
+const TransactionContext = sig.runtime.TransactionContext;
+const FeatureSet = sig.runtime.FeatureSet;
+const Hash = sig.core.Hash;
 const MemoryMap = memory.MemoryMap;
+const tests = @import("tests.zig");
 
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }) = .{};
@@ -55,7 +57,7 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: sig.vm.BuiltinProgram(TestContextObject) = .{};
+    var loader: sig.vm.BuiltinProgram = .{};
     defer loader.deinit(allocator);
 
     inline for (.{
@@ -108,11 +110,8 @@ pub fn main() !void {
         memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
-    var context: TestContextObject = .{
-        .remaining = std.math.maxInt(u64),
-        .stdout = std.io.getStdOut(),
-    };
-    var vm = try Vm(TestContextObject).init(
+    var context = tests.TEST_TRANSACTION_CONTEXT;
+    var vm = try Vm.init(
         allocator,
         &executable,
         m,
