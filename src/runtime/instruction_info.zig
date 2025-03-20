@@ -90,6 +90,17 @@ pub const InstructionInfo = struct {
         return false;
     }
 
+    /// Agave https://github.com/anza-xyz/agave/blob/9eee2f66775291a1ec4c4b1be32efc1d314002f7/transaction-context/src/lib.rs#L736
+    ///
+    /// Fill in the passed buffer with all keys of signer instruction accounts in this Instruction.
+    pub fn signers(self: *const InstructionInfo, buffer: *std.ArrayList(Pubkey)) !void {
+        for (self.account_metas.constSlice()) |account_meta| {
+            if (account_meta.is_signer) {
+                try buffer.append(account_meta.pubkey);
+            }
+        }
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/program_utils.rs#L9
     pub fn deserializeInstruction(
         self: InstructionInfo,

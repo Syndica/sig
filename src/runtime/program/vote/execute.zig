@@ -179,6 +179,11 @@ fn executeAuthorize(
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
+    var signers = std.ArrayList(Pubkey).init(allocator);
+    defer signers.deinit();
+
+    try ic.info.signers(&signers);
+
     try authorize(
         allocator,
         ic,
@@ -186,7 +191,7 @@ fn executeAuthorize(
         pubkey,
         vote_authorize,
         clock,
-        null,
+        signers.items,
     );
 }
 
@@ -202,7 +207,7 @@ fn authorize(
     authorized: Pubkey,
     vote_authorize: VoteAuthorize,
     clock: Clock,
-    maybe_signers: ?[]const Pubkey,
+    signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     const versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
@@ -219,10 +224,10 @@ fn authorize(
             // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L701-L707
             // https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
             {
-                const authorized_withdrawer_signer = if (maybe_signers) |signers|
-                    try validateIsSigner(vote_state.authorized_withdrawer, signers)
-                else
-                    ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
+                const authorized_withdrawer_signer = try validateIsSigner(
+                    vote_state.authorized_withdrawer,
+                    signers,
+                );
 
                 // current authorized withdrawer or epoch authorized voter must say "yay"
                 if (!authorized_withdrawer_signer) {
@@ -230,9 +235,11 @@ fn authorize(
                         allocator,
                         current_epoch,
                     );
-                    if (!ic.info.isPubkeySigner(epoch_authorized_voter)) {
-                        return InstructionError.MissingRequiredSignature;
-                    }
+
+                    _ = try validateIsSigner(
+                        epoch_authorized_voter,
+                        signers,
+                    );
                 }
             }
 
@@ -249,10 +256,10 @@ fn authorize(
         },
         .withdrawer => {
             // current authorized withdrawer must say "yay".
-            const authorized_withdrawer_signer = if (maybe_signers) |signers_|
-                try validateIsSigner(vote_state.authorized_withdrawer, signers_)
-            else
-                ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
+            const authorized_withdrawer_signer = try validateIsSigner(
+                vote_state.authorized_withdrawer,
+                signers,
+            );
 
             if (!authorized_withdrawer_signer) {
                 return InstructionError.MissingRequiredSignature;
@@ -329,10 +336,7 @@ fn authorizeWithSeed(
         new_authority,
         authorization_type,
         clock,
-        if (expected_authority_keys.items.len > 0)
-            expected_authority_keys.items
-        else
-            null,
+        expected_authority_keys.items,
     );
 }
 
@@ -399,6 +403,11 @@ fn executeAuthorizeChecked(
         .withdrawer => VoteAuthorize.withdrawer,
     };
 
+    var signers = std.ArrayList(Pubkey).init(allocator);
+    defer signers.deinit();
+
+    try ic.info.signers(&signers);
+
     try authorize(
         allocator,
         ic,
@@ -406,7 +415,7 @@ fn executeAuthorizeChecked(
         new_authority.pubkey,
         authorize_pubkey,
         clock,
-        null,
+        signers.items,
     );
 }
 
