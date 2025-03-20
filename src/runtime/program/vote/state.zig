@@ -344,7 +344,7 @@ pub const VoteState1_14_11 = struct {
 
     /// Upper limit on the size of the Vote State
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
-    pub const MAX_VOTE_STATE_SIZE: usize = 64;
+    pub const MAX_VOTE_STATE_SIZE: usize = 3731;
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -415,7 +415,7 @@ pub const VoteState = struct {
 
     /// Upper limit on the size of the Vote State
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
-    pub const MAX_VOTE_STATE_SIZE: usize = 64;
+    pub const MAX_VOTE_STATE_SIZE: usize = 3762;
 
     pub fn init(
         allocator: std.mem.Allocator,
