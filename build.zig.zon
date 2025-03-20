@@ -11,10 +11,6 @@
             .url = "git+https://github.com/ikskuh/zig-network#d4506cd1950de8a6e6d3f28aed68a0b4f64e0b44",
             .hash = "122080b2675fa7fdd7410af5f62942dec99e0ea766827c8c6506e6672b575fb0a50e",
         },
-        .@"zig-cli" = .{
-            .url = "git+https://github.com/sam701/zig-cli#8c7a798c0f7fa0358d7ab41106fc872fca4cd995",
-            .hash = "1220c008492d9460c3be2b209600a948181e6efb3bf0d79a1633def499632e708f4b",
-        },
         .httpz = .{
             .url = "git+https://github.com/karlseguin/http.zig#79dad0f0cc652830cd8e49bf3e73aa77155ad4b2",
             .hash = "1220b8a918dfcee4fc8326ec337776e2ffd3029511c35f6b96d10aa7be98ca2faf99",
