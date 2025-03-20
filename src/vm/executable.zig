@@ -64,6 +64,26 @@ pub const Executable = struct {
         };
     }
 
+    /// Checks whether `source` is an ELF file by comparing the header to the
+    /// ELF magic. If it's an ELF, we parse and load the ELF, otherwise we parse
+    /// the bytes as assembly.
+    pub fn fromBytes(
+        allocator: std.mem.Allocator,
+        source: []u8,
+        loader: *BuiltinProgram,
+        config: Config,
+    ) !Executable {
+        if (source.len < 4) return error.InvalidLength;
+        const is_elf = source[0..4] == std.elf.MAGIC;
+        if (is_elf) {
+            var elf = try Elf.parse(allocator, source, loader, config);
+            errdefer elf.deinit(allocator);
+            return fromElf(elf);
+        } else {
+            return fromAsm(allocator, source, config);
+        }
+    }
+
     pub fn fromAsm(
         allocator: std.mem.Allocator,
         source: []const u8,
