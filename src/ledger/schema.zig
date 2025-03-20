@@ -1,4 +1,3 @@
-const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
 

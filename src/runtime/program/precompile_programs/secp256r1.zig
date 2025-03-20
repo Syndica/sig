@@ -1,4 +1,3 @@
-const std = @import("std");
 const sig = @import("../../../sig.zig");
 const precompile_programs = sig.runtime.program.precompile_programs;
 

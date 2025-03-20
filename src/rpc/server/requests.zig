@@ -1,7 +1,6 @@
 //! This file defines most of the shared logic for the bounds and handling
 //! of RPC requests.
 
-const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 

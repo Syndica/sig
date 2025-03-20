@@ -1,7 +1,6 @@
 const std = @import("std");
 const time = @import("../time/time.zig");
 const Level = @import("level.zig").Level;
-const sig = @import("../sig.zig");
 
 /// Return the format string for the type when used as a value in a field.
 fn fieldFmtString(comptime Value: type) []const u8 {

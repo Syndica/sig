@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const phash = @import("poseidon");
 const sig = @import("../sig.zig");
 const lib = @import("lib.zig");
