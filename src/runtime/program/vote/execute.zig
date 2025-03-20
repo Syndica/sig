@@ -229,13 +229,13 @@ fn authorize(
                     signers,
                 );
 
-                // current authorized withdrawer or epoch authorized voter must say "yay"
-                if (!authorized_withdrawer_signer) {
-                    const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
-                        allocator,
-                        current_epoch,
-                    );
+                const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
+                    allocator,
+                    current_epoch,
+                );
 
+                // current authorized withdrawer or epoch authorized voter must sign transaction.
+                if (!authorized_withdrawer_signer) {
                     _ = try validateIsSigner(
                         epoch_authorized_voter,
                         signers,
