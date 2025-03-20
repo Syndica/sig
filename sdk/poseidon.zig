@@ -1,0 +1,3 @@
+pub const PARAMETERS_BN254_X5 = 0;
+pub const ENDIANNESS_BIG_ENDIAN = 0;
+pub const ENDIANNESS_LITTLE_ENDIAN = 1;
