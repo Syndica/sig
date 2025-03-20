@@ -1,28 +1,12 @@
 const std = @import("std");
+const sdk = @import("sdk");
 
-const SolBytes = extern struct {
-    addr: [*]const u8,
-    len: u64,
-};
+const poseidon = sdk.poseidon;
+const SolBytes = sdk.SolBytes;
 
-// hashed as `log`
-const log: *align(1) const fn (msg: [*]const u8, len: u64) void = @ptrFromInt(0x6bf5c3fe);
-
-// hashed as `sol_poseidon`
-const sol_poseidon: *const fn (
-    parameters: u64,
-    endianness: u64,
-    bytes: [*]const SolBytes,
-    bytes_len: u64,
-    result: [*]u8,
-) void = @ptrFromInt(0xc4947c21);
-
-// hashed as `sol_panic_`
-const panic: *const fn ([*]const u8, u64, u64, u64) void = @ptrFromInt(0x686093bb);
-
-const POSEIDON_PARAMETERS_BN254_X5 = 0;
-const POSEIDON_ENDIANNESS_BIG_ENDIAN = 0;
-const POSEIDON_ENDIANNESS_LITTLE_ENDIAN = 1;
+const log = sdk.defineSyscall("log");
+const sol_poseidon = sdk.defineSyscall("sol_poseidon");
+const panic = sdk.defineSyscall("panic");
 
 /// Mirrors this Agave test: https://github.com/anza-xyz/agave/blob/e87917adab5468fe13287147800922a3191d0040/programs/sbf/c/src/poseidon/poseidon.c#L8
 export fn entrypoint() u64 {
@@ -274,10 +258,10 @@ fn expectEqual(
 ) void {
     var result: [32]u8 = undefined;
     sol_poseidon(
-        POSEIDON_PARAMETERS_BN254_X5,
+        poseidon.PARAMETERS_BN254_X5,
         switch (endian) {
-            .big => POSEIDON_ENDIANNESS_BIG_ENDIAN,
-            .little => POSEIDON_ENDIANNESS_LITTLE_ENDIAN,
+            .big => poseidon.ENDIANNESS_BIG_ENDIAN,
+            .little => poseidon.ENDIANNESS_LITTLE_ENDIAN,
         },
         inputs.ptr,
         inputs.len,

@@ -38,7 +38,17 @@ EXCLUDE_V3=(bss_section data_section
 for ZIG_FILE in data/test-elfs/*.zig; do
     BASE_NAME=$(basename "$ZIG_FILE" .zig)
     
-    $ZIG build-obj "$ZIG_FILE" -target bpfel-freestanding -OReleaseSmall -fstrip -fno-emit-bin -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc"
+    $ZIG build-obj -target bpfel-freestanding \
+                               -OReleaseSmall \
+                               -fstrip \
+                               -fno-emit-bin \
+                               -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc" \
+                               --dep sdk \
+                               -Mroot="$ZIG_FILE" \
+                               --dep sig \
+                               -Msdk=sdk/sdk.zig \
+                               -Msig=src/sig.zig
+
     if [[ ! " ${EXCLUDE_V3[@]} " =~ " ${BASE_NAME} " ]]; then
         $CC_V3 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}.o"
         $LD_V3 "data/test-elfs/${BASE_NAME}.o" -o "data/test-elfs/${BASE_NAME}.so"
