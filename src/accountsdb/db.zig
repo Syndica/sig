@@ -1428,10 +1428,8 @@ pub const AccountsDB = struct {
                 // self.logger.debug().logf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
-                if (delete_account_files.count() > DELETE_ACCOUNT_FILES_MIN) {
-                    defer delete_account_files.clearRetainingCapacity();
-                    try self.deleteAccountFiles(delete_account_files.keys());
-                }
+                defer delete_account_files.clearRetainingCapacity();
+                try self.deleteAccountFiles(delete_account_files.keys());
             }
         }
     }
