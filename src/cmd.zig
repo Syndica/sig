@@ -895,12 +895,12 @@ const Cmd = struct {
 };
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
-fn identity(gpa_allocator: std.mem.Allocator, cfg: config.Cmd) !void {
-    const maybe_file, const logger = try spawnLogger(gpa_allocator, cfg);
+fn identity(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+    const maybe_file, const logger = try spawnLogger(allocator, cfg);
     defer if (maybe_file) |file| file.close();
     defer logger.deinit();
 
-    const keypair = try sig.identity.getOrInit(gpa_allocator, logger);
+    const keypair = try sig.identity.getOrInit(allocator, logger);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     logger.info().logf("Identity: {s}\n", .{pubkey});
@@ -908,18 +908,18 @@ fn identity(gpa_allocator: std.mem.Allocator, cfg: config.Cmd) !void {
 
 /// entrypoint to run only gossip
 fn gossip(
-    gpa_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
-    var app_base = try AppBase.init(gpa_allocator, cfg);
+    var app_base = try AppBase.init(allocator, cfg);
     errdefer {
         app_base.shutdown();
         app_base.deinit();
     }
 
     const gossip_service = try startGossip(
-        gpa_allocator,
+        allocator,
         gossip_value_allocator,
         cfg,
         &app_base,
@@ -928,7 +928,7 @@ fn gossip(
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
-        gpa_allocator.destroy(gossip_service);
+        allocator.destroy(gossip_service);
     }
 
     // block forever
@@ -1481,7 +1481,7 @@ fn testTransactionSenderService(
     transaction_sender_handle.join();
 }
 
-fn mockRpcServer(gpa_allocator: std.mem.Allocator, cfg: config.Cmd) !void {
+fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const logger: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(cfg.accounts_db.snapshot_dir, .{
@@ -1490,7 +1490,7 @@ fn mockRpcServer(gpa_allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     defer snapshot_dir.close();
 
     const snap_files = try sig.accounts_db.db.findAndUnpackSnapshotFilePair(
-        gpa_allocator,
+        allocator,
         std.Thread.getCpuCount() catch 1,
         snapshot_dir,
         snapshot_dir,
@@ -1499,12 +1499,12 @@ fn mockRpcServer(gpa_allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
     var latest_snapshot_gen_info = sig.sync.RwMux(?SnapshotGenerationInfo).init(blk: {
         const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
-            gpa_allocator,
+            allocator,
             logger.unscoped(),
             snapshot_dir,
             snap_files,
         );
-        defer all_snap_fields.deinit(gpa_allocator);
+        defer all_snap_fields.deinit(allocator);
 
         break :blk .{
             .full = .{
@@ -1527,7 +1527,7 @@ fn mockRpcServer(gpa_allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     });
 
     var server_ctx = try sig.rpc.server.Context.init(.{
-        .allocator = gpa_allocator,
+        .allocator = allocator,
         .logger = logger,
 
         .snapshot_dir = snapshot_dir,
@@ -1889,11 +1889,11 @@ fn loadSnapshot(
 
 /// entrypoint to download snapshot
 fn downloadSnapshot(
-    gpa_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
-    var app_base = try AppBase.init(gpa_allocator, cfg);
+    var app_base = try AppBase.init(allocator, cfg);
     errdefer {
         app_base.shutdown();
         app_base.deinit();
@@ -1903,7 +1903,7 @@ fn downloadSnapshot(
         @panic("cannot download a snapshot with no entrypoints");
     }
     const gossip_service = try startGossip(
-        gpa_allocator,
+        allocator,
         gossip_value_allocator,
         cfg,
         &app_base,
@@ -1912,10 +1912,10 @@ fn downloadSnapshot(
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
-        gpa_allocator.destroy(gossip_service);
+        allocator.destroy(gossip_service);
     }
 
-    const trusted_validators = try getTrustedValidators(gpa_allocator, cfg);
+    const trusted_validators = try getTrustedValidators(allocator, cfg);
     defer if (trusted_validators) |*tvs| tvs.deinit();
 
     const snapshot_dir_str = cfg.accounts_db.snapshot_dir;
@@ -1925,7 +1925,7 @@ fn downloadSnapshot(
     defer snapshot_dir.close();
 
     const full_file, const maybe_inc_file = try downloadSnapshotsFromGossip(
-        gpa_allocator,
+        allocator,
         app_base.logger.unscoped(),
         if (trusted_validators) |trusted| trusted.items else null,
         gossip_service,
