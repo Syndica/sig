@@ -138,7 +138,7 @@ fn intializeAccount(
     vote_account: *BorrowedAccount,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (vote_account.constAccountData().len != VoteState.sizeOf()) {
+    if (vote_account.constAccountData().len != VoteState.MAX_VOTE_STATE_SIZE) {
         return InstructionError.InvalidAccountData;
     }
 

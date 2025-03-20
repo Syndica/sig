@@ -342,6 +342,10 @@ pub const VoteState1_14_11 = struct {
     /// most recent timestamp submitted with a vote
     last_timestamp: BlockTimestamp,
 
+    /// Upper limit on the size of the Vote State
+    /// when votes.len() is MAX_LOCKOUT_HISTORY.
+    pub const MAX_VOTE_STATE_SIZE: usize = 64;
+
     pub fn init(
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
@@ -373,12 +377,6 @@ pub const VoteState1_14_11 = struct {
         self.votes.deinit();
         self.authorized_voters.deinit();
         self.epoch_credits.deinit();
-    }
-
-    /// Upper limit on the size of the Vote State
-    /// when votes.len() is MAX_LOCKOUT_HISTORY.
-    pub fn sizeOf() usize {
-        return 3731;
     }
 };
 
@@ -414,6 +412,10 @@ pub const VoteState = struct {
 
     /// most recent timestamp submitted with a vote
     last_timestamp: BlockTimestamp,
+
+    /// Upper limit on the size of the Vote State
+    /// when votes.len() is MAX_LOCKOUT_HISTORY.
+    pub const MAX_VOTE_STATE_SIZE: usize = 64;
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -453,12 +455,6 @@ pub const VoteState = struct {
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteState) bool {
         return self.authorized_voters.count() == 0;
-    }
-
-    /// Upper limit on the size of the Vote State
-    /// when votes.len() is MAX_LOCKOUT_HISTORY.
-    pub fn sizeOf() usize {
-        return 3762;
     }
 
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
