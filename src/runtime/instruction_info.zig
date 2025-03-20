@@ -52,7 +52,7 @@ pub const InstructionInfo = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L523
     pub fn getAccountMetaIndex(
-        self: InstructionInfo,
+        self: *const InstructionInfo,
         pubkey: Pubkey,
     ) ?u16 {
         for (self.account_metas.slice(), 0..) |account_meta, index|
@@ -62,7 +62,7 @@ pub const InstructionInfo = struct {
 
     // Gets the account meta at a given index returning null if the index is out of bounds
     pub fn getAccountMetaAtIndex(
-        self: InstructionInfo,
+        self: *const InstructionInfo,
         index: u16,
     ) ?*const InstructionInfo.AccountMeta {
         if (index >= self.account_metas.len) return null;
@@ -71,7 +71,7 @@ pub const InstructionInfo = struct {
 
     /// Return if the account at a given index is a signer with bounds checking
     pub fn isIndexSigner(
-        self: InstructionInfo,
+        self: *const InstructionInfo,
         index: u16,
     ) InstructionError!bool {
         const account_meta = self.getAccountMetaAtIndex(index) orelse
@@ -82,16 +82,12 @@ pub const InstructionInfo = struct {
     /// Replaces Agave's approach to checking if a pubkey is a signer which is to precompute a
     /// hashmap of signers to parse during instruction execution
     pub fn isPubkeySigner(
-        self: InstructionInfo,
+        self: *const InstructionInfo,
         pubkey: Pubkey,
     ) bool {
-        std.debug.print("Looking for==={any}\n", .{pubkey.data});
-        std.debug.print("Looking for==={any}\n", .{pubkey.data});
-        for (self.account_metas.slice()) |account_meta| {
-            std.debug.print("Needle==={any}\n\n", .{pubkey.data});
+        for (self.account_metas.constSlice()) |account_meta| {
             if (account_meta.pubkey.equals(&pubkey) and account_meta.is_signer) return true;
         }
-
         return false;
     }
 
@@ -108,7 +104,7 @@ pub const InstructionInfo = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/program_utils.rs#L9
     pub fn deserializeInstruction(
-        self: InstructionInfo,
+        self: *const InstructionInfo,
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
@@ -121,7 +117,7 @@ pub const InstructionInfo = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
     pub fn checkNumberOfAccounts(
-        self: InstructionInfo,
+        self: *const InstructionInfo,
         minimum_accounts: u16,
     ) InstructionError!void {
         if (self.account_metas.len < minimum_accounts) return InstructionError.NotEnoughAccountKeys;

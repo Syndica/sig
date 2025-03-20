@@ -351,17 +351,12 @@ fn executeAuthorizeCheckedWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
-    // var new_authority = try ic.borrowInstructionAccount(
-    //     @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
-    // );
-    // defer new_authority.release();
+    // Safe since there are at least 4 accounts, and the new_authority index is 3.
+    const new_authority_meta = ic.info.account_metas.buffer[
+        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority)
+    ];
 
-    const new_authority_meta = ic.info.getAccountMetaAtIndex(
-        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
-    ) orelse
-        return InstructionError.NotEnoughAccountKeys;
-
-    if (!ic.info.isPubkeySigner(new_authority_meta.pubkey)) {
+    if (!new_authority_meta.is_signer) {
         return InstructionError.MissingRequiredSignature;
     }
 
