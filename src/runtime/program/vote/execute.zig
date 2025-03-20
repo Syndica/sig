@@ -123,7 +123,7 @@ fn executeIntializeAccount(
     );
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884-L903
+/// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884-L903
 ///
 /// Note: Versioned state is not implemented for creating new vote account, as current check in Agaave implementation
 /// here https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
@@ -166,7 +166,7 @@ fn intializeAccount(
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
 fn executeAuthorize(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -195,7 +195,7 @@ fn executeAuthorize(
     );
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_state/mod.rs#L678
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_state/mod.rs#L678
 ///
 /// Authorize the given pubkey to withdraw or sign votes. This may be called multiple times,
 /// but will implicitly withdraw authorization from the previously authorized
@@ -270,7 +270,7 @@ fn authorize(
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
 fn executeAuthorizeWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -340,7 +340,7 @@ fn authorizeWithSeed(
     );
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L96-L102
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L96-L102
 fn executeAuthorizeCheckedWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -375,7 +375,7 @@ fn executeAuthorizeCheckedWithSeed(
     );
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L239-L248
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L239-L248
 fn executeAuthorizeChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
