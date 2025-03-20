@@ -351,12 +351,17 @@ fn executeAuthorizeCheckedWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
-    var new_authority = try ic.borrowInstructionAccount(
-        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
-    );
-    defer new_authority.release();
+    // var new_authority = try ic.borrowInstructionAccount(
+    //     @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
+    // );
+    // defer new_authority.release();
 
-    if (!ic.info.isPubkeySigner(new_authority.pubkey)) {
+    const new_authority_meta = ic.info.getAccountMetaAtIndex(
+        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
+    ) orelse
+        return InstructionError.NotEnoughAccountKeys;
+
+    if (!ic.info.isPubkeySigner(new_authority_meta.pubkey)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -364,7 +369,7 @@ fn executeAuthorizeCheckedWithSeed(
         allocator,
         ic,
         vote_account,
-        new_authority.pubkey,
+        new_authority_meta.pubkey,
         authorization_type,
         current_authority_derived_key_owner,
         current_authority_derived_key_seed,

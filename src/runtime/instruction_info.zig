@@ -85,8 +85,13 @@ pub const InstructionInfo = struct {
         self: InstructionInfo,
         pubkey: Pubkey,
     ) bool {
-        for (self.account_metas.slice()) |account_meta|
+        std.debug.print("Looking for==={any}\n", .{pubkey.data});
+        std.debug.print("Looking for==={any}\n", .{pubkey.data});
+        for (self.account_metas.slice()) |account_meta| {
+            std.debug.print("Needle==={any}\n\n", .{pubkey.data});
             if (account_meta.pubkey.equals(&pubkey) and account_meta.is_signer) return true;
+        }
+
         return false;
     }
 
