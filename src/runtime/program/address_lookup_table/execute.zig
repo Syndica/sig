@@ -120,7 +120,10 @@ pub const AddressLookupTable = struct {
     }
 
     // https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L224
-    pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) (error{OutOfMemory} || InstructionError)!AddressLookupTable {
+    pub fn deserialize(
+        allocator: std.mem.Allocator,
+        data: []const u8,
+    ) (error{OutOfMemory} || InstructionError)!AddressLookupTable {
         const state = sig.bincode.readFromSlice(allocator, ProgramState, data, .{}) catch
             return error.InvalidAccountData;
         errdefer sig.bincode.free(allocator, state);
@@ -329,7 +332,10 @@ fn freezeLookupTable(
         return error.InvalidAccountOwner;
     }
 
-    const lookup_table = try AddressLookupTable.deserialize(allocator, lookup_table_account.account.data);
+    const lookup_table = try AddressLookupTable.deserialize(
+        allocator,
+        lookup_table_account.account.data,
+    );
     defer sig.bincode.free(allocator, lookup_table.meta);
 
     if (lookup_table.meta.authority) |authority| {
@@ -389,7 +395,10 @@ fn extendLookupTable(
         var lookup_table_account = try ic.borrowInstructionAccount(0);
         defer lookup_table_account.release();
 
-        var lookup_table = try AddressLookupTable.deserialize(allocator, lookup_table_account.account.data);
+        var lookup_table = try AddressLookupTable.deserialize(
+            allocator,
+            lookup_table_account.account.data,
+        );
         defer sig.bincode.free(allocator, lookup_table.meta);
 
         if (lookup_table.meta.authority) |authority| {
@@ -527,7 +536,10 @@ fn deactivateLookupTable(
     const lookup_table_account = try ic.borrowInstructionAccount(0);
     defer lookup_table_account.release();
 
-    const lookup_table = try AddressLookupTable.deserialize(allocator, lookup_table_account.account.data);
+    const lookup_table = try AddressLookupTable.deserialize(
+        allocator,
+        lookup_table_account.account.data,
+    );
     defer sig.bincode.free(allocator, lookup_table.meta);
 
     if (lookup_table.meta.authority) |authority| {
@@ -595,7 +607,10 @@ fn closeLookupTable(
             return error.InvalidAccountOwner;
         }
 
-        const lookup_table = try AddressLookupTable.deserialize(allocator, lookup_table_account.account.data);
+        const lookup_table = try AddressLookupTable.deserialize(
+            allocator,
+            lookup_table_account.account.data,
+        );
         defer sig.bincode.free(allocator, lookup_table.meta);
 
         if (lookup_table.meta.authority) |authority| {
