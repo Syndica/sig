@@ -141,11 +141,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var spawned_threads: u8 = 0;
 
     defer {
-        map_alive.store(false, .seq_cst);
         const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.writeWithLock();
         defer tracked_accounts_lg.unlock();
         tracked_accounts.deinit();
-
+    }
+    defer {
+        map_alive.store(false, .seq_cst);
         for (threads[0..spawned_threads]) |thread| thread.join();
     }
 
@@ -162,11 +163,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer pubkeys_this_slot.deinit();
 
     {
-        errdefer {
-            for (threads[0..spawned_threads]) |thread| thread.detach();
-            spawned_threads = 0;
-        }
-
         for (&threads) |*thread| {
             defer spawned_threads += 1;
 
