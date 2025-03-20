@@ -675,7 +675,7 @@ fn CmdHelper(
 
             const maybe_opt_info = @field(cmd_info.sub, s_field.name);
             if (isOptionInfo(@TypeOf(maybe_opt_info))) {
-                opt_enum_to_field_map = &opt_enum_to_field_map[0..].* ++ .{.{
+                opt_enum_to_field_map = opt_enum_to_field_map ++ .{.{
                     .index = s_field_i,
                     .sub = null,
                 }};
@@ -700,7 +700,7 @@ fn CmdHelper(
             const s_sub_info = @typeInfo(s_field.type).Struct;
             @setEvalBranchQuota(cmd_fields.len * 3 + 1 + s_sub_info.fields.len * 2 + 1);
             for (s_sub_info.fields, 0..) |s_sub_field, s_sub_field_i| {
-                opt_enum_to_field_map = &opt_enum_to_field_map[0..].* ++ .{.{
+                opt_enum_to_field_map = opt_enum_to_field_map ++ .{.{
                     .index = s_field_i,
                     .sub = s_sub_field_i,
                 }};
@@ -785,12 +785,7 @@ fn CmdHelper(
             .bits = MAX_ALIAS_TABLE_LEN,
         } });
         const used_aliases_bits: UsedAliasesBits = @bitCast(used_aliases_mask_vec);
-
-        const native_endian = @import("builtin").target.cpu.arch.endian();
-        const trailing_unused_bits = switch (native_endian) {
-            .big => @ctz(used_aliases_bits),
-            .little => @clz(used_aliases_bits),
-        };
+        const trailing_unused_bits = @clz(used_aliases_bits);
 
         const alias_table_len = MAX_ALIAS_TABLE_LEN - trailing_unused_bits;
         const alias_table_has_holes = @popCount(used_aliases_bits) == alias_table_len;
@@ -992,7 +987,7 @@ fn CmdHelper(
                         const sub_helper = CmdHelper(SubCmd, sub_cmd_info, sub_parent);
                         subcmd_ptr.* = try sub_helper.parseInner(
                             allocator,
-                            &command_chain.* ++ [_][]const u8{arg},
+                            command_chain ++ .{arg},
                             tty_config,
                             help_writer,
                             args_iter,
@@ -1251,7 +1246,7 @@ fn computeOptFieldInfo(
     );
 
     const opt_enum_field_idx = opt_enum_fields.len;
-    opt_enum_fields.* = &opt_enum_fields.*[0..].* ++ .{.{
+    opt_enum_fields.* = opt_enum_fields.* ++ .{.{
         .name = opt_enum_field_name,
         .value = opt_enum_field_idx,
     }};
