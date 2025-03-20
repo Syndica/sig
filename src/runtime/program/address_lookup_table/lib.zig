@@ -10,7 +10,6 @@ pub const ID = sig.runtime.ids.ADDRESS_LOOKUP_TABLE_PROGRAM_ID;
 
 pub const execute = @import("execute.zig").execute;
 
-pub const entrypoint = @import("execute.zig").entrypoint;
 pub const ProgramState = @import("execute.zig").ProgramState;
 pub const LookupTableMeta = @import("execute.zig").LookupTableMeta;
 pub const AddressLookupTable = @import("execute.zig").AddressLookupTable;
