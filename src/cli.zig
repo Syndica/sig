@@ -1608,6 +1608,9 @@ inline fn comptimeReplaceScalar(
 }
 
 /// Compares `a` and `b` as strings, assuming one or both of them is/are of constant length.
+/// This is both a minor optimization for comparing against constant-length strings at runtime,
+/// as well as a way to compare strings at comptime whilst consuming only a single unit of
+/// eval branch quota (1 for the function call) - ie, a comptime optimization.
 inline fn constEql(a: []const u8, b: []const u8) bool {
     const a_is_const = @typeInfo(@TypeOf(.{a.len})).Struct.fields[0].is_comptime;
     const b_is_const = @typeInfo(@TypeOf(.{b.len})).Struct.fields[0].is_comptime;
