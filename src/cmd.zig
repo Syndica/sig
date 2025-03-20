@@ -129,7 +129,7 @@ pub fn main() !void {
             current_config.genesis_file_path = params.genesis_file_path;
             params.accountsdb_base.apply(&current_config);
             params.accountsdb_index.apply(&current_config);
-            current_config.gossip.cluster = params.gossip_network;
+            current_config.gossip.cluster = params.gossip_cluster;
             params.geyser.apply(&current_config);
             try validateSnapshot(gpa, current_config);
         },
@@ -267,9 +267,9 @@ const Cmd = struct {
         .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
     };
 
-    const gossip_network_option: cli.OptionInfo(?[]const u8) = .{
-        .name_override = "network",
-        .alias = .n,
+    const gossip_cluster_option: cli.OptionInfo(?[]const u8) = .{
+        .name_override = "cluster",
+        .alias = .c,
         .default_value = null,
         .config = .string,
         .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
@@ -331,7 +331,7 @@ const Cmd = struct {
                 .config = .string,
                 .help = "gossip address of the entrypoint validators",
             },
-            .network = gossip_network_option,
+            .network = gossip_cluster_option,
         };
 
         fn apply(opts: @This(), cfg: *config.Cmd) void {
@@ -738,7 +738,7 @@ const Cmd = struct {
         genesis_file_path: ?[]const u8,
         accountsdb_base: AccountsDbOptionsBase,
         accountsdb_index: AccountsDbOptionsIndex,
-        gossip_network: ?[]const u8,
+        gossip_cluster: ?[]const u8,
         geyser: GeyserOptionsBase,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
@@ -751,7 +751,7 @@ const Cmd = struct {
                 .genesis_file_path = genesis_file_path_option,
                 .accountsdb_base = AccountsDbOptionsBase.cmd_info,
                 .accountsdb_index = AccountsDbOptionsIndex.cmd_info,
-                .gossip_network = gossip_network_option,
+                .gossip_cluster = gossip_cluster_option,
                 .geyser = GeyserOptionsBase.cmd_info,
             },
         };
