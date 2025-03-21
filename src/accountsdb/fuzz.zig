@@ -115,17 +115,17 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // prealloc some references to use throught the fuzz
     try accounts_db.account_index.expandRefCapacity(1_000_000);
 
-    var exit = std.atomic.Value(bool).init(false);
+    var manager_exit = std.atomic.Value(bool).init(false);
     const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
         &accounts_db, AccountsDB.ManagerLoopConfig{
-            .exit = &exit,
+            .exit = &manager_exit,
             .slots_per_full_snapshot = 50_000,
             .slots_per_incremental_snapshot = 5_000,
             .zstd_nb_workers = @intCast(std.Thread.getCpuCount() catch 0),
         },
     });
     defer {
-        exit.store(true, .release);
+        manager_exit.store(true, .release);
         manager_handle.join();
     }
 
@@ -135,23 +135,37 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         try tracked_accounts.ensureTotalCapacity(10_000);
         break :blk tracked_accounts;
     });
-    var map_alive = std.atomic.Value(bool).init(true);
-
-    var threads: [N_RANDOM_THREADS]std.Thread = undefined;
-    var spawned_threads: u8 = 0;
-
     defer {
         const tracked_accounts, var tracked_accounts_lg = tracked_accounts_rw.writeWithLock();
         defer tracked_accounts_lg.unlock();
         tracked_accounts.deinit();
     }
+
+    var threads: [N_RANDOM_THREADS]std.Thread = undefined;
+    var reader_exit = std.atomic.Value(bool).init(true);
+    var spawned_threads: u8 = 0;
     defer {
-        map_alive.store(false, .seq_cst);
+        reader_exit.store(true, .seq_cst);
         for (threads[0..spawned_threads]) |thread| thread.join();
     }
 
-    var random_bank_fields = try BankFields.initRandom(allocator, random, 1 << 8);
-    defer random_bank_fields.deinit(allocator);
+    // spawn the random reader threads
+    for (&threads) |*thread| {
+        // NOTE: these threads just access accounts and do not perform
+        // any validation (in the .get block of the main fuzzer
+        // loop, we perform validation)
+        thread.* = try std.Thread.spawn(.{}, readRandomAccounts, .{
+            &accounts_db,
+            &tracked_accounts_rw,
+            seed + spawned_threads,
+            &reader_exit,
+            spawned_threads,
+        });
+        spawned_threads += 1;
+
+        std.debug.print("started readRandomAccounts thread: {}\n", .{spawned_threads});
+    }
+    std.debug.assert(spawned_threads == N_RANDOM_THREADS);
 
     const zstd_compressor = try zstd.Compressor.init(.{});
     defer zstd_compressor.deinit();
@@ -161,23 +175,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var pubkeys_this_slot = std.AutoHashMap(Pubkey, void).init(allocator);
     defer pubkeys_this_slot.deinit();
-
-    {
-        for (&threads) |*thread| {
-            defer spawned_threads += 1;
-
-            thread.* = try std.Thread.spawn(.{}, readRandomAccountThread, .{
-                &accounts_db,
-                &tracked_accounts_rw,
-                seed + spawned_threads,
-                &map_alive,
-                spawned_threads,
-            });
-            std.debug.print("started random read thread {}\n", .{spawned_threads});
-        }
-
-        std.debug.assert(spawned_threads == N_RANDOM_THREADS);
-    }
 
     // get/put a bunch of accounts
     while (true) {
@@ -424,19 +421,19 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     std.debug.print("fuzzing complete\n", .{});
 }
 
-fn readRandomAccountThread(
-    self: *AccountsDB,
+fn readRandomAccounts(
+    db: *AccountsDB,
     tracked_accounts_rw: *sig.sync.RwMux(std.AutoArrayHashMap(Pubkey, TrackedAccount)),
     seed: u64,
-    alive: *std.atomic.Value(bool),
-    thread_num: usize,
+    exit: *std.atomic.Value(bool),
+    thread_id: usize,
 ) void {
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
     while (true) {
-        if (!alive.load(.seq_cst)) {
-            std.debug.print("finishing random read thread {}\n", .{thread_num});
+        if (exit.load(.seq_cst)) {
+            std.debug.print("finishing readRandomAccounts thread: {}\n", .{thread_id});
             return;
         }
 
@@ -446,7 +443,11 @@ fn readRandomAccountThread(
             defer tracked_accounts_lg.unlock();
 
             const tracked_pubkeys = tracked_accounts.keys();
-            if (tracked_pubkeys.len == 0) continue;
+            if (tracked_pubkeys.len == 0) {
+                // wait for some accounts to exist
+                std.time.sleep(std.time.ns_per_s);
+                continue;
+            }
 
             for (&pubkeys) |*pubkey| pubkey.* = blk: {
                 const index = random.intRangeLessThan(usize, 0, tracked_pubkeys.len);
@@ -454,9 +455,9 @@ fn readRandomAccountThread(
             };
         }
 
-        for (pubkeys) |pubkey| {
-            const account = self.getAccount(&pubkey) catch continue;
-            defer account.deinit(self.allocator);
+        for (pubkeys) |*pubkey| {
+            const account = db.getAccount(pubkey) catch continue;
+            defer account.deinit(db.allocator);
         }
     }
 }
