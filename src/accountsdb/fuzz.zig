@@ -455,8 +455,8 @@ fn readRandomAccounts(
             };
         }
 
-        for (pubkeys) |*pubkey| {
-            const account = db.getAccount(pubkey) catch continue;
+        for (pubkeys) |pubkey| {
+            const account = db.getAccount(&pubkey) catch continue;
             defer account.deinit(db.allocator);
         }
     }
