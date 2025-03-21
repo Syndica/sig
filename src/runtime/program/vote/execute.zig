@@ -216,25 +216,30 @@ fn authorize(
     switch (vote_authorize) {
         .voter => {
             const current_epoch = clock.epoch;
-            // Analogous to
-            // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L691-L692
-            // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L701-L707
-            // https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
 
-            const authorized_withdrawer_signer = !std.meta.isError(validateIsSigner(
-                vote_state.authorized_withdrawer,
-                signers,
-            ));
+            const authorized_withdrawer_signer = blk: {
+                validateIsSigner(
+                    vote_state.authorized_withdrawer,
+                    signers,
+                ) catch {
+                    break :blk false;
+                };
+                break :blk true;
+            };
 
+            // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L697-L701
             const target_epoch = std.math.add(u64, current_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
             };
 
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L872
             const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
                 allocator,
                 current_epoch,
             );
 
+            // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
+            // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // current authorized withdrawer or epoch authorized voter must sign transaction.
             if (!authorized_withdrawer_signer) {
                 _ = try validateIsSigner(
