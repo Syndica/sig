@@ -288,6 +288,7 @@ pub fn build(b: *Build) !void {
     install_step.dependOn(&vm_exe.step);
 
     vm_exe.root_module.addImport("sig", sig_mod);
+    vm_exe.root_module.addImport("cli", cli_mod);
     try addInstallAndRun(b, vm_step, vm_exe, config);
 
     // docs for the Sig library
