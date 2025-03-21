@@ -18,7 +18,7 @@ pub const Instruction = union(enum) {
     /// # Account references
     ///   0. `[WRITE]` Address lookup table account to freeze
     ///   1. `[SIGNER]` Current authority
-    FreezeLookupTable,
+    FreezeLookupTable: FreezeLookupTable,
 
     /// Extend an address lookup table with new addresses. Funding account and
     /// system program account references are only required if the lookup table
@@ -38,7 +38,7 @@ pub const Instruction = union(enum) {
     /// # Account references
     ///   0. `[WRITE]` Address lookup table account to deactivate
     ///   1. `[SIGNER]` Current authority
-    DeactivateLookupTable,
+    DeactivateLookupTable: DeactivateLookupTable,
 
     /// Close an address lookup table account
     ///
@@ -46,7 +46,18 @@ pub const Instruction = union(enum) {
     ///   0. `[WRITE]` Address lookup table account to close
     ///   1. `[SIGNER]` Current authority
     ///   2. `[WRITE]` Recipient of closed account lamports
-    CloseLookupTable,
+    CloseLookupTable: CloseLookupTable,
+};
+
+const AccountIndexWithPayer = enum(u8) {
+    lookup_table_account = 0,
+    authority_account = 1,
+    payer_account = 2,
+};
+
+const AccountIndexNoPayer = enum(u8) {
+    lookup_table_account = 0,
+    authority_account = 1,
 };
 
 // https://github.com/anza-xyz/agave/blob/7e8a1ddf86fa84b0ca4b64360af89399afd9de44/sdk/program/src/address_lookup_table/instruction.rs#L21
@@ -61,9 +72,25 @@ pub const CreateLookupTable = struct {
     /// addresses using the funding address, recent blockhash, and
     /// the user-passed `bump_seed`.
     bump_seed: u8,
+
+    pub const AccountIndex = AccountIndexWithPayer;
+};
+
+pub const FreezeLookupTable = struct {
+    pub const AccountIndex = AccountIndexNoPayer;
 };
 
 // https://github.com/anza-xyz/agave/blob/7e8a1ddf86fa84b0ca4b64360af89399afd9de44/sdk/program/src/address_lookup_table/instruction.rs#L51
 pub const ExtendLookupTable = struct {
     new_addresses: []const Pubkey,
+
+    pub const AccountIndex = AccountIndexWithPayer;
+};
+
+pub const DeactivateLookupTable = struct {
+    pub const AccountIndex = AccountIndexNoPayer;
+};
+
+pub const CloseLookupTable = struct {
+    pub const AccountIndex = AccountIndexWithPayer;
 };
