@@ -10,6 +10,9 @@ pub const LIFT_CPI_CALLER_RESTRICTION =
 pub const REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS =
     Pubkey.parseBase58String("FfgtauHUWKeXTzjXkua9Px4tNGBFHKZ9WaigM5VbbzFx") catch unreachable;
 
+pub const ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX =
+    Pubkey.parseBase58String("HcW8ZjBezYYgvcbxNJwqv1t484Y2556qJsfNDWvJGZRH") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features
