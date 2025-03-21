@@ -26,6 +26,7 @@ const Cmd = struct {
     };
 
     const pipe_path_option: cli.OptionInfo([]const u8) = .{
+        .kind = .named,
         .name_override = "geyser-pipe-path",
         .alias = .none,
         .default_value = sig.VALIDATOR_DIR ++ "geyser.pipe",
@@ -45,6 +46,7 @@ const Cmd = struct {
             .sub = .{
                 .pipe_path = pipe_path_option,
                 .measure_rate_secs = .{
+                    .kind = .named,
                     .name_override = "measure-rate",
                     .alias = .none,
                     .default_value = 5,
@@ -71,6 +73,7 @@ const Cmd = struct {
             .sub = .{
                 .pipe_path = pipe_path_option,
                 .geyser_bincode_buf_len = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .none,
                     .default_value = 1 << 29,
@@ -78,6 +81,7 @@ const Cmd = struct {
                     .help = "size of the bincode buffer",
                 },
                 .geyser_io_buf_len = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .none,
                     .default_value = 1 << 29,
@@ -85,6 +89,7 @@ const Cmd = struct {
                     .help = "size of the io buffer",
                 },
                 .csv_buf_len = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .none,
                     .default_value = 1 << 32,
@@ -92,6 +97,7 @@ const Cmd = struct {
                     .help = "size of the csv buffer",
                 },
                 .owner_accounts = .{
+                    .kind = .named,
                     .name_override = "owner-account",
                     .alias = .o,
                     .default_value = &.{},
@@ -99,6 +105,7 @@ const Cmd = struct {
                     .help = "list of owner accounts to filter to csv",
                 },
                 .accounts = .{
+                    .kind = .named,
                     .name_override = "account",
                     .alias = .a,
                     .default_value = &.{},
