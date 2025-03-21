@@ -88,18 +88,43 @@ pub fn deriveLookupTableAddress(
     ).?;
 }
 
-test "bad execute" {
-    _ = sig.runtime.program.testing.expectProgramExecuteResult(
-        std.testing.allocator,
-        {},
-        @This(),
-        Instruction{
-            .CreateLookupTable = .{ .bump_seed = 0, .recent_slot = 0 },
-        },
-        &.{},
-        .{ .accounts = &.{} },
-        .{ .accounts = &.{} },
-    ) catch {};
+test "address-lookup-table missing accounts" {
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const unsigned_authority_address = Pubkey.initRandom(prng.random());
+    const recent_slot = std.math.maxInt(Slot);
+
+    const lookup_table_address, const bump_seed = deriveLookupTableAddress(
+        unsigned_authority_address,
+        recent_slot,
+    );
+    _ = bump_seed;
+
+    const accounts: []const sig.runtime.testing.TransactionContextAccountParams = &.{
+        .{ .pubkey = lookup_table_address },
+    };
+
+    const instructions: []const Instruction = &.{
+        .{ .CreateLookupTable = .{ .bump_seed = 0, .recent_slot = 0 } },
+        Instruction.FreezeLookupTable,
+        Instruction.CloseLookupTable,
+        Instruction.DeactivateLookupTable,
+        .{ .ExtendLookupTable = .{ .new_addresses = &.{Pubkey.ZEROES} } },
+    };
+
+    for (instructions) |instruction| {
+        const value = sig.runtime.program.testing.expectProgramExecuteResult(
+            std.testing.allocator,
+            {},
+            @This(),
+            instruction,
+            &.{},
+            .{ .accounts = accounts },
+            .{ .accounts = accounts },
+        );
+
+        try std.testing.expectError(error.CouldNotFindProgramAccount, value);
+    }
 }
 
 test "address-lookup-table create" {
@@ -574,76 +599,80 @@ test "address-lookup-table extend" {
     // (1280640/(128+56))*(128+56+32) = 1503360
     const required_lamports = 1503360;
 
-    const accounts: []const testing.TransactionContextAccountParams = &.{
-        .{
-            .pubkey = lookup_table_address,
-            .owner = ID,
-            .lamports = required_lamports,
-            .data = before_lookup_table,
-        },
-        .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = payer, .lamports = 0 },
-        .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
-        .{
-            .pubkey = sig.runtime.program.system_program.ID,
-            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            .executable = true,
-        },
-    };
+    inline for (.{ true, false }) |payer_required| {
+        const accounts: []const testing.TransactionContextAccountParams = &.{
+            .{
+                .pubkey = lookup_table_address,
+                .owner = ID,
+                .lamports = if (payer_required) 0 else required_lamports,
+                .data = before_lookup_table,
+            },
+            .{ .pubkey = unsigned_authority_address },
+            .{ .pubkey = payer, .lamports = if (payer_required) required_lamports else 0 },
+            .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
+            .{
+                .pubkey = sig.runtime.program.system_program.ID,
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                .executable = true,
+            },
+        };
 
-    const expected_accounts: []const testing.TransactionContextAccountParams = &.{
-        .{
-            .pubkey = lookup_table_address,
-            .owner = ID,
-            .lamports = required_lamports,
-            .data = after_lookup_table,
-        },
-        .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = payer, .lamports = 0 },
-        .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
-        .{
-            .pubkey = sig.runtime.program.system_program.ID,
-            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            .executable = true,
-        },
-    };
+        const expected_accounts: []const testing.TransactionContextAccountParams = &.{
+            .{
+                .pubkey = lookup_table_address,
+                .owner = ID,
+                .lamports = required_lamports,
+                .data = after_lookup_table,
+            },
+            .{ .pubkey = unsigned_authority_address },
+            .{ .pubkey = payer, .lamports = 0 },
+            .{ .pubkey = ID, .owner = sig.runtime.ids.NATIVE_LOADER_ID, .executable = true },
+            .{
+                .pubkey = sig.runtime.program.system_program.ID,
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                .executable = true,
+            },
+        };
 
-    const meta: []const testing.InstructionContextAccountMetaParams = &.{
-        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-        .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
-        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
-        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
-        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
-    };
+        const meta: []const testing.InstructionContextAccountMetaParams = &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
+        };
 
-    const sysvar_cache = sig.runtime.SysvarCache{
-        .clock = sig.runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = sig.runtime.sysvar.SlotHashes{
-            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
-        },
-        .rent = sig.runtime.sysvar.Rent.DEFAULT,
-    };
+        const sysvar_cache = sig.runtime.SysvarCache{
+            .clock = sig.runtime.sysvar.Clock.DEFAULT,
+            .slot_hashes = sig.runtime.sysvar.SlotHashes{
+                .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
+            },
+            .rent = sig.runtime.sysvar.Rent.DEFAULT,
+        };
 
-    const expected_used_compute = COMPUTE_UNITS;
-    const before_compute_meter = 9999999;
-    const after_compute_meter = before_compute_meter - expected_used_compute;
+        const expected_used_compute = COMPUTE_UNITS +
+            if (payer_required) sig.runtime.program.system_program.COMPUTE_UNITS else 0;
 
-    try testing.expectProgramExecuteResult(
-        allocator,
-        {},
-        @This(),
-        Instruction{ .ExtendLookupTable = .{ .new_addresses = &.{first_address} } },
-        meta,
-        .{
-            .log_collector = sig.runtime.LogCollector.default(std.testing.allocator),
-            .accounts = accounts,
-            .compute_meter = before_compute_meter,
-            .sysvar_cache = sysvar_cache,
-        },
-        .{
-            .accounts = expected_accounts,
-            .accounts_resize_delta = 32,
-            .compute_meter = after_compute_meter,
-        },
-    );
+        const before_compute_meter = 9999999;
+        const after_compute_meter = before_compute_meter - expected_used_compute;
+
+        try testing.expectProgramExecuteResult(
+            allocator,
+            {},
+            @This(),
+            Instruction{ .ExtendLookupTable = .{ .new_addresses = &.{first_address} } },
+            meta,
+            .{
+                .log_collector = sig.runtime.LogCollector.default(std.testing.allocator),
+                .accounts = accounts,
+                .compute_meter = before_compute_meter,
+                .sysvar_cache = sysvar_cache,
+            },
+            .{
+                .accounts = expected_accounts,
+                .accounts_resize_delta = 32,
+                .compute_meter = after_compute_meter,
+            },
+        );
+    }
 }
