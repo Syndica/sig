@@ -34,11 +34,9 @@ const assert = std.debug.assert;
 /// Metadata with its index. Each hashmap entry's index is the same as the index
 /// of the item in the metadata list.
 pub const GossipMap = struct {
-    key_to_index: KeyToIndex = .{},
+    key_to_index: std.AutoArrayHashMapUnmanaged(GossipKey, SplitUnionList(GossipData).Index) = .{},
     gossip_data: SplitUnionList(GossipData) = SplitUnionList(GossipData).init(),
     metadata: std.ArrayListUnmanaged(Metadata) = .{},
-
-    const KeyToIndex = std.AutoArrayHashMapUnmanaged(GossipKey, SplitUnionList(GossipData).Index);
 
     pub const Metadata = struct {
         signature: Signature,
