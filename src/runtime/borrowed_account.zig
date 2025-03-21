@@ -156,6 +156,25 @@ pub const BorrowedAccount = struct {
         try self.account.resize(allocator, new_length);
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L916
+    pub fn setDataFromSlice(
+        self: *BorrowedAccount,
+        allocator: std.mem.Allocator,
+        resize_delta: *i64,
+        data: []const u8,
+    ) (error{OutOfMemory} || InstructionError)!void {
+        if (self.checkCanSetDataLength(resize_delta.*, data.len)) |err| return err;
+        if (self.checkDataIsMutable()) |err| return err;
+
+        const old_length_signed: i64 = @intCast(self.constAccountData().len);
+        const new_length_signed: i64 = @intCast(data.len);
+        resize_delta.* +|= new_length_signed -| old_length_signed;
+
+        // TODO: Implement account shared data method set data from slice
+        // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account/src/lib.rs#L616
+        try self.account.resize(allocator, data.len);
+        @memcpy(self.account.data[0..data.len], data);
+    }
     /// Deserialize the account data into a type `T`\
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968
     pub fn deserializeFromAccountData(
