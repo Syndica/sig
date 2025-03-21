@@ -5,15 +5,17 @@ const sig = @import("../../sig.zig");
 const executor = sig.runtime.executor;
 const runtime_testing = sig.runtime.testing;
 
-const InstructionContextAccountMetaParams = runtime_testing.InstructionContextAccountMetaParams;
-const TransactionContextParams = runtime_testing.TransactionContextParams;
+pub const InstructionContextAccountMetaParams = runtime_testing.InstructionContextAccountMetaParams;
+pub const TransactionContextParams = runtime_testing.TransactionContextParams;
+pub const TransactionContextAccountParams = runtime_testing.TransactionContextAccountParams;
 
-const createTransactionContext = runtime_testing.createTransactionContext;
-const createInstructionInfo = runtime_testing.createInstructionInfo;
-const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
+pub const createTransactionContext = runtime_testing.createTransactionContext;
+pub const createInstructionInfo = runtime_testing.createInstructionInfo;
+pub const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
 
 pub fn expectProgramExecuteResult(
     allocator: std.mem.Allocator,
+    log_writer: anytype,
     program: anytype,
     instruction: anytype,
     instruction_accounts_params: []const InstructionContextAccountMetaParams,
@@ -30,6 +32,17 @@ pub fn expectProgramExecuteResult(
         transaction_context_params,
     );
     defer transaction_context.deinit(allocator);
+
+    defer {
+        if (@TypeOf(log_writer) != void) {
+            if (transaction_context.log_collector) |collector| {
+                log_writer.writeAll("logs:\n") catch {};
+                for (collector.collect()) |log| {
+                    log_writer.print("    log: {s}\n", .{log}) catch {};
+                }
+            }
+        }
+    }
 
     var prng_1 = std.rand.DefaultPrng.init(0);
     var expected_transaction_context = try createTransactionContext(

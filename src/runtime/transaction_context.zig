@@ -77,6 +77,20 @@ pub const TransactionContext = struct {
         self.feature_set.deinit(allocator);
     }
 
+    pub fn deinitWriteLogs(
+        self: *TransactionContext,
+        allocator: std.mem.Allocator,
+        writer: anytype,
+    ) !void {
+        if (self.log_collector) |collector| {
+            try writer.print("logs:\n");
+            for (collector.collect()) |log_line| {
+                try writer.print("    {s}\n", .{log_line});
+            }
+        }
+        self.deinit(allocator);
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233
     pub fn getAccountIndex(
         self: *TransactionContext,
