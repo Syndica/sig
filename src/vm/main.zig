@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("sig");
 const builtin = @import("builtin");
+const cli = @import("cli");
 
 const Elf = sig.vm.Elf;
 const memory = sig.vm.memory;
@@ -13,52 +14,32 @@ const Config = sig.vm.Config;
 const MemoryMap = memory.MemoryMap;
 
 pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }) = .{};
-    defer _ = gpa.deinit();
-    const allocator = if (builtin.mode == .Debug)
-        gpa.allocator()
-    else
-        std.heap.c_allocator;
+    var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa_state.deinit();
+    const gpa = if (builtin.mode == .Debug) gpa_state.allocator() else std.heap.c_allocator;
 
-    var std_logger = sig.trace.DirectPrintLogger.init(allocator, .debug);
-    const logger = std_logger.logger();
+    const argv = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, argv);
 
-    var input_path: ?[]const u8 = null;
-    var assemble: bool = false;
-    var version: sbpf.Version = .v3;
+    const parser = cli.Parser(Cmd, Cmd.cmd_info);
+    const cmd = try parser.parse(
+        gpa,
+        "vm",
+        std.io.tty.detectConfig(std.io.getStdOut()),
+        std.io.getStdOut().writer(),
+        argv[1..],
+    ) orelse return;
+    defer parser.free(gpa, cmd);
+    if (cmd.input_path == null) @panic("no input file provided");
 
-    var args = try std.process.argsWithAllocator(allocator);
-    _ = args.next();
-    while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "-a")) {
-            assemble = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "-v")) {
-            const version_string = args.next() orelse fail("provide SBPF version", .{});
-            version = std.meta.stringToEnum(sbpf.Version, version_string) orelse
-                fail("invalid SBPF version", .{});
-            continue;
-        }
-
-        if (input_path) |file| {
-            fail("input file already given: {s}", .{file});
-        } else {
-            input_path = arg;
-        }
-    }
-    if (input_path == null) {
-        fail("no input file provided", .{});
-    }
-
-    const input_file = try std.fs.cwd().openFile(input_path.?, .{});
+    const input_file = try std.fs.cwd().openFile(cmd.input_path.?, .{});
     defer input_file.close();
 
-    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
-    defer allocator.free(bytes);
+    const bytes = try input_file.readToEndAlloc(gpa, sbpf.MAX_FILE_SIZE);
+    defer gpa.free(bytes);
 
     var loader: sig.vm.BuiltinProgram = .{};
-    defer loader.deinit(allocator);
+    defer loader.deinit(gpa);
 
     inline for (.{
         .{ "log", syscalls.log },
@@ -74,33 +55,33 @@ pub fn main() !void {
     }) |entry| {
         const name, const function = entry;
         _ = try loader.functions.registerHashed(
-            allocator,
+            gpa,
             name,
             function,
         );
     }
 
     const config: Config = .{
-        .maximum_version = version,
+        .maximum_version = cmd.version,
         .enable_symbol_and_section_labels = false,
         .optimize_rodata = false,
     };
-    var executable = if (assemble)
-        try Executable.fromAsm(allocator, bytes, config)
+    var executable = if (cmd.assemble)
+        try Executable.fromAsm(gpa, bytes, config)
     else exec: {
-        const elf = try Elf.parse(allocator, bytes, &loader, config);
+        const elf = try Elf.parse(gpa, bytes, &loader, config);
         break :exec Executable.fromElf(elf);
     };
-    defer executable.deinit(allocator);
+    defer executable.deinit(gpa);
 
     try executable.verify(&loader);
 
-    const heap_mem = try allocator.alloc(u8, 0x40000);
-    defer allocator.free(heap_mem);
+    const heap_mem = try gpa.alloc(u8, 0x40000);
+    defer gpa.free(heap_mem);
     @memset(heap_mem, 0x00);
 
-    const stack_memory = try allocator.alloc(u8, config.stackSize());
-    defer allocator.free(stack_memory);
+    const stack_memory = try gpa.alloc(u8, config.stackSize());
+    defer gpa.free(stack_memory);
     @memset(stack_memory, 0);
 
     const m = try MemoryMap.init(&.{
@@ -110,8 +91,11 @@ pub fn main() !void {
         memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
+    var std_logger = sig.trace.DirectPrintLogger.init(gpa, .debug);
+    const logger = std_logger.logger();
+
     var vm = try Vm.init(
-        allocator,
+        gpa,
         &executable,
         m,
         &loader,
@@ -124,8 +108,38 @@ pub fn main() !void {
     std.debug.print("result: {}, count: {}\n", .{ result, vm.instruction_count });
 }
 
-fn fail(comptime fmt: []const u8, args: anytype) noreturn {
-    const stderr = std.io.getStdErr().writer();
-    stderr.print(fmt ++ "\n", args) catch @panic("failed to print the stderr");
-    std.posix.abort();
-}
+const Cmd = struct {
+    assemble: bool,
+    version: sbpf.Version,
+    input_path: ?[]const u8,
+
+    const cmd_info: cli.CommandInfo(@This()) = .{
+        .help = .{
+            .short = "Runs sBPF programs from ELF files or assembly",
+            .long = null,
+        },
+        .sub = .{
+            .assemble = .{
+                .name_override = null,
+                .alias = .a,
+                .default_value = false,
+                .config = {},
+                .help = "whether the input file is an assembly file",
+            },
+            .version = .{
+                .name_override = null,
+                .alias = .v,
+                .default_value = .v3,
+                .config = {},
+                .help = "sBPF version to execute under",
+            },
+            .input_path = .{
+                .name_override = "input",
+                .alias = .none,
+                .default_value = null,
+                .config = .string,
+                .help = "input file path",
+            },
+        },
+    };
+};
