@@ -356,11 +356,10 @@ fn executeAuthorizeCheckedWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
-    const new_authority_meta = ic.info.getAccountMetaAtIndex(
-        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
-    ) orelse
-        return InstructionError.NotEnoughAccountKeys;
-
+    // Safe since there are at least 4 accounts, and the new_authority index is 3.
+    const new_authority_meta = &ic.info.account_metas.buffer[
+        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority)
+    ];
     if (!new_authority_meta.is_signer) {
         return InstructionError.MissingRequiredSignature;
     }
@@ -389,11 +388,10 @@ fn executeAuthorizeChecked(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
-    const new_authority_meta = ic.info.getAccountMetaAtIndex(
-        @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_authority),
-    ) orelse
-        return InstructionError.NotEnoughAccountKeys;
-
+    // Safe since there are at least 4 accounts, and the new_authority index is 3.
+    const new_authority_meta = &ic.info.account_metas.buffer[
+        @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_authority)
+    ];
     if (!new_authority_meta.is_signer) {
         return InstructionError.MissingRequiredSignature;
     }
