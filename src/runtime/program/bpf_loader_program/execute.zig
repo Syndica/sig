@@ -462,8 +462,7 @@ pub fn executeV3Upgrade(
             try ic.tc.log("Program account not writeable", .{});
             return InstructionError.InvalidArgument;
         }
-        // NOTE: get_owner() != program_id
-        if (!program_account.account.owner.equals(&program_account.context.program_id)) {
+        if (!program_account.isOwnedByCurrentProgram()) {
             try ic.tc.log("Program account not owned by loader", .{});
             return InstructionError.IncorrectProgramId;
         }
@@ -857,8 +856,7 @@ pub fn executeV3Close(
                 try ic.tc.log("Program account is not writable", .{});
                 return InstructionError.InvalidArgument;
             }
-            // NOTE: getOwner() == ic.getLastProgramKey()
-            if (!program_account.account.owner.equals(&program_account.context.program_id)) {
+            if (!program_account.isOwnedByCurrentProgram()) {
                 try ic.tc.log("Program account is not owned by the loader", .{});
                 return InstructionError.IncorrectProgramId;
             }

@@ -200,6 +200,10 @@ pub const BorrowedAccount = struct {
         self.account.owner = pubkey;
     }
 
+    pub fn isOwnedByCurrentProgram(self: *const BorrowedAccount) bool {
+        return self.account.owner.equals(&self.context.program_id);
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L1001
     pub fn setExecutable(
         self: *BorrowedAccount,
