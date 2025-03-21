@@ -85,7 +85,7 @@ pub const InstructionInfo = struct {
         self: *const InstructionInfo,
         pubkey: Pubkey,
     ) bool {
-        for (self.account_metas.slice()) |account_meta|
+        for (self.account_metas.constSlice()) |account_meta|
             if (account_meta.pubkey.equals(&pubkey) and account_meta.is_signer) return true;
         return false;
     }

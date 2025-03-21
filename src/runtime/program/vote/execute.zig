@@ -359,11 +359,6 @@ fn executeAuthorizeCheckedWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
-    // var new_authority = try ic.borrowInstructionAccount(
-    //     @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
-    // );
-    // defer new_authority.release();
-
     const new_authority_meta = ic.info.getAccountMetaAtIndex(
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
     ) orelse
