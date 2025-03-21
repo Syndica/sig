@@ -59,7 +59,7 @@ pub const GossipDumpService = struct {
                 const gossip_versioned_data = entry.getVersionedData();
                 const val: SignedGossipData = gossip_versioned_data.value;
 
-                var encoded_buf: [50]u8 = undefined;
+                var encoded_buf: [52]u8 = undefined;
                 const encoded_len = endec.encode(
                     &encoded_buf,
                     &gossip_versioned_data.value_hash.data,
