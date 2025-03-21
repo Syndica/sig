@@ -1,4 +1,4 @@
-/// Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
+/// [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
@@ -15,19 +15,19 @@ const Clock = sig.runtime.sysvar.Clock;
 
 pub const MAX_PRIOR_VOTERS: usize = 32;
 
-/// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L357
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L357
 pub const BlockTimestamp = struct {
     slot: Slot,
     timestamp: i64,
 };
 
-/// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L85
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L85
 pub const Lockout = struct {
     slot: Slot,
     confirmation_count: u32,
 };
 
-/// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L135
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L135
 pub const LandedVote = struct {
     // Latency is the difference in slot number between the slot that was voted on (lockout.slot) and the slot in
     // which the vote that added this Lockout landed.  For votes which were cast before versions of the validator
@@ -36,7 +36,7 @@ pub const LandedVote = struct {
     lockout: Lockout,
 };
 
-/// Analogous tuple [(Pubkey, Epoch, Epoch)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L444.
+/// [agave] Analogous tuple [(Pubkey, Epoch, Epoch)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L444.
 pub const PriorVote = struct {
     /// authorized voter at the time of the vote.
     key: Pubkey,
@@ -46,7 +46,7 @@ pub const PriorVote = struct {
     end: Epoch,
 };
 
-/// Analogous tuple [(Epoch, u64, u64)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L448
+/// [agave] Analogous tuple [(Epoch, u64, u64)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L448
 pub const EpochCredit = struct {
     epoch: Epoch,
     credits: u64,
@@ -380,7 +380,7 @@ pub const VoteState1_14_11 = struct {
     }
 };
 
-/// [Agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
 pub const VoteState = struct {
     /// the node that votes in this account
     node_pubkey: Pubkey,
@@ -462,7 +462,7 @@ pub const VoteState = struct {
         self: *VoteState,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
-    ) (error{OutOfMemory} || InstructionError)!struct { void, ?VoteError } {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
 
         // The offset in slots `n` on which the target_epoch
         // (default value `DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET`) is
@@ -470,7 +470,8 @@ pub const VoteState = struct {
         // first slot `S` of an epoch in which to set a new voter for
         // the epoch at `S` + `n`
         if (self.authorized_voters.contains(target_epoch)) {
-            return .{ {}, VoteError.too_soon_to_reauthorize };
+            // Failure, return VoteError.
+            return VoteError.too_soon_to_reauthorize;
         }
 
         const latest_epoch, const latest_pubkey = self.authorized_voters.last() orelse
@@ -493,10 +494,9 @@ pub const VoteState = struct {
             });
         }
 
-        return .{
-            try self.authorized_voters.insert(target_epoch, new_authorized_voter),
-            null,
-        };
+        try self.authorized_voters.insert(target_epoch, new_authorized_voter);
+        // Success, return null.
+        return null;
     }
 
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
@@ -527,7 +527,7 @@ pub fn createTestVoteState(
     authorized_voter: ?Pubkey,
     authorized_withdrawer: Pubkey,
     commission: u8,
-) VoteState {
+) !VoteState {
     if (!builtin.is_test) {
         @panic("createTestVoteState should only be called in test mode");
     }
@@ -535,7 +535,7 @@ pub fn createTestVoteState(
     return .{
         .node_pubkey = node_pubkey,
         .authorized_voters = if (authorized_voter) |authorized_voter_|
-            AuthorizedVoters.init(allocator, 0, authorized_voter_) catch unreachable
+            try AuthorizedVoters.init(allocator, 0, authorized_voter_)
         else
             AuthorizedVoters{
                 .authorized_voters = SortedMap(Epoch, Pubkey).init(allocator),
@@ -729,7 +729,7 @@ test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
 
     // Same as initial epoch
     const target_epoch: Epoch = 0;
-    _, const err = try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
+    const err = try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
     try std.testing.expectEqual(
         VoteError.too_soon_to_reauthorize,
         err.?,
@@ -800,7 +800,7 @@ test "VoteState.isUninitialized: invalid account data" {
 
     try std.testing.expect(!vote_state.isUninitialized());
 
-    const uninitialized_state = createTestVoteState(
+    const uninitialized_state = try createTestVoteState(
         allocator,
         node_publey,
         null, // Authorized voters not set

@@ -223,31 +223,37 @@ fn authorize(
             // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L691-L692
             // https://github.com/anza-xyz/agave/blob/49fb51295c1062b6b09e585b2fe0a4676c33d3d4/programs/vote/src/vote_state/mod.rs#L701-L707
             // https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L873
-            {
-                const authorized_withdrawer_signer = try validateIsSigner(
+
+            const authorized_withdrawer_signer = blk: {
+                validateIsSigner(
                     vote_state.authorized_withdrawer,
                     signers,
-                );
+                ) catch {
+                    break :blk false;
+                };
+                break :blk true;
+            };
 
-                const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
-                    allocator,
-                    current_epoch,
-                );
+            const target_epoch = std.math.add(u64, current_epoch, 1) catch {
+                return InstructionError.InvalidAccountData;
+            };
 
-                // current authorized withdrawer or epoch authorized voter must sign transaction.
-                if (!authorized_withdrawer_signer) {
-                    _ = try validateIsSigner(
-                        epoch_authorized_voter,
-                        signers,
-                    );
-                }
+            const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
+                allocator,
+                current_epoch,
+            );
+
+            // current authorized withdrawer or epoch authorized voter must sign transaction.
+            if (!authorized_withdrawer_signer) {
+                _ = try validateIsSigner(
+                    epoch_authorized_voter,
+                    signers,
+                );
             }
 
-            _, const maybe_err = try vote_state.setNewAuthorizedVoter(
+            const maybe_err = try vote_state.setNewAuthorizedVoter(
                 authorized,
-                std.math.add(u64, current_epoch, 1) catch {
-                    return InstructionError.InvalidAccountData;
-                },
+                target_epoch,
             );
             if (maybe_err) |err| {
                 ic.tc.custom_error = @intFromEnum(err);
@@ -256,10 +262,15 @@ fn authorize(
         },
         .withdrawer => {
             // current authorized withdrawer must say "yay".
-            const authorized_withdrawer_signer = try validateIsSigner(
-                vote_state.authorized_withdrawer,
-                signers,
-            );
+            const authorized_withdrawer_signer = blk: {
+                validateIsSigner(
+                    vote_state.authorized_withdrawer,
+                    signers,
+                ) catch {
+                    break :blk false;
+                };
+                break :blk true;
+            };
 
             if (!authorized_withdrawer_signer) {
                 return InstructionError.MissingRequiredSignature;
@@ -311,23 +322,20 @@ fn authorizeWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
-    var expected_authority_keys = std.ArrayList(Pubkey).init(allocator);
-    defer expected_authority_keys.deinit();
-    if (try ic.info.isIndexSigner(signer_index)) {
-        const signer_meta = ic.info.getAccountMetaAtIndex(signer_index) orelse
-            return InstructionError.NotEnoughAccountKeys;
+    const signer_meta = ic.info.getAccountMetaAtIndex(signer_index) orelse
+        return InstructionError.NotEnoughAccountKeys;
 
-        const created = pubkey_utils.createWithSeed(
+    const expected_authority_keys = if (signer_meta.is_signer)
+        &[_]Pubkey{pubkey_utils.createWithSeed(
             signer_meta.pubkey,
             seed,
             owner,
         ) catch |err| {
-            ic.tc.custom_error = @intFromError(err);
+            ic.tc.custom_error = pubkey_utils.mapError(err);
             return InstructionError.Custom;
-        };
-
-        try expected_authority_keys.append(created);
-    }
+        }}
+    else
+        &[_]Pubkey{};
 
     try authorize(
         allocator,
@@ -336,7 +344,7 @@ fn authorizeWithSeed(
         new_authority,
         authorization_type,
         clock,
-        expected_authority_keys.items,
+        expected_authority_keys,
     );
 }
 
@@ -351,10 +359,15 @@ fn executeAuthorizeCheckedWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
-    // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = ic.info.account_metas.buffer[
-        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority)
-    ];
+    // var new_authority = try ic.borrowInstructionAccount(
+    //     @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
+    // );
+    // defer new_authority.release();
+
+    const new_authority_meta = ic.info.getAccountMetaAtIndex(
+        @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority),
+    ) orelse
+        return InstructionError.NotEnoughAccountKeys;
 
     if (!new_authority_meta.is_signer) {
         return InstructionError.MissingRequiredSignature;
@@ -384,12 +397,12 @@ fn executeAuthorizeChecked(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(4);
 
-    var new_authority = try ic.borrowInstructionAccount(
+    const new_authority_meta = ic.info.getAccountMetaAtIndex(
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_authority),
-    );
-    defer new_authority.release();
+    ) orelse
+        return InstructionError.NotEnoughAccountKeys;
 
-    if (!ic.info.isPubkeySigner(new_authority.pubkey)) {
+    if (!new_authority_meta.is_signer) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -412,7 +425,7 @@ fn executeAuthorizeChecked(
         allocator,
         ic,
         vote_account,
-        new_authority.pubkey,
+        new_authority_meta.pubkey,
         authorize_pubkey,
         clock,
         signers.items,
@@ -422,10 +435,10 @@ fn executeAuthorizeChecked(
 fn validateIsSigner(
     authorized: Pubkey,
     signers: []const Pubkey,
-) InstructionError!bool {
+) InstructionError!void {
     for (signers) |signer| {
         if (signer.equals(&authorized)) {
-            return true;
+            return;
         }
     }
     return InstructionError.MissingRequiredSignature;
