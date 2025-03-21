@@ -171,6 +171,7 @@ test "executeIntializeAccount" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .initialize_account = .{
