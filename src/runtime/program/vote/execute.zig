@@ -179,10 +179,7 @@ fn executeAuthorize(
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
-    var signers = std.ArrayList(Pubkey).init(allocator);
-    defer signers.deinit();
-
-    try ic.info.signers(&signers);
+    const signers = try ic.info.getSigners();
 
     try authorize(
         allocator,
@@ -191,7 +188,7 @@ fn executeAuthorize(
         pubkey,
         vote_authorize,
         clock,
-        signers.items,
+        signers.constSlice(),
     );
 }
 
@@ -411,10 +408,7 @@ fn executeAuthorizeChecked(
         .withdrawer => VoteAuthorize.withdrawer,
     };
 
-    var signers = std.ArrayList(Pubkey).init(allocator);
-    defer signers.deinit();
-
-    try ic.info.signers(&signers);
+    const signers = try ic.info.getSigners();
 
     try authorize(
         allocator,
@@ -423,7 +417,7 @@ fn executeAuthorizeChecked(
         new_authority_meta.pubkey,
         authorize_pubkey,
         clock,
-        signers.items,
+        signers.constSlice(),
     );
 }
 
