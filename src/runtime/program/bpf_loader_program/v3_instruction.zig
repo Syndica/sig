@@ -1,3 +1,124 @@
+pub const InitializeBuffer = struct {
+    pub const AccountIndex = enum(u1) {
+        /// `[WRITE]` source account to initialize.
+        account = 0,
+        /// `[]` Buffer authority, optional, if omitted then the buffer will be immutable.
+        authority = 1,
+    };
+};
+
+pub const Write = struct {
+    /// Offset at which to write the given bytes.
+    offset: u32,
+    /// Serialized program data
+    bytes: []const u8,
+
+    pub const AccountIndex = enum(u1) {
+        /// `[WRITE]` Buffer account to write program data to.
+        account = 0,
+        /// `[SIGNER]` Buffer authority.
+        authority = 1,
+    };
+};
+
+pub const DeployWithMaxDataLen = struct {
+    /// Maximum length that the program can be upgraded to.
+    max_data_len: usize,
+
+    pub const AccountIndex = enum(u3) {
+        /// `[WRITE, SIGNER]` The payer account that will pay to create the ProgramData account.
+        payer = 0,
+        /// `[WRITE]` The uninitialized ProgramData account.
+        program_data = 1,
+        /// `[WRITE]` The uninitialized Program account.
+        program = 2,
+        /// `[WRITE]` The Buffer account where the program data has been written.
+        /// The buffer account's authority must match the program's authority.
+        buffer = 3,
+        /// `[]` Rent sysvar.
+        rent = 4,
+        /// `[]` Clock sysvar.
+        clock = 5,
+        /// `[]` System program (`solana_sdk::system_program::id()`).
+        system_program = 6,
+        /// `[SIGNER]` The program's authority.
+        authority = 7,
+    };
+};
+
+pub const Upgrade = struct {
+    pub const AccountIndex = enum(u7) {
+        /// `[WRITE]` The ProgramData account.
+        program_data = 0,
+        /// `[WRITE]` The Program account.
+        program = 1,
+        /// `[WRITE]` The Buffer account where the program data has been written.
+        /// The buffer account's authority must match the program's authority.
+        buffer = 2,
+        /// `[WRITE]` The spill account.
+        spill = 3,
+        /// `[]` Rent sysvar.
+        rent = 4,
+        /// `[]` Clock sysvar.
+        clock = 5,
+        /// `[SIGNER]` The program's authority.
+        authority = 6,
+    };
+};
+
+pub const SetAuthority = struct {
+    pub const AccountIndex = enum(u2) {
+        /// `[WRITE]` The Buffer or ProgramData account to change the authority of.
+        account = 0,
+        /// `[SIGNER]` The current authority.
+        present_authority = 1,
+        /// `[]` The new authority, optional, if omitted then the program will not be upgradeable.
+        new_authority = 2,
+    };
+};
+
+pub const SetAuthorityChecked = struct {
+    pub const AccountIndex = enum(u2) {
+        /// `[WRITE]` The Buffer or ProgramData account to change the authority of.
+        account = 0,
+        /// `[SIGNER]` The current authority.
+        present_authority = 1,
+        /// `[SIGNER]` The new authority.
+        new_authority = 2,
+    };
+};
+
+pub const Close = struct {
+    pub const AccountIndex = enum(u2) {
+        /// `[WRITE]` The account to close, if closing a program must be the ProgramData account.
+        account = 0,
+        /// `[WRITE]` The account to deposit the closed account's lamports.
+        recipient = 1,
+        /// `[SIGNER]` The account's authority, Optional, required for initialized accounts.
+        authority = 2,
+        /// `[WRITE]` The associated Program account if the account to close is a ProgramData account.
+        program = 3,
+    };
+};
+
+pub const ExtendProgram = struct {
+    /// Number of bytes to extend the program data.
+    additional_bytes: u32,
+
+    pub const AccountIndex = enum(u2) {
+        /// `[WRITE]` The ProgramData account.
+        program_data = 0,
+        /// `[WRITE]` The ProgramData account's associated Program account.
+        program = 1,
+        /// `[]` System program (`solana_sdk::system_program::id()`),
+        /// optional used to transfer lamports from the payer to the ProgramData account.
+        system_program = 2,
+        /// `[WRITE, SIGNER]` The payer account, optional, that will pay necessary rent exemption
+        /// costs for the increased storage size.
+        payer = 3,
+    };
+};
+
 /// [agave] https://github.com/anza-xyz/agave/blob/master/sdk/program/src/loader_upgradeable_instruction.rs#L7
 pub const Instruction = union(enum) {
     /// Initialize a Buffer account.
@@ -15,19 +136,14 @@ pub const Instruction = union(enum) {
     ///   0. `[writable]` source account to initialize.
     ///   1. `[]` Buffer authority, optional, if omitted then the buffer will be
     ///      immutable.
-    initialize_buffer,
+    initialize_buffer: InitializeBuffer,
 
     /// Write program data into a Buffer account.
     ///
     /// # Account references
     ///   0. `[writable]` Buffer account to write program data to.
     ///   1. `[signer]` Buffer authority
-    write: struct {
-        /// Offset at which to write the given bytes.
-        offset: u32,
-        /// Serialized program data
-        bytes: []const u8,
-    },
+    write: Write,
 
     /// Deploy an executable program.
     ///
@@ -70,10 +186,7 @@ pub const Instruction = union(enum) {
     ///   5. `[]` Clock sysvar.
     ///   6. `[]` System program (`solana_sdk::system_program::id()`).
     ///   7. `[signer]` The program's authority
-    deploy_with_max_data_len: struct {
-        /// Maximum length that the program can be upgraded to.
-        max_data_len: usize,
-    },
+    deploy_with_max_data_len: DeployWithMaxDataLen,
 
     /// Upgrade a program.
     ///
@@ -95,7 +208,7 @@ pub const Instruction = union(enum) {
     ///   4. `[]` Rent sysvar.
     ///   5. `[]` Clock sysvar.
     ///   6. `[signer]` The program's authority.
-    upgrade,
+    upgrade: Upgrade,
 
     /// Set a new authority that is allowed to write the buffer or upgrade the
     /// program.  To permanently make the buffer immutable or disable program
@@ -107,7 +220,7 @@ pub const Instruction = union(enum) {
     ///   1. `[signer]` The current authority.
     ///   2. `[]` The new authority, optional, if omitted then the program will
     ///      not be upgradeable.
-    set_authority,
+    set_authority: SetAuthority,
 
     /// Closes an account owned by the upgradeable loader of all lamports and
     /// withdraws all the lamports
@@ -120,7 +233,7 @@ pub const Instruction = union(enum) {
     ///      initialized accounts.
     ///   3. `[writable]` The associated Program account if the account to close
     ///      is a ProgramData account.
-    close,
+    close: Close,
 
     /// Extend a program's ProgramData account by the specified number of bytes.
     /// Only upgradeable program's can be extended.
@@ -137,10 +250,7 @@ pub const Instruction = union(enum) {
     ///      lamports from the payer to the ProgramData account.
     ///   3. `[writable, signer]` The payer account, optional, that will pay
     ///       necessary rent exemption costs for the increased storage size.
-    extend_program: struct {
-        /// Number of bytes to extend the program data.
-        additional_bytes: u32,
-    },
+    extend_program: ExtendProgram,
 
     /// Set a new authority that is allowed to write the buffer or upgrade the
     /// program.
@@ -153,5 +263,5 @@ pub const Instruction = union(enum) {
     ///      authority of.
     ///   1. `[signer]` The current authority.
     ///   2. `[signer]` The new authority.
-    set_authority_checked,
+    set_authority_checked: SetAuthorityChecked,
 };

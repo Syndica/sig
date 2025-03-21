@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -66,5 +67,10 @@ pub const InstructionContext = struct {
             return InstructionError.InvalidArgument;
 
         return self.tc.sysvar_cache.get(T) orelse InstructionError.UnsupportedSysvar;
+    }
+
+    pub fn getAccountKeyByIndex(self: *const InstructionContext, index: u16) Pubkey {
+        const account_meta = self.info.getAccountMetaAtIndex(index) orelse unreachable;
+        return account_meta.pubkey;
     }
 };
