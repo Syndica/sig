@@ -11,6 +11,7 @@ const GossipTableShards = sig.gossip.shards.GossipTableShards;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipData = sig.gossip.data.GossipData;
 const GossipMap = sig.gossip.map.GossipMap;
+const GossipMetadata = sig.gossip.data.GossipMetadata;
 const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
@@ -147,11 +148,15 @@ pub const GossipTable = struct {
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
-        const versioned_value = GossipVersionedData{
-            .value = value,
+        const metadata = GossipMetadata{
+            .signature = value.signature,
             .value_hash = value_hash,
             .timestamp_on_insertion = now,
             .cursor_on_insertion = self.cursor,
+        };
+        const versioned_value = GossipVersionedData{
+            .data = value.data,
+            .metadata = metadata,
         };
 
         const label = value.label();
@@ -190,7 +195,7 @@ pub const GossipTable = struct {
                 else => {},
             }
 
-            try self.shards.insert(entry_index, &versioned_value.value_hash);
+            try self.shards.insert(entry_index, &metadata.value_hash);
 
             try self.entries.put(self.cursor, entry_index);
 
@@ -253,7 +258,7 @@ pub const GossipTable = struct {
             // remove and insert to make sure the shard ordering is oldest-to-newest
             // NOTE: do we need the ordering to be oldest-to-newest?
             self.shards.remove(entry_index, &old_entry.value_hash);
-            try self.shards.insert(entry_index, &versioned_value.value_hash);
+            try self.shards.insert(entry_index, &metadata.value_hash);
 
             const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
             std.debug.assert(did_remove);
@@ -276,7 +281,7 @@ pub const GossipTable = struct {
         } else {
             const old_entry = result.entry.metadata_ptr.*;
 
-            if (old_entry.value_hash.order(&versioned_value.value_hash) != .eq) {
+            if (old_entry.value_hash.order(&metadata.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(old_entry.value_hash, now);
                 return .IgnoredOldValue;
@@ -359,9 +364,19 @@ pub const GossipTable = struct {
         }
     }
 
-    // ** getter functions **
+    /// Get the entire combination of GossipData and GossipMetadata.
+    /// Try not to use this unless absolutely necessary.
+    /// Use getData or getMetadata instead if possible,
     pub fn get(self: *const Self, label: GossipKey) ?GossipVersionedData {
         return self.store.get(label);
+    }
+
+    pub fn getData(self: *const Self, label: GossipKey) ?GossipData {
+        return self.store.getData(label);
+    }
+
+    pub fn getMetadata(self: *const Self, label: GossipKey) ?GossipMetadata {
+        return self.store.getMetadata(label);
     }
 
     /// Since a node may be represented with ContactInfo or LegacyContactInfo,
@@ -370,7 +385,7 @@ pub const GossipTable = struct {
     pub fn getThreadSafeContactInfo(self: *const Self, pubkey: Pubkey) ?ThreadSafeContactInfo {
         const label = GossipKey{ .ContactInfo = pubkey };
         if (self.store.get(label)) |v| {
-            return ThreadSafeContactInfo.fromContactInfo(v.value.data.ContactInfo);
+            return ThreadSafeContactInfo.fromContactInfo(v.data.ContactInfo);
         } else {
             const contact_info = self.converted_contact_infos.get(pubkey) orelse return null;
             return ThreadSafeContactInfo.fromContactInfo(contact_info);
@@ -812,8 +827,8 @@ pub const GossipTable = struct {
             inline for (labels) |label| {
                 if (self.get(label)) |*contact_info| {
                     const value_timestamp = @min(
-                        contact_info.value.wallclock(),
-                        contact_info.timestamp_on_insertion,
+                        contact_info.data.wallclock(),
+                        contact_info.metadata.timestamp_on_insertion,
                     );
                     if (value_timestamp > cutoff_timestamp) {
                         continue :next_key;
@@ -828,11 +843,11 @@ pub const GossipTable = struct {
             for (entry_indexs.iterator().keys[0..count]) |entry_index| {
                 const versioned_value = self.store.getByIndex(entry_index);
                 const value_timestamp = @min(
-                    versioned_value.value.wallclock(),
-                    versioned_value.timestamp_on_insertion,
+                    versioned_value.data.wallclock(),
+                    versioned_value.metadata.timestamp_on_insertion,
                 );
                 if (value_timestamp <= cutoff_timestamp) {
-                    old_labels.append(versioned_value.value.label()) catch unreachable;
+                    old_labels.append(versioned_value.data.label()) catch unreachable;
                 }
             }
         }

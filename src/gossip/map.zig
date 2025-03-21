@@ -11,6 +11,7 @@ const SplitUnionList = sig.utils.collections.SplitUnionList;
 const GossipData = gossip.data.GossipData;
 const GossipDataTag = gossip.data.GossipDataTag;
 const GossipKey = gossip.data.GossipKey;
+const GossipMetadata = gossip.data.GossipMetadata;
 const GossipVersionedData = gossip.data.GossipVersionedData;
 
 const assert = std.debug.assert;
@@ -38,12 +39,7 @@ pub const GossipMap = struct {
     gossip_data: SplitUnionList(GossipData) = SplitUnionList(GossipData).init(),
     metadata: std.ArrayListUnmanaged(Metadata) = .{},
 
-    pub const Metadata = struct {
-        signature: Signature,
-        value_hash: Hash,
-        timestamp_on_insertion: u64,
-        cursor_on_insertion: u64,
-    };
+    pub const Metadata = GossipMetadata; // TODO eliminate redundant alias
 
     pub fn deinit(self: *GossipMap, allocator: Allocator) void {
         self.key_to_index.deinit(allocator);
@@ -60,17 +56,24 @@ pub const GossipMap = struct {
         return self.getByIndex(index);
     }
 
+    /// Get only a GossipData without the GossipMetadata
+    pub fn getData(self: *const GossipMap, key: GossipKey) ?GossipData {
+        const index = self.key_to_index.get(key) orelse return null;
+        return self.gossip_data.get(index);
+    }
+
+    /// Get only a GossipMetaData without the GossipData
+    pub fn getMetadata(self: *const GossipMap, key: GossipKey) ?GossipMetadata {
+        const index = self.key_to_index.getIndex(key) orelse return null;
+        return self.metadata.items[index];
+    }
+
     pub fn getByIndex(self: *const GossipMap, index: usize) GossipVersionedData {
         const metadata = self.metadata.items[index];
         const tagged_index = self.key_to_index.values()[index];
         return .{
-            .value = .{
-                .signature = metadata.signature,
-                .data = self.gossip_data.get(tagged_index),
-            },
-            .value_hash = metadata.value_hash,
-            .timestamp_on_insertion = metadata.timestamp_on_insertion,
-            .cursor_on_insertion = metadata.cursor_on_insertion,
+            .metadata = metadata,
+            .data = self.gossip_data.get(tagged_index),
         };
     }
 
@@ -207,24 +210,14 @@ pub const Entry = struct {
 
     pub fn getVersionedData(self: Entry) GossipVersionedData {
         return .{
-            .value = .{
-                .signature = self.metadata_ptr.signature,
-                .data = self.getGossipData(),
-            },
-            .value_hash = self.metadata_ptr.value_hash,
-            .timestamp_on_insertion = self.metadata_ptr.timestamp_on_insertion,
-            .cursor_on_insertion = self.metadata_ptr.cursor_on_insertion,
+            .data = self.getGossipData(),
+            .metadata = self.metadata_ptr.*,
         };
     }
 
     pub fn setVersionedData(self: Entry, versioned: GossipVersionedData) void {
-        self.metadata_ptr.* = .{
-            .signature = versioned.value.signature,
-            .value_hash = versioned.value_hash,
-            .timestamp_on_insertion = versioned.timestamp_on_insertion,
-            .cursor_on_insertion = versioned.cursor_on_insertion,
-        };
-        self.setGossipData(versioned.value.data);
+        self.metadata_ptr.* = versioned.metadata;
+        self.setGossipData(versioned.data);
     }
 
     pub fn getGossipData(self: Entry) GossipData {
@@ -256,10 +249,13 @@ test "put and get" {
     );
     const key = value.data.label();
     const data = GossipVersionedData{
-        .value = value,
-        .value_hash = undefined,
-        .timestamp_on_insertion = 12345,
-        .cursor_on_insertion = 101,
+        .data = value.data,
+        .metadata = .{
+            .signature = value.signature,
+            .value_hash = undefined,
+            .timestamp_on_insertion = 12345,
+            .cursor_on_insertion = 101,
+        },
     };
 
     const gop = try map.getOrPut(std.testing.allocator, key);
@@ -288,10 +284,13 @@ test "put, remove, and get" {
         );
         const key = value.data.label();
         const versioned = GossipVersionedData{
-            .value = value,
-            .value_hash = undefined,
-            .timestamp_on_insertion = 12345,
-            .cursor_on_insertion = 101,
+            .data = value.data,
+            .metadata = .{
+                .signature = value.signature,
+                .value_hash = undefined,
+                .timestamp_on_insertion = 12345,
+                .cursor_on_insertion = 101,
+            },
         };
 
         keys[i] = key;
@@ -341,10 +340,13 @@ test "repeat add+remove" {
 
             const key = value.data.label();
             const versioned = GossipVersionedData{
-                .value = value,
-                .value_hash = undefined,
-                .timestamp_on_insertion = 12345,
-                .cursor_on_insertion = 101,
+                .data = value.data,
+                .metadata = .{
+                    .signature = value.signature,
+                    .value_hash = undefined,
+                    .timestamp_on_insertion = 12345,
+                    .cursor_on_insertion = 101,
+                },
             };
 
             try keys.append(key);

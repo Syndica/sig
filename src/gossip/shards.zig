@@ -129,7 +129,7 @@ fn newTestGossipVersionedData(random: std.rand.Random, gossip_table: *GossipTabl
 }
 
 fn checkMask(value: *const GossipVersionedData, mask: u64, mask_bits: u32) bool {
-    const uhash = hashToU64(&value.value_hash);
+    const uhash = hashToU64(&value.metadata.value_hash);
     const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
     return (uhash | ones) == (mask | ones);
 }

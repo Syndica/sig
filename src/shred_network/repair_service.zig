@@ -546,8 +546,8 @@ pub const RepairPeerProvider = struct {
             {
                 potential_peers += 1;
                 // exclude nodes that are known to be missing this slot
-                if (gossip_table.get(.{ .LowestSlot = info.pubkey })) |lsv| {
-                    if (lsv.value.data.LowestSlot[1].lowest > slot) {
+                if (gossip_table.getData(.{ .LowestSlot = info.pubkey })) |data| {
+                    if (data.LowestSlot[1].lowest > slot) {
                         continue;
                     }
                 }

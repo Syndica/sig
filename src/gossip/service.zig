@@ -1096,7 +1096,7 @@ pub const GossipService = struct {
             if (active_set.len() == 0) return packet_batch;
 
             for (gossip_entries) |entry| {
-                const value = entry.value;
+                const value = entry.signedData();
 
                 const entry_time = value.wallclock();
                 const too_old = entry_time < now -| PUSH_MSG_TIMEOUT.asMillis();
@@ -2658,8 +2658,8 @@ test "handle pull request" {
                 _ = try gossip_table.insert(value, getWallclockMs());
 
                 // make sure well get a response from the request
-                const vers_value = gossip_table.get(value.label()).?;
-                const hash_bits = pull_request.hashToU64(&vers_value.value_hash) >> (64 - N_FILTER_BITS);
+                const metadata = gossip_table.getMetadata(value.label()).?;
+                const hash_bits = pull_request.hashToU64(&metadata.value_hash) >> (64 - N_FILTER_BITS);
                 if (hash_bits == 1) {
                     done = true;
                 }

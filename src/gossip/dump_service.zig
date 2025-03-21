@@ -57,12 +57,12 @@ pub const GossipDumpService = struct {
             var iterator = gossip_table.store.iterator();
             while (iterator.next()) |entry| {
                 const gossip_versioned_data = entry.getVersionedData();
-                const val: SignedGossipData = gossip_versioned_data.value;
+                const val: SignedGossipData = gossip_versioned_data.signedData();
 
                 var encoded_buf: [52]u8 = undefined;
                 const encoded_len = endec.encode(
                     &encoded_buf,
-                    &gossip_versioned_data.value_hash.data,
+                    &gossip_versioned_data.metadata.value_hash.data,
                 );
                 const encoded = encoded_buf[0..encoded_len];
 

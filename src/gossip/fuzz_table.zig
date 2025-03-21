@@ -185,12 +185,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     logger.err().logf("pubkey failed: {} with key: {}", .{ pubkey, search_key });
                 }
 
-                const versioned_data = gossip_table.get(search_key) orelse {
+                const metadata = gossip_table.getMetadata(search_key) orelse {
                     logger.err().logf("failed to get pubkey: {}", .{search_key});
                     return error.PubkeyNotFound;
                 };
 
-                if (!versioned_data.value.signature.eql(&signatures.get(pubkey).?)) {
+                if (!metadata.signature.eql(&signatures.get(pubkey).?)) {
                     logger.err().logf("signature mismatch: {}", .{pubkey});
                     return error.SignatureMismatch;
                 }

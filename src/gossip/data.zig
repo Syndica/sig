@@ -36,30 +36,26 @@ pub const MAX_DUPLICATE_SHREDS: u16 = 512;
 
 /// Analogous to [VersionedCrdsValue](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L122)
 pub const GossipVersionedData = struct {
-    value: SignedGossipData,
-    value_hash: Hash,
-    timestamp_on_insertion: u64,
-    cursor_on_insertion: u64,
+    metadata: GossipMetadata,
+    data: GossipData,
 
     pub fn clone(self: *const GossipVersionedData, allocator: std.mem.Allocator) error{OutOfMemory}!GossipVersionedData {
         return .{
-            .value = try self.value.clone(allocator),
-            .value_hash = self.value_hash,
-            .timestamp_on_insertion = self.timestamp_on_insertion,
-            .cursor_on_insertion = self.cursor_on_insertion,
+            .data = try self.data.clone(allocator),
+            .metadata = self.metadata,
         };
     }
 
     pub fn deinit(self: *const GossipVersionedData, allocator: std.mem.Allocator) void {
-        self.value.deinit(allocator);
+        self.data.deinit(allocator);
     }
 
     pub fn overwrites(new_value: *const @This(), old_value: *const @This()) bool {
         // labels must match
-        std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));
+        std.debug.assert(@intFromEnum(new_value.data.label()) == @intFromEnum(old_value.data.label()));
 
-        const new_ts = new_value.value.wallclock();
-        const old_ts = old_value.value.wallclock();
+        const new_ts = new_value.data.wallclock();
+        const old_ts = old_value.data.wallclock();
 
         // TODO: improve the return type here
         if (new_ts > old_ts) {
@@ -67,9 +63,24 @@ pub const GossipVersionedData = struct {
         } else if (new_ts < old_ts) {
             return false;
         } else {
-            return old_value.value_hash.order(&new_value.value_hash) == .lt;
+            return old_value.metadata.value_hash.order(&new_value.metadata.value_hash) == .lt;
         }
     }
+
+    pub fn signedData(self: GossipVersionedData) SignedGossipData {
+        return .{
+            .signature = self.metadata.signature,
+            .data = self.data,
+        };
+    }
+};
+
+/// The metadata about a GossipData instance in the Gossip Table
+pub const GossipMetadata = struct {
+    value_hash: Hash,
+    timestamp_on_insertion: u64,
+    cursor_on_insertion: u64,
+    signature: Signature,
 };
 
 /// Analogous to [CrdsValue](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L45)

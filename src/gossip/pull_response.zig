@@ -49,20 +49,20 @@ pub fn filterSignedGossipDatas(
         var entry = gossip_table.store.getByIndex(entry_index);
 
         // entry is too new
-        if (entry.value.wallclock() > caller_wallclock_with_jitter) {
+        if (entry.data.wallclock() > caller_wallclock_with_jitter) {
             continue;
         }
         // entry is already contained in the bloom
-        if (bloom.contains(&entry.value_hash.data)) {
+        if (bloom.contains(&entry.metadata.value_hash.data)) {
             continue;
         }
         // exclude contact info (? not sure why - labs does it)
-        if (entry.value.data == .ContactInfo) {
+        if (entry.data == .ContactInfo) {
             continue;
         }
 
         // good
-        try output.append(entry.value);
+        try output.append(entry.signedData());
         if (output.items.len == max_number_values) {
             break;
         }
