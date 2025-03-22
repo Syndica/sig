@@ -5,7 +5,7 @@ comptime {
     @setEvalBranchQuota(10_000);
     refAllDeclsRecursive(sig, 2);
     refAllDeclsRecursive(sig.ledger, 2);
-    refAllDeclsRecursive(sig.runtime.program, 2);
+    refAllDeclsRecursive(sig.runtime.program, 3);
 }
 
 /// Like std.testing.refAllDeclsRecursive, except:

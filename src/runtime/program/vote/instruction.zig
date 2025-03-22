@@ -1,6 +1,7 @@
 const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
+const vote_program = sig.runtime.program.vote_program;
 
 pub const IntializeAccount = struct {
     node_pubkey: Pubkey,
@@ -25,6 +26,71 @@ pub const IntializeAccount = struct {
     };
 };
 
+pub const Authorize = struct {
+    /// Public Key to be made the new authority for the vote account.
+    new_authority: Pubkey,
+    /// Type of autorization to grant.
+    vote_authorize: vote_program.state.VoteAuthorize,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to be updated with the Pubkey for authorization
+        account = 0,
+        /// `[]` Clock sysvar
+        clock_sysvar = 1,
+        /// `[SIGNER]` Vote or withdraw authority
+        current_authority = 2,
+    };
+};
+
+pub const VoteAuthorizeWithSeedArgs = struct {
+    authorization_type: vote_program.state.VoteAuthorize,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+    new_authority: Pubkey,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to be updated
+        account = 0,
+        /// `[]` Clock sysvar
+        clock_sysvar = 1,
+        /// `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
+        current_base_authority = 2,
+    };
+};
+
+pub const VoteAuthorizeCheckedWithSeedArgs = struct {
+    authorization_type: vote_program.state.VoteAuthorize,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated
+        account = 0,
+        /// `[]` Clock sysvar
+        clock_sysvar = 1,
+        ///  `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
+        current_base_authority = 2,
+        /// `[SIGNER]` New vote or withdraw authority
+        new_authority = 3,
+    };
+};
+
+pub const VoteAuthorize = enum {
+    withdrawer,
+    voter,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated with the Pubkey for authorization
+        account = 0,
+        /// `[]` Clock sysvar
+        clock_sysvar = 1,
+        ///  `[SIGNER]` Vote or withdraw authority
+        current_authority = 2,
+        /// `[SIGNER]` New vote or withdraw authority
+        new_authority = 3,
+    };
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum) {
     /// Initialize a vote account
@@ -35,4 +101,48 @@ pub const Instruction = union(enum) {
     ///   2. `[]` Clock sysvar
     ///   3. `[SIGNER]` New validator identity (node_pubkey)
     initialize_account: IntializeAccount,
+
+    /// Authorize a key to send votes or issue a withdrawal
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated with the Pubkey for authorization
+    ///   1. `[]` Clock sysvar
+    ///   2. `[SIGNER]` Current vote or withdraw authority
+    authorize: Authorize,
+
+    /// Given that the current Voter or Withdrawer authority is a derived key,
+    /// this instruction allows someone who can sign for that derived key's
+    /// base key to authorize a new Voter or Withdrawer for a vote account.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to be updated
+    ///   1. `[]` Clock sysvar
+    ///   2. `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
+    authorize_with_seed: VoteAuthorizeWithSeedArgs,
+
+    /// Given that the current Voter or Withdrawer authority is a derived key,
+    /// this instruction allows someone who can sign for that derived key's
+    /// base key to authorize a new Voter or Withdrawer for a vote account.
+    ///
+    /// This instruction behaves like `AuthorizeWithSeed` with the additional requirement
+    /// that the new vote or withdraw authority must also be a signer.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to be updated
+    ///   1. `[]` Clock sysvar
+    ///   2. `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
+    ///   3. `[SIGNER]` New vote or withdraw authority
+    authorize_checked_with_seed: VoteAuthorizeCheckedWithSeedArgs,
+
+    /// Authorize a key to send votes or issue a withdrawal
+    ///
+    /// This instruction behaves like `Authorize` with the additional requirement that the new vote
+    /// or withdraw authority must also be a signer.
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated with the Pubkey for authorization
+    ///   1. `[]` Clock sysvar
+    ///   2. `[SIGNER]` Vote or withdraw authority
+    ///   3. `[SIGNER]` New vote or withdraw authority
+    authorize_checked: VoteAuthorize,
 };
