@@ -11,7 +11,10 @@ const sbpf = sig.vm.sbpf;
 const syscalls = sig.vm.syscalls;
 const Config = sig.vm.Config;
 const MemoryMap = memory.MemoryMap;
-const tests = sig.vm.tests;
+const TransactionContext = sig.runtime.TransactionContext;
+const FeatureSet = sig.runtime.FeatureSet;
+const Hash = sig.core.Hash;
+const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub fn main() !void {
     var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
@@ -91,7 +94,21 @@ pub fn main() !void {
         memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
-    var context = tests.TEST_TRANSACTION_CONTEXT;
+    var context: TransactionContext = .{
+        .accounts = &.{},
+        .instruction_stack = .{},
+        .instruction_trace = .{},
+        .accounts_resize_delta = 0,
+        .return_data = .{},
+        .custom_error = null,
+        .log_collector = null,
+        .sysvar_cache = .{},
+        .compute_meter = std.math.maxInt(u64),
+        .feature_set = FeatureSet.EMPTY,
+        .lamports_per_signature = 0,
+        .last_blockhash = Hash.ZEROES,
+        .compute_budget = ComputeBudget.default(1_400_000),
+    };
     var vm = try Vm.init(
         gpa,
         &executable,

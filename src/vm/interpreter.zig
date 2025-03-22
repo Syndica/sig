@@ -709,7 +709,7 @@ pub const SbpfError = error{
 /// Contains either an error encountered while executing the program, or the
 /// result, which is the value of the `r0` register at the time of exit.
 ///
-/// https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/error.rs#L170-L171
+/// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/error.rs#L170-L171
 pub const Result = union(enum) {
     err: SbpfError,
     ok: u64,
