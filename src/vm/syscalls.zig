@@ -39,12 +39,12 @@ pub const Entry = struct {
 };
 
 // logging
-/// https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
+/// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
 pub fn log(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
     const vm_addr = registers.get(.r1);
     const len = registers.get(.r2);
 
-    // https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L15-L19
+    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L15-L19
     const cost = @max(ctx.getComputeBudget().syscall_base_cost, len);
     try ctx.consumeCompute(cost);
 
@@ -53,9 +53,9 @@ pub fn log(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) E
     try ctx.log("{s}", .{string});
 }
 
-/// https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
+/// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
 pub fn log64(ctx: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Error!void {
-    // https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L47-L48
+    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L47-L48
     const cost = ctx.getComputeBudget().log_64_units;
     try ctx.consumeCompute(cost);
 
@@ -71,9 +71,9 @@ pub fn log64(ctx: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Er
     );
 }
 
-/// https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
+/// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
 pub fn logPubkey(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    // https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L94-L95
+    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L94-L95
     const cost = ctx.getComputeBudget().log_pubkey_units;
     try ctx.consumeCompute(cost);
 
@@ -83,9 +83,9 @@ pub fn logPubkey(ctx: *TransactionContext, mmap: *MemoryMap, registers: Register
     try ctx.log("log: {}", .{pubkey});
 }
 
-/// https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
+/// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
 pub fn logComputeUnits(ctx: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
-    // https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L70-L71
+    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L70-L71
     const cost = ctx.getComputeBudget().syscall_base_cost;
     try ctx.consumeCompute(cost);
 
@@ -94,26 +94,26 @@ pub fn logComputeUnits(ctx: *TransactionContext, _: *MemoryMap, _: RegisterMap) 
 
 // memory operators
 
-/// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L130-L162
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L130-L162
 pub fn memset(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
     const dst_addr = registers.get(.r1);
     const scalar = registers.get(.r2);
     const len = registers.get(.r3);
 
-    // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L142
+    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L142
     try consumeMemoryCompute(ctx, len);
 
     const host_addr = try mmap.vmap(.mutable, dst_addr, len);
     @memset(host_addr, @truncate(scalar));
 }
 
-/// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L31-L52
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L31-L52
 pub fn memcpy(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
     const dst_addr = registers.get(.r1);
     const src_addr = registers.get(.r2);
     const len = registers.get(.r3);
 
-    // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L43
+    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L43
     try consumeMemoryCompute(ctx, len);
 
     const dst_host = try mmap.vmap(.mutable, dst_addr, len);
@@ -121,14 +121,14 @@ pub fn memcpy(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
     @memcpy(dst_host, src_host);
 }
 
-/// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L72-L128
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L72-L128
 pub fn memcmp(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
     const a_addr = registers.get(.r1);
     const b_addr = registers.get(.r2);
     const n = registers.get(.r3);
     const cmp_result_addr = registers.get(.r4);
 
-    // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L84
+    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L84
     try consumeMemoryCompute(ctx, n);
 
     const a = try mmap.vmap(.constant, a_addr, n);
@@ -144,7 +144,7 @@ pub fn memcmp(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
     cmp_result.* = @intFromEnum(result);
 }
 
-/// https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L8-L15
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L8-L15
 fn consumeMemoryCompute(ctx: *TransactionContext, length: u64) !void {
     const budget = ctx.getComputeBudget();
     const cost = @max(budget.mem_op_base_cost, length / budget.cpi_bytes_per_unit);

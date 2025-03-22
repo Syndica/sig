@@ -14,25 +14,9 @@ const Config = lib.Config;
 const Region = memory.Region;
 const MemoryMap = memory.MemoryMap;
 const OpCode = sbpf.Instruction.OpCode;
-const TransactionContext = sig.runtime.TransactionContext;
-const FeatureSet = sig.runtime.FeatureSet;
-const Hash = sig.core.Hash;
-const expectEqual = std.testing.expectEqual;
 
-pub const TEST_TRANSACTION_CONTEXT: TransactionContext = .{
-    .accounts = &.{},
-    .instruction_stack = .{},
-    .instruction_trace = .{},
-    .accounts_resize_delta = 0,
-    .return_data = .{},
-    .custom_error = null,
-    .log_collector = null,
-    .sysvar_cache = .{},
-    .compute_meter = std.math.maxInt(u64),
-    .feature_set = FeatureSet.EMPTY,
-    .lamports_per_signature = 0,
-    .last_blockhash = Hash.ZEROES,
-};
+const expectEqual = std.testing.expectEqual;
+const createTransactionContext = sig.runtime.testing.createTransactionContext;
 
 // Execution tests
 
@@ -76,8 +60,12 @@ fn testAsmWithMemory(
         Region.init(.mutable, mutable, memory.INPUT_START),
     }, config.maximum_version);
 
-    var context = TEST_TRANSACTION_CONTEXT;
-    context.compute_meter = expected[1];
+    var prng = std.Random.DefaultPrng.init(10);
+    var context = try createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{}, .compute_meter = expected[1] },
+    );
     var vm = try Vm.init(
         allocator,
         &executable,
@@ -1900,7 +1888,12 @@ test "pqr" {
     program[33] = 16; // src = r1
     program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
-    var context: TransactionContext = TEST_TRANSACTION_CONTEXT;
+    var prng = std.Random.DefaultPrng.init(10);
+    var context = try createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{}, .compute_meter = 6 },
+    );
     const max_int = std.math.maxInt(u64);
     inline for (
         // zig fmt: off
@@ -2039,8 +2032,12 @@ test "pqr divide by zero" {
         defer executable.deinit(allocator);
 
         const map = try MemoryMap.init(&.{}, .v3);
-        var context = TEST_TRANSACTION_CONTEXT;
-        context.compute_meter = 2;
+        var prng = std.Random.DefaultPrng.init(10);
+        var context = try createTransactionContext(
+            allocator,
+            prng.random(),
+            .{ .accounts = &.{}, .compute_meter = 2 },
+        );
         var vm = try Vm.init(
             allocator,
             &executable,
@@ -2294,8 +2291,12 @@ pub fn testElfWithSyscalls(
         Region.init(.mutable, &.{}, memory.INPUT_START),
     }, .v0);
 
-    var context = TEST_TRANSACTION_CONTEXT;
-    context.compute_meter = expected[1];
+    var prng = std.Random.DefaultPrng.init(10);
+    var context = try createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{}, .compute_meter = expected[1] },
+    );
     var vm = try Vm.init(
         allocator,
         &executable,
