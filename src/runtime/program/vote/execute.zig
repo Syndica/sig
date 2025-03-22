@@ -571,6 +571,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .authorize = .{
@@ -682,6 +683,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .authorize = .{
@@ -793,6 +795,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .authorize_with_seed = .{
@@ -905,6 +908,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .authorize_checked_with_seed = .{
@@ -1010,6 +1014,7 @@ test "vote_program: authorizeChecked withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .authorize_checked = vote_program.vote_instruction.VoteAuthorize.withdrawer,
