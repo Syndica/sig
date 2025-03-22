@@ -17,8 +17,8 @@ const sol_poseidon: *const fn (
     result: [*]u8,
 ) void = @ptrFromInt(0xc4947c21);
 
-// hashed as `panic`
-const panic: *const fn ([*]const u8, u64, u64, u64) void = @ptrFromInt(0xb17b0490);
+// hashed as `sol_panic_`
+const panic: *const fn ([*]const u8, u64, u64, u64) void = @ptrFromInt(0x686093bb);
 
 const POSEIDON_PARAMETERS_BN254_X5 = 0;
 const POSEIDON_ENDIANNESS_BIG_ENDIAN = 0;
