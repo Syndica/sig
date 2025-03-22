@@ -733,6 +733,40 @@ pub const Instruction = packed struct(u64) {
     }
 };
 
+/// [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed8df53595afb8770531cf4ca938e449cf7/src/vm.rs#L52
+/// VM configuration settings
+pub const Config = struct {
+    /// Maximum call depth
+    max_call_depth: usize,
+    /// Size of a stack frame in bytes, must match the size specified in the LLVM BPF backend
+    stack_frame_size: usize,
+    /// Enables the use of MemoryMapping and MemoryRegion for address translation
+    enable_address_translation: bool,
+    /// Enables gaps in VM address space between the stack frames
+    enable_stack_frame_gaps: bool,
+    /// Maximal pc distance after which a new instruction meter validation is emitted by the JIT
+    instruction_meter_checkpoint_distance: usize,
+    /// Enable instruction meter and limiting
+    enable_instruction_meter: bool,
+    /// Enable instruction tracing
+    enable_instruction_tracing: bool,
+    /// Enable dynamic string allocation for labels
+    enable_symbol_and_section_labels: bool,
+    /// Reject ELF files containing issues that the verifier did not catch before (up to v0.2.21)
+    reject_broken_elfs: bool,
+    /// Ratio of native host instructions per random no-op in JIT (0 = OFF)
+    noop_instruction_rate: u32,
+    /// Enable disinfection of immediate values and offsets provided by the user in JIT
+    sanitize_user_provided_values: bool,
+    /// Avoid copying read only sections when possible
+    optimize_rodata: bool,
+    /// Use aligned memory mapping
+    aligned_memory_mapping: bool,
+    /// Allowed [SBPFVersion]s
+    min_enabled_sbpf_version: Version,
+    max_enabled_sbpf_version: Version,
+};
+
 pub fn hashSymbolName(name: []const u8) u32 {
     return std.hash.Murmur3_32.hashWithSeed(name, 0);
 }
