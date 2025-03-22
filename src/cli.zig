@@ -621,13 +621,15 @@ test "TestCmd" {
 
     try expectHelp(&.{ "gossip", "--help" },
         \\USAGE:
-        \\  sig-test gossip [OPTIONS]
+        \\  sig-test gossip [file] [OPTIONS]
         \\
         \\Run gossip
         \\
         \\Sub-Test CLI
         \\
         \\OPTIONS:
+        \\  [file]                               Input file
+        \\
         \\  -p, --gossip-port  (default: 8020)   The port to run gossip listener
         \\  -e, --entrypoint                     Gossip address of the entrypoint validators
         \\  -f, --fizz         (default: 32)     fizzy
@@ -1142,6 +1144,34 @@ fn CmdHelper(
                 try writer.writeAll(subcmd_str);
                 try writer.writeByte(' ');
             }
+
+            @setEvalBranchQuota(positional_set.len * 8 + 1);
+            inline for (positional_set) |s_field_idx| {
+                const s_field = cmd_fields[s_field_idx.index];
+                const maybe_opt_info = @field(cmd_info.sub, s_field.name);
+                const opt_name = blk: {
+                    const s_sub_field_idx = s_field_idx.sub orelse {
+                        const opt_info: OptionInfo(s_field.type) = maybe_opt_info;
+                        break :blk comptimeReplaceScalar(
+                            opt_info.name_override orelse s_field.name,
+                            '_',
+                            '-',
+                        );
+                    };
+                    const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                    const s_sub_field = s_sub_fields[s_sub_field_idx];
+                    const opt_info: OptionInfo(s_sub_field.type) =
+                        @field(maybe_opt_info, s_sub_field.name);
+                    break :blk comptimeReplaceScalar(
+                        opt_info.name_override orelse s_sub_field.name,
+                        '_',
+                        '-',
+                    );
+                };
+
+                try writer.writeAll("[" ++ opt_name ++ "] ");
+            }
+
             try writer.writeAll("[OPTIONS]");
 
             try tty_config.setColor(writer, .reset);
@@ -1194,53 +1224,94 @@ fn CmdHelper(
             try tty_config.setColor(writer, .yellow);
             try writer.writeAll("OPTIONS:");
 
-            const help_option_alias_name = "-h, --help";
-
             const name_alias_base_width: u64, //
             const default_value_base_width: ?u64 //
-            = min: {
-                var max_name_alias_width: u64 = help_option_alias_name.len;
-                var max_default_value_width: ?u64 = null;
+            = try writeOptionsHelp(.no_color, std.io.null_writer, 0, null);
 
-                @setEvalBranchQuota(opt_enum_to_field_map.len * 8 + 1);
-                inline for (opt_enum_to_field_map, 0..opt_enum_fields.len) |s_field_idx, e_int| {
-                    const opt_tag: OptEnum = @enumFromInt(e_int);
-                    const s_field = cmd_fields[s_field_idx.index];
-                    const maybe_opt_info = @field(cmd_info.sub, s_field.name);
-                    const opt_info = if (s_field_idx.sub) |s_sub_field_idx| blk: {
-                        const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
-                        const s_sub_field = s_sub_fields[s_sub_field_idx];
-                        break :blk @field(maybe_opt_info, s_sub_field.name);
-                    } else @as(OptionInfo(s_field.type), maybe_opt_info);
+            _ = try writeOptionsHelp(
+                tty_config,
+                writer,
+                name_alias_base_width,
+                default_value_base_width,
+            );
+        }
 
-                    var cw = std.io.countingWriter(std.io.null_writer);
-                    writeOptionNameWithDefault(
-                        opt_info.alias,
-                        @tagName(opt_tag),
-                        cw.writer(),
-                    ) catch |err| switch (err) {};
-                    max_name_alias_width = @max(
-                        max_name_alias_width,
+        fn writeOptionsHelp(
+            tty_config: std.io.tty.Config,
+            writer: anytype,
+            name_alias_base_width: u64,
+            default_value_base_width: ?u64,
+        ) !struct {
+            u64, // max_name_alias_width
+            ?u64, // max_default_value_width
+        } {
+            const help_option_alias_name = "-h, --help";
+
+            var max_name_alias_width: u64 = @max(help_option_alias_name.len, name_alias_base_width);
+            var max_default_value_width: ?u64 = null;
+
+            @setEvalBranchQuota(positional_set.len * 8 + 1);
+            inline for (positional_set, 0..) |s_field_idx, i| {
+                const s_field = cmd_fields[s_field_idx.index];
+                const maybe_opt_info = @field(cmd_info.sub, s_field.name);
+                const opt_info, const opt_name = blk: {
+                    const s_sub_field_idx = s_field_idx.sub orelse {
+                        const opt_info: OptionInfo(s_field.type) = maybe_opt_info;
+                        break :blk .{ opt_info, opt_info.name_override orelse s_field.name };
+                    };
+                    const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                    const s_sub_field = s_sub_fields[s_sub_field_idx];
+                    const opt_info: OptionInfo(s_sub_field.type) =
+                        @field(maybe_opt_info, s_sub_field.name);
+                    break :blk .{ opt_info, opt_info.name_override orelse s_sub_field.name };
+                };
+
+                const multiline_help = std.mem.indexOfScalar(u8, opt_info.help, '\n') != null;
+
+                try tty_config.setColor(writer, .green);
+                if (multiline_help) try writer.writeByte('\n');
+                try writer.writeByte('\n');
+                try writer.writeByteNTimes(' ', 2);
+
+                // write option alias & name
+                var cw = std.io.countingWriter(writer);
+                try writeOptionNameWithDefault(null, opt_name, cw.writer());
+                max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
+
+                // write padding
+                try tty_config.setColor(writer, .reset);
+                try writer.writeByteNTimes(
+                    ' ',
+                    @max(cw.bytes_written, name_alias_base_width) - cw.bytes_written + 2,
+                );
+
+                // maybe write default value
+                cw.bytes_written = 0;
+                if (try renderOptionDefaultValue(opt_info.default_value, cw.writer())) {
+                    max_default_value_width = @max(
+                        max_default_value_width orelse 0,
                         cw.bytes_written,
                     );
-
-                    cw.bytes_written = 0;
-                    if (renderOptionDefaultValue(
-                        opt_info.default_value,
-                        cw.writer(),
-                    ) catch |err| switch (err) {}) {
-                        max_default_value_width = @max(
-                            max_default_value_width orelse 0,
-                            cw.bytes_written,
-                        );
-                    }
                 }
-                break :min .{ max_name_alias_width, max_default_value_width };
-            };
+
+                // write padding
+                try writer.writeByteNTimes(' ', 1 + padding: {
+                    const base_width = default_value_base_width orelse break :padding 0;
+                    break :padding base_width - cw.bytes_written + 2;
+                });
+
+                // write help description and newline
+                const indent = 2 + name_alias_base_width + 2 +
+                    if (default_value_base_width) |base_width| (base_width + 3) else 1;
+                try writeIndentedText(writer, indent, opt_info.help);
+                if (multiline_help and i != positional_set.len - 1) try writer.writeByte('\n');
+            }
+
+            if (positional_set.len != 0) try writer.writeByte('\n');
 
             @setEvalBranchQuota(opt_enum_to_field_map.len * 8 + 1);
             inline for (opt_enum_to_field_map, 0..opt_enum_fields.len) |s_field_idx, e_int| {
-                const opt_kebab_tag: OptEnum = @enumFromInt(e_int);
+                const opt_tag: OptEnum = @enumFromInt(e_int);
                 const s_field = cmd_fields[s_field_idx.index];
                 const maybe_opt_info = @field(cmd_info.sub, s_field.name);
                 const opt_info = if (s_field_idx.sub) |s_sub_field_idx| blk: {
@@ -1261,20 +1332,26 @@ fn CmdHelper(
                 var cw = std.io.countingWriter(writer);
                 try writeOptionNameWithDefault(
                     opt_info.alias,
-                    @tagName(opt_kebab_tag),
+                    @tagName(opt_tag),
                     cw.writer(),
                 );
+                max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
 
                 // write padding
                 try tty_config.setColor(writer, .reset);
-                try writer.writeByteNTimes(' ', name_alias_base_width - cw.bytes_written + 2);
+                try writer.writeByteNTimes(
+                    ' ',
+                    @max(cw.bytes_written, name_alias_base_width) - cw.bytes_written + 2,
+                );
 
                 // maybe write default value
                 cw.bytes_written = 0;
-                _ = try renderOptionDefaultValue(
-                    opt_info.default_value,
-                    cw.writer(),
-                );
+                if (try renderOptionDefaultValue(opt_info.default_value, cw.writer())) {
+                    max_default_value_width = @max(
+                        max_default_value_width orelse 0,
+                        cw.bytes_written,
+                    );
+                }
 
                 // write padding
                 try writer.writeByteNTimes(' ', 1 + padding: {
@@ -1295,7 +1372,7 @@ fn CmdHelper(
 
             try writer.writeAll(help_option_alias_name);
             const padding1 =
-                name_alias_base_width -
+                @max(help_option_alias_name.len, name_alias_base_width) -
                 help_option_alias_name.len + 3 -
                 @intFromBool(default_value_base_width != null);
             const padding2 = if (default_value_base_width) |base_width| base_width + 3 else 0;
@@ -1304,6 +1381,11 @@ fn CmdHelper(
             try writer.writeByteNTimes(' ', padding1 + padding2);
 
             try writer.writeAll("Prints help information\n");
+
+            return .{
+                max_name_alias_width,
+                max_default_value_width,
+            };
         }
 
         inline fn optionTagFromAlias(alias: u8) ?OptEnum {
@@ -1637,17 +1719,23 @@ fn parseSingleOptValue(
 /// Writes `"-?, --{name}"`, or `"    --{name}"`.
 /// Replaces all '_' in `name` with '-'.
 fn writeOptionNameWithDefault(
-    opt_alias: OptionAlias,
+    /// Null for positionals
+    maybe_opt_alias: ?OptionAlias,
     opt_name: []const u8,
     /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
     writer: anytype,
 ) @TypeOf(writer).Error!void {
-    if (opt_alias != .none) {
-        try writer.print("-{c}, ", .{@intFromEnum(opt_alias)});
+    if (maybe_opt_alias) |opt_alias| {
+        if (opt_alias != .none) {
+            try writer.print("-{c}, ", .{@intFromEnum(opt_alias)});
+        } else {
+            try writer.writeByteNTimes(' ', 4);
+        }
+        try writer.writeByteNTimes('-', 2);
     } else {
-        try writer.writeByteNTimes(' ', 4);
+        try writer.writeByte('[');
     }
-    try writer.writeAll("--");
+
     var start_idx: usize = 0;
     while (std.mem.indexOfScalarPos(u8, opt_name, start_idx, '_')) |end_idx| {
         defer start_idx = end_idx + 1;
@@ -1655,6 +1743,9 @@ fn writeOptionNameWithDefault(
         try writer.writeByte('-');
     }
     try writer.writeAll(opt_name[start_idx..]);
+    if (maybe_opt_alias == null) {
+        try writer.writeByte(']');
+    }
 }
 
 /// Returns true only if the value was rendered.
