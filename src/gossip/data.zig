@@ -36,8 +36,8 @@ pub const MAX_DUPLICATE_SHREDS: u16 = 512;
 
 /// Analogous to [VersionedCrdsValue](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L122)
 pub const GossipVersionedData = struct {
-    metadata: GossipMetadata,
     data: GossipData,
+    metadata: GossipMetadata,
 
     pub fn clone(self: *const GossipVersionedData, allocator: std.mem.Allocator) error{OutOfMemory}!GossipVersionedData {
         return .{
@@ -75,12 +75,12 @@ pub const GossipVersionedData = struct {
     }
 };
 
-/// The metadata about a GossipData instance in the Gossip Table
+/// The metadata about a GossipData instance in the GossipTable
 pub const GossipMetadata = struct {
+    signature: Signature,
     value_hash: Hash,
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
-    signature: Signature,
 };
 
 /// Analogous to [CrdsValue](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L45)

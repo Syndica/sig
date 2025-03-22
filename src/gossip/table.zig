@@ -364,7 +364,7 @@ pub const GossipTable = struct {
         }
     }
 
-    /// Get the entire combination of GossipData and GossipMetadata.
+    /// Gets both a GossipData and its associated GossipMetadata.
     /// Try not to use this unless absolutely necessary.
     /// Use getData or getMetadata instead if possible,
     pub fn get(self: *const Self, label: GossipKey) ?GossipVersionedData {
