@@ -410,7 +410,7 @@ fn executeAuthorizeChecked(
     );
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L114-L118
+/// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L114-L118
 fn executeUpdateValidatorIdentity(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -431,7 +431,7 @@ fn executeUpdateValidatorIdentity(
     );
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_state/mod.rs#L722
+/// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_state/mod.rs#L722
 ///
 /// Update the node_pubkey, requires signature of the authorized voter
 fn updateValidatorIdentity(
