@@ -2,14 +2,14 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
+const executor = sig.runtime.executor;
+const system_program = sig.runtime.program.system_program;
 
 const Pubkey = sig.core.Pubkey;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 
-const executor = sig.runtime.executor;
-const system_program = sig.runtime.program.system_program;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;

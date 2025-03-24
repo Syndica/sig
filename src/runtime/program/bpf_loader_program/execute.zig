@@ -19,16 +19,30 @@ const FeatureSet = sig.runtime.FeatureSet;
 const InstructionContext = sig.runtime.InstructionContext;
 const LogCollector = sig.runtime.LogCollector;
 
+// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
+const migration_authority =
+    Pubkey.parseBase58String("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42") catch unreachable;
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var program_account = try ic.borrowProgramAccount();
+    // The borrowed program cannot be held during calls to other execute functions.
+    // Agave originally drops it at the relevant sites, but we can just extract needed fields here.
+    const program_key, const program_owner, const program_executable = blk: {
+        const program_account = try ic.borrowProgramAccount();
+        defer program_account.release();
+
+        break :blk .{
+            program_account.pubkey,
+            program_account.account.owner,
+            program_account.account.executable,
+        };
+    };
 
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
-    if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner)) {
-        program_account.release();
+    if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
         if (bpf_loader_program.v1.ID.equals(&ic.info.program_meta.pubkey)) {
             try ic.tc.consumeCompute(bpf_loader_program.v1.COMPUTE_UNITS);
             try ic.tc.log("Deprecated loader is no longer supported", .{});
@@ -46,10 +60,13 @@ pub fn execute(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-    if (!program_account.account.executable) {
+    if (!program_executable) {
         try ic.tc.log("Program is not executable", .{});
         return InstructionError.IncorrectProgramId;
     }
+
+    // TODO: [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L439-L447
+    _ = program_key;
 }
 
 pub fn executeBpfLoaderV3ProgramInstruction(
@@ -430,7 +447,7 @@ pub fn executeV3Upgrade(
     try ic.info.checkNumberOfAccounts(7);
     const authority_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.authority));
 
-    // verify program
+    // Verify program account
 
     const new_program_id = blk: {
         const program_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program));
@@ -1151,10 +1168,6 @@ pub fn executeV3Migrate(
             .funds = programdata.account.lamports,
         };
     };
-
-    // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
-    const migration_authority =
-        Pubkey.parseBase58String("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42") catch unreachable;
 
     // Verify authority signature
     if (!migration_authority.equals(&provided_authority_key) and
