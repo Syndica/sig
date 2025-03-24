@@ -587,6 +587,7 @@ pub fn isCommissionUpdateAllowed(slot: u64, epoch_schedule: *const EpochSchedule
     }
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/e363f52b5bb4bfb131c647d4dbd6043d23575c78/programs/vote/src/vote_processor.rs#L222-L227
 fn executeWithdraw(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -608,6 +609,7 @@ fn executeWithdraw(
     );
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/e363f52b5bb4bfb131c647d4dbd6043d23575c78/programs/vote/src/vote_state/mod.rs#L824
 fn widthraw(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
