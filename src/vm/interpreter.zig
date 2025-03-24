@@ -73,7 +73,7 @@ pub const Vm = struct {
     }
 
     pub fn run(self: *Vm) struct { Result, u64 } {
-        const initial_instruction_count = self.transaction_context.getRemaining();
+        const initial_instruction_count = self.transaction_context.compute_meter;
         while (true) {
             const cont = self.step() catch |err| {
                 self.result = .{ .err = err };
@@ -84,7 +84,7 @@ pub const Vm = struct {
         // https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/vm.rs#L380-L385
         const instruction_count = if (self.executable.config.enable_instruction_meter) blk: {
             self.transaction_context.consumeUnchecked(self.instruction_count);
-            break :blk initial_instruction_count -| self.transaction_context.getRemaining();
+            break :blk initial_instruction_count -| self.transaction_context.compute_meter;
         } else 0;
         return .{ self.result, instruction_count };
     }
@@ -92,7 +92,7 @@ pub const Vm = struct {
     fn step(self: *Vm) SbpfError!bool {
         const config = self.executable.config;
         if (config.enable_instruction_meter and
-            self.instruction_count >= self.transaction_context.getRemaining())
+            self.instruction_count >= self.transaction_context.compute_meter)
         {
             return error.ExceededMaxInstructions;
         }
@@ -569,7 +569,7 @@ pub const Vm = struct {
 
                     if (self.depth == 0) {
                         if (config.enable_instruction_meter and
-                            self.instruction_count > self.transaction_context.getRemaining())
+                            self.instruction_count > self.transaction_context.compute_meter)
                         {
                             return error.ExceededMaxInstructions;
                         }

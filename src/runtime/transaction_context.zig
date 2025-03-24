@@ -135,16 +135,6 @@ pub const TransactionContext = struct {
         self.compute_meter -|= compute;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L107-L109
-    pub fn getRemaining(self: *TransactionContext) u64 {
-        return self.compute_meter;
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L591-L594
-    pub fn getComputeBudget(self: *TransactionContext) ComputeBudget {
-        return self.compute_budget;
-    }
-
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L94
     pub fn log(
         self: *TransactionContext,
