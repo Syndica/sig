@@ -143,7 +143,6 @@ const AlignedMemoryMap = struct {
 
     fn region(self: *const AlignedMemoryMap, vm_addr: u64) !Region {
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
-
         if (index >= 1 and index <= self.regions.len) {
             const reg = self.regions[index - 1];
             if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {

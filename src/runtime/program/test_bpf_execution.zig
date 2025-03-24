@@ -25,7 +25,7 @@ fn executeBpfProgram(
     // Create Syscalls
     var syscalls = vm.BuiltinProgram{};
     defer syscalls.deinit(allocator);
-    _ = syscalls.functions.registerHashed(allocator, "sol_log_", vm.syscalls.log) catch {
+    _ = syscalls.functions.registerHashed(allocator, "log", vm.syscalls.log) catch {
         return InstructionError.ProgramEnvironmentSetupFailure;
     };
 
@@ -53,6 +53,7 @@ fn executeBpfProgram(
     );
     defer {
         allocator.free(parameter_bytes);
+        allocator.free(regions);
         allocator.free(accounts_metadata);
     }
 
@@ -67,14 +68,21 @@ fn executeBpfProgram(
         try ic.tc.log("Failed to create SBPF VM: {}", .{err});
         return InstructionError.ProgramEnvironmentSetupFailure;
     };
+    defer sbpf_vm.deinit();
     defer allocator.free(stack);
     defer allocator.free(heap);
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1625-L1638
-    const result, const err = sbpf_vm.run();
+    const result, const compute_consumed = sbpf_vm.run();
+
+    const logs = ic.tc.log_collector.?.collect();
 
     std.debug.print("result: {}\n", .{result});
-    std.debug.print("err: {}\n", .{err});
+    std.debug.print("compute_consumed: {}\n", .{compute_consumed});
+    std.debug.print("logs:\n", .{});
+    for (logs) |log| {
+        std.debug.print("\t{s}\n", .{log});
+    }
 
     // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1744
     try serialization.deserializeParameters(
@@ -116,11 +124,16 @@ fn initVm(
 
     // TODO: Create memory map
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
-    const memory_map = try createMemoryMapping(
-        executable,
-        stack,
-        heap,
-        regions,
+    std.debug.assert(regions.len == 1);
+
+    const memory_map = try vm.memory.MemoryMap.init(
+        &[_]vm.memory.Region{
+            executable.getProgramRegion(),
+            vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START),
+            vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START),
+            regions[0],
+        },
+        executable.version,
     );
 
     // TODO: Set syscall context
@@ -142,25 +155,6 @@ fn initVm(
         stack,
         heap,
     };
-}
-
-fn createMemoryMapping(
-    executable: vm.Executable,
-    stack: []u8,
-    heap: []u8,
-    regions: []const vm.memory.Region,
-) !vm.memory.MemoryMap {
-    std.debug.assert(regions.len == 1);
-
-    return vm.memory.MemoryMap.init(
-        &[_]vm.memory.Region{
-            executable.getProgramRegion(),
-            vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START),
-            vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START),
-            regions[0],
-        },
-        executable.version,
-    );
 }
 
 test "testBpfProgramExecution" {
@@ -192,6 +186,7 @@ test "testBpfProgramExecution" {
             },
         },
         .log_collector = LogCollector.init(allocator, null),
+        .compute_meter = 1_000,
     });
     defer tc.deinit(allocator);
 
