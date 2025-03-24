@@ -79,6 +79,7 @@ pub fn execute(
             &vote_account,
             args,
         ),
+        .update_validator_identity => executeUpdateValidatorIdentity(allocator, ic, &vote_account),
     };
 }
 
@@ -354,10 +355,6 @@ fn executeAuthorizeCheckedWithSeed(
         return InstructionError.MissingRequiredSignature;
     }
 
-    if (!ic.info.isPubkeySigner(new_authority.pubkey)) {
-        return InstructionError.MissingRequiredSignature;
-    }
-
     try authorizeWithSeed(
         allocator,
         ic,
@@ -411,6 +408,56 @@ fn executeAuthorizeChecked(
         clock,
         signers.constSlice(),
     );
+}
+
+/// Agave https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L114-L118
+fn executeUpdateValidatorIdentity(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
+
+    var new_identity = try ic.borrowInstructionAccount(
+        @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity),
+    );
+    defer new_identity.release();
+
+    try updateValidatorIdentity(
+        allocator,
+        ic,
+        vote_account,
+        new_identity.pubkey,
+    );
+}
+
+/// Agave https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_state/mod.rs#L722
+///
+/// Update the node_pubkey, requires signature of the authorized voter
+fn updateValidatorIdentity(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    new_identity: Pubkey,
+) (error{OutOfMemory} || InstructionError)!void {
+    const versioned_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+
+    var vote_state = try versioned_state.convertToCurrent(allocator);
+    defer vote_state.deinit();
+
+    const is_withdrawer_signed = ic.info.isPubkeySigner(vote_state.authorized_withdrawer);
+    const is_new_identity_signed = ic.info.isPubkeySigner(new_identity);
+    // Both the current authorized withdrawer and new identity must sign.
+    const has_required_signatures = is_withdrawer_signed and is_new_identity_signed;
+    if (!has_required_signatures) {
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    vote_state.node_pubkey = new_identity;
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
 fn validateIsSigner(
@@ -1066,4 +1113,289 @@ test "vote_program: authorizeChecked withdrawer" {
             },
         },
     );
+}
+
+test "vote_program: update_validator_identity" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const new_node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        new_node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction.update_validator_identity,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = new_node_pubkey },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = new_node_pubkey },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+        },
+    );
+}
+
+test "vote_program: update_validator_identity new authority did not sign" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const new_node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        new_node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    const result = testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction.update_validator_identity,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            // new authority did not sign.
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = new_node_pubkey },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = new_node_pubkey },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+        },
+    );
+
+    try std.testing.expectError(InstructionError.MissingRequiredSignature, result);
+}
+
+test "vote_program: update_validator_identity current authority did not sign" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 0,
+        .leader_schedule_epoch = 0,
+        .unix_timestamp = 0,
+    };
+
+    // Account data.
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const new_node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const initial_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer initial_vote_state.deinit();
+
+    const final_vote_state = VoteStateVersions{ .current = try VoteState.init(
+        allocator,
+        new_node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    ) };
+    defer final_vote_state.deinit();
+
+    var initial_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
+
+    var final_vote_state_bytes = ([_]u8{0} ** 3762);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    const result = testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction.update_validator_identity,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            // current authority did not sign.
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = initial_vote_state_bytes[0..],
+                },
+                .{ .pubkey = new_node_pubkey },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = 27074400,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = new_node_pubkey },
+                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+            },
+        },
+    );
+
+    try std.testing.expectError(InstructionError.MissingRequiredSignature, result);
 }
