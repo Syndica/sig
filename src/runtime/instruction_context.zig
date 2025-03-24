@@ -87,10 +87,9 @@ pub const InstructionContext = struct {
         instruction: anytype,
         account_metas: []const InstructionAccount,
         signers: []const Pubkey,
-    ) !void {
-        const data = bincode.writeAlloc(allocator, instruction, .{}) catch |err| {
-            self.tc.custom_error = @intFromError(err);
-            return InstructionError.Custom;
+    ) (error{OutOfMemory} || InstructionError)!void {
+        const data = bincode.writeAlloc(allocator, instruction, .{}) catch |e| switch (e) {
+            error.NoSpaceLeft, error.OutOfMemory => return error.OutOfMemory,
         };
         defer allocator.free(data);
 

@@ -419,7 +419,7 @@ pub fn executeV3DeployWithMaxDataLen(
 pub fn executeV3Upgrade(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.Upgrade.AccountIndex;
     try ic.info.checkNumberOfAccounts(3);
 
@@ -792,7 +792,7 @@ pub fn executeV3SetAuthorityChecked(
 pub fn executeV3Close(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.Close.AccountIndex;
     try ic.info.checkNumberOfAccounts(2);
 
@@ -906,7 +906,7 @@ pub fn executeV3Close(
 fn commonCloseAccount(
     ic: *InstructionContext,
     authority_address: ?Pubkey,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (authority_address == null) {
         try ic.tc.log("Account is immutable", .{});
         return InstructionError.Immutable;
@@ -942,7 +942,7 @@ pub fn executeV3ExtendProgram(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     additional_bytes: u32,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (additional_bytes == 0) {
         try ic.tc.log("Additional bytes must be greater than 0", .{});
         return InstructionError.InvalidInstructionData;
@@ -1099,7 +1099,7 @@ pub fn executeV3ExtendProgram(
 pub fn executeV3Migrate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (!ic.tc.feature_set.active.contains(
         feature_set.ENABLE_LOADER_V4,
     )) {
