@@ -637,7 +637,7 @@ fn widthraw(
         };
 
         if (reject_active_vote_account_close) {
-            ic.tc.custom_error = @intFromError(VoteError.ActiveVoteAccountClose);
+            ic.tc.custom_error = @intFromEnum(VoteError.active_vote_account_close);
             return InstructionError.Custom;
         } else {
             // Deinitialize upon zero-balance
@@ -2249,13 +2249,14 @@ test "vote_program: widthdraw no changes" {
     ) };
     defer vote_state.deinit();
 
-    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
-    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    var vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .withdraw = 0,
@@ -2336,14 +2337,15 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
     ) };
     defer vote_state.deinit();
 
-    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
-    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    var vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
 
     const withdraw_amount = 400;
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .withdraw = withdraw_amount,
@@ -2443,15 +2445,15 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 //     const initial_vote_state = VoteStateVersions{ .current = state };
 //     defer initial_vote_state.deinit();
 
-//     // TODO use VoteState.sizeOf() instead of hardcoding the size.
+//     // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
 //     // Do in a clean up PR after all instructions has been added.
-//     var initial_vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+//     var initial_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
 //     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
 //     const final_vote_state = VoteStateVersions{ .current = VoteState.default(allocator) };
 //     defer final_vote_state.deinit();
 
-//     var final_vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+//     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
 //     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
 //     try testing.expectProgramExecuteResult(
@@ -2552,19 +2554,20 @@ test "vote_program: widthdraw all and close account with active vote account" {
     const initial_vote_state = VoteStateVersions{ .current = state };
     defer initial_vote_state.deinit();
 
-    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
-    var initial_vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    var initial_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
     const final_vote_state = VoteStateVersions{ .current = VoteState.default(allocator) };
     defer final_vote_state.deinit();
 
-    var final_vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
     testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .withdraw = RENT_EXEMPT_THRESHOLD, // withdrawal will close down account.
@@ -2648,14 +2651,15 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
     ) };
     defer vote_state.deinit();
 
-    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
-    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    var vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
 
     const withdraw_amount = 400;
     testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .withdraw = withdraw_amount,
@@ -2738,13 +2742,14 @@ test "vote_program: widthdraw insufficient funds" {
     ) };
     defer vote_state.deinit();
 
-    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
-    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    var vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
 
     testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .withdraw = RENT_EXEMPT_THRESHOLD + 1, // withdraw more than account balance
@@ -2826,14 +2831,15 @@ test "vote_program: widthdraw with missing signature" {
     ) };
     defer vote_state.deinit();
 
-    // TODO use VoteState.sizeOf() instead of hardcoding the size.
+    // TODO use VoteState.MAX_VOTE_STATE_SIZE instead of hardcoding the size.
     // Do in a clean up PR after all instructions has been added.
-    var vote_state_bytes = ([_]u8{0} ** VoteState.sizeOf());
+    var vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(vote_state_bytes[0..], vote_state, .{});
 
     const withdraw_amount = 400;
     testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         vote_program,
         VoteProgramInstruction{
             .withdraw = withdraw_amount,

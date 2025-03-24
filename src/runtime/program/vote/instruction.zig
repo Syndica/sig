@@ -102,6 +102,26 @@ pub const UpdateVoteIdentity = struct {
     };
 };
 
+pub const UpdateCommission = struct {
+    pub const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated
+        account = 0,
+        /// `[SIGNER]` Withdraw authority
+        current_authority = 1,
+    };
+};
+
+pub const Withdraw = struct {
+    pub const AccountIndex = enum(u8) {
+        /// `[Write]` Vote account to be updated
+        account = 0,
+        /// `[Write]` Recipient account
+        recipient_authority = 1,
+        /// `[SIGNER]` Withdraw authority
+        current_authority = 2,
+    };
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum) {
     /// Initialize a vote account

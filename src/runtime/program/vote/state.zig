@@ -419,6 +419,22 @@ pub const VoteState = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
 
+    pub fn default(allocator: std.mem.Allocator) VoteState {
+        return .{
+            .node_pubkey = Pubkey.ZEROES,
+            .authorized_withdrawer = Pubkey.ZEROES,
+            .commission = 0,
+            .votes = std.ArrayList(LandedVote).init(allocator),
+            .root_slot = null,
+            .authorized_voters = AuthorizedVoters{
+                .authorized_voters = SortedMap(Epoch, Pubkey).init(allocator),
+            },
+            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
+            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+        };
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
@@ -818,6 +834,36 @@ test "VoteState.isUninitialized: invalid account data" {
     );
 
     try std.testing.expect(uninitialized_state.isUninitialized());
+}
+
+test "VoteState.isCommissionIncrease" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 100;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 2, // epoch of current authorized voter
+        .leader_schedule_epoch = 1,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    try std.testing.expect(vote_state.isCommissionIncrease(101));
+    try std.testing.expect(!vote_state.isCommissionIncrease(99));
 }
 
 test "AuthorizedVoters.init" {
