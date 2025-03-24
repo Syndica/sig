@@ -1,9 +1,15 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Pubkey = sig.core.Pubkey;
-const InstructionError = sig.core.instruction.InstructionError;
+const bincode = sig.bincode;
 
+const Pubkey = sig.core.Pubkey;
+const Instruction = sig.core.instruction.Instruction;
+const InstructionError = sig.core.instruction.InstructionError;
+const InstructionAccount = sig.core.instruction.InstructionAccount;
+
+const executor = sig.runtime.executor;
+const system_program = sig.runtime.program.system_program;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -72,5 +78,31 @@ pub const InstructionContext = struct {
     pub fn getAccountKeyByIndex(self: *const InstructionContext, index: u16) Pubkey {
         const account_meta = self.info.getAccountMetaAtIndex(index) orelse unreachable;
         return account_meta.pubkey;
+    }
+
+    pub fn nativeInvoke(
+        self: *InstructionContext,
+        allocator: std.mem.Allocator,
+        program_id: Pubkey,
+        instruction: anytype,
+        account_metas: []const InstructionAccount,
+        signers: []const Pubkey,
+    ) !void {
+        const data = bincode.writeAlloc(allocator, instruction, .{}) catch |err| {
+            self.tc.custom_error = @intFromError(err);
+            return InstructionError.Custom;
+        };
+        defer allocator.free(data);
+
+        try executor.executeNativeCpiInstruction(
+            allocator,
+            self.tc,
+            Instruction{
+                .program_id = program_id,
+                .accounts = account_metas,
+                .data = data,
+            },
+            signers,
+        );
     }
 };

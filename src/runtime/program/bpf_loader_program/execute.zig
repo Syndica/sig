@@ -326,20 +326,9 @@ pub fn executeV3DeployWithMaxDataLen(
         return InstructionError.Custom;
     };
 
-    const account_metas = &.{
-        .{ .pubkey = payer_key, .is_signer = true, .is_writable = true },
-        .{ .pubkey = program_data_key, .is_signer = true, .is_writable = true },
-        // pass an extra account to avoid the overly strict UnbalancedInstruction error
-        // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L668-L669
-        .{
-            .pubkey = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.buffer)),
-            .is_signer = false,
-            .is_writable = true,
-        },
-    };
-
-    const data = bincode.writeAlloc(
+    try ic.nativeInvoke(
         allocator,
+        system_program.ID,
         system_program.Instruction{
             .create_account = .{
                 .lamports = @max(1, rent.minimumBalance(program_data_len)),
@@ -347,20 +336,16 @@ pub fn executeV3DeployWithMaxDataLen(
                 .owner = ic.info.program_meta.pubkey,
             },
         },
-        .{},
-    ) catch |err| {
-        ic.tc.custom_error = @intFromError(err);
-        return InstructionError.Custom;
-    };
-    defer allocator.free(data);
-
-    try executor.executeNativeCpiInstruction(
-        allocator,
-        ic.tc,
-        Instruction{
-            .program_id = system_program.ID,
-            .accounts = account_metas,
-            .data = data,
+        &.{
+            .{ .pubkey = payer_key, .is_signer = true, .is_writable = true },
+            .{ .pubkey = program_data_key, .is_signer = true, .is_writable = true },
+            // pass an extra account to avoid the overly strict UnbalancedInstruction error
+            // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L668-L669
+            .{
+                .pubkey = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.buffer)),
+                .is_signer = false,
+                .is_writable = true,
+            },
         },
         &.{signer_derived_key},
     );
@@ -1064,28 +1049,15 @@ pub fn executeV3ExtendProgram(
         const payer = ic.info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.payer)) orelse
             return InstructionError.NotEnoughAccountKeys;
 
-        const data = bincode.writeAlloc(
+        try ic.nativeInvoke(
             allocator,
+            system_program.ID,
             system_program.Instruction{
                 .transfer = .{ .lamports = required_payment },
             },
-            .{},
-        ) catch |err| {
-            ic.tc.custom_error = @intFromError(err);
-            return InstructionError.Custom;
-        };
-        defer allocator.free(data);
-
-        try executor.executeNativeCpiInstruction(
-            allocator,
-            ic.tc,
-            Instruction{
-                .program_id = system_program.ID,
-                .accounts = &.{
-                    .{ .pubkey = payer.pubkey, .is_signer = true, .is_writable = true },
-                    .{ .pubkey = programdata_key, .is_signer = false, .is_writable = true },
-                },
-                .data = data,
+            &.{
+                .{ .pubkey = payer.pubkey, .is_signer = true, .is_writable = true },
+                .{ .pubkey = programdata_key, .is_signer = false, .is_writable = true },
             },
             &.{},
         );
