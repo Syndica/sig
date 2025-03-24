@@ -33,4 +33,13 @@ pub const v3 = struct {
     pub const State = @import("v3_state.zig").State;
 };
 
+pub const v4 = struct {
+    /// [agave] https://docs.rs/solana-sdk-ids/latest/src/solana_sdk_ids/lib.rs.html#43
+    pub const ID =
+        Pubkey.parseBase58String("LoaderV411111111111111111111111111111111111") catch unreachable;
+
+    pub const instruction = @import("v4_instruction.zig");
+    pub const Instruction = instruction.Instruction;
+};
+
 pub const execute = @import("execute.zig").execute;

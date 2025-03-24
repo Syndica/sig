@@ -1137,8 +1137,9 @@ pub fn executeV3Migrate(
                     return InstructionError.InvalidArgument;
                 }
 
-                const program_len = programdata.constAccountData().len -|
-                    bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE;
+                const program_len: u32 = @intCast(programdata.constAccountData().len -|
+                    bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE);
+
                 break :blk .{ program_len, data.upgrade_authority_address };
             },
             else => .{ 0, null },
@@ -1215,14 +1216,81 @@ pub fn executeV3Migrate(
     }
 
     if (progdata_info.len > 0) {
-        @compileError("native_invoke(v4::set_program_length)");
-        @compileError("native_invoke(v4::copy)");
-        @compileError("native_invoke(v4::deploy)");
+        try ic.nativeInvoke(
+            allocator,
+            system_program.ID,
+            bpf_loader_program.v4.Instruction{
+                .set_program_length = .{
+                    .new_size = progdata_info.len,
+                },
+            },
+            &.{
+                .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+                .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+                .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+            },
+            &.{},
+        );
+
+        try ic.nativeInvoke(
+            allocator,
+            system_program.ID,
+            bpf_loader_program.v4.Instruction{
+                .copy = .{
+                    .destination_offset = 0,
+                    .source_offset = 0,
+                    .length = progdata_info.len,
+                },
+            },
+            &.{
+                .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+                .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+                .{ .pubkey = programdata_key, .is_signer = false, .is_writable = false },
+            },
+            &.{},
+        );
+
+        try ic.nativeInvoke(
+            allocator,
+            system_program.ID,
+            bpf_loader_program.v4.Instruction{
+                .deploy = .{},
+            },
+            &.{
+                .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+                .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+            },
+            &.{},
+        );
 
         if (progdata_info.upgrade_key) |upgrade_key| {
-            @compileError("native_invoke(v4::transfer_authority)");
+            try ic.nativeInvoke(
+                allocator,
+                system_program.ID,
+                bpf_loader_program.v4.Instruction{
+                    .transfer_authority = .{},
+                },
+                &.{
+                    .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+                    .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+                    .{ .pubkey = upgrade_key, .is_signer = true, .is_writable = false },
+                },
+                &.{},
+            );
         } else {
-            @compileError("native_invoke(v4::finalize)");
+            try ic.nativeInvoke(
+                allocator,
+                system_program.ID,
+                bpf_loader_program.v4.Instruction{
+                    .finalize = .{},
+                },
+                &.{
+                    .{ .pubkey = program_key, .is_signer = false, .is_writable = true },
+                    .{ .pubkey = provided_authority_key, .is_signer = true, .is_writable = false },
+                    .{ .pubkey = program_key, .is_signer = false, .is_writable = false },
+                },
+                &.{},
+            );
         }
     }
 
