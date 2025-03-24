@@ -99,6 +99,7 @@ pub fn execute(
             &vote_account,
             args,
         ),
+        .update_commission => |args| executeUpdateCommission(allocator, ic, &vote_account, args),
     };
 }
 
