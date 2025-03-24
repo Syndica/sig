@@ -12,7 +12,8 @@ fn executeBpfProgram(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const program_account = try ic.borrowProgramAccount(ic.program_meta.index_in_transaction);
+    const program_account = try ic.borrowProgramAccount();
+    errdefer program_account.release();
     const copy_account_data = true;
 
     // Check program is executable
@@ -41,13 +42,19 @@ fn executeBpfProgram(
     };
     defer executable.deinit(allocator);
 
+    program_account.release();
+
     // Serialize parameters
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
-    const parameter_bytes, const regions, const accounts_metadata = serialization.serializeParameters(
+    const parameter_bytes, const regions, const accounts_metadata = try serialization.serializeParameters(
         allocator,
         ic,
         copy_account_data,
     );
+    defer {
+        allocator.free(parameter_bytes);
+        allocator.free(accounts_metadata);
+    }
 
     // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1614-L1622
     var sbpf_vm, const stack, const heap = initVm(
@@ -57,14 +64,17 @@ fn executeBpfProgram(
         regions,
         syscalls,
     ) catch |err| {
-        ic.tc.log("Failed to create SBPF VM: {}", .{err});
+        try ic.tc.log("Failed to create SBPF VM: {}", .{err});
         return InstructionError.ProgramEnvironmentSetupFailure;
     };
     defer allocator.free(stack);
     defer allocator.free(heap);
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1625-L1638
-    try sbpf_vm.run();
+    const result, const err = sbpf_vm.run();
+
+    std.debug.print("result: {}\n", .{result});
+    std.debug.print("err: {}\n", .{err});
 
     // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1744
     try serialization.deserializeParameters(
@@ -98,9 +108,11 @@ fn initVm(
 
     const heap = try allocator.alloc(u8, heap_size);
     @memset(heap, 0);
+    errdefer allocator.free(heap);
 
     const stack = try allocator.alloc(u8, stack_size);
     @memset(stack, 0);
+    errdefer allocator.free(stack);
 
     // TODO: Create memory map
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
@@ -117,12 +129,13 @@ fn initVm(
     // Create VM
     const sbpf_vm = try vm.Vm.init(
         allocator,
-        executable,
+        &executable,
         memory_map,
         &syscalls,
-        .noop,
-        stack_size,
+        stack.len,
+        tc,
     );
+    errdefer sbpf_vm.deinit();
 
     return .{
         sbpf_vm,
@@ -150,4 +163,55 @@ fn createMemoryMapping(
     );
 }
 
-test "testBpfProgramExecution" {}
+test "testBpfProgramExecution" {
+    const sbpf = sig.vm.sbpf;
+
+    const Pubkey = sig.core.Pubkey;
+    const LogCollector = sig.runtime.LogCollector;
+
+    const createTransactionContext = sig.runtime.testing.createTransactionContext;
+    const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
+
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const input_file = try std.fs.cwd().openFile(sig.ELF_DATA_DIR ++ "syscall_static.so", .{});
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    var tc = try createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = program_id,
+                .lamports = 1_000_000_000,
+                .owner = sig.runtime.ids.BPF_LOADER_V3_PROGRAM_ID,
+                .executable = true,
+                .rent_epoch = 0,
+                .data = bytes,
+            },
+        },
+        .log_collector = LogCollector.init(allocator, null),
+    });
+    defer tc.deinit(allocator);
+
+    const instruction_info = try createInstructionInfo(
+        allocator,
+        &tc,
+        program_id,
+        [_]u8{},
+        &.{.{
+            .index_in_transaction = 0,
+            .is_signer = false,
+            .is_writable = false,
+        }},
+    );
+
+    var ic = InstructionContext{
+        .tc = &tc,
+        .info = instruction_info,
+        .depth = 0,
+    };
+
+    try executeBpfProgram(allocator, &ic);
+}
