@@ -438,10 +438,10 @@ fn executeUpdateValidatorIdentity(
     try ic.info.checkNumberOfAccounts(2);
 
     // Safe since there are at least 2 accounts, and the new_authority index is 1.
-    const new_authority_meta = &ic.info.account_metas.buffer[
+    const new_identity_meta = &ic.info.account_metas.buffer[
         @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity)
     ];
-    if (!new_authority_meta.is_signer) {
+    if (!new_identity_meta.is_signer) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -449,7 +449,7 @@ fn executeUpdateValidatorIdentity(
         allocator,
         ic,
         vote_account,
-        new_authority_meta.pubkey,
+        new_identity_meta.pubkey,
     );
 }
 
@@ -522,9 +522,9 @@ fn updateCommission(
             ) catch {
                 break :blk true;
             };
-            const vote_state_ = try versioned_state.convertToCurrent(allocator);
-            maybe_vote_state = vote_state_;
-            break :blk vote_state_.isCommissionIncrease(commission);
+            const vote_state = try versioned_state.convertToCurrent(allocator);
+            maybe_vote_state = vote_state;
+            break :blk vote_state.isCommissionIncrease(commission);
         } else {
             break :blk true;
         }
@@ -924,7 +924,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
     ) };
     defer initial_vote_state.deinit();
 
-    var final_vote_state_ = try VoteState.init(
+    var final_vote_state = try VoteState.init(
         allocator,
         node_pubkey,
         authorized_voter,
@@ -932,21 +932,21 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         commission,
         clock,
     );
-    try final_vote_state_.authorized_voters.insert(1, new_authorized_voter);
-    final_vote_state_.prior_voters.append(PriorVote{
+    try final_vote_state.authorized_voters.insert(1, new_authorized_voter);
+    final_vote_state.prior_voters.append(PriorVote{
         .key = authorized_voter,
         .start = 0,
         .end = 1,
     });
 
-    var final_vote_state = VoteStateVersions{ .current = final_vote_state_ };
-    defer final_vote_state.deinit();
+    var final_current_vote_state = VoteStateVersions{ .current = final_vote_state };
+    defer final_current_vote_state.deinit();
 
     var initial_vote_state_bytes = ([_]u8{0} ** 3762);
     _ = try sig.bincode.writeToSlice(initial_vote_state_bytes[0..], initial_vote_state, .{});
 
     var final_vote_state_bytes = ([_]u8{0} ** 3762);
-    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_current_vote_state, .{});
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
