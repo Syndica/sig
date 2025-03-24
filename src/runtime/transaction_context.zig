@@ -16,6 +16,7 @@ const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
+const ComputeBudget = sig.runtime.ComputeBudget;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
@@ -59,6 +60,7 @@ pub const TransactionContext = struct {
     lamports_per_signature: u64,
     last_blockhash: Hash,
     feature_set: FeatureSet,
+    compute_budget: ComputeBudget,
 
     pub const InstructionStack = std.BoundedArray(
         InstructionContext,
@@ -139,6 +141,11 @@ pub const TransactionContext = struct {
             self.compute_meter = 0;
             return InstructionError.ComputationalBudgetExceeded;
         }
+        self.consumeUnchecked(compute);
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L100-L105
+    pub fn consumeUnchecked(self: *TransactionContext, compute: u64) void {
         self.compute_meter -|= compute;
     }
 

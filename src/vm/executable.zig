@@ -3,7 +3,6 @@ const sbpf = @import("sbpf.zig");
 const Elf = @import("elf.zig").Elf;
 const memory = @import("memory.zig");
 const syscalls = @import("syscalls.zig");
-const Vm = @import("interpreter.zig").Vm;
 
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
@@ -18,29 +17,6 @@ pub const Executable = struct {
     text_vaddr: u64,
     function_registry: Registry(u64),
     config: Config,
-
-    pub const Section = union(enum) {
-        owned: Owned,
-        borrowed: Borrowed,
-
-        const Owned = struct {
-            offset: u64,
-            data: []const u8,
-        };
-
-        const Borrowed = struct {
-            offset: u64,
-            start: u64,
-            end: u64,
-        };
-
-        pub fn deinit(section: Section, allocator: std.mem.Allocator) void {
-            switch (section) {
-                .owned => |owned| allocator.free(owned.data),
-                .borrowed => {},
-            }
-        }
-    };
 
     /// Takes ownership of the `Elf`.
     pub fn fromElf(elf: Elf) Executable {
@@ -133,7 +109,7 @@ pub const Executable = struct {
 
     pub fn verify(
         self: *const Executable,
-        loader: *const BuiltinProgram,
+        loader: *BuiltinProgram,
     ) !void {
         const version = self.version;
         const instructions = self.instructions;
@@ -397,6 +373,29 @@ pub const Executable = struct {
             .borrowed => |b| .{ b.offset, self.bytes[b.start..b.end] },
         };
         return memory.Region.init(.constant, ro_data, offset);
+    }
+};
+
+pub const Section = union(enum) {
+    owned: Owned,
+    borrowed: Borrowed,
+
+    const Owned = struct {
+        offset: u64,
+        data: []const u8,
+    };
+
+    const Borrowed = struct {
+        offset: u64,
+        start: u64,
+        end: u64,
+    };
+
+    pub fn deinit(section: Section, allocator: std.mem.Allocator) void {
+        switch (section) {
+            .owned => |owned| allocator.free(owned.data),
+            .borrowed => {},
+        }
     }
 };
 
@@ -905,9 +904,12 @@ pub fn Registry(T: type) type {
 }
 
 pub const BuiltinProgram = struct {
-    functions: Registry(*const fn (*Vm) syscalls.Error!void) = .{},
+    functions: Registry(syscalls.Syscall) = .{},
 
-    pub fn deinit(self: *BuiltinProgram, allocator: std.mem.Allocator) void {
+    pub fn deinit(
+        self: *BuiltinProgram,
+        allocator: std.mem.Allocator,
+    ) void {
         self.functions.deinit(allocator);
     }
 };
@@ -916,7 +918,9 @@ pub const Config = struct {
     optimize_rodata: bool = true,
     reject_broken_elfs: bool = false,
     enable_symbol_and_section_labels: bool = false,
+    enable_instruction_meter: bool = true,
     minimum_version: sbpf.Version = .v0,
+
     maximum_version: sbpf.Version = .v3,
     stack_frame_size: u64 = 4096,
     max_call_depth: u64 = 64,

@@ -10,8 +10,11 @@ const Vm = sig.vm.Vm;
 const sbpf = sig.vm.sbpf;
 const syscalls = sig.vm.syscalls;
 const Config = sig.vm.Config;
-
 const MemoryMap = memory.MemoryMap;
+const TransactionContext = sig.runtime.TransactionContext;
+const FeatureSet = sig.runtime.FeatureSet;
+const Hash = sig.core.Hash;
+const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub fn main() !void {
     var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
@@ -91,21 +94,33 @@ pub fn main() !void {
         memory.Region.init(.mutable, &.{}, memory.INPUT_START),
     }, executable.version);
 
-    var std_logger = sig.trace.DirectPrintLogger.init(gpa, .debug);
-    const logger = std_logger.logger();
-
+    var context: TransactionContext = .{
+        .accounts = &.{},
+        .instruction_stack = .{},
+        .instruction_trace = .{},
+        .accounts_resize_delta = 0,
+        .return_data = .{},
+        .custom_error = null,
+        .log_collector = null,
+        .sysvar_cache = .{},
+        .compute_meter = std.math.maxInt(u64),
+        .feature_set = FeatureSet.EMPTY,
+        .lamports_per_signature = 0,
+        .last_blockhash = Hash.ZEROES,
+        .compute_budget = ComputeBudget.default(1_400_000),
+    };
     var vm = try Vm.init(
         gpa,
         &executable,
         m,
         &loader,
-        logger,
         stack_memory.len,
+        &context,
     );
     defer vm.deinit();
-    const result = try vm.run();
+    const result, const instruction_count = vm.run();
 
-    std.debug.print("result: {}, count: {}\n", .{ result, vm.instruction_count });
+    std.debug.print("result: {}, count: {}\n", .{ result, instruction_count });
 }
 
 const Cmd = struct {
