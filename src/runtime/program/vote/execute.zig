@@ -471,7 +471,7 @@ fn updateValidatorIdentity(
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L121-L131
+/// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L121-L131
 fn executeUpdateCommission(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -491,7 +491,7 @@ fn executeUpdateCommission(
     );
 }
 
-/// Agave https://github.com/anza-xyz/solana-sdk/blob/69edb584ac17df2f5d8b5e817d7afede7877eded/vote-interface/src/instruction.rs#L415
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/69edb584ac17df2f5d8b5e817d7afede7877eded/vote-interface/src/instruction.rs#L415
 fn updateCommission(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -557,7 +557,7 @@ fn updateCommission(
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
-/// Agave https://github.com/anza-xyz/agave/blob/a7092a20bb2f5d16375bdc531b71d2a164b43b93/programs/vote/src/vote_state/mod.rs#L798
+/// [agave] https://github.com/anza-xyz/agave/blob/a7092a20bb2f5d16375bdc531b71d2a164b43b93/programs/vote/src/vote_state/mod.rs#L798
 ///
 /// Given the current slot and epoch schedule, determine if a commission change
 /// is allowed
