@@ -79,7 +79,11 @@ pub fn execute(
             &vote_account,
             args,
         ),
-        .update_validator_identity => executeUpdateValidatorIdentity(allocator, ic, &vote_account),
+        .update_validator_identity => try executeUpdateValidatorIdentity(
+            allocator,
+            ic,
+            &vote_account,
+        ),
     };
 }
 
@@ -418,16 +422,19 @@ fn executeUpdateValidatorIdentity(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
 
-    var new_identity = try ic.borrowInstructionAccount(
-        @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity),
-    );
-    defer new_identity.release();
+    // Safe since there are at least 2 accounts, and the new_authority index is 1.
+    const new_authority_meta = &ic.info.account_metas.buffer[
+        @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity)
+    ];
+    if (!new_authority_meta.is_signer) {
+        return InstructionError.MissingRequiredSignature;
+    }
 
     try updateValidatorIdentity(
         allocator,
         ic,
         vote_account,
-        new_identity.pubkey,
+        new_authority_meta.pubkey,
     );
 }
 
