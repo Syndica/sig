@@ -119,6 +119,17 @@ pub const ExtendProgram = struct {
     };
 };
 
+pub const Migrate = struct {
+    pub const AccountIndex = enum(u2) {
+        /// `[WRITE]` The ProgramData account.
+        program_data = 0,
+        /// `[WRITE]` The Program account.
+        program = 1,
+        /// `[SIGNER]` The current authority.
+        authority = 2,
+    };
+};
+
 /// [agave] https://github.com/anza-xyz/agave/blob/master/sdk/program/src/loader_upgradeable_instruction.rs#L7
 pub const Instruction = union(enum) {
     /// Initialize a Buffer account.
@@ -264,4 +275,12 @@ pub const Instruction = union(enum) {
     ///   1. `[signer]` The current authority.
     ///   2. `[signer]` The new authority.
     set_authority_checked: SetAuthorityChecked,
+
+    /// Migrate the program to loader-v4.
+    ///
+    /// # Account references
+    ///   0. `[writable]` The ProgramData account.
+    ///   1. `[writable]` The Program account.
+    ///   2. `[signer]` The current authority.
+    migrate: Migrate,
 };

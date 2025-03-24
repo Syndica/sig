@@ -13,6 +13,9 @@ pub const REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS =
 pub const ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX =
     Pubkey.parseBase58String("HcW8ZjBezYYgvcbxNJwqv1t484Y2556qJsfNDWvJGZRH") catch unreachable;
 
+pub const ENABLE_LOADER_V4 =
+    Pubkey.parseBase58String("8Cb77yHjPWe9wuWUfXeh6iszFGCDGNCoFk3tprViYHNm") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features

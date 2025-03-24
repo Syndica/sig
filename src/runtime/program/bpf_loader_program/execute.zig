@@ -100,6 +100,10 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             ic,
             args.additional_bytes,
         ),
+        .migrate => executeV3Migrate(
+            allocator,
+            ic,
+        ),
     };
 }
 
@@ -1117,6 +1121,149 @@ pub fn executeV3ExtendProgram(
     });
 
     try ic.tc.log("Extended ProgramData account by {} bytes", .{additional_bytes});
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1346-L1515
+pub fn executeV3Migrate(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) !void {
+    if (!ic.tc.feature_set.active.contains(
+        feature_set.ENABLE_LOADER_V4,
+    )) {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    const AccountIndex = bpf_loader_program.v3.instruction.Migrate.AccountIndex;
+    try ic.info.checkNumberOfAccounts(3);
+
+    const programdata_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.program_data));
+    const program_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.program));
+    const provided_authority_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.authority));
+
+    // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
+    const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse
+        return InstructionError.UnsupportedSysvar;
+
+    // Verify ProgramData account.
+    const progdata_info = info: {
+        var programdata = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
+        defer programdata.release();
+
+        if (!programdata.context.is_writable) {
+            try ic.tc.log("ProgramData account not writeable", .{});
+            return InstructionError.InvalidArgument;
+        }
+
+        const program_len, const upgrade_key = switch (try programdata.deserializeFromAccountData(
+            allocator,
+            bpf_loader_program.v3.State,
+        )) {
+            .program_data => |data| blk: {
+                if (clock.slot == data.slot) {
+                    try ic.tc.log("Program was deployed in this block already", .{});
+                    return InstructionError.InvalidArgument;
+                }
+
+                const program_len = programdata.constAccountData().len -|
+                    bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE;
+                break :blk .{ program_len, data.upgrade_authority_address };
+            },
+            else => .{ 0, null },
+        };
+
+        break :info .{
+            .len = program_len,
+            .upgrade_key = upgrade_key,
+            .funds = programdata.account.lamports,
+        };
+    };
+
+    // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
+    const migration_authority =
+        Pubkey.parseBase58String("3Scf35jMNk2xXBD6areNjgMtXgp5ZspDhms8vdcbzC42") catch unreachable;
+
+    // Verify authority signature
+    if (!migration_authority.equals(&provided_authority_key) and
+        !provided_authority_key.equals(&(progdata_info.upgrade_key orelse program_key)))
+    {
+        try ic.tc.log("Incorrect migration authority provided", .{});
+        return InstructionError.IncorrectAuthority;
+    }
+    if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+        try ic.tc.log("Migration authority did not sign", .{});
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    // Verify Program account
+    {
+        var program_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program));
+        defer program_account.release();
+
+        if (!program_account.context.is_writable) {
+            try ic.tc.log("Program account not writeable", .{});
+            return InstructionError.InvalidArgument;
+        }
+        if (!program_account.isOwnedByCurrentProgram()) {
+            try ic.tc.log("Program account not owned by loader", .{});
+            return InstructionError.IncorrectProgramId;
+        }
+
+        switch (try program_account.deserializeFromAccountData(
+            allocator,
+            bpf_loader_program.v3.State,
+        )) {
+            .program => |data| {
+                if (!program_key.equals(&data.programdata_address)) {
+                    try ic.tc.log("Program and ProgramData account mismatch", .{});
+                    return InstructionError.InvalidArgument;
+                }
+            },
+            else => {
+                try ic.tc.log("Invalid Program account", .{});
+                return InstructionError.InvalidAccountData;
+            },
+        }
+
+        var resize_delta: i64 = undefined;
+        try program_account.setDataLength(allocator, &resize_delta, 0); // set_data_from_slice(&[])
+        try program_account.addLamports(progdata_info.funds);
+
+        if (progdata_info.len == 0) {
+            try program_account.setOwner(system_program.ID);
+        } else {
+            try program_account.setOwner(bpf_loader_program.v4.ID);
+        }
+    }
+
+    {
+        var programdata = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
+        defer programdata.release();
+        try programdata.setLamports(0);
+    }
+
+    if (progdata_info.len > 0) {
+        @compileError("native_invoke(v4::set_program_length)");
+        @compileError("native_invoke(v4::copy)");
+        @compileError("native_invoke(v4::deploy)");
+
+        if (progdata_info.upgrade_key) |upgrade_key| {
+            @compileError("native_invoke(v4::transfer_authority)");
+        } else {
+            @compileError("native_invoke(v4::finalize)");
+        }
+    }
+
+    {
+        var programdata = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
+        defer programdata.release();
+
+        var resize_delta: i64 = undefined;
+        try programdata.setDataLength(allocator, &resize_delta, 0); // set_data_from_slice(&[])
+        try programdata.setOwner(system_program.ID);
+    }
+
+    try ic.tc.log("Migrated program {any}", .{program_key});
 }
 
 /// TODO: This function depends on syscalls and program cache implementations
