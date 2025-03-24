@@ -836,6 +836,36 @@ test "VoteState.isUninitialized: invalid account data" {
     try std.testing.expect(uninitialized_state.isUninitialized());
 }
 
+test "VoteState.isCommissionIncrease" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 100;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 2, // epoch of current authorized voter
+        .leader_schedule_epoch = 1,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = try VoteState.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    try std.testing.expect(vote_state.isCommissionIncrease(101));
+    try std.testing.expect(!vote_state.isCommissionIncrease(99));
+}
+
 test "AuthorizedVoters.init" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
