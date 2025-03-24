@@ -41,7 +41,7 @@ pub const SerializedAccountMeta = struct {
 pub const Serializer = struct {
     allocator: std.mem.Allocator,
     buffer: std.ArrayListUnmanaged(u8),
-    regions: std.BoundedArray(Region, 4),
+    regions: std.ArrayListUnmanaged(Region),
     vaddr: u64,
     region_start: usize,
     aligned: bool,
@@ -57,7 +57,7 @@ pub const Serializer = struct {
         return .{
             .allocator = allocator,
             .buffer = try std.ArrayListUnmanaged(u8).initCapacity(allocator, size),
-            .regions = std.BoundedArray(Region, 4){},
+            .regions = std.ArrayListUnmanaged(Region){},
             .vaddr = region_start,
             .region_start = 0,
             .aligned = aligned,
@@ -84,13 +84,13 @@ pub const Serializer = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L91-L92
-    pub fn writeAccount(self: *Serializer, account: *const BorrowedAccount) InstructionError!u64 {
+    pub fn writeAccount(self: *Serializer, account: *const BorrowedAccount) (error{OutOfMemory} || InstructionError)!u64 {
         const vm_data_addr = if (self.copy_account_data) blk: {
             const addr = self.vaddr +| self.buffer.items.len;
             _ = self.writeAll(account.account.data);
             break :blk addr;
         } else blk: {
-            self.pushRegion(true);
+            try self.pushRegion(true);
             const addr = self.vaddr;
             try self.pushAccountDataRegion(account);
             break :blk addr;
@@ -120,7 +120,7 @@ pub const Serializer = struct {
                     return InstructionError.InvalidArgument;
                 };
                 self.region_start += BPF_ALIGN_OF_U128 -| align_offset;
-                self.pushRegion(account.checkDataIsMutable() == null);
+                try self.pushRegion(account.checkDataIsMutable() == null);
             }
         }
 
@@ -128,7 +128,7 @@ pub const Serializer = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L154-L155
-    pub fn pushRegion(self: *Serializer, is_writable: bool) void {
+    pub fn pushRegion(self: *Serializer, is_writable: bool) error{OutOfMemory}!void {
         const range_size = self.buffer.items.len -| self.region_start;
 
         const region = switch (is_writable) {
@@ -139,7 +139,7 @@ pub const Serializer = struct {
             ),
         };
 
-        self.regions.appendAssumeCapacity(region);
+        try self.regions.append(self.allocator, region);
         self.region_start = self.buffer.items.len;
         self.vaddr += range_size;
     }
@@ -148,7 +148,7 @@ pub const Serializer = struct {
     pub fn pushAccountDataRegion(
         self: *Serializer,
         account: *const BorrowedAccount,
-    ) InstructionError!void {
+    ) (error{OutOfMemory} || InstructionError)!void {
         // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L134
         if (account.constAccountData().len > 0) {
             const state = getAccountDataRegionMemoryState(account);
@@ -163,15 +163,15 @@ pub const Serializer = struct {
                 ),
             };
             self.vaddr += account.constAccountData().len;
-            self.regions.appendAssumeCapacity(region);
+            try self.regions.append(self.allocator, region);
         }
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L172
     pub fn finish(self: *Serializer) error{OutOfMemory}!struct { []u8, []Region } {
-        self.pushRegion(true);
+        try self.pushRegion(true);
         std.debug.assert(self.region_start == self.buffer.items.len);
-        return .{ try self.buffer.toOwnedSlice(self.allocator), self.regions.slice() };
+        return .{ try self.buffer.toOwnedSlice(self.allocator), try self.regions.toOwnedSlice(self.allocator) };
     }
 
     pub fn getAccountDataRegionMemoryState(account: *const BorrowedAccount) vm.memory.MemoryState {
@@ -203,6 +203,7 @@ pub fn serializeParameters(
         allocator,
         ic.info.account_metas.len,
     ) catch return InstructionError.ProgramEnvironmentSetupFailure;
+    defer accounts.deinit();
 
     for (ic.info.account_metas.constSlice(), 0..) |account_meta, index_in_instruction| {
         if (account_meta.index_in_callee != index_in_instruction) {
@@ -220,7 +221,7 @@ pub fn serializeParameters(
     return if (is_loader_v1)
         serializeParametersUnaligned(
             allocator,
-            try accounts.toOwnedSlice(),
+            accounts.items,
             ic.info.instruction_data,
             ic.info.program_meta.pubkey,
             copy_account_data,
@@ -228,7 +229,7 @@ pub fn serializeParameters(
     else
         serializeParametersAligned(
             allocator,
-            try accounts.toOwnedSlice(),
+            accounts.items,
             ic.info.instruction_data,
             ic.info.program_meta.pubkey,
             copy_account_data,
@@ -333,6 +334,10 @@ fn serializeParametersUnaligned(
     _ = serializer.writeAll(&program_id.data);
 
     const memory, const regions = try serializer.finish();
+    errdefer {
+        allocator.free(memory);
+        allocator.free(regions);
+    }
 
     return .{
         memory,
@@ -455,7 +460,10 @@ fn serializeParametersAligned(
     _ = serializer.writeAll(&program_id.data);
 
     const memory, const regions = try serializer.finish();
-    errdefer allocator.free(memory);
+    errdefer {
+        allocator.free(memory);
+        allocator.free(regions);
+    }
 
     return .{
         memory,
@@ -491,7 +499,7 @@ pub fn deserializeParameters(
             ic,
             copy_account_data,
             memory,
-            try account_lengths.toOwnedSlice(allocator),
+            account_lengths.items,
         )
     else
         try deserializeParametersAligned(
@@ -499,7 +507,7 @@ pub fn deserializeParameters(
             ic,
             copy_account_data,
             memory,
-            try account_lengths.toOwnedSlice(allocator),
+            account_lengths.items,
         );
 }
 
@@ -700,7 +708,7 @@ test "serializeParameters" {
     const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
 
     // const allocator = std.testing.allocator;
-    const allocator = std.heap.page_allocator;
+    const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
     for ([_]Pubkey{
@@ -729,7 +737,7 @@ test "serializeParameters" {
                         .{
                             .pubkey = Pubkey.initRandom(prng.random()),
                             .lamports = 1,
-                            .data = try allocator.dupe(u8, &.{ 1, 2, 3, 4, 5 }),
+                            .data = &.{ 1, 2, 3, 4, 5 },
                             .owner = loader_id,
                             .executable = false,
                             .rent_epoch = 100,
@@ -737,10 +745,7 @@ test "serializeParameters" {
                         .{
                             .pubkey = Pubkey.initRandom(prng.random()),
                             .lamports = 2,
-                            .data = try allocator.dupe(
-                                u8,
-                                &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19 },
-                            ),
+                            .data = &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19 },
                             .owner = loader_id,
                             .executable = true,
                             .rent_epoch = 200,
@@ -748,7 +753,7 @@ test "serializeParameters" {
                         .{
                             .pubkey = Pubkey.initRandom(prng.random()),
                             .lamports = 3,
-                            .data = try allocator.dupe(u8, &.{}),
+                            .data = &.{},
                             .owner = loader_id,
                             .executable = false,
                             .rent_epoch = 3100,
@@ -756,7 +761,7 @@ test "serializeParameters" {
                         .{
                             .pubkey = Pubkey.initRandom(prng.random()),
                             .lamports = 4,
-                            .data = try allocator.dupe(u8, &.{ 1, 2, 3, 4, 5 }),
+                            .data = &.{ 1, 2, 3, 4, 5 },
                             .owner = loader_id,
                             .executable = false,
                             .rent_epoch = 100,
@@ -764,10 +769,7 @@ test "serializeParameters" {
                         .{
                             .pubkey = Pubkey.initRandom(prng.random()),
                             .lamports = 5,
-                            .data = try allocator.dupe(
-                                u8,
-                                &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19 },
-                            ),
+                            .data = &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19 },
                             .owner = loader_id,
                             .executable = true,
                             .rent_epoch = 200,
@@ -775,7 +777,7 @@ test "serializeParameters" {
                         .{
                             .pubkey = Pubkey.initRandom(prng.random()),
                             .lamports = 6,
-                            .data = try allocator.dupe(u8, &.{}),
+                            .data = &.{},
                             .owner = loader_id,
                             .executable = false,
                             .rent_epoch = 3100,
@@ -849,6 +851,7 @@ test "serializeParameters" {
                     },
                 },
             );
+            defer instruction_info.deinit(allocator);
 
             var ic = InstructionContext{
                 .tc = &tc,
@@ -883,8 +886,14 @@ test "serializeParameters" {
                 &ic,
                 copy_account_data,
             );
+            defer {
+                allocator.free(memory);
+                allocator.free(regions);
+                allocator.free(account_metas);
+            }
 
             const serialized_regions = try concatRegions(allocator, regions);
+            defer allocator.free(serialized_regions);
             if (copy_account_data) {
                 try std.testing.expectEqualSlices(u8, memory, serialized_regions);
             }
