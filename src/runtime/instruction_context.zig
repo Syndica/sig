@@ -75,7 +75,7 @@ pub const InstructionContext = struct {
         return self.tc.sysvar_cache.get(T) orelse InstructionError.UnsupportedSysvar;
     }
 
-    pub fn getAccountKeyByIndex(self: *const InstructionContext, index: u16) Pubkey {
+    pub fn getAccountKeyByIndexUnchecked(self: *const InstructionContext, index: u16) Pubkey {
         const account_meta = self.info.getAccountMetaAtIndex(index) orelse unreachable;
         return account_meta.pubkey;
     }

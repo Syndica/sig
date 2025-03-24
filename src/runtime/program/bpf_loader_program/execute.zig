@@ -144,7 +144,7 @@ pub fn executeV3InitializeBuffer(
         return InstructionError.AccountAlreadyInitialized;
     }
 
-    const authority_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.authority));
+    const authority_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
     try buffer_account.serializeIntoAccountData(bpf_loader_program.v3.State{
         .buffer = .{
             .authority_address = authority_key,
@@ -169,7 +169,7 @@ pub fn executeV3Write(
         .buffer => |state| {
             if (state.authority_address) |buffer_authority| {
                 if (!buffer_authority.equals(
-                    &ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.authority)),
+                    &ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority)),
                 )) {
                     try ic.tc.log("Incorrect buffer authority provided", .{});
                     return InstructionError.IncorrectAuthority;
@@ -214,8 +214,10 @@ pub fn executeV3DeployWithMaxDataLen(
     try ic.info.checkNumberOfAccounts(4);
 
     // Safety: at least 4 accounts are present
-    const payer_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.payer));
-    const program_data_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.program_data));
+    const payer_key = 
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.payer));
+    const program_data_key =
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
 
     const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, @intFromEnum(AccountIndex.rent));
     const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, @intFromEnum(AccountIndex.clock));
@@ -224,7 +226,7 @@ pub fn executeV3DeployWithMaxDataLen(
     try ic.info.checkNumberOfAccounts(8);
 
     // Safety: at least 8 accounts are present
-    const authority_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.authority));
+    const authority_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // Verify program account and retrieve its program id
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L582-L597
@@ -359,7 +361,7 @@ pub fn executeV3DeployWithMaxDataLen(
             // pass an extra account to avoid the overly strict UnbalancedInstruction error
             // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L668-L669
             .{
-                .pubkey = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.buffer)),
+                .pubkey = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.buffer)),
                 .is_signer = false,
                 .is_writable = true,
             },
@@ -440,12 +442,12 @@ pub fn executeV3Upgrade(
     const AccountIndex = bpf_loader_program.v3.instruction.Upgrade.AccountIndex;
     try ic.info.checkNumberOfAccounts(3);
 
-    const programdata_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.program_data));
+    const programdata_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
     const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, @intFromEnum(AccountIndex.rent));
     const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, @intFromEnum(AccountIndex.clock));
 
     try ic.info.checkNumberOfAccounts(7);
-    const authority_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.authority));
+    const authority_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // Verify program account
 
@@ -524,7 +526,8 @@ pub fn executeV3Upgrade(
     // Verify ProgramData account
 
     const progdata = blk: {
-        const programdata = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
+        const programdata = 
+            try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
         defer programdata.release();
 
         const offset = bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE;
@@ -664,7 +667,7 @@ pub fn executeV3SetAuthority(
     var account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer account.release();
 
-    const present_authority_key = ic.getAccountKeyByIndex(
+    const present_authority_key = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.present_authority),
     );
     const new_authority = if (ic.info.getAccountMetaAtIndex(
@@ -741,10 +744,10 @@ pub fn executeV3SetAuthorityChecked(
     var account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer account.release();
 
-    const present_authority_key = ic.getAccountKeyByIndex(
+    const present_authority_key = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.present_authority),
     );
-    const new_authority = ic.getAccountKeyByIndex(
+    const new_authority = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.new_authority),
     );
 
@@ -1126,9 +1129,12 @@ pub fn executeV3Migrate(
     const AccountIndex = bpf_loader_program.v3.instruction.Migrate.AccountIndex;
     try ic.info.checkNumberOfAccounts(3);
 
-    const programdata_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.program_data));
-    const program_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.program));
-    const provided_authority_key = ic.getAccountKeyByIndex(@intFromEnum(AccountIndex.authority));
+    const programdata_key =
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
+    const program_key =
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program));
+    const provided_authority_key =
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
     const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse
