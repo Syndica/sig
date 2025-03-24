@@ -164,4 +164,11 @@ pub const Instruction = union(enum) {
     ///   1. `[SIGNER]` New validator identity (node_pubkey)
     ///   2. `[SIGNER]` Withdraw authority
     update_validator_identity,
+
+    /// Update the commission for the vote account
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated
+    ///   1. `[SIGNER]` Withdraw authority
+    update_commission: u8,
 };
