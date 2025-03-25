@@ -1,7 +1,14 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const bincode = sig.bincode;
+const executor = sig.runtime.executor;
+const system_program = sig.runtime.program.system_program;
+
+const Pubkey = sig.core.Pubkey;
+const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
+const InstructionAccount = sig.core.instruction.InstructionAccount;
 
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
@@ -35,6 +42,7 @@ pub const InstructionContext = struct {
     ) InstructionError!BorrowedAccount {
         return self.tc.borrowAccountAtIndex(self.info.program_meta.index_in_transaction, .{
             .program_id = self.info.program_meta.pubkey,
+            .tc = self.tc,
         });
     }
 
@@ -48,6 +56,7 @@ pub const InstructionContext = struct {
 
         return try self.tc.borrowAccountAtIndex(account_meta.index_in_transaction, .{
             .program_id = self.info.program_meta.pubkey,
+            .tc = self.tc,
             .is_signer = account_meta.is_signer,
             .is_writable = account_meta.is_writable,
         });
@@ -66,5 +75,35 @@ pub const InstructionContext = struct {
             return InstructionError.InvalidArgument;
 
         return self.tc.sysvar_cache.get(T) orelse InstructionError.UnsupportedSysvar;
+    }
+
+    pub fn getAccountKeyByIndexUnchecked(self: *const InstructionContext, index: u16) Pubkey {
+        const account_meta = self.info.getAccountMetaAtIndex(index) orelse unreachable;
+        return account_meta.pubkey;
+    }
+
+    pub fn nativeInvoke(
+        self: *InstructionContext,
+        allocator: std.mem.Allocator,
+        program_id: Pubkey,
+        instruction: anytype,
+        account_metas: []const InstructionAccount,
+        signers: []const Pubkey,
+    ) (error{OutOfMemory} || InstructionError)!void {
+        const data = bincode.writeAlloc(allocator, instruction, .{}) catch |e| switch (e) {
+            error.NoSpaceLeft, error.OutOfMemory => return error.OutOfMemory,
+        };
+        defer allocator.free(data);
+
+        try executor.executeNativeCpiInstruction(
+            allocator,
+            self.tc,
+            Instruction{
+                .program_id = program_id,
+                .accounts = account_metas,
+                .data = data,
+            },
+            signers,
+        );
     }
 };

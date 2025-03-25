@@ -143,6 +143,27 @@ test "findProgramAddress" {
     }
 }
 
+test "createProgramAddress" {
+    var prng = std.Random.DefaultPrng.init(5083);
+    for (0..1_000) |_| {
+        const program_id = Pubkey.initRandom(prng.random());
+
+        const derived_key, const bump_seed = findProgramAddress(
+            &.{ "Lil'", "Bits" },
+            program_id,
+        ) orelse unreachable;
+
+        try std.testing.expectEqual(
+            derived_key,
+            createProgramAddress(
+                &.{ "Lil'", "Bits" },
+                &.{bump_seed},
+                program_id,
+            ),
+        );
+    }
+}
+
 test "bytesAreCurvePoint" {
     const bytes_on_curve: []const []const u8 = &.{ &.{
         184, 122, 70,  205, 215, 194, 55,  219,
