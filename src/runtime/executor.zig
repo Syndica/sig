@@ -561,6 +561,7 @@ test "popInstruction" {
         // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
             .program_id = Pubkey.ZEROES,
+            .tc = &tc,
             .is_signer = false,
             .is_writable = false,
         });
@@ -813,6 +814,7 @@ test "sumAccountLamports" {
         // Failure: AccountBorrowOutstanding
         const borrowed_account = try tc.borrowAccountAtIndex(0, .{
             .program_id = Pubkey.ZEROES,
+            .tc = &tc,
             .is_signer = false,
             .is_writable = false,
         });

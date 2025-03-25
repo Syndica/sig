@@ -42,6 +42,7 @@ pub const InstructionContext = struct {
     ) InstructionError!BorrowedAccount {
         return self.tc.borrowAccountAtIndex(self.info.program_meta.index_in_transaction, .{
             .program_id = self.info.program_meta.pubkey,
+            .tc = self.tc,
         });
     }
 
@@ -55,6 +56,7 @@ pub const InstructionContext = struct {
 
         return try self.tc.borrowAccountAtIndex(account_meta.index_in_transaction, .{
             .program_id = self.info.program_meta.pubkey,
+            .tc = self.tc,
             .is_signer = account_meta.is_signer,
             .is_writable = account_meta.is_writable,
         });

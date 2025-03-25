@@ -214,7 +214,7 @@ pub fn executeV3DeployWithMaxDataLen(
     try ic.info.checkNumberOfAccounts(4);
 
     // Safety: at least 4 accounts are present
-    const payer_key = 
+    const payer_key =
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.payer));
     const program_data_key =
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
@@ -428,7 +428,7 @@ pub fn executeV3DeployWithMaxDataLen(
         } });
         // TODO: Is it okay to pass rent here which is loaded from the sysvar_cache rather than the rent stored in the
         // transaction context in agave?
-        try program_account.setExecutable(true, rent);
+        try program_account.setExecutable(true);
     }
 
     try ic.tc.log("Deployed program {}", .{new_program_id});
@@ -526,7 +526,7 @@ pub fn executeV3Upgrade(
     // Verify ProgramData account
 
     const progdata = blk: {
-        const programdata = 
+        const programdata =
             try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
         defer programdata.release();
 
