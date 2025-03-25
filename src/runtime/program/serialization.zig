@@ -209,7 +209,7 @@ pub fn serializeParameters(
         if (account_meta.index_in_callee != index_in_instruction) {
             accounts.appendAssumeCapacity(.{ .duplicate = @intCast(account_meta.index_in_callee) });
         } else {
-            const account = try ic.borrowInstructionAccount(account_meta.index_in_transaction);
+            const account = try ic.borrowInstructionAccount(index_in_instruction);
             defer account.release();
             accounts.appendAssumeCapacity(.{ .account = .{
                 @intCast(index_in_instruction),
