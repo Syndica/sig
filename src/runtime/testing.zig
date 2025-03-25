@@ -14,6 +14,7 @@ const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
+const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub const TransactionContextAccountParams = struct {
     pubkey: ?Pubkey = null,
@@ -34,6 +35,7 @@ pub const TransactionContextParams = struct {
     lamports_per_signature: u64 = 0,
     last_blockhash: Hash = Hash.ZEROES,
     feature_set: FeatureSetParams = &.{},
+    compute_budget: ComputeBudget = ComputeBudget.default(1_400_000),
 };
 
 pub const FeatureSetParams = []const struct { pubkey: Pubkey, slot: Slot = 0 };
@@ -83,6 +85,7 @@ pub fn createTransactionContext(
         .lamports_per_signature = params.lamports_per_signature,
         .last_blockhash = params.last_blockhash,
         .feature_set = feature_set,
+        .compute_budget = params.compute_budget,
     };
 }
 
@@ -138,12 +141,9 @@ pub fn createInstructionInfo(
     if (!builtin.is_test)
         @compileError("createInstructionContext should only be called in test mode");
 
-    const program_index_in_transaction = blk: {
-        for (tc.accounts, 0..) |account, index| {
-            if (account.pubkey.equals(&program_id)) break :blk index;
-        }
-        return error.CoulfNotFindProgramAccount;
-    };
+    const program_index_in_transaction = for (tc.accounts, 0..) |account, index| {
+        if (account.pubkey.equals(&program_id)) break index;
+    } else return error.CouldNotFindProgramAccount;
 
     const account_metas = try createInstructionContextAccountMetas(tc, accounts_params);
 

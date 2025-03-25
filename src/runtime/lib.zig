@@ -14,6 +14,7 @@ pub const sysvar_cache = @import("sysvar_cache.zig");
 pub const testing = @import("testing.zig");
 pub const tmp_utils = @import("tmp_utils.zig");
 pub const transaction_context = @import("transaction_context.zig");
+pub const compute_budget = @import("compute_budget.zig");
 
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;
@@ -24,6 +25,7 @@ pub const LogCollector = log_collector.LogCollector;
 pub const SysvarCache = sysvar_cache.SysvarCache;
 pub const TransactionContext = transaction_context.TransactionContext;
 pub const TransactionContextAccount = transaction_context.TransactionContextAccount;
+pub const ComputeBudget = compute_budget.ComputeBudget;
 
 // TODO: move to accounts db
 pub const AccountSharedData = @import("account_shared_data.zig").AccountSharedData;

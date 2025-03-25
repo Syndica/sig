@@ -400,6 +400,14 @@ pub fn SortedMapCustom(
             return item;
         }
 
+        pub fn swapRemoveNoSort(self: *Self, key: K) bool {
+            const was_removed = self.inner.swapRemove(key);
+            if (was_removed and !self.resetMaxOnRemove(key)) {
+                self.is_sorted = false;
+            }
+            return was_removed;
+        }
+
         pub fn getOrPut(self: *Self, key: K) !std.AutoArrayHashMap(K, V).GetOrPutResult {
             const result = try self.inner.getOrPut(key);
             if (self.max == null or order(key, self.max.?) == .gt) {
@@ -536,7 +544,7 @@ pub fn SortedMapCustom(
             return .{ keys_, values_ };
         }
 
-        fn sort(self: *Self) void {
+        pub fn sort(self: *Self) void {
             if (self.is_sorted) return;
             self.inner.sort(struct {
                 items: std.MultiArrayList(Inner.Unmanaged.Data).Slice,
@@ -1152,4 +1160,39 @@ test "RingBuffer" {
         try std.testing.expect(std.mem.eql(i32, data, &expected));
         try std.testing.expect(cb.last() == @as(i32, 6));
     }
+}
+
+test "SortedMap" {
+    var map = SortedMap(u64, u64).init(std.testing.allocator);
+    defer map.deinit();
+
+    try map.put(3, 30);
+    try map.put(1, 10);
+    try map.put(2, 20);
+    try map.put(4, 40);
+    try map.put(5, 50);
+
+    // Get the keys and values
+    const items = map.items();
+    const keys = items[0];
+    const values = items[1];
+
+    // Check that the keys and values are sorted.
+    for (keys, 0..) |key, i| {
+        // Keys should be 1, 2, 3, 4, 5
+        try expectEqual(key, i + 1);
+        // Values should be 10, 20, 30, 40, 50
+        try expectEqual(values[i], (i + 1) * 10);
+    }
+    // Check that the map is sorted
+    try expect(map.is_sorted);
+
+    // Remove a non terminal item with no sort.
+    try expect(map.swapRemoveNoSort(3));
+    try expect(!map.swapRemoveNoSort(3));
+    try expect(map.swapRemoveNoSort(1));
+
+    try expect(!map.is_sorted);
+    map.sort();
+    try expect(map.is_sorted);
 }
