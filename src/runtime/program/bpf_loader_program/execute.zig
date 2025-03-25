@@ -313,8 +313,8 @@ pub fn executeV3DeployWithMaxDataLen(
         &.{&new_program_id.data},
         bpf_loader_program.v3.ID,
     ) orelse {
-        ic.tc.custom_error = 12345; // TODO: Correct error behaviour here?
-        return InstructionError.Custom;
+        // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/pubkey/src/lib.rs#L611-L612
+        @panic("Unable to find viable program address bump seed");
     };
 
     if (!derived_key.equals(&program_data_key)) {
