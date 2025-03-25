@@ -15,6 +15,7 @@ pub const Config = struct {
     ssh_install_dir: []const u8,
     ssh_workdir: []const u8,
     no_network_tests: bool,
+    has_side_effects: bool,
 
     pub fn fromBuild(b: *Build) !Config {
         var self = Config{
@@ -22,30 +23,63 @@ pub const Config = struct {
                 .default_target = defaultTargetDetectM3() orelse .{},
             }),
             .optimize = b.standardOptimizeOption(.{}),
-            .filters = b.option([]const []const u8, "filter", "List of filters, used for example" ++
-                " to filter unit tests by name. specified as a series like `-Dfilter='filter1' " ++
-                "-Dfilter='filter2'`"),
+            .filters = b.option(
+                []const []const u8,
+                "filter",
+                "List of filters, used for example" ++
+                    " to filter unit tests by name. specified as a series like `-Dfilter='filter1' " ++
+                    "-Dfilter='filter2'`",
+            ),
             .enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite"),
-            .blockstore_db = b.option(BlockstoreDB, "blockstore", "Blockstore database backend") orelse
-                .rocksdb,
-            .run = !(b.option(bool, "no-run",
+            .blockstore_db = b.option(
+                BlockstoreDB,
+                "blockstore",
+                "Blockstore database backend",
+            ) orelse .rocksdb,
+            .run = !(b.option(
+                bool,
+                "no-run",
                 \\Don't run any of the executables implied by the specified steps, only install them.
                 \\Use in conjunction with 'no-bin' to avoid installation as well.
+                ,
             ) orelse false),
-            .install = !(b.option(bool, "no-bin",
+            .install = !(b.option(
+                bool,
+                "no-bin",
                 \\Don't install any of the binaries implied by the specified steps, only run them.
                 \\Use in conjunction with 'no-run' to avoid running as well.
+                ,
             ) orelse false),
-            .ssh_host = b.option([]const u8, "ssh-host", "Builds will target this remote host," ++
-                " binaries will be installed there, and executables will run there."),
-            .ssh_install_dir = b.option([]const u8, "ssh-installdir", "When using ssh-host, this" ++
-                " configures the directory to install binaries (relative to ssh-workdir)" ++
-                " (default: zig-out/bin).") orelse "zig-out/bin/",
-            .ssh_workdir = b.option([]const u8, "ssh-workdir", "When using ssh-host, this " ++
-                "configures the working directory where executables will run (default: sig).") orelse
+            .ssh_host = b.option(
+                []const u8,
+                "ssh-host",
+                "Builds will target this remote host," ++
+                    " binaries will be installed there, and executables will run there.",
+            ),
+            .ssh_install_dir = b.option(
+                []const u8,
+                "ssh-installdir",
+                "When using ssh-host, this" ++
+                    " configures the directory to install binaries (relative to ssh-workdir)" ++
+                    " (default: zig-out/bin).",
+            ) orelse "zig-out/bin/",
+            .ssh_workdir = b.option(
+                []const u8,
+                "ssh-workdir",
+                "When using ssh-host, this configures the working " ++
+                    "directory where executables will run (default: sig).",
+            ) orelse
                 "sig",
-            .no_network_tests = b.option(bool, "no-network-tests", "Do not run any tests that " ++
-                "depend on the network.") orelse false,
+            .no_network_tests = b.option(
+                bool,
+                "no-network-tests",
+                "Do not run any tests that depend on the network.",
+            ) orelse false,
+            .has_side_effects = b.option(
+                bool,
+                "side-effects",
+                "Disables caching of the run step",
+            ) orelse false,
         };
 
         if (self.ssh_host) |host| {
@@ -340,6 +374,7 @@ fn addInstallAndRun(
         } else {
             const run = b.addRunArtifact(exe);
             run.addArgs(b.args orelse &.{});
+            run.has_side_effects = config.has_side_effects;
             step.dependOn(&run.step);
         }
     }
