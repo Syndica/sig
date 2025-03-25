@@ -422,7 +422,7 @@ fn handleRecvBody(
         if (body.head_info.content_len) |content_len| {
             connErrLogger(logger, entry_data).logf(
                 "{} request isn't expected to have a body, but got Content-Length: {d}",
-                .{ requests.methodFmt(body.head_info.method), content_len },
+                .{ requests.httpMethodFmt(body.head_info.method), content_len },
             );
         }
     }
@@ -530,7 +530,7 @@ fn handleRecvBody(
 
     logger.err().logf(
         "Unrecognized request '{} {s}'",
-        .{ requests.methodFmt(body.head_info.method), body.head_info.target.constSlice() },
+        .{ requests.httpMethodFmt(body.head_info.method), body.head_info.target.constSlice() },
     );
     entry_data.state = .{
         .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(

@@ -1,6 +1,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
+const sig = @import("../../sig.zig");
+
 const server = @import("server.zig");
 const requests = server.requests;
 const connection = server.connection;
@@ -37,7 +39,9 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
 
     var http_server = std.http.Server.init(conn, buffer);
     var request = http_server.receiveHead() catch |err| {
-        logger.err().field("conn", conn.address).logf("Receive head error: {s}", .{@errorName(err)});
+        logger.err()
+            .field("conn", conn.address)
+            .logf("Receive head error: {s}", .{@errorName(err)});
         return;
     };
     const head_info = requests.HeadInfo.parseFromStdHead(request.head) catch |err| {
@@ -54,7 +58,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
 
     logger.info().field("conn", conn.address).logf(
         "Responding to request: {} {s}",
-        .{ requests.methodFmt(request.head.method), request.head.target },
+        .{ requests.httpMethodFmt(request.head.method), request.head.target },
     );
 
     switch (head_info.method) {
@@ -122,7 +126,9 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
             },
 
             .genesis_file => {
-                logger.err().field("conn", conn.address).logf("Attempt to get our genesis file", .{});
+                logger.err()
+                    .field("conn", conn.address)
+                    .logf("Attempt to get our genesis file", .{});
                 try request.respond("Genesis file get is not yet implemented", .{
                     .status = .service_unavailable,
                     .keep_alive = false,
@@ -133,11 +139,38 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
             .not_found => {},
         },
         .POST => {
-            logger.err().field("conn", conn.address).logf("Attempt to invoke our RPC service", .{});
-            try request.respond("RPCs are not yet implemented", .{
-                .status = .service_unavailable,
-                .keep_alive = false,
-            });
+            if (head_info.content_type != .@"application/json") {
+                std.debug.panic("TODO: handle bad or missing content type", .{});
+            }
+
+            // make the server handle the 100-continue in case there is one
+            const any_reader = request.reader() catch |err| switch (err) {
+                error.HttpExpectationFailed => return,
+                else => |e| return e,
+            };
+            const req_reader = sig.utils.io.narrowAnyReader(
+                any_reader,
+                std.http.Server.Request.ReadError,
+            );
+            _ = req_reader; // autofix
+
+            switch (head_info.transfer_encoding) {
+                .none => {
+                    const content_len = head_info.content_len orelse
+                        std.debug.panic("TODO: handle content_len xor transfer_encoding", .{});
+                    if (content_len > requests.MAX_REQUEST_BODY_SIZE) {
+                        std.debug.panic("TODO: handle oversized request body", .{});
+                    }
+                    std.debug.panic("TODO: handle content_len-based transfer", .{});
+                },
+                .chunked => {
+                    if (head_info.content_len != null) {
+                        std.debug.panic("TODO: handle content_len xor transfer_encoding", .{});
+                    }
+                    std.debug.panic("TODO: handle chunked transfer encoding", .{});
+                },
+            }
+
             return;
         },
         else => {},
@@ -147,7 +180,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
 
     logger.err().field("conn", conn.address).logf(
         "Unrecognized request '{} {s}'",
-        .{ requests.methodFmt(request.head.method), request.head.target },
+        .{ requests.httpMethodFmt(request.head.method), request.head.target },
     );
     try request.respond("", .{
         .status = .not_found,
