@@ -486,7 +486,6 @@ fn executeUpdateCommission(
     vote_account: *BorrowedAccount,
     commission: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-
     try updateCommission(
         allocator,
         ic,
@@ -571,14 +570,14 @@ fn updateCommission(
 /// is allowed
 pub fn isCommissionUpdateAllowed(slot: u64, epoch_schedule: *const EpochSchedule) bool {
     // Always allowed during warmup epochs
-    const relative_slot: ?u64 = std.math.rem(
+    const maybe_relative_slot: ?u64 = std.math.rem(
         u64,
         (slot -| epoch_schedule.first_normal_slot),
         epoch_schedule.slots_per_epoch,
     ) catch null;
 
-    if (relative_slot) |r_slot| {
-        return (r_slot *| 2 <= epoch_schedule.slots_per_epoch);
+    if (maybe_relative_slot) |relative_slot| {
+        return (relative_slot *| 2 <= epoch_schedule.slots_per_epoch);
     } else {
         return true;
     }
