@@ -258,6 +258,15 @@ pub const VoteStateVersions = union(enum) {
             .current => |state| return state,
         }
     }
+
+    /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
+    pub fn isUninitialized(self: VoteStateVersions) bool {
+        switch (self) {
+            .v0_23_5 => |state| return state.authorized_voter.equals(&Pubkey.ZEROES),
+            .v1_14_11 => |state| return state.authorized_voters.count() == 0,
+            .current => |state| return state.authorized_voters.count() == 0,
+        }
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_0_23_5.rs#L11
@@ -900,25 +909,27 @@ test "VoteState.isUninitialized: invalid account data" {
         .unix_timestamp = 0,
     };
 
-    var vote_state = try VoteState.init(
+    var vote_state = VoteStateVersions{ .current = try VoteState.init(
         allocator,
         node_publey,
         authorized_voter,
         authorized_withdrawer,
         commission,
         clock,
-    );
+    ) };
     defer vote_state.deinit();
 
     try std.testing.expect(!vote_state.isUninitialized());
 
-    const uninitialized_state = try createTestVoteState(
-        allocator,
-        node_publey,
-        null, // Authorized voters not set
-        authorized_withdrawer,
-        commission,
-    );
+    const uninitialized_state = VoteStateVersions{
+        .current = try createTestVoteState(
+            allocator,
+            node_publey,
+            null, // Authorized voters not set
+            authorized_withdrawer,
+            commission,
+        ),
+    };
 
     try std.testing.expect(uninitialized_state.isUninitialized());
 }
