@@ -17,7 +17,7 @@ const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
-const FeatureSet = sig.runtime.FeatureSet;
+const feature_set = sig.runtime.feature_set;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 
@@ -515,7 +515,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.tc.feature_set.isActive(FeatureSet.allow_commission_decrease_at_any_time)) {
+        if (ic.tc.feature_set.isActive(feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
             const versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,
@@ -531,7 +531,7 @@ fn updateCommission(
     };
 
     if (enforce_commission_update_rule and ic.tc.feature_set.isActive(
-        FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+        feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
             // Clean up before returning, if we have a vote_state already.
@@ -1702,11 +1702,11 @@ test "vote_program: update_commission increasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -1729,11 +1729,11 @@ test "vote_program: update_commission increasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -1827,11 +1827,11 @@ test "vote_program: update_commission decreasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -1854,11 +1854,11 @@ test "vote_program: update_commission decreasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2059,11 +2059,11 @@ test "vote_program: update_commission error commission update too late failure" 
             },
             .feature_set = &.{
                 .{
-                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2086,11 +2086,11 @@ test "vote_program: update_commission error commission update too late failure" 
             },
             .feature_set = &.{
                 .{
-                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2189,11 +2189,11 @@ test "vote_program: update_commission missing signature" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2216,11 +2216,11 @@ test "vote_program: update_commission missing signature" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = FeatureSet.allow_commission_decrease_at_any_time,
+                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = FeatureSet.commission_updates_only_allowed_in_first_half_of_epoch,
+                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },

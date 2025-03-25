@@ -19,6 +19,12 @@ pub const ENABLE_LOADER_V4 =
 pub const RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION =
     Pubkey.parseBase58String("FKAcEvNgSY79RpqsPNUV5gDyumopH4cEHqUxyfm8b8Ap") catch unreachable;
 
+pub const ALLOW_COMMISSION_DECREASE_AT_ANY_TIME =
+    Pubkey.parseBase58String("5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL") catch unreachable;
+
+pub const COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH =
+    Pubkey.parseBase58String("noRuG2kzACwgaY7TVmLRnUNPLKNVQE1fb7X55YWBehp") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features
@@ -41,10 +47,4 @@ pub const FeatureSet = struct {
     pub fn isActive(self: *const FeatureSet, feature: Pubkey) bool {
         return self.active.contains(feature);
     }
-
-    pub const allow_commission_decrease_at_any_time =
-        Pubkey.parseBase58String("5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL") catch unreachable;
-
-    pub const commission_updates_only_allowed_in_first_half_of_epoch =
-        Pubkey.parseBase58String("noRuG2kzACwgaY7TVmLRnUNPLKNVQE1fb7X55YWBehp") catch unreachable;
 };
