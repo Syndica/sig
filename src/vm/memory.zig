@@ -12,7 +12,7 @@ pub const STACK_START: u64 = 0x200000000;
 pub const HEAP_START: u64 = 0x300000000;
 /// Virtual address of the input region
 pub const INPUT_START: u64 = 0x400000000;
-const VIRTUAL_ADDRESS_BITS = 32;
+pub const VIRTUAL_ADDRESS_BITS = 32;
 
 pub const AccessError = error{ StackAccessViolation, AccessViolation };
 pub const RegionError = AccessError || error{InvalidMemoryRegion};
