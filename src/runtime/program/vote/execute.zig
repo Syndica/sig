@@ -498,6 +498,8 @@ fn executeUpdateCommission(
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/69edb584ac17df2f5d8b5e817d7afede7877eded/vote-interface/src/instruction.rs#L415
+///
+/// Update the vote account's commission
 fn updateCommission(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
