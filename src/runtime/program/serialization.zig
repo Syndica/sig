@@ -71,13 +71,11 @@ pub const Serializer = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L56-L57
     pub fn write(self: *Serializer, comptime T: type, value: T) u64 {
-        const vaddr = self.vaddr +| self.buffer.items.len -| self.region_start;
-        self.buffer.appendSliceAssumeCapacity(std.mem.asBytes(&value));
-        return vaddr;
+        return self.writeBytes(std.mem.asBytes(&value));
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L77-L78
-    pub fn writeAll(self: *Serializer, data: []const u8) u64 {
+    pub fn writeBytes(self: *Serializer, data: []const u8) u64 {
         const vaddr = self.vaddr +| self.buffer.items.len -| self.region_start;
         self.buffer.appendSliceAssumeCapacity(data);
         return vaddr;
@@ -87,7 +85,7 @@ pub const Serializer = struct {
     pub fn writeAccount(self: *Serializer, account: *const BorrowedAccount) (error{OutOfMemory} || InstructionError)!u64 {
         const vm_data_addr = if (self.copy_account_data) blk: {
             const addr = self.vaddr +| self.buffer.items.len;
-            _ = self.writeAll(account.account.data);
+            _ = self.writeBytes(account.account.data);
             break :blk addr;
         } else blk: {
             try self.pushRegion(true);
@@ -196,7 +194,7 @@ pub fn serializeParameters(
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
-        break :blk program_account.account.owner.equals(&ids.BPF_LOADER_V1_PROGRAM_ID);
+        break :blk program_account.account.owner.equals(&program.bpf_loader_program.v1.ID);
     };
 
     var accounts = std.ArrayList(SerializedAccount).initCapacity(
@@ -209,7 +207,7 @@ pub fn serializeParameters(
         if (account_meta.index_in_callee != index_in_instruction) {
             accounts.appendAssumeCapacity(.{ .duplicate = @intCast(account_meta.index_in_callee) });
         } else {
-            const account = try ic.borrowInstructionAccount(index_in_instruction);
+            const account = try ic.borrowInstructionAccount(@intCast(index_in_instruction));
             defer account.release();
             accounts.appendAssumeCapacity(.{ .account = .{
                 @intCast(index_in_instruction),
@@ -296,7 +294,7 @@ fn serializeParametersUnaligned(
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
 
-                const vm_key_addr = serializer.writeAll(&borrowed_account.pubkey.data);
+                const vm_key_addr = serializer.writeBytes(&borrowed_account.pubkey.data);
                 const vm_lamports_addr = serializer.write(
                     u64,
                     std.mem.nativeToLittle(u64, borrowed_account.account.lamports),
@@ -307,7 +305,7 @@ fn serializeParametersUnaligned(
                     std.mem.nativeToLittle(u64, borrowed_account.constAccountData().len),
                 );
                 const vm_data_addr = try serializer.writeAccount(&borrowed_account);
-                const vm_owner_addr = serializer.writeAll(&borrowed_account.account.owner.data);
+                const vm_owner_addr = serializer.writeBytes(&borrowed_account.account.owner.data);
 
                 _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
                 _ = serializer.write(
@@ -330,8 +328,8 @@ fn serializeParametersUnaligned(
         }
     }
     _ = serializer.write(u64, std.mem.nativeToLittle(u64, instruction_data.len));
-    _ = serializer.writeAll(instruction_data);
-    _ = serializer.writeAll(&program_id.data);
+    _ = serializer.writeBytes(instruction_data);
+    _ = serializer.writeBytes(&program_id.data);
 
     const memory, const regions = try serializer.finish();
     errdefer {
@@ -419,10 +417,10 @@ fn serializeParametersAligned(
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
-                _ = serializer.writeAll(&.{ 0, 0, 0, 0 });
+                _ = serializer.writeBytes(&.{ 0, 0, 0, 0 });
 
-                const vm_key_addr = serializer.writeAll(&borrowed_account.pubkey.data);
-                const vm_owner_addr = serializer.writeAll(&borrowed_account.account.owner.data);
+                const vm_key_addr = serializer.writeBytes(&borrowed_account.pubkey.data);
+                const vm_owner_addr = serializer.writeBytes(&borrowed_account.account.owner.data);
                 const vm_lamports_addr = serializer.write(
                     u64,
                     std.mem.nativeToLittle(u64, borrowed_account.account.lamports),
@@ -450,14 +448,14 @@ fn serializeParametersAligned(
             .duplicate => |index| {
                 account_metas.appendAssumeCapacity(account_metas.items[index]);
                 _ = serializer.write(u8, index);
-                _ = serializer.writeAll(&.{ 0, 0, 0, 0, 0, 0, 0 });
+                _ = serializer.writeBytes(&.{ 0, 0, 0, 0, 0, 0, 0 });
             },
         }
     }
 
     _ = serializer.write(u64, std.mem.nativeToLittle(u64, instruction_data.len));
-    _ = serializer.writeAll(instruction_data);
-    _ = serializer.writeAll(&program_id.data);
+    _ = serializer.writeBytes(instruction_data);
+    _ = serializer.writeBytes(&program_id.data);
 
     const memory, const regions = try serializer.finish();
     errdefer {
@@ -482,7 +480,7 @@ pub fn deserializeParameters(
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
-        break :blk program_account.account.owner.equals(&ids.BPF_LOADER_V1_PROGRAM_ID);
+        break :blk program_account.account.owner.equals(&program.bpf_loader_program.v1.ID);
     };
 
     var account_lengths =
@@ -712,9 +710,9 @@ test "serializeParameters" {
     var prng = std.rand.DefaultPrng.init(0);
 
     for ([_]Pubkey{
-        ids.BPF_LOADER_V1_PROGRAM_ID,
-        ids.BPF_LOADER_V2_PROGRAM_ID,
-        ids.BPF_LOADER_V3_PROGRAM_ID,
+        program.bpf_loader_program.v1.ID,
+        program.bpf_loader_program.v2.ID,
+        program.bpf_loader_program.v3.ID,
     }) |loader_id| {
         for ([_]bool{
             false,
@@ -898,7 +896,7 @@ test "serializeParameters" {
                 try std.testing.expectEqualSlices(u8, memory, serialized_regions);
             }
 
-            // TODO: deserialize and compare
+            // TODO: compare against entrypoint deserialize method once implemented
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L981
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L893-L894
 
