@@ -453,7 +453,9 @@ pub fn executeV3Upgrade(
     const AccountIndex = bpf_loader_program.v3.instruction.Upgrade.AccountIndex;
     try ic.info.checkNumberOfAccounts(3);
 
-    const programdata_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
+    const programdata_key = 
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
+    
     const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, @intFromEnum(AccountIndex.rent));
     const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, @intFromEnum(AccountIndex.clock));
 
