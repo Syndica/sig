@@ -2,8 +2,13 @@
 
 const std = @import("std");
 const sig = @import("sig");
+const builtin = @import("builtin");
 pub const poseidon = @import("poseidon.zig");
-pub const deserialize = @import("deserialize.zig");
+pub const serial = @import("serial.zig");
+
+/// "v0" is a Solana idea, Zig can't represent it. So we use v1 instead.
+const is_sbpfv0 = std.mem.eql(u8, builtin.cpu.model.name, "v1");
+pub const deserialize = serial.deserialize;
 
 const sbpf = sig.vm.sbpf;
 const Pubkey = sig.core.Pubkey;
@@ -38,7 +43,7 @@ pub const SolParameters = extern struct {
 };
 
 const syscall_map = std.StaticStringMap(type).initComptime(&.{
-    .{ "panic", fn ([*]const u8, u64, u64, u64) void },
+    .{ "sol_panic_", fn ([*]const u8, u64, u64, u64) void },
     .{ "sol_poseidon", fn (
         parameters: u64,
         endianness: u64,
@@ -46,18 +51,28 @@ const syscall_map = std.StaticStringMap(type).initComptime(&.{
         bytes_len: u64,
         result: [*]u8,
     ) void },
-    .{ "log", fn (msg: [*]const u8, len: u64) void },
+    .{ "abort", fn () noreturn },
+    .{ "sol_log_", fn (msg: [*]const u8, len: u64) void },
 });
 
 fn SyscallType(comptime name: []const u8) type {
-    return syscall_map.get(name) orelse @compileError("unknown syscall: " ++ name);
+    const ty = syscall_map.get(name) orelse @compileError("unknown syscall: " ++ name);
+    if (is_sbpfv0) {
+        var ti = @typeInfo(ty);
+        ti.Fn.calling_convention = .C;
+        return @Type(ti);
+    } else return ty;
 }
 
 pub inline fn defineSyscall(
     comptime name: []const u8,
 ) *align(1) const SyscallType(name) {
     comptime {
-        const hash = sbpf.hashSymbolName(name);
-        return @ptrFromInt(hash);
+        if (std.mem.eql(u8, builtin.cpu.model.name, "v1")) {
+            return @extern(*const SyscallType(name), .{ .name = name });
+        } else {
+            const hash = sbpf.hashSymbolName(name);
+            return @ptrFromInt(hash);
+        }
     }
 }

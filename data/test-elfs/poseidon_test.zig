@@ -4,9 +4,9 @@ const sdk = @import("sdk");
 const poseidon = sdk.poseidon;
 const SolBytes = sdk.SolBytes;
 
-const log = sdk.defineSyscall("log");
+const log = sdk.defineSyscall("sol_log_");
 const sol_poseidon = sdk.defineSyscall("sol_poseidon");
-const panic = sdk.defineSyscall("panic");
+const panic = sdk.defineSyscall("sol_panic_");
 
 /// Mirrors this Agave test: https://github.com/anza-xyz/agave/blob/e87917adab5468fe13287147800922a3191d0040/programs/sbf/c/src/poseidon/poseidon.c#L8
 export fn entrypoint() u64 {

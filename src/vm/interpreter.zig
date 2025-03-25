@@ -583,13 +583,12 @@ pub const Vm = struct {
                         self.result = .{ .ok = self.registers.get(.r0) };
                         return false;
                     }
+
                     self.depth -= 1;
                     const frame = self.call_frames.pop();
+
                     self.registers.set(.r10, frame.fp);
                     @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
-                    if (!version.enableDynamicStackFrames()) {
-                        registers.getPtr(.r10).* -= config.stack_frame_size;
-                    }
                     next_pc = frame.return_pc;
                 }
             },

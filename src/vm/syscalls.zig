@@ -221,7 +221,7 @@ test poseidon {
         sig.ELF_DATA_DIR ++ "poseidon_test.so",
         &.{
             .{ .name = "sol_poseidon", .builtin_fn = poseidon },
-            .{ .name = "log", .builtin_fn = log },
+            .{ .name = "sol_log_", .builtin_fn = log },
             .{ .name = "sol_panic_", .builtin_fn = panic },
         },
         .{ 0, 48526 },

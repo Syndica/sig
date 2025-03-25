@@ -19,6 +19,12 @@ CC_V3="${CC} ${C_FLAGS_V3}"
 LD_V0="${LD_FLAGS} --script data/test-elfs/elf_sbpfv0.ld"
 LD_V3="${LD_FLAGS} -Bsymbolic --script data/test-elfs/elf.ld"
 
+ZIG_FLAGS="-target bpfel-freestanding \
+            -OReleaseSmall \
+            -fstrip \
+            -fno-emit-bin"
+ZIG_V0="${ZIG_FLAGS}"
+
 V0_FILES=(reloc_64_64 
           reloc_64_relative 
           reloc_64_relative_data 
@@ -28,33 +34,40 @@ V0_FILES=(reloc_64_64
           syscall_reloc_64_32
           struct_func_pointer
           hash_collision
-          relative_call)
+          relative_call
+          deserialize)
           
 EXCLUDE_V3=(bss_section data_section 
             syscall_reloc_64_32
             hash_collision
-            relative_call)
+            relative_call
+            deserialize)
 
 for ZIG_FILE in data/test-elfs/*.zig; do
     BASE_NAME=$(basename "$ZIG_FILE" .zig)
-    
-    $ZIG build-obj -target bpfel-freestanding \
-                               -OReleaseSmall \
-                               -fstrip \
-                               -fno-emit-bin \
-                               -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc" \
-                               --dep sdk \
-                               -Mroot="$ZIG_FILE" \
-                               --dep sig \
-                               -Msdk=sdk/sdk.zig \
-                               -Msig=src/sig.zig
 
     if [[ ! " ${EXCLUDE_V3[@]} " =~ " ${BASE_NAME} " ]]; then
+        $ZIG build-obj $ZIG_FLAGS -mcpu v3 \
+                                  -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc" \
+                                  --dep sdk \
+                                  -Mroot="$ZIG_FILE" \
+                                  --dep sig \
+                                  -Msdk=sdk/sdk.zig \
+                                  -Msig=src/sig.zig \
+
         $CC_V3 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}.o"
         $LD_V3 "data/test-elfs/${BASE_NAME}.o" -o "data/test-elfs/${BASE_NAME}.so"
     fi
     
     if [[ " ${V0_FILES[@]} " =~ " ${BASE_NAME} " ]]; then
+        $ZIG build-obj $ZIG_FLAGS -mcpu v1 \
+                                  -femit-llvm-bc="data/test-elfs/${BASE_NAME}.bc" \
+                                  --dep sdk \
+                                  -Mroot="$ZIG_FILE" \
+                                  --dep sig \
+                                  -Msdk=sdk/sdk.zig \
+                                  -Msig=src/sig.zig \
+
         $CC_V0 "data/test-elfs/${BASE_NAME}.bc" -c -o "data/test-elfs/${BASE_NAME}_sbpfv0.o"
         $LD_V0 "data/test-elfs/${BASE_NAME}_sbpfv0.o" -o "data/test-elfs/${BASE_NAME}_sbpfv0.so"
     fi

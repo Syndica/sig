@@ -1,1 +1,0 @@
-runtime.program.test_bpf_execution.test.testBpfProgramExecution: hello world 2005792

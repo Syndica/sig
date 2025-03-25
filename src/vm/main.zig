@@ -45,7 +45,7 @@ pub fn main() !void {
     defer loader.deinit(gpa);
 
     inline for (.{
-        .{ "log", syscalls.log },
+        .{ "sol_log_", syscalls.log },
         .{ "sol_log_64_", syscalls.log64 },
         .{ "sol_log_pubkey", syscalls.logPubkey },
         .{ "sol_log_compute_units_", syscalls.logComputeUnits },
