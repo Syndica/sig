@@ -441,9 +441,6 @@ fn executeUpdateValidatorIdentity(
     const new_identity_meta = &ic.info.account_metas.buffer[
         @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity)
     ];
-    if (!new_identity_meta.is_signer) {
-        return InstructionError.MissingRequiredSignature;
-    }
 
     try updateValidatorIdentity(
         allocator,
