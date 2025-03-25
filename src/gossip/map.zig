@@ -4,8 +4,6 @@ const gossip = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Hash = sig.core.Hash;
-const Signature = sig.core.Signature;
 const SplitUnionList = sig.utils.collections.SplitUnionList;
 
 const GossipData = gossip.data.GossipData;
