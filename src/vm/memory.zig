@@ -11,7 +11,7 @@ pub const STACK_START: u64 = 0x200000000;
 pub const HEAP_START: u64 = 0x300000000;
 /// Virtual address of the input region
 pub const INPUT_START: u64 = 0x400000000;
-const VIRTUAL_ADDRESS_BITS = 32;
+pub const VIRTUAL_ADDRESS_BITS = 32;
 
 pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
@@ -129,7 +129,12 @@ const AlignedMemoryMap = struct {
     version: sbpf.Version,
 
     fn init(regions: []const Region, version: sbpf.Version) !AlignedMemoryMap {
+        std.debug.print("\nAlignedMemoryMap.init\n", .{});
         for (regions, 1..) |reg, index| {
+            std.debug.print("\tindex: {}\n", .{index});
+            std.debug.print("\treg.len: {}\n", .{reg.constSlice().len});
+            std.debug.print("\treg.vm_addr_start: {}\n", .{reg.vm_addr_start});
+            std.debug.print("\treg.vm_addr_end: {}\n\n", .{reg.vm_addr_end});
             if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
                 return error.InvalidMemoryRegion;
             }
@@ -142,9 +147,15 @@ const AlignedMemoryMap = struct {
     }
 
     fn region(self: *const AlignedMemoryMap, vm_addr: u64) !Region {
+        std.debug.print("\nAlignedMemoryMap.region\n", .{});
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
+        std.debug.print("\tvm_addr: {}\n", .{vm_addr});
+        std.debug.print("\tindex: {}\n", .{index});
         if (index >= 1 and index <= self.regions.len) {
             const reg = self.regions[index - 1];
+            std.debug.print("\tregion.len: {}\n", .{reg.constSlice().len});
+            std.debug.print("\treg.vm_addr_start: {}\n", .{reg.vm_addr_start});
+            std.debug.print("\treg.vm_addr_end: {}\n\n", .{reg.vm_addr_end});
             if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
                 return reg;
             }

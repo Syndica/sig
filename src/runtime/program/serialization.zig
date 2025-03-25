@@ -209,7 +209,7 @@ pub fn serializeParameters(
         if (account_meta.index_in_callee != index_in_instruction) {
             accounts.appendAssumeCapacity(.{ .duplicate = @intCast(account_meta.index_in_callee) });
         } else {
-            const account = try ic.borrowInstructionAccount(account_meta.index_in_transaction);
+            const account = try ic.borrowInstructionAccount(index_in_instruction);
             defer account.release();
             accounts.appendAssumeCapacity(.{ .account = .{
                 @intCast(index_in_instruction),
@@ -888,6 +888,11 @@ test "serializeParameters" {
                 allocator.free(memory);
                 allocator.free(regions);
                 allocator.free(account_metas);
+            }
+
+            std.debug.print("Regions:\n", .{});
+            for (regions) |region| {
+                std.debug.print("\tregion: {}, vm_addr={}\n", .{ region.vm_addr_start >> sig.vm.memory.VIRTUAL_ADDRESS_BITS, region.vm_addr_start });
             }
 
             const serialized_regions = try concatRegions(allocator, regions);

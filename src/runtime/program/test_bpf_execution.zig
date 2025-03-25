@@ -25,7 +25,16 @@ fn executeBpfProgram(
     // Create Syscalls
     var syscalls = vm.BuiltinProgram{};
     defer syscalls.deinit(allocator);
-    _ = syscalls.functions.registerHashed(allocator, "log", vm.syscalls.log) catch {
+    _ = syscalls.functions.registerHashed(allocator, "sol_log_", vm.syscalls.log) catch {
+        return InstructionError.ProgramEnvironmentSetupFailure;
+    };
+    _ = syscalls.functions.registerHashed(allocator, "sol_memcpy_", vm.syscalls.memcpy) catch {
+        return InstructionError.ProgramEnvironmentSetupFailure;
+    };
+    _ = syscalls.functions.registerHashed(allocator, "sol_memset_", vm.syscalls.memset) catch {
+        return InstructionError.ProgramEnvironmentSetupFailure;
+    };
+    _ = syscalls.functions.registerHashed(allocator, "abort", vm.syscalls.abort) catch {
         return InstructionError.ProgramEnvironmentSetupFailure;
     };
 
@@ -58,30 +67,45 @@ fn executeBpfProgram(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1614-L1622
-    var sbpf_vm, const stack, const heap = initVm(
+    var sbpf_vm, const stack, const heap, const mm_regions = initVm(
         allocator,
         ic.tc,
-        executable,
+        &executable,
         regions,
-        syscalls,
+        &syscalls,
     ) catch |err| {
         try ic.tc.log("Failed to create SBPF VM: {}", .{err});
         return InstructionError.ProgramEnvironmentSetupFailure;
     };
-    defer sbpf_vm.deinit();
-    defer allocator.free(stack);
-    defer allocator.free(heap);
+    defer {
+        sbpf_vm.deinit();
+        allocator.free(stack);
+        allocator.free(heap);
+        allocator.free(mm_regions);
+    }
+
+    std.debug.print("\nPost VM Init\n", .{});
+    for (sbpf_vm.memory_map.aligned.regions, 1..) |reg, index| {
+        std.debug.print("\tindex: {}\n", .{index});
+        std.debug.print("\treg.len: {}\n", .{reg.constSlice().len});
+        std.debug.print("\treg.vm_addr_start: {}\n", .{reg.vm_addr_start});
+        std.debug.print("\treg.vm_addr_end: {}\n\n", .{reg.vm_addr_end});
+    }
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1625-L1638
+    std.debug.print("\nPre SBPF VM Run\n", .{});
+    std.debug.print("\texecutable.entry_pc: {}\n", .{executable.entry_pc});
+    std.debug.print("\texecutable.instructions.len: {}\n", .{executable.instructions.len});
+    std.debug.print("\texecutable.version: {}\n", .{executable.version});
+
     const result, const compute_consumed = sbpf_vm.run();
 
     const logs = ic.tc.log_collector.?.collect();
 
-    std.debug.print("result: {}\n", .{result});
-    std.debug.print("compute_consumed: {}\n", .{compute_consumed});
+    std.debug.print("result: ({}, {})\n", .{ result, compute_consumed });
     std.debug.print("logs:\n", .{});
-    for (logs) |log| {
-        std.debug.print("\t{s}\n", .{log});
+    for (logs, 1..) |log, index| {
+        std.debug.print("\t{}: {s}", .{ index, log });
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1744
@@ -97,21 +121,22 @@ fn executeBpfProgram(
 fn initVm(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
-    executable: vm.Executable,
+    executable: *const vm.Executable,
     regions: []vm.memory.Region,
-    syscalls: vm.BuiltinProgram,
+    syscalls: *const vm.BuiltinProgram,
 ) !struct {
     vm.Vm,
     []u8,
     []u8,
+    []vm.memory.Region,
 } {
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1615-L1623
     const PAGE_SIZE: u64 = 32 * 1024;
 
     const stack_size = executable.config.stackSize();
-    const heap_size = 10; // ic.tc.compute_budget.heap_size;
+    const heap_size = tc.compute_budget.heap_size;
     const cost = std.mem.alignBackward(u64, heap_size -| 1, PAGE_SIZE) / PAGE_SIZE;
-    const heap_cost = cost * 10; // ic.tc.compute_budget.heap_cost;
+    const heap_cost = cost * tc.compute_budget.heap_cost;
     try tc.consumeCompute(heap_cost);
 
     const heap = try allocator.alloc(u8, heap_size);
@@ -126,13 +151,16 @@ fn initVm(
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
     std.debug.assert(regions.len == 1);
 
+    var mm_regions = try allocator.alloc(vm.memory.Region, 4);
+    errdefer allocator.free(mm_regions);
+
+    mm_regions[0] = executable.getProgramRegion();
+    mm_regions[1] = vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START);
+    mm_regions[2] = vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START);
+    mm_regions[3] = regions[0];
+
     const memory_map = try vm.memory.MemoryMap.init(
-        &[_]vm.memory.Region{
-            executable.getProgramRegion(),
-            vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START),
-            vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START),
-            regions[0],
-        },
+        mm_regions,
         executable.version,
     );
 
@@ -142,9 +170,9 @@ fn initVm(
     // Create VM
     const sbpf_vm = try vm.Vm.init(
         allocator,
-        &executable,
+        executable,
         memory_map,
-        &syscalls,
+        syscalls,
         stack.len,
         tc,
     );
@@ -154,10 +182,11 @@ fn initVm(
         sbpf_vm,
         stack,
         heap,
+        mm_regions,
     };
 }
 
-test "testBpfProgramExecution" {
+test "testBpfProgramExecution: log" {
     const sbpf = sig.vm.sbpf;
 
     const Pubkey = sig.core.Pubkey;
@@ -195,11 +224,116 @@ test "testBpfProgramExecution" {
         &tc,
         program_id,
         [_]u8{},
-        &.{.{
-            .index_in_transaction = 0,
-            .is_signer = false,
-            .is_writable = false,
-        }},
+        &.{},
+    );
+
+    var ic = InstructionContext{
+        .tc = &tc,
+        .info = instruction_info,
+        .depth = 0,
+    };
+
+    try executeBpfProgram(allocator, &ic);
+}
+
+test "testBpfProgramExecution: hello world" {
+    const sbpf = sig.vm.sbpf;
+
+    const Pubkey = sig.core.Pubkey;
+    const LogCollector = sig.runtime.LogCollector;
+
+    const createTransactionContext = sig.runtime.testing.createTransactionContext;
+    const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
+
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const input_file = try std.fs.cwd().openFile(sig.ELF_DATA_DIR ++ "hello_world.so", .{});
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    var tc = try createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = program_id,
+                .lamports = 1_000_000_000,
+                .owner = sig.runtime.ids.BPF_LOADER_V3_PROGRAM_ID,
+                .executable = true,
+                .rent_epoch = 0,
+                .data = bytes,
+            },
+        },
+        .log_collector = LogCollector.init(allocator, null),
+        .compute_meter = 1_000,
+    });
+    defer tc.deinit(allocator);
+
+    const instruction_info = try createInstructionInfo(
+        allocator,
+        &tc,
+        program_id,
+        [_]u8{},
+        &.{},
+    );
+
+    var ic = InstructionContext{
+        .tc = &tc,
+        .info = instruction_info,
+        .depth = 0,
+    };
+
+    try executeBpfProgram(allocator, &ic);
+}
+
+test "testBpfProgramExecution: hello world account print" {
+    const sbpf = sig.vm.sbpf;
+
+    const Pubkey = sig.core.Pubkey;
+    const LogCollector = sig.runtime.LogCollector;
+
+    const createTransactionContext = sig.runtime.testing.createTransactionContext;
+    const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
+
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const input_file = try std.fs.cwd().openFile(sig.ELF_DATA_DIR ++ "hello_world_account_print.so", .{});
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    var tc = try createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = program_id,
+                .lamports = 1_000_000_000,
+                .owner = sig.runtime.ids.BPF_LOADER_V3_PROGRAM_ID,
+                .executable = true,
+                .rent_epoch = 0,
+                .data = bytes,
+            },
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+            },
+        },
+        .log_collector = LogCollector.init(allocator, null),
+        .compute_meter = 1_000,
+    });
+    defer tc.deinit(allocator);
+
+    const instruction_info = try createInstructionInfo(
+        allocator,
+        &tc,
+        program_id,
+        [_]u8{},
+        &.{
+            .{
+                .index_in_transaction = 1,
+                .is_writable = false,
+                .is_signer = false,
+            },
+        },
     );
 
     var ic = InstructionContext{

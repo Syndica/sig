@@ -73,6 +73,7 @@ pub const Vm = struct {
     }
 
     pub fn run(self: *Vm) struct { Result, u64 } {
+        // std.debug.print("\nVM Run\n", .{});
         const initial_instruction_count = self.transaction_context.getRemaining();
         while (true) {
             const cont = self.step() catch |err| {
@@ -90,6 +91,7 @@ pub const Vm = struct {
     }
 
     fn step(self: *Vm) SbpfError!bool {
+        // std.debug.print("\n\tVM Step\n", .{});
         const config = self.executable.config;
         if (config.enable_instruction_meter and
             self.instruction_count >= self.transaction_context.getRemaining())
@@ -101,6 +103,8 @@ pub const Vm = struct {
         const version = self.executable.version;
         const registers = &self.registers;
         const pc = registers.get(.pc);
+        // std.debug.print("\t\tpc = {}\n", .{pc});
+        // std.debug.print("\t\tinstructions.len = {}\n", .{self.executable.instructions.len});
         var next_pc: u64 = pc + 1;
 
         const instructions = self.executable.instructions;

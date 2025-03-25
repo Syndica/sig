@@ -936,7 +936,7 @@ pub const BuiltinProgram = struct {
 
 pub const Config = struct {
     optimize_rodata: bool = true,
-    reject_broken_elfs: bool = false,
+    reject_broken_elfs: bool = true,
     enable_symbol_and_section_labels: bool = false,
     enable_instruction_meter: bool = true,
     minimum_version: sbpf.Version = .v0,

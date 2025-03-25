@@ -573,6 +573,7 @@ pub const Elf = struct {
                             if (config.reject_broken_elfs and
                                 loader.functions.lookupKey(hash) == null)
                             {
+                                std.debug.print("Symbol not found: {s}\n", .{symbol_name});
                                 return error.UnresolvedSymbol;
                             }
                             const slice = try safeSlice(bytes, imm_offset, 4);
