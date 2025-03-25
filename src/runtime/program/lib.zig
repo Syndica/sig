@@ -24,6 +24,7 @@ fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
         .{ bpf_loader_program.v1.ID.base58String().slice(), bpf_loader_program.execute },
         .{ bpf_loader_program.v2.ID.base58String().slice(), bpf_loader_program.execute },
         .{ bpf_loader_program.v3.ID.base58String().slice(), bpf_loader_program.execute },
+        .{ bpf_loader_program.v4.ID.base58String().slice(), bpf_loader_program.execute },
         .{ system_program.ID.base58String().slice(), system_program.execute },
         .{ vote_program.ID.base58String().slice(), vote_program.execute },
     });

@@ -38,6 +38,9 @@ pub const v4 = struct {
     pub const ID =
         Pubkey.parseBase58String("LoaderV411111111111111111111111111111111111") catch unreachable;
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/loader-v4/src/lib.rs#L30
+    pub const COMPUTE_UNITS = 2000;
+
     pub const instruction = @import("v4_instruction.zig");
     pub const Instruction = instruction.Instruction;
 };
