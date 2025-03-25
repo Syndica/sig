@@ -486,16 +486,14 @@ fn executeUpdateCommission(
     vote_account: *BorrowedAccount,
     commission: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const epoch_schedule = try ic.getSysvar(EpochSchedule);
-    const clock = try ic.getSysvar(Clock);
 
     try updateCommission(
         allocator,
         ic,
         vote_account,
         commission,
-        epoch_schedule,
-        clock,
+        try ic.getSysvar(EpochSchedule),
+        try ic.getSysvar(Clock),
     );
 }
 
