@@ -12,9 +12,6 @@ pub const system_program = @import("system_program/lib.zig");
 pub const testing = @import("testing.zig");
 pub const vote_program = @import("vote/lib.zig");
 
-const InstructionError = sig.core.instruction.InstructionError;
-const InstructionContext = sig.runtime.InstructionContext;
-
 pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
@@ -25,7 +22,7 @@ const EntrypointFn = *const fn (
 
 // reviewer's note: does this have to be a string map? might be better to keep as pubkeys
 fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
-    @setEvalBranchQuota(5000);
+    @setEvalBranchQuota(10_000);
     return std.StaticStringMap(EntrypointFn).initComptime(&.{
         .{ bpf_loader_program.v1.ID.base58String().slice(), bpf_loader_program.execute },
         .{ bpf_loader_program.v2.ID.base58String().slice(), bpf_loader_program.execute },

@@ -3,7 +3,6 @@ const sig = @import("../../../sig.zig");
 
 const ids = sig.runtime.ids;
 const bincode = sig.bincode;
-const executor = sig.runtime.executor;
 const program = sig.runtime.program;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
@@ -12,7 +11,6 @@ const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 const feature_set = sig.runtime.feature_set;
 
 const Pubkey = sig.core.Pubkey;
-const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 
 const FeatureSet = sig.runtime.FeatureSet;
@@ -453,9 +451,9 @@ pub fn executeV3Upgrade(
     const AccountIndex = bpf_loader_program.v3.instruction.Upgrade.AccountIndex;
     try ic.info.checkNumberOfAccounts(3);
 
-    const programdata_key = 
+    const programdata_key =
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
-    
+
     const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, @intFromEnum(AccountIndex.rent));
     const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, @intFromEnum(AccountIndex.clock));
 
@@ -1390,6 +1388,7 @@ test "executeV3InitializeBuffer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.initialize_buffer,
         &.{
@@ -1462,6 +1461,7 @@ test "executeV3Write" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction{
             .write = .{
@@ -1586,6 +1586,7 @@ test "executeDeployWithMaxDataLen" {
 
     testing.expectProgramExecuteResult(
         allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction{
             .deploy_with_max_data_len = .{ .max_data_len = max_data_len },
@@ -1733,6 +1734,7 @@ test "executeV3SetAuthority" {
     // test with State.buffer
     try testing.expectProgramExecuteResult(
         allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority,
         &.{
@@ -1805,6 +1807,7 @@ test "executeV3SetAuthority" {
     // test with State.program_data
     try testing.expectProgramExecuteResult(
         allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority,
         &.{
@@ -1888,6 +1891,7 @@ test "executeV3SetAuthorityChecked" {
     // test with State.buffer (1 and 2 must be signers).
     try testing.expectProgramExecuteResult(
         allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority_checked,
         &.{
@@ -1963,6 +1967,7 @@ test "executeV3SetAuthorityChecked" {
     // test with State.program_data (1 and 2 must be signers).
     try testing.expectProgramExecuteResult(
         allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction.set_authority_checked,
         &.{
@@ -2043,6 +2048,7 @@ test "executeV3Close" {
 
         try testing.expectProgramExecuteResult(
             allocator,
+            {},
             bpf_loader_program.v3,
             bpf_loader_program.v3.Instruction{
                 .close = .{},
@@ -2110,6 +2116,7 @@ test "executeV3Close" {
 
         try testing.expectProgramExecuteResult(
             allocator,
+            {},
             bpf_loader_program.v3,
             bpf_loader_program.v3.Instruction{
                 .close = .{},
@@ -2199,6 +2206,7 @@ test "executeV3Close" {
 
         try testing.expectProgramExecuteResult(
             allocator,
+            {},
             bpf_loader_program.v3,
             bpf_loader_program.v3.Instruction{
                 .close = .{},
@@ -2342,6 +2350,7 @@ test "executeV3Upgrade" {
 
     try testing.expectProgramExecuteResult(
         allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction{
             .upgrade = .{},
@@ -2528,6 +2537,7 @@ test "executeV3ExtendProgram" {
 
         try testing.expectProgramExecuteResult(
             allocator,
+            {},
             bpf_loader_program.v3,
             bpf_loader_program.v3.Instruction{
                 .extend_program = .{ .additional_bytes = additional_bytes },
@@ -2657,6 +2667,7 @@ test "executeV3Migrate" {
 
     try testing.expectProgramExecuteResult(
         allocator,
+        {},
         bpf_loader_program.v3,
         bpf_loader_program.v3.Instruction{
             .migrate = .{},
