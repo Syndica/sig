@@ -85,8 +85,8 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         var trusted_count: usize = 0;
         // SAFE: the perf is safe because maybe_ is non null only if trusted_validators is non-null
         for (trusted_validators.?) |trusted_validator| {
-            const gossip_data = table.get(.{ .SnapshotHashes = trusted_validator }) orelse continue;
-            const trusted_hashes = gossip_data.value.data.SnapshotHashes;
+            const gossip_data = table.getData(.{ .SnapshotHashes = trusted_validator }) orelse continue;
+            const trusted_hashes = gossip_data.SnapshotHashes;
             trusted_count += 1;
 
             // track the full and all incremental hashes
@@ -118,11 +118,11 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             result.no_rpc_count += 1;
             continue;
         }
-        const gossip_data = table.get(.{ .SnapshotHashes = peer_contact_info.pubkey }) orelse {
+        const gossip_data = table.getData(.{ .SnapshotHashes = peer_contact_info.pubkey }) orelse {
             result.no_snapshot_hashes_count += 1;
             continue;
         };
-        const snapshot_hashes = gossip_data.value.data.SnapshotHashes;
+        const snapshot_hashes = gossip_data.SnapshotHashes;
 
         var max_inc_hash: ?SlotAndHash = null;
         for (snapshot_hashes.incremental.getSlice()) |inc_hash| {
