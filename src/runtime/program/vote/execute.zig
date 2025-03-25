@@ -594,12 +594,14 @@ fn executeWithdraw(
     const rent = try ic.getSysvar(Rent);
     const clock = try ic.getSysvar(Clock);
 
-    // TODO agave drops the vote_account here. Why?
+    vote_account.release();
+
     try widthraw(
         allocator,
         ic,
-        vote_account,
+        @intFromEnum(vote_instruction.Withdraw.AccountIndex.account),
         lamports,
+        @intFromEnum(vote_instruction.Withdraw.AccountIndex.recipient_authority),
         rent,
         clock,
     );
@@ -609,11 +611,15 @@ fn executeWithdraw(
 fn widthraw(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-    vote_account: *BorrowedAccount,
+    vote_account_index: u16,
     lamports: u64,
+    to_account_index: u16,
     rent: Rent,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
+    var vote_account = try ic.borrowInstructionAccount(vote_account_index);
+    defer vote_account.release();
+
     const versioned_state = try vote_account.deserializeFromAccountData(
         allocator,
         VoteStateVersions,
@@ -664,10 +670,9 @@ fn widthraw(
     }
 
     try vote_account.subtractLamports(lamports);
-    // TODO Agave manually drops the vote_account here. Why?
-    var recipient_account = try ic.borrowInstructionAccount(
-        @intFromEnum(vote_instruction.Withdraw.AccountIndex.recipient_authority),
-    );
+    vote_account.release();
+
+    var recipient_account = try ic.borrowInstructionAccount(to_account_index);
     defer recipient_account.release();
     try recipient_account.addLamports(lamports);
 }
