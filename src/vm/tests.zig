@@ -2198,6 +2198,18 @@ test "fixed stack out of bounds" {
     , .{ error.AccessNotMapped, 1 });
 }
 
+test "decrease frame pointer on v0" {
+    const config: Config = .{ .maximum_version = .v0 };
+    try testAsm(config,
+        \\entrypoint:
+        \\  call function_foo
+        \\  mov r0, r10
+        \\  exit
+        \\function_foo:
+        \\  exit
+    , .{ memory.STACK_START + config.stack_frame_size, 4 });
+}
+
 test "dynamic frame pointer" {
     const config: Config = .{};
     try testAsm(
