@@ -42,7 +42,7 @@ scripts/
 ## Resources
 
 - [Official Website](https://www.syndica.io/sig)
-- [Docs Page](https://sig.fun.syndica.io/)
+- [Docs Page](https://sig.fun/)
 - [Code Docs](https://syndica.github.io/sig/)
 - [Discord](https://discord.gg/vUF4pexE)
 - [Engineering Blogposts](https://blog.syndica.io/tag/engineering/)

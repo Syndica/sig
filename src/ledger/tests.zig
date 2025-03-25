@@ -3,7 +3,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
-const transaction_status = @import("./transaction_status.zig");
 
 const Allocator = std.mem.Allocator;
 

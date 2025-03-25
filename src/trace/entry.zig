@@ -1,5 +1,4 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 const trace = @import("lib.zig");
 
 const Level = trace.level.Level;

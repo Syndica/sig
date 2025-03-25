@@ -1,25 +1,30 @@
-name: run abi check script
+# NOTE: this script is currently disabled
+# as the frozen_abi we previously used has been
+# removed in the latest agave:
+# https://github.com/anza-xyz/agave/blob/e363f52b5bb4bfb131c647d4dbd6043d23575c78/gossip/src/protocol.rs#L52
 
-on:
-  schedule: 
-    - cron: "0 12 * * *" # everyday 7am CDT
+# name: run abi check script
 
-permissions:
-  contents: read
+# on:
+#   schedule:
+#     - cron: "0 12 * * *" # everyday 7am CDT
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install requests
-    - name: run
-      run: |
-        python scripts/agave_gossip_hash_check.py
+# permissions:
+#   contents: read
+
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
+#     steps:
+#     - uses: actions/checkout@v3
+#     - name: Set up Python 3.10
+#       uses: actions/setup-python@v3
+#       with:
+#         python-version: "3.10"
+#     - name: Install dependencies
+#       run: |
+#         python -m pip install --upgrade pip
+#         python -m pip install requests
+#     - name: run
+#       run: |
+#         python scripts/agave_gossip_hash_check.py

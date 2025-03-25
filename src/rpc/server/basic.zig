@@ -1,6 +1,5 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../sig.zig");
 
 const server = @import("server.zig");
 const requests = server.requests;

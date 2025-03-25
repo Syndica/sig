@@ -143,6 +143,7 @@ fn processNextInstruction(
     // TODO:
     // - precompile feature gate move to svm otherwise noop
     // - precompile entrypoints
+
     const maybe_precompile_fn =
         program.PRECOMPILE_ENTRYPOINTS.get(program_id.base58String().slice());
 
@@ -222,7 +223,7 @@ fn prepareCpiInstructionInfo(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
     for (callee.accounts, 0..) |account, index| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
-            try tc.log("Instruction references unkown account {}", .{account.pubkey});
+            try tc.log("Instruction references unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
@@ -242,7 +243,7 @@ fn prepareCpiInstructionInfo(
             deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
         } else {
             const index_in_caller = caller.info.getAccountMetaIndex(account.pubkey) orelse {
-                try tc.log("Instruction references unkown account {}", .{account.pubkey});
+                try tc.log("Instruction references unknown account {}", .{account.pubkey});
                 return InstructionError.MissingAccount;
             };
 
@@ -487,7 +488,7 @@ test "processNextInstruction" {
     defer instruction_info.deinit(allocator);
 
     // Failure: CallDepth
-    try std.testing.expectEqual(
+    try std.testing.expectError(
         InstructionError.CallDepth,
         processNextInstruction(allocator, &tc),
     );
@@ -501,7 +502,7 @@ test "processNextInstruction" {
 
         try pushInstruction(&tc, instruction_info);
 
-        try std.testing.expectEqual(
+        try std.testing.expectError(
             InstructionError.UnsupportedProgramId,
             processNextInstruction(allocator, &tc),
         );
