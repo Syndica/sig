@@ -11,7 +11,7 @@ pub const STACK_START: u64 = 0x200000000;
 pub const HEAP_START: u64 = 0x300000000;
 /// Virtual address of the input region
 pub const INPUT_START: u64 = 0x400000000;
-const VIRTUAL_ADDRESS_BITS = 32;
+pub const VIRTUAL_ADDRESS_BITS = 32;
 
 pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
@@ -143,7 +143,6 @@ const AlignedMemoryMap = struct {
 
     fn region(self: *const AlignedMemoryMap, vm_addr: u64) !Region {
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
-
         if (index >= 1 and index <= self.regions.len) {
             const reg = self.regions[index - 1];
             if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
