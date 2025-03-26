@@ -414,12 +414,12 @@ pub const GossipTable = struct {
     /// );
     fn genericGetEntriesWithCursor(
         allocator: std.mem.Allocator,
-        hashmap: anytype,
+        cursor_hashmap: anytype,
         store: GossipMap,
         buf: []GossipVersionedData,
         caller_cursor: *usize,
     ) error{OutOfMemory}![]GossipVersionedData {
-        const cursor_keys = hashmap.keys();
+        const cursor_keys = cursor_hashmap.keys();
 
         // NOTE: we need a clone so we dont modify (and break) the map.
         // see .keys() doc comment for more info.
@@ -437,13 +437,13 @@ pub const GossipTable = struct {
         var last_cursor_included: u64 = caller_cursor.*;
 
         for (cursors) |cursor| {
-            // NOTE: this is safe only because we know the cursors are sorted
             if (cursor < caller_cursor.*) {
                 continue;
             }
 
-            const entry_index = hashmap.get(cursor).?;
+            const entry_index = cursor_hashmap.get(cursor).?;
             const entry = store.getByIndex(entry_index);
+            // sanity check
             std.debug.assert(entry.metadata.cursor_on_insertion == cursor);
 
             buf[count] = try entry.clone(allocator);

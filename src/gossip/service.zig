@@ -961,7 +961,7 @@ pub const GossipService = struct {
 
                     // NOTE: wallclock is updated when draining the push_msg_queue
                     // in drainPushQueueToGossipTable
-                    var contact_info: ContactInfo = try self.my_contact_info.clone();
+                    const contact_info: ContactInfo = try self.my_contact_info.clone();
                     errdefer contact_info.deinit();
 
                     const legacy_contact_info = LegacyContactInfo.fromContactInfo(
