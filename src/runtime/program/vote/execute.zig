@@ -8,6 +8,7 @@ const vote_instruction = vote_program.vote_instruction;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
+const Vote = vote_program.state.Vote;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
 const VoteError = vote_program.VoteError;
@@ -17,6 +18,7 @@ const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const feature_set = sig.runtime.feature_set;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
@@ -110,6 +112,18 @@ pub fn execute(
             ic,
             &vote_account,
             args,
+        ),
+        .vote => |args| executeProcessVoteWithAccount(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote,
+        ),
+        .vote_switch => |args| executeProcessVoteWithAccount(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote,
         ),
     };
 }
@@ -689,6 +703,106 @@ fn widthraw(
     var recipient_account = try ic.borrowInstructionAccount(to_account_index);
     defer recipient_account.release();
     try recipient_account.addLamports(lamports);
+}
+
+fn executeProcessVoteWithAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote: Vote,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (ic.tc.feature_set.isActive(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
+        ic.tc.feature_set.isActive(feature_set.DEPRECATE_LEGACY_VOTE_IXS))
+    {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    const slot_hashes = try ic.getSysvarWithAccountCheck(
+        SlotHashes,
+        @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
+    );
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
+    );
+
+    try processVoteWithAccount(allocator, ic, vote_account, vote, slot_hashes, clock);
+}
+
+fn processVoteWithAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote: Vote,
+    slot_hashes: SlotHashes,
+    clock: Clock,
+) (error{OutOfMemory} || InstructionError)!void {
+    var vote_state = try verifyAndGetVoteState(
+        allocator,
+        ic,
+        vote_account,
+        clock,
+    );
+    defer vote_state.deinit();
+
+    const maybe_err = try vote_state.processVote(
+        allocator,
+        &vote,
+        slot_hashes,
+        clock.epoch,
+        clock.slot,
+    );
+
+    if (maybe_err) |err| {
+        ic.tc.custom_error = @intFromEnum(err);
+        return InstructionError.Custom;
+    }
+
+    if (vote.timestamp) |timestamp| {
+        if (vote.slots.items.len == 0) {
+            ic.tc.custom_error = @intFromEnum(VoteError.empty_slots);
+            return InstructionError.Custom;
+        }
+
+        // TODO any better way to do this?
+        var max_slot: u64 = 0;
+        for (vote.slots.items) |slot| {
+            if (slot > max_slot) {
+                max_slot = slot;
+            }
+        }
+
+        if (vote_state.processTimestamp(max_slot, timestamp)) |err| {
+            ic.tc.custom_error = @intFromEnum(err);
+            return InstructionError.Custom;
+        }
+    }
+
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+}
+
+fn verifyAndGetVoteState(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    clock: Clock,
+) (error{OutOfMemory} || InstructionError)!VoteState {
+    const versioned_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+
+    if (versioned_state.isUninitialized()) {
+        return (InstructionError.UninitializedAccount);
+    }
+
+    var vote_state = try versioned_state.convertToCurrent(allocator);
+
+    const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
+    if (!ic.info.isPubkeySigner(authorized_voter)) {
+        return InstructionError.MissingRequiredSignature;
+    }
+    return vote_state;
 }
 
 fn validateIsSigner(
