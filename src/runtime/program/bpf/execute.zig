@@ -298,9 +298,9 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust);
 
     // Memory Allocator
-    // if (!tc.feature_set.active.contains(feature_set.DISABLE_DEPLOY_OF_ALlOC_FREE_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alloc_free_", vm.syscalls.allocFree);
-    // }
+    if (!tc.feature_set.active.contains(feature_set.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
+        _ = try syscalls.functions.registerHashed(allocator, "sol_alloc_free_", vm.syscalls.allocFree);
+    }
 
     // Alt_bn128
     // if (tc.feature_set.active.contains(feature_set.ENABLE_ALT_BN128_SYSCALL)) {
