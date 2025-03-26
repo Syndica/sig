@@ -113,13 +113,11 @@ pub const Serializer = struct {
                     MAX_PERMITTED_DATA_INCREASE + align_offset,
                 );
             } else {
-                self.buffer.appendNTimes(
+                try self.buffer.appendNTimes(
                     self.allocator,
                     0,
                     MAX_PERMITTED_DATA_INCREASE + BPF_ALIGN_OF_U128,
-                ) catch {
-                    return InstructionError.InvalidArgument;
-                };
+                );
                 self.region_start += BPF_ALIGN_OF_U128 -| align_offset;
                 try self.pushRegion(account.checkDataIsMutable() == null);
             }
