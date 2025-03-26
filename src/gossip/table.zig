@@ -460,8 +460,7 @@ pub const GossipTable = struct {
         // update the caller_cursor
         caller_cursor.* = last_cursor_included;
         // +1 do we dont include the last value next loop
-        if (count != 0)
-            caller_cursor.* += 1;
+        if (count != 0) caller_cursor.* += 1;
 
         return buf[0..count];
     }

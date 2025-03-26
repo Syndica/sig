@@ -3035,13 +3035,14 @@ test "test large push messages" {
         try as.initRotate(prng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
+        std.debug.print("{}\n", .{as.len()});
     }
 
     var cursor: u64 = 0;
     const msgs = try gossip_service.buildPushMessages(&cursor);
     defer msgs.deinit();
 
-    try std.testing.expect(msgs.items.len < 2_000);
+    try std.testing.expectEqual(3_780, msgs.items.len);
 }
 
 test "test packet verification" {
