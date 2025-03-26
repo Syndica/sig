@@ -5,7 +5,6 @@ pub const address_lookup_table = @import("address_lookup_table/lib.zig");
 pub const bpf_loader_program = @import("bpf_loader/lib.zig");
 pub const precompile_programs = @import("precompiles/lib.zig");
 pub const system_program = @import("system/lib.zig");
-pub const serialization = @import("serialization.zig");
 pub const testing = @import("testing.zig");
 pub const vote_program = @import("vote/lib.zig");
 
