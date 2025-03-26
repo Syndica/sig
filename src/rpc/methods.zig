@@ -53,17 +53,26 @@ pub const Call = struct {
                 if (@hasDecl(T, "jsonStringify")) {
                     try jw.write(maybe_method);
                 } else {
+                    var null_count: usize = 0;
+
                     try jw.beginArray();
-                    blk: {
-                        inline for (@typeInfo(T).Struct.fields) |field| {
-                            const maybe_value = @field(maybe_method, field.name);
-                            if (@typeInfo(field.type) != .Optional) {
-                                try jw.write(maybe_value);
-                            } else {
-                                const value = maybe_value orelse break :blk;
-                                try jw.write(value);
-                            }
-                        }
+                    inline for (@typeInfo(T).Struct.fields) |field| cont: {
+                        const maybe_value = @field(maybe_method, field.name);
+                        const value = blk: {
+                            if (@typeInfo(field.type) != .Optional) break :blk maybe_value;
+                            if (maybe_value) |value| break :blk value;
+                            null_count += 1;
+                            break :cont;
+                        };
+
+                        // we counted `null_count` null element before this
+                        // without writing anything, and instead of writing
+                        // them we just skipped them. but since this element
+                        // isn't null, we have to write out the leading null
+                        // elements so that this one is at the correct index
+                        for (0..null_count) |_| try jw.write(null);
+                        null_count = 0;
+                        try jw.write(value);
                     }
                     try jw.endArray();
                 }
