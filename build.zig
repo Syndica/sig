@@ -281,8 +281,6 @@ pub fn build(b: *Build) !void {
     benchmark_exe.root_module.omit_frame_pointer = false;
     benchmark_exe.root_module.strip = false;
 
-    b.installArtifact(benchmark_exe);
-
     benchmark_exe.root_module.addImport("secp256k1", secp256k1_mod);
     benchmark_exe.root_module.addImport("base58", base58_mod);
     benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
