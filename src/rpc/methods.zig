@@ -220,7 +220,8 @@ pub const Call = struct {
                         .use_last => {},
                     };
 
-                    const tok_type: enum { null, number, string } = switch (try source.peekNextTokenType()) {
+                    const TokType = enum { null, number, string };
+                    const tok_type: TokType = switch (try source.peekNextTokenType()) {
                         .null => .null,
                         .number => .number,
                         .string => .string,
