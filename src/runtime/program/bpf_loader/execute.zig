@@ -6,6 +6,7 @@ const bincode = sig.bincode;
 const program = sig.runtime.program;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
+const bpf_program = sig.runtime.program.bpf;
 const system_program = sig.runtime.program.system_program;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 const feature_set = sig.runtime.feature_set;
@@ -28,15 +29,10 @@ pub fn execute(
 ) (error{OutOfMemory} || InstructionError)!void {
     // The borrowed program cannot be held during calls to other execute functions.
     // Agave originally drops it at the relevant sites, but we can just extract needed fields here.
-    const program_key, const program_owner, const program_executable = blk: {
+    const program_owner = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
-
-        break :blk .{
-            program_account.pubkey,
-            program_account.account.owner,
-            program_account.account.executable,
-        };
+        break :blk program_account.account.owner;
     };
 
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
@@ -60,14 +56,10 @@ pub fn execute(
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-    if (!program_executable) {
-        try ic.tc.log("Program is not executable", .{});
-        return InstructionError.IncorrectProgramId;
-    }
-
-    // TODO: [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L439-L447
-    _ = program_key;
+    // NOTE: We reborrow the program account within bpf_program.execute, this adds an additional
+    // borrow wrt Agave's implementation. It should not cause an issue but is worth noting.
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
+    try bpf_program.execute(allocator, ic);
 }
 
 // TODO: v4 loader
@@ -1387,9 +1379,8 @@ test "executeV3InitializeBuffer" {
     _ = try bincode.writeToSlice(final_buffer_account_data, final_buffer_account_state, .{});
 
     try testing.expectProgramExecuteResult(
-        std.testing.allocator,
-        {},
-        bpf_loader_program.v3,
+        allocator,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction.initialize_buffer,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1428,6 +1419,7 @@ test "executeV3InitializeBuffer" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -1460,9 +1452,8 @@ test "executeV3Write" {
     @memcpy(final_buffer_account_data[start..end], &source);
 
     try testing.expectProgramExecuteResult(
-        std.testing.allocator,
-        {},
-        bpf_loader_program.v3,
+        allocator,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction{
             .write = .{
                 .offset = offset,
@@ -1506,6 +1497,7 @@ test "executeV3Write" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -1584,10 +1576,9 @@ test "executeDeployWithMaxDataLen" {
     const log_collector = sig.runtime.LogCollector.default(allocator);
     defer log_collector.deinit();
 
-    testing.expectProgramExecuteResult(
+    try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        bpf_loader_program.v3,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction{
             .deploy_with_max_data_len = .{ .max_data_len = max_data_len },
         },
@@ -1692,12 +1683,8 @@ test "executeDeployWithMaxDataLen" {
                 .clock = sysvar.Clock.DEFAULT,
             },
         },
-    ) catch |err| {
-        for (log_collector.collect()) |msg| {
-            std.debug.print("{any}\n", .{msg});
-        }
-        return err;
-    };
+        .{},
+    );
 }
 
 test "executeV3SetAuthority" {
@@ -1734,8 +1721,7 @@ test "executeV3SetAuthority" {
     // test with State.buffer
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        bpf_loader_program.v3,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction.set_authority,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1781,6 +1767,7 @@ test "executeV3SetAuthority" {
                 },
             },
         },
+        .{},
     );
 
     const initial_program_account_data =
@@ -1807,8 +1794,7 @@ test "executeV3SetAuthority" {
     // test with State.program_data
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        bpf_loader_program.v3,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction.set_authority,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1854,6 +1840,7 @@ test "executeV3SetAuthority" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -1891,8 +1878,7 @@ test "executeV3SetAuthorityChecked" {
     // test with State.buffer (1 and 2 must be signers).
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        bpf_loader_program.v3,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction.set_authority_checked,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1941,6 +1927,7 @@ test "executeV3SetAuthorityChecked" {
                 },
             },
         },
+        .{},
     );
 
     const initial_program_account_data =
@@ -1967,8 +1954,7 @@ test "executeV3SetAuthorityChecked" {
     // test with State.program_data (1 and 2 must be signers).
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        bpf_loader_program.v3,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction.set_authority_checked,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -2017,6 +2003,7 @@ test "executeV3SetAuthorityChecked" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -2048,8 +2035,7 @@ test "executeV3Close" {
 
         try testing.expectProgramExecuteResult(
             allocator,
-            {},
-            bpf_loader_program.v3,
+            bpf_loader_program.v3.ID,
             bpf_loader_program.v3.Instruction{
                 .close = .{},
             },
@@ -2093,6 +2079,7 @@ test "executeV3Close" {
                     },
                 },
             },
+            .{},
         );
     }
 
@@ -2116,8 +2103,7 @@ test "executeV3Close" {
 
         try testing.expectProgramExecuteResult(
             allocator,
-            {},
-            bpf_loader_program.v3,
+            bpf_loader_program.v3.ID,
             bpf_loader_program.v3.Instruction{
                 .close = .{},
             },
@@ -2169,6 +2155,7 @@ test "executeV3Close" {
                 },
                 .accounts_resize_delta = -@as(i64, @intCast(initial_data.len - final_data.len)),
             },
+            .{},
         );
     }
 
@@ -2206,8 +2193,7 @@ test "executeV3Close" {
 
         try testing.expectProgramExecuteResult(
             allocator,
-            {},
-            bpf_loader_program.v3,
+            bpf_loader_program.v3.ID,
             bpf_loader_program.v3.Instruction{
                 .close = .{},
             },
@@ -2273,6 +2259,7 @@ test "executeV3Close" {
                 },
                 .accounts_resize_delta = -@as(i64, @intCast(initial_data.len - final_data.len)),
             },
+            .{},
         );
     }
 }
@@ -2350,8 +2337,7 @@ test "executeV3Upgrade" {
 
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        bpf_loader_program.v3,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction{
             .upgrade = .{},
         },
@@ -2459,6 +2445,7 @@ test "executeV3Upgrade" {
             },
             .accounts_resize_delta = -buf_size,
         },
+        .{},
     );
 }
 
@@ -2537,8 +2524,7 @@ test "executeV3ExtendProgram" {
 
         try testing.expectProgramExecuteResult(
             allocator,
-            {},
-            bpf_loader_program.v3,
+            bpf_loader_program.v3.ID,
             bpf_loader_program.v3.Instruction{
                 .extend_program = .{ .additional_bytes = additional_bytes },
             },
@@ -2611,6 +2597,7 @@ test "executeV3ExtendProgram" {
                 },
                 .accounts_resize_delta = additional_bytes,
             },
+            .{},
         );
     }
 }
@@ -2667,8 +2654,7 @@ test "executeV3Migrate" {
 
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        bpf_loader_program.v3,
+        bpf_loader_program.v3.ID,
         bpf_loader_program.v3.Instruction{
             .migrate = .{},
         },
@@ -2746,5 +2732,6 @@ test "executeV3Migrate" {
             },
             .accounts_resize_delta = 0,
         },
+        .{},
     );
 }

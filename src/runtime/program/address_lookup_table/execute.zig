@@ -638,12 +638,12 @@ test "address-lookup-table missing accounts" {
     for (instructions) |instr| {
         const value = runtime.program.testing.expectProgramExecuteResult(
             std.testing.allocator,
-            {},
-            @This(),
+            @This().ID,
             instr,
             &.{},
             .{ .accounts = accounts },
             .{ .accounts = accounts },
+            .{},
         );
 
         try std.testing.expectError(error.CouldNotFindProgramAccount, value);
@@ -739,14 +739,9 @@ test "address-lookup-table create" {
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
-    var log_out = std.ArrayList(u8).init(std.testing.allocator);
-    defer log_out.deinit();
-    errdefer std.debug.print("{s}", .{log_out.items});
-
     try testing.expectProgramExecuteResult(
         allocator,
-        log_out.writer(),
-        @This(),
+        @This().ID,
         Instruction{
             .CreateLookupTable = .{ .bump_seed = bump_seed, .recent_slot = recent_slot },
         },
@@ -762,6 +757,7 @@ test "address-lookup-table create" {
             .accounts_resize_delta = 56,
             .compute_meter = after_compute_meter,
         },
+        .{},
     );
 }
 
@@ -853,8 +849,7 @@ test "address-lookup-table freeze" {
 
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        @This(),
+        @This().ID,
         Instruction.FreezeLookupTable,
         meta,
         .{
@@ -868,6 +863,7 @@ test "address-lookup-table freeze" {
             .accounts_resize_delta = 0,
             .compute_meter = after_compute_meter,
         },
+        .{},
     );
 }
 
@@ -961,8 +957,7 @@ test "address-lookup-table close" {
 
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        @This(),
+        @This().ID,
         Instruction.CloseLookupTable,
         meta,
         .{
@@ -976,6 +971,7 @@ test "address-lookup-table close" {
             .accounts_resize_delta = -@as(i64, @intCast(before_lookup_table.len)),
             .compute_meter = after_compute_meter,
         },
+        .{},
     );
 }
 
@@ -1067,8 +1063,7 @@ test "address-lookup-table deactivate" {
 
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        @This(),
+        @This().ID,
         Instruction.DeactivateLookupTable,
         meta,
         .{
@@ -1082,6 +1077,7 @@ test "address-lookup-table deactivate" {
             .accounts_resize_delta = 0,
             .compute_meter = after_compute_meter,
         },
+        .{},
     );
 }
 
@@ -1191,8 +1187,7 @@ test "address-lookup-table extend" {
 
         try testing.expectProgramExecuteResult(
             allocator,
-            {},
-            @This(),
+            @This().ID,
             Instruction{ .ExtendLookupTable = .{ .new_addresses = &.{first_address} } },
             meta,
             .{
@@ -1206,6 +1201,7 @@ test "address-lookup-table extend" {
                 .accounts_resize_delta = 32,
                 .compute_meter = after_compute_meter,
             },
+            .{},
         );
     }
 }

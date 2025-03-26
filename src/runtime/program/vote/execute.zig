@@ -460,8 +460,7 @@ test "vote_program: executeIntializeAccount" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .initialize_account = .{
                 .node_pubkey = node_publey,
@@ -514,6 +513,7 @@ test "vote_program: executeIntializeAccount" {
                 .clock = clock,
             },
         },
+        .{},
     );
 }
 
@@ -571,8 +571,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .authorize = .{
                 .new_authority = new_authorized_withdrawer,
@@ -618,6 +617,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
                 .clock = clock,
             },
         },
+        .{},
     );
 }
 
@@ -683,8 +683,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .authorize = .{
                 .new_authority = new_authorized_voter,
@@ -730,6 +729,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
                 .clock = clock,
             },
         },
+        .{},
     );
 }
 
@@ -795,8 +795,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .authorize_with_seed = .{
                 .authorization_type = VoteAuthorize.withdrawer,
@@ -844,6 +843,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
                 .clock = clock,
             },
         },
+        .{},
     );
 }
 
@@ -908,8 +908,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .authorize_checked_with_seed = .{
                 .authorization_type = VoteAuthorize.withdrawer,
@@ -959,6 +958,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
                 .clock = clock,
             },
         },
+        .{},
     );
 }
 
@@ -1014,8 +1014,7 @@ test "vote_program: authorizeChecked withdrawer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .authorize_checked = vote_program.vote_instruction.VoteAuthorize.withdrawer,
         },
@@ -1061,5 +1060,6 @@ test "vote_program: authorizeChecked withdrawer" {
                 .clock = clock,
             },
         },
+        .{},
     );
 }

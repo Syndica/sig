@@ -1,16 +1,17 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const InstructionError = sig.core.instruction.InstructionError;
-const InstructionContext = sig.runtime.InstructionContext;
-
 pub const address_lookup_table = @import("address_lookup_table/lib.zig");
 pub const bpf_loader_program = @import("bpf_loader/lib.zig");
 pub const precompile_programs = @import("precompiles/lib.zig");
 pub const system_program = @import("system/lib.zig");
-pub const serialization = @import("serialization.zig");
 pub const testing = @import("testing.zig");
 pub const vote_program = @import("vote/lib.zig");
+
+pub const bpf = @import("bpf/lib.zig");
+
+const InstructionError = sig.core.instruction.InstructionError;
+const InstructionContext = sig.runtime.InstructionContext;
 
 pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();

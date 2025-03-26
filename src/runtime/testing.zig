@@ -214,23 +214,44 @@ pub fn expectTransactionContextEqual(
     if (!builtin.is_test)
         @compileError("expectTransactionContextEqual should only be called in test mode");
 
-    if (expected.accounts.len != actual.accounts.len)
+    if (expected.accounts.len != actual.accounts.len) {
+        std.debug.print("accounts.len: {} != {}\n", .{
+            expected.accounts.len,
+            actual.accounts.len,
+        });
         return error.AccountsLengthMismatch;
+    }
 
     for (expected.accounts, 0..) |expected_account, index|
         try expectTransactionAccountEqual(
             expected_account,
             actual.accounts[index],
+            index,
         );
 
-    if (expected.accounts_resize_delta != actual.accounts_resize_delta)
+    if (expected.accounts_resize_delta != actual.accounts_resize_delta) {
+        std.debug.print("accounts_resize_delta: {} != {}\n", .{
+            expected.accounts_resize_delta,
+            actual.accounts_resize_delta,
+        });
         return error.AccountsResizeDeltaMismatch;
+    }
 
-    if (expected.compute_meter != actual.compute_meter)
+    if (expected.compute_meter != actual.compute_meter) {
+        std.debug.print("compute_meter: {} != {}\n", .{
+            expected.compute_meter,
+            actual.compute_meter,
+        });
         return error.ComputeMeterMismatch;
+    }
 
-    if (expected.custom_error != actual.custom_error)
+    if (expected.custom_error != actual.custom_error) {
+        std.debug.print("custom_error: {any} != {any}\n", .{
+            expected.custom_error,
+            actual.custom_error,
+        });
         return error.MaybeCustomErrorMismatch;
+    }
 
     // TODO: implement eqls for LogCollector
     // if (expected.maybe_log_collector != actual.maybe_log_collector)
@@ -240,11 +261,21 @@ pub fn expectTransactionContextEqual(
     // if (expected.sysvar_cache != actual.sysvar_cache)
     //     return error.SysvarCacheMismatch;
 
-    if (expected.lamports_per_signature != actual.lamports_per_signature)
+    if (expected.lamports_per_signature != actual.lamports_per_signature) {
+        std.debug.print("lamports_per_signature: {} != {}\n", .{
+            expected.lamports_per_signature,
+            actual.lamports_per_signature,
+        });
         return error.LamportsPerSignatureMismatch;
+    }
 
-    if (!expected.last_blockhash.eql(actual.last_blockhash))
+    if (!expected.last_blockhash.eql(actual.last_blockhash)) {
+        std.debug.print("last_blockhash: {} != {}\n", .{
+            expected.last_blockhash,
+            actual.last_blockhash,
+        });
         return error.LastBlockhashMismatch;
+    }
 
     // TODO: implement eqls for FeatureSet
     // if (expected.feature_set != actual.feature_set)
@@ -254,24 +285,89 @@ pub fn expectTransactionContextEqual(
 pub fn expectTransactionAccountEqual(
     expected: TransactionContextAccount,
     actual: TransactionContextAccount,
+    index: usize,
 ) !void {
     if (!builtin.is_test)
         @compileError("expectTransactionAccountEqual should only be called in test mode");
 
-    if (!expected.pubkey.equals(&actual.pubkey))
+    if (!expected.pubkey.equals(&actual.pubkey)) {
+        std.debug.print("account[{}]: {} != {}\n", .{
+            index,
+            expected.pubkey,
+            actual,
+        });
         return error.PubkeyMismatch;
-    if (expected.account.lamports != actual.account.lamports)
+    }
+    if (expected.account.lamports != actual.account.lamports) {
+        std.debug.print("account[{}]: {} != {}\n", .{
+            index,
+            expected.account.lamports,
+            actual.account.lamports,
+        });
         return error.LamportsMismatch;
-    if (!std.mem.eql(u8, expected.account.data, actual.account.data))
-        return error.DataMismatch;
-    if (!expected.account.owner.equals(&actual.account.owner))
+    }
+    if (!std.mem.eql(u8, expected.account.data, actual.account.data)) {
+        if (expected.account.data.len != actual.account.data.len) {
+            std.debug.print("account[{}]: {} != {}\n", .{
+                index,
+                expected.account.data.len,
+                actual.account.data.len,
+            });
+            return error.DataLengthMismatch;
+        } else {
+            std.debug.print("account[{}]:\n", .{index});
+            var diffs: usize = 0;
+            for (expected.account.data, actual.account.data, 0..) |expected_byte, actual_byte, i| {
+                if (expected_byte != actual_byte) {
+                    diffs += 1;
+                    std.debug.print("\t{}: {} != {}\n", .{ i, expected_byte, actual_byte });
+                }
+                if (diffs >= 10) {
+                    std.debug.print("\t...\n", .{});
+                    break;
+                }
+            }
+            return error.DataMismatch;
+        }
+    }
+    if (!expected.account.owner.equals(&actual.account.owner)) {
+        std.debug.print("account[{}]: {} != {}\n", .{
+            index,
+            expected.account.owner,
+            actual.account.owner,
+        });
         return error.OwnerMismatch;
-    if (expected.account.executable != actual.account.executable)
+    }
+    if (expected.account.executable != actual.account.executable) {
+        std.debug.print("account[{}]: {} != {}\n", .{
+            index,
+            expected.account.executable,
+            actual.account.executable,
+        });
         return error.ExecutableMismatch;
-    if (expected.account.rent_epoch != actual.account.rent_epoch)
+    }
+    if (expected.account.rent_epoch != actual.account.rent_epoch) {
+        std.debug.print("account[{}]: {} != {}\n", .{
+            index,
+            expected.account.rent_epoch,
+            actual.account.rent_epoch,
+        });
         return error.RentEpochMismatch;
-    if (expected.read_refs != actual.read_refs)
+    }
+    if (expected.read_refs != actual.read_refs) {
+        std.debug.print("account[{}]: {} != {}\n", .{
+            index,
+            expected.read_refs,
+            actual.read_refs,
+        });
         return error.ReadRefsMismatch;
-    if (expected.write_ref != actual.write_ref)
+    }
+    if (expected.write_ref != actual.write_ref) {
+        std.debug.print("account[{}]: {} != {}\n", .{
+            index,
+            expected.write_ref,
+            actual.write_ref,
+        });
         return error.WriteRefMismatch;
+    }
 }
