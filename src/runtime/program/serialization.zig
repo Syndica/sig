@@ -24,11 +24,13 @@ pub const BPF_ALIGN_OF_U128: usize = 8;
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L26
 pub const SerializedAccount = union(enum) {
     account: struct { u16, BorrowedAccount },
     duplicate: u8,
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/invoke_context.rs#L182
 pub const SerializedAccountMeta = struct {
     original_data_len: usize,
     vm_data_addr: u64,
@@ -37,6 +39,7 @@ pub const SerializedAccountMeta = struct {
     vm_owner_addr: u64,
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L31
 pub const Serializer = struct {
     allocator: std.mem.Allocator,
     buffer: std.ArrayListUnmanaged(u8),
@@ -104,13 +107,11 @@ pub const Serializer = struct {
             ) - account.constAccountData().len;
 
             if (self.copy_account_data) {
-                self.buffer.appendNTimes(
+                try self.buffer.appendNTimes(
                     self.allocator,
                     0,
                     MAX_PERMITTED_DATA_INCREASE + align_offset,
-                ) catch {
-                    return InstructionError.InvalidArgument;
-                };
+                );
             } else {
                 self.buffer.appendNTimes(
                     self.allocator,
@@ -184,6 +185,7 @@ pub const Serializer = struct {
     }
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L188
 pub fn serializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -239,6 +241,7 @@ pub fn serializeParameters(
         );
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L282
 fn serializeParametersUnaligned(
     allocator: std.mem.Allocator,
     accounts: []SerializedAccount,
@@ -349,6 +352,7 @@ fn serializeParametersUnaligned(
     };
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L415
 fn serializeParametersAligned(
     allocator: std.mem.Allocator,
     accounts: []SerializedAccount,
@@ -475,6 +479,7 @@ fn serializeParametersAligned(
     };
 }
 
+/// https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L251
 pub fn deserializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -514,6 +519,7 @@ pub fn deserializeParameters(
         );
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L360
 fn deserializeParametersUnaligned(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -577,6 +583,7 @@ fn deserializeParametersUnaligned(
     }
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L501
 fn deserializeParametersAligned(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -606,14 +613,14 @@ fn deserializeParametersAligned(
 
             // read owner
             if (start + @sizeOf(Pubkey) > memory.len) return InstructionError.InvalidArgument;
-            const owner = memory[start .. start + @sizeOf(Pubkey)];
+            const owner = memory[start..][0..@sizeOf(Pubkey)];
             start += @sizeOf(Pubkey);
 
             // read and update Lamports
             if (start + @sizeOf(u64) > memory.len) return InstructionError.InvalidArgument;
             const lamports = std.mem.readInt(
                 u64,
-                memory[start .. start + @sizeOf(u64)][0..@sizeOf(u64)],
+                memory[start..][0..@sizeOf(u64)],
                 .little,
             );
             start += @sizeOf(u64);
@@ -625,7 +632,7 @@ fn deserializeParametersAligned(
             if (start + @sizeOf(u64) > memory.len) return InstructionError.InvalidArgument;
             const post_len = std.mem.readInt(
                 u64,
-                memory[start .. start + @sizeOf(u64)][0..@sizeOf(u64)],
+                memory[start..][0..@sizeOf(u64)],
                 .little,
             );
             start += @sizeOf(u64);
@@ -699,12 +706,13 @@ fn deserializeParametersAligned(
 
             // update owner at the end so that we are allowed to change the lamports and data
             if (!std.mem.eql(u8, &borrowed_account.account.owner.data, owner)) {
-                try borrowed_account.setOwner(.{ .data = owner[0..@sizeOf(Pubkey)].* });
+                try borrowed_account.setOwner(.{ .data = owner.* });
             }
         }
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L778
 test "serializeParameters" {
     const TransactionContextAccount = sig.runtime.TransactionContextAccount;
     const createTransactionContext = sig.runtime.testing.createTransactionContext;
@@ -952,7 +960,7 @@ test "serializeParameters" {
 
 fn concatRegions(allocator: std.mem.Allocator, regions: []Region) ![]u8 {
     if (!builtin.is_test) {
-        @panic("concatRegions should only be called in test mode");
+        @compileError("concatRegions should only be called in test mode");
     }
     var size: u64 = 0;
     for (regions) |region| size += region.constSlice().len;

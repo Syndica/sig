@@ -55,6 +55,11 @@ pub const BorrowedAccount = struct {
         self.account_write_guard.release();
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/transaction-context/src/lib.rs#L1129
+    pub fn isOwnedByCurrentProgram(self: *const BorrowedAccount) bool {
+        return self.account.owner.equals(&self.context.program_id);
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
     pub fn checkDataIsMutable(self: BorrowedAccount) ?InstructionError {
         if (self.account.executable)
@@ -218,10 +223,6 @@ pub const BorrowedAccount = struct {
         }
 
         self.account.owner = pubkey;
-    }
-
-    pub fn isOwnedByCurrentProgram(self: *const BorrowedAccount) bool {
-        return self.account.owner.equals(&self.context.program_id);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L1001

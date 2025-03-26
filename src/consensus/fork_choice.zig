@@ -1054,7 +1054,7 @@ pub const ForkChoice = struct {
         stake_for_slot: u64,
     ) void {
         if (!builtin.is_test) {
-            @panic("setStakeVotedAt should only be called in test mode");
+            @compileError("setStakeVotedAt should only be called in test mode");
         }
 
         if (self.fork_infos.getPtr(slot_hash_key.*)) |fork_info| {
@@ -1918,7 +1918,7 @@ pub fn forkChoiceForTest(
     forks: []const TreeNode,
 ) !ForkChoice {
     if (!builtin.is_test) {
-        @panic("initForTest should only be called in test mode");
+        @compileError("initForTest should only be called in test mode");
     }
 
     const root = forks[0][1].?;
