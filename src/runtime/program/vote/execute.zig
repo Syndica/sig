@@ -115,6 +115,18 @@ pub fn execute(
             &vote_account,
             args.vote,
         ),
+        .vote => |args| executeProcessVoteWithAccount(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote,
+        ),
+        .vote_switch => |args| executeProcessVoteWithAccount(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote,
+        ),
     };
 }
 
