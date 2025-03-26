@@ -218,6 +218,7 @@ const Cmd = struct {
                 .mock_rpc_server = MockRpcServer.cmd_info,
             },
             .log_level = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .l,
                 .default_value = .debug,
@@ -225,6 +226,7 @@ const Cmd = struct {
                 .help = "The amount of detail to log",
             },
             .metrics_port = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .m,
                 .default_value = 12345,
@@ -232,6 +234,7 @@ const Cmd = struct {
                 .help = "Port to expose prometheus metrics via http",
             },
             .log_file = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = null,
@@ -239,6 +242,7 @@ const Cmd = struct {
                 .help = "Write logs to this file instead of stderr",
             },
             .tee_logs = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = false,
@@ -252,6 +256,7 @@ const Cmd = struct {
     };
 
     const shred_version_option: cli.OptionInfo(?u16) = .{
+        .kind = .named,
         .name_override = "shred-version",
         .alias = .none,
         .default_value = null,
@@ -260,6 +265,7 @@ const Cmd = struct {
     };
 
     const leader_schedule_option: cli.OptionInfo(?[]const u8) = .{
+        .kind = .named,
         .name_override = "leader-schedule",
         .alias = .none,
         .default_value = null,
@@ -268,6 +274,7 @@ const Cmd = struct {
     };
 
     const gossip_cluster_option: cli.OptionInfo(?[]const u8) = .{
+        .kind = .named,
         .name_override = "cluster",
         .alias = .c,
         .default_value = null,
@@ -276,6 +283,7 @@ const Cmd = struct {
     };
 
     const snapshot_dir_option: cli.OptionInfo([]const u8) = .{
+        .kind = .named,
         .name_override = "snapshot-dir",
         .alias = .s,
         .default_value = sig.VALIDATOR_DIR ++ "accounts_db",
@@ -286,6 +294,7 @@ const Cmd = struct {
     };
 
     const genesis_file_path_option: cli.OptionInfo(?[]const u8) = .{
+        .kind = .named,
         .name_override = "genesis-file-path",
         .alias = .g,
         .default_value = null,
@@ -295,6 +304,7 @@ const Cmd = struct {
     };
 
     const force_new_snapshot_download_option: cli.OptionInfo(bool) = .{
+        .kind = .named,
         .name_override = "force-new-snapshot-download",
         .alias = .none,
         .default_value = false,
@@ -310,6 +320,7 @@ const Cmd = struct {
 
         const cmd_info: cli.OptionInfoGroup(@This()) = .{
             .host = .{
+                .kind = .named,
                 .name_override = "gossip-host",
                 .alias = .none,
                 .default_value = null,
@@ -318,6 +329,7 @@ const Cmd = struct {
                     " - default: get from --entrypoint, fallback to 127.0.0.1",
             },
             .port = .{
+                .kind = .named,
                 .name_override = "gossip-port",
                 .alias = .p,
                 .default_value = 8001,
@@ -325,6 +337,7 @@ const Cmd = struct {
                 .help = "The port to run gossip listener",
             },
             .entrypoints = .{
+                .kind = .named,
                 .name_override = "entrypoint",
                 .alias = .e,
                 .default_value = &.{},
@@ -347,6 +360,7 @@ const Cmd = struct {
 
         const cmd_info: cli.OptionInfoGroup(@This()) = .{
             .spy_node = .{
+                .kind = .named,
                 .name_override = "spy-node",
                 .alias = .none,
                 .default_value = false,
@@ -354,6 +368,7 @@ const Cmd = struct {
                 .help = "run as a gossip spy node (minimize outgoing packets)",
             },
             .dump = .{
+                .kind = .named,
                 .name_override = "dump-gossip",
                 .alias = .none,
                 .default_value = false,
@@ -378,6 +393,7 @@ const Cmd = struct {
 
         const cmd_info: cli.OptionInfoGroup(@This()) = .{
             .use_disk_index = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = false,
@@ -385,6 +401,7 @@ const Cmd = struct {
                 .help = "use disk-memory for the account index",
             },
             .n_threads_snapshot_load = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .t,
                 .default_value = 0,
@@ -392,6 +409,7 @@ const Cmd = struct {
                 .help = "number of threads used to initialize the account index - default: ncpus",
             },
             .n_threads_snapshot_unpack = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .u,
                 .default_value = 0,
@@ -399,6 +417,7 @@ const Cmd = struct {
                 .help = "number of threads to unpack snapshots - default: ncpus * 2",
             },
             .force_unpack_snapshot = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .f,
                 .default_value = false,
@@ -406,6 +425,7 @@ const Cmd = struct {
                 .help = "unpacks a snapshot (even if it exists)",
             },
             .number_of_index_shards = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = sig.accounts_db.db.ACCOUNT_INDEX_SHARDS,
@@ -413,6 +433,7 @@ const Cmd = struct {
                 .help = "number of shards for the account index's pubkey_ref_map",
             },
             .accounts_per_file_estimate = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .a,
                 .default_value = sig.accounts_db.db
@@ -439,6 +460,7 @@ const Cmd = struct {
 
         const cmd_info: cli.OptionInfoGroup(@This()) = .{
             .min_snapshot_download_speed_mb = .{
+                .kind = .named,
                 .name_override = "min-snapshot-download-speed",
                 .alias = .none,
                 .default_value = 20,
@@ -447,6 +469,7 @@ const Cmd = struct {
                     " - default: 20MB/s",
             },
             .trusted_validators = .{
+                .kind = .named,
                 .name_override = "trusted-validator",
                 .alias = .t,
                 .default_value = &.{},
@@ -466,6 +489,7 @@ const Cmd = struct {
 
         const cmd_info: cli.OptionInfoGroup(@This()) = .{
             .fastload = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = false,
@@ -473,6 +497,7 @@ const Cmd = struct {
                 .help = "fastload the accounts db",
             },
             .save_index = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = false,
@@ -495,6 +520,7 @@ const Cmd = struct {
 
         const cmd_info: cli.OptionInfoGroup(@This()) = .{
             .turbine_port = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = 8002,
@@ -502,6 +528,7 @@ const Cmd = struct {
                 .help = "The port to run turbine shred listener (aka TVU port)",
             },
             .repair_port = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = 8003,
@@ -509,6 +536,7 @@ const Cmd = struct {
                 .help = "The port to run shred repair listener",
             },
             .test_repair_for_slot = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .none,
                 .default_value = null,
@@ -520,6 +548,7 @@ const Cmd = struct {
                 ,
             },
             .num_retransmit_threads = .{
+                .kind = .named,
                 .name_override = "num-retransmit-threads",
                 .alias = .none,
                 .default_value = null,
@@ -528,6 +557,7 @@ const Cmd = struct {
                     " - default: cpu count",
             },
             .max_shreds = .{
+                .kind = .named,
                 .name_override = "max-shreds",
                 .alias = .none,
                 .default_value = 1_000,
@@ -551,6 +581,7 @@ const Cmd = struct {
 
         const cmd_info: cli.OptionInfoGroup(@This()) = .{
             .enable = .{
+                .kind = .named,
                 .name_override = "enable-geyser",
                 .alias = .none,
                 .default_value = false,
@@ -558,6 +589,7 @@ const Cmd = struct {
                 .help = "enable geyser",
             },
             .pipe_path = .{
+                .kind = .named,
                 .name_override = "geyser-pipe-path",
                 .alias = .none,
                 .default_value = sig.VALIDATOR_DIR ++ "geyser.pipe",
@@ -565,6 +597,7 @@ const Cmd = struct {
                 .help = "path to the geyser pipe",
             },
             .writer_fba_bytes = .{
+                .kind = .named,
                 .name_override = "geyser-writer-fba-bytes",
                 .alias = .none,
                 .default_value = 1 << 32, // 4gb
@@ -681,6 +714,7 @@ const Cmd = struct {
                 .gossip_node = GossipOptionsNode.cmd_info,
                 .repair = RepairOptionsBase.cmd_info,
                 .dump_shred_tracker = .{
+                    .kind = .named,
                     .name_override = "dump-shred-tracker",
                     .alias = .none,
                     .default_value = false,
@@ -689,6 +723,7 @@ const Cmd = struct {
                         " to visually represent the currently tracked slots.",
                 },
                 .overwrite_stake_for_testing = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .none,
                     .default_value = false,
@@ -696,6 +731,7 @@ const Cmd = struct {
                     .help = "Overwrite the stake for testing purposes",
                 },
                 .no_retransmit = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .none,
                     .default_value = true,
@@ -703,6 +739,7 @@ const Cmd = struct {
                     .help = "Shreds will be received and stored but not retransmitted",
                 },
                 .snapshot_metadata_only = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .none,
                     .default_value = false,
@@ -846,6 +883,7 @@ const Cmd = struct {
                 .shred_version = shred_version_option,
                 .genesis_file_path = genesis_file_path_option,
                 .n_transactions = .{
+                    .kind = .named,
                     .name_override = "n-transactions",
                     .alias = .t,
                     .default_value = 3,
@@ -853,6 +891,7 @@ const Cmd = struct {
                     .help = "number of transactions to send",
                 },
                 .n_lamports_per_tx = .{
+                    .kind = .named,
                     .name_override = "n-lamports-per-tx",
                     .alias = .l,
                     .default_value = 1e7,

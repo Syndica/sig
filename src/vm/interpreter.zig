@@ -580,9 +580,6 @@ pub const Vm = struct {
                     const frame = self.call_frames.pop();
                     self.registers.set(.r10, frame.fp);
                     @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
-                    if (!version.enableDynamicStackFrames()) {
-                        registers.getPtr(.r10).* -= config.stack_frame_size;
-                    }
                     next_pc = frame.return_pc;
                 }
             },

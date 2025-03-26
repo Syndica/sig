@@ -216,7 +216,6 @@ pub fn build(b: *Build) !void {
         .sanitize_thread = config.enable_tsan,
         .filters = config.filters orelse &.{},
     });
-    b.installArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe.step);
     install_step.dependOn(&unit_tests_exe.step);
 
@@ -281,8 +280,6 @@ pub fn build(b: *Build) !void {
     benchmark_exe.build_id = .fast;
     benchmark_exe.root_module.omit_frame_pointer = false;
     benchmark_exe.root_module.strip = false;
-
-    b.installArtifact(benchmark_exe);
 
     benchmark_exe.root_module.addImport("secp256k1", secp256k1_mod);
     benchmark_exe.root_module.addImport("base58", base58_mod);
