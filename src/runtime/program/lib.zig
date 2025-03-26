@@ -9,7 +9,7 @@ pub const serialization = @import("serialization.zig");
 pub const testing = @import("testing.zig");
 pub const vote_program = @import("vote/lib.zig");
 
-pub const test_bpf_execution = @import("test_bpf_execution.zig");
+pub const bpf = @import("bpf/lib.zig");
 
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
