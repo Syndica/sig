@@ -216,7 +216,6 @@ pub fn build(b: *Build) !void {
         .sanitize_thread = config.enable_tsan,
         .filters = config.filters orelse &.{},
     });
-    b.installArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe.step);
     install_step.dependOn(&unit_tests_exe.step);
 
