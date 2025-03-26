@@ -124,9 +124,9 @@ pub fn main() !void {
 }
 
 const Cmd = struct {
+    input_path: ?[]const u8,
     assemble: bool,
     version: sbpf.Version,
-    input_path: ?[]const u8,
 
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
@@ -134,7 +134,16 @@ const Cmd = struct {
             .long = null,
         },
         .sub = .{
+            .input_path = .{
+                .kind = .positional,
+                .name_override = "input",
+                .alias = .none,
+                .default_value = null,
+                .config = .string,
+                .help = "input file path",
+            },
             .assemble = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .a,
                 .default_value = false,
@@ -142,18 +151,12 @@ const Cmd = struct {
                 .help = "whether the input file is an assembly file",
             },
             .version = .{
+                .kind = .named,
                 .name_override = null,
                 .alias = .v,
                 .default_value = .v3,
                 .config = {},
                 .help = "sBPF version to execute under",
-            },
-            .input_path = .{
-                .name_override = "input",
-                .alias = .none,
-                .default_value = null,
-                .config = .string,
-                .help = "input file path",
             },
         },
     };

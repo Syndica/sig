@@ -67,8 +67,12 @@ pub const BytesConfig = enum {
 
 pub fn OptionInfo(comptime Opt: type) type {
     return struct {
+        kind: enum { named, positional },
+
         /// Used to override the name displayed on the command line, or null
         /// to simply use the associated field name in kebab-case form.
+        /// For positionals, this is not specifiable, but is used in the
+        /// help message.
         name_override: ?[]const u8,
 
         /// The alias associated with this option, or `.none`.
@@ -325,6 +329,7 @@ test "TestCmd" {
                     .rpc = Rpc.cmd_info,
                 },
                 .log_level = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .l,
                     .default_value = .debug,
@@ -332,6 +337,7 @@ test "TestCmd" {
                     .help = "The amount of detail to log",
                 },
                 .metrics_port = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .m,
                     .default_value = 12345,
@@ -348,6 +354,7 @@ test "TestCmd" {
 
             const opt_info: OptionInfoGroup(@This()) = .{
                 .fizz = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .f,
                     .default_value = 32,
@@ -355,6 +362,7 @@ test "TestCmd" {
                     .help = "fizzy",
                 },
                 .buzz = .{
+                    .kind = .named,
                     .name_override = null,
                     .alias = .b,
                     .help = "buzzy",
@@ -386,6 +394,7 @@ test "TestCmd" {
         };
 
         const Gossip = struct {
+            file_path: ?[]const u8 = null,
             gossip_port: u16,
             entrypoints: []const []const u8,
             shared: Shared,
@@ -396,8 +405,17 @@ test "TestCmd" {
                     .long = "Sub-Test CLI",
                 },
                 .sub = .{
+                    .file_path = .{
+                        .kind = .positional,
+                        .name_override = "file",
+                        .alias = .none,
+                        .default_value = null,
+                        .config = .string,
+                        .help = "Input file",
+                    },
                     .shared = Shared.opt_info,
                     .gossip_port = .{
+                        .kind = .named,
                         .name_override = null,
                         .alias = .p,
                         .default_value = 8020,
@@ -405,6 +423,7 @@ test "TestCmd" {
                         .help = "The port to run gossip listener",
                     },
                     .entrypoints = .{
+                        .kind = .named,
                         .name_override = "entrypoint",
                         .alias = .e,
                         .default_value = &.{},
@@ -426,6 +445,7 @@ test "TestCmd" {
                 },
                 .sub = .{
                     .single = .{
+                        .kind = .named,
                         .name_override = null,
                         .alias = .none,
                         .default_value = null,
@@ -493,6 +513,22 @@ test "TestCmd" {
             .gossip = .{
                 .gossip_port = 8020,
                 .entrypoints = &.{ "33", "1" },
+                .shared = .{
+                    .fizz = 32,
+                    .buzz = &.{},
+                },
+            },
+        },
+    });
+
+    try expectParsed(&.{ "gossip", "foo/bar.zig" }, .{
+        .log_level = .debug,
+        .metrics_port = 12345,
+        .subcmd = .{
+            .gossip = .{
+                .file_path = "foo/bar.zig",
+                .gossip_port = 8020,
+                .entrypoints = &.{},
                 .shared = .{
                     .fizz = 32,
                     .buzz = &.{},
@@ -585,13 +621,15 @@ test "TestCmd" {
 
     try expectHelp(&.{ "gossip", "--help" },
         \\USAGE:
-        \\  sig-test gossip [OPTIONS]
+        \\  sig-test gossip [file] [OPTIONS]
         \\
         \\Run gossip
         \\
         \\Sub-Test CLI
         \\
         \\OPTIONS:
+        \\  [file]                               Input file
+        \\
         \\  -p, --gossip-port  (default: 8020)   The port to run gossip listener
         \\  -e, --entrypoint                     Gossip address of the entrypoint validators
         \\  -f, --fizz         (default: 32)     fizzy
@@ -652,13 +690,15 @@ fn CmdHelper(
 
     const OptEnum: type, //
     const opt_enum_to_field_map: []const OptStructIndex, //
+    const positional_set: []const OptStructIndex, //
     // WIP table that will be used to construct a final table for mapping aliases to options
     const alias_table_wip: [MAX_ALIAS_TABLE_LEN]OptEnumIntPlusOne, //
     // partially default-initialised result
     const default_init: Cmd //
-    = blk: {
+    = mappings_and_init: {
         var opt_enum_fields: []const Type.EnumField = &.{};
         var opt_enum_to_field_map: []const OptStructIndex = &.{};
+        var positional_set: []const OptStructIndex = &.{};
 
         var alias_table_wip = [_]OptEnumIntPlusOne{alias_table_sentinel} ** MAX_ALIAS_TABLE_LEN;
 
@@ -675,10 +715,6 @@ fn CmdHelper(
 
             const maybe_opt_info = @field(cmd_info.sub, s_field.name);
             if (isOptionInfo(@TypeOf(maybe_opt_info))) {
-                opt_enum_to_field_map = opt_enum_to_field_map ++ .{.{
-                    .index = s_field_i,
-                    .sub = null,
-                }};
                 computeOptFieldInfo(
                     maybe_parent_name,
 
@@ -687,6 +723,10 @@ fn CmdHelper(
                     maybe_opt_info,
 
                     &opt_enum_fields,
+
+                    .{ .index = s_field_i, .sub = null },
+                    &opt_enum_to_field_map,
+                    &positional_set,
 
                     &default_init,
 
@@ -700,10 +740,6 @@ fn CmdHelper(
             const s_sub_info = @typeInfo(s_field.type).Struct;
             @setEvalBranchQuota(cmd_fields.len * 3 + 1 + s_sub_info.fields.len * 2 + 1);
             for (s_sub_info.fields, 0..) |s_sub_field, s_sub_field_i| {
-                opt_enum_to_field_map = opt_enum_to_field_map ++ .{.{
-                    .index = s_field_i,
-                    .sub = s_sub_field_i,
-                }};
                 computeOptFieldInfo(
                     maybe_parent_name,
 
@@ -713,12 +749,37 @@ fn CmdHelper(
 
                     &opt_enum_fields,
 
+                    .{ .index = s_field_i, .sub = s_sub_field_i },
+                    &opt_enum_to_field_map,
+                    &positional_set,
+
                     &@field(default_init, s_field.name),
 
                     OptEnumIntPlusOne,
                     &alias_table_wip,
                 );
             }
+
+            if (positional_set.len != 0) if (maybe_sub_cmd_s_field_index) |sub_cmd_s_field_index| {
+                const sub_cmd_s_field_info = cmd_fields[sub_cmd_s_field_index];
+                const sub_cmd_s_field_name = sub_cmd_s_field_info.name;
+
+                const pos_name = blk: {
+                    const pos_s_field_idx = positional_set[0];
+                    const pos_s_field = cmd_fields[pos_s_field_idx.index];
+                    const s_sub_field_idx = pos_s_field_idx.sub orelse break :blk pos_s_field.name;
+                    const s_sub_fields = @typeInfo(pos_s_field.type).Struct.fields;
+                    const s_sub_field = s_sub_fields[s_sub_field_idx];
+                    break :blk s_sub_field.name;
+                };
+
+                @compileError(
+                    "" ++
+                        parent_name ++ " cannot have both a " ++
+                        "subcommand (" ++ sub_cmd_s_field_name ++ ") " ++
+                        "and a positional (" ++ pos_name ++ ")",
+                );
+            };
         }
 
         const OptEnum = @Type(.{ .Enum = .{
@@ -728,9 +789,10 @@ fn CmdHelper(
             .is_exhaustive = true,
         } });
 
-        break :blk .{
+        break :mappings_and_init .{
             OptEnum,
             opt_enum_to_field_map,
+            positional_set,
             alias_table_wip,
             default_init,
         };
@@ -860,6 +922,8 @@ fn CmdHelper(
             var result: Cmd = default_init;
             errdefer freeOptions(allocator, result);
 
+            var positional_count: std.math.IntFittingRange(0, positional_set.len) = 0;
+
             const parse_result: union(enum) {
                 help,
                 subcmd_set: if (maybe_sub_cmd_s_field_index != null) void else noreturn,
@@ -871,6 +935,9 @@ fn CmdHelper(
                     const key, //
                     const maybe_value //
                     = try parseOptionKeyMaybeValStr(arg) orelse break :parse_opt;
+
+                    // prevent trying to parse any more positionals
+                    positional_count = positional_set.len;
 
                     const is_help = switch (key) {
                         .short => |alias| alias == 'h',
@@ -896,55 +963,43 @@ fn CmdHelper(
                     switch (opt_tag) {
                         inline else => |itag| {
                             const s_field_idx = opt_enum_to_field_map[@intFromEnum(itag)];
-                            const s_field = cmd_fields[s_field_idx.index];
-                            const s_field_ptr = &@field(result, s_field.name);
-                            const maybe_opt_info = @field(cmd_info.sub, s_field.name);
-
-                            const opt_name, const opt_ptr, const opt_info = opt: {
-                                const s_sub_field_idx = s_field_idx.sub orelse break :opt .{
-                                    s_field.name,
-                                    s_field_ptr,
-                                    maybe_opt_info,
-                                };
-                                const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
-                                const s_sub_field = s_sub_fields[s_sub_field_idx];
-                                const s_sub_field_ptr = &@field(s_field_ptr, s_sub_field.name);
-                                break :opt .{
-                                    s_sub_field.name,
-                                    s_sub_field_ptr,
-                                    @field(maybe_opt_info, s_sub_field.name),
-                                };
-                            };
-
-                            const Opt = @TypeOf(opt_ptr.*);
-                            const is_list, const ValueType = switch (@typeInfo(Opt)) {
-                                .Pointer => |ptr_info| blk: {
-                                    const is_list = ptr_info.size == .Slice and
-                                        (ptr_info.child != u8 or opt_info.config == .list);
-                                    const ListElem = if (is_list) ptr_info.child else Opt;
-                                    break :blk .{ is_list, ListElem };
-                                },
-                                else => .{ false, Opt },
-                            };
-                            const parsed_value = try parseSingleOptValueMaybeScan(
-                                opt_name,
-                                ValueType,
+                            try parseOptValueMaybeScanIntoResult(
+                                allocator,
+                                s_field_idx,
+                                &result,
                                 maybe_value,
                                 args_iter,
                             );
-                            if (!is_list) {
-                                opt_ptr.* = parsed_value;
-                            } else {
-                                opt_ptr.* = try allocator.realloc(
-                                    @constCast(opt_ptr.*),
-                                    opt_ptr.len + 1,
-                                );
-                                @constCast(&opt_ptr.*[opt_ptr.len - 1]).* = parsed_value;
-                            }
                         },
                     }
 
                     continue;
+                }
+
+                if (positional_count != positional_set.len) {
+                    @setEvalBranchQuota(positional_set.len);
+                    switch (positional_count) {
+                        inline 0...positional_set.len - 1 => |positional_i| {
+                            const s_field_idx = positional_set[positional_i];
+
+                            const args_iter_index_guard = args_iter.index;
+                            try parseOptValueMaybeScanIntoResult(
+                                allocator,
+                                s_field_idx,
+                                &result,
+                                arg,
+                                args_iter,
+                            );
+                            std.debug.assert( // sanity check
+                                args_iter.index ==
+                                args_iter_index_guard //
+                            );
+
+                            positional_count += 1;
+                            continue;
+                        },
+                        else => unreachable,
+                    }
                 }
 
                 const sub_cmd_s_field_index = maybe_sub_cmd_s_field_index orelse {
@@ -1017,6 +1072,60 @@ fn CmdHelper(
             return result;
         }
 
+        fn parseOptValueMaybeScanIntoResult(
+            allocator: std.mem.Allocator,
+            comptime s_field_idx: OptStructIndex,
+            result: *Cmd,
+            maybe_value: ?[]const u8,
+            args_iter: *ArgsIter,
+        ) !void {
+            const s_field = cmd_fields[s_field_idx.index];
+            const s_field_ptr = &@field(result, s_field.name);
+            const maybe_opt_info = @field(cmd_info.sub, s_field.name);
+
+            const opt_name, const opt_ptr, const opt_info = opt: {
+                const s_sub_field_idx = s_field_idx.sub orelse break :opt .{
+                    s_field.name,
+                    s_field_ptr,
+                    maybe_opt_info,
+                };
+                const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                const s_sub_field = s_sub_fields[s_sub_field_idx];
+                const s_sub_field_ptr = &@field(s_field_ptr, s_sub_field.name);
+                break :opt .{
+                    s_sub_field.name,
+                    s_sub_field_ptr,
+                    @field(maybe_opt_info, s_sub_field.name),
+                };
+            };
+
+            const Opt = @TypeOf(opt_ptr.*);
+            const is_list, const ValueType = switch (@typeInfo(Opt)) {
+                .Pointer => |ptr_info| blk: {
+                    const is_list = ptr_info.size == .Slice and
+                        (ptr_info.child != u8 or opt_info.config == .list);
+                    const ListElem = if (is_list) ptr_info.child else Opt;
+                    break :blk .{ is_list, ListElem };
+                },
+                else => .{ false, Opt },
+            };
+            const parsed_value = try parseSingleOptValueMaybeScan(
+                opt_name,
+                ValueType,
+                maybe_value,
+                args_iter,
+            );
+            if (!is_list) {
+                opt_ptr.* = parsed_value;
+            } else {
+                opt_ptr.* = try allocator.realloc(
+                    @constCast(opt_ptr.*),
+                    opt_ptr.len + 1,
+                );
+                @constCast(&opt_ptr.*[opt_ptr.len - 1]).* = parsed_value;
+            }
+        }
+
         fn writeHelp(
             /// `*const [n][]const u8`
             command_chain: anytype,
@@ -1035,6 +1144,34 @@ fn CmdHelper(
                 try writer.writeAll(subcmd_str);
                 try writer.writeByte(' ');
             }
+
+            @setEvalBranchQuota(positional_set.len * 8 + 1);
+            inline for (positional_set) |s_field_idx| {
+                const s_field = cmd_fields[s_field_idx.index];
+                const maybe_opt_info = @field(cmd_info.sub, s_field.name);
+                const opt_name = blk: {
+                    const s_sub_field_idx = s_field_idx.sub orelse {
+                        const opt_info: OptionInfo(s_field.type) = maybe_opt_info;
+                        break :blk comptimeReplaceScalar(
+                            opt_info.name_override orelse s_field.name,
+                            '_',
+                            '-',
+                        );
+                    };
+                    const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                    const s_sub_field = s_sub_fields[s_sub_field_idx];
+                    const opt_info: OptionInfo(s_sub_field.type) =
+                        @field(maybe_opt_info, s_sub_field.name);
+                    break :blk comptimeReplaceScalar(
+                        opt_info.name_override orelse s_sub_field.name,
+                        '_',
+                        '-',
+                    );
+                };
+
+                try writer.writeAll("[" ++ opt_name ++ "] ");
+            }
+
             try writer.writeAll("[OPTIONS]");
 
             try tty_config.setColor(writer, .reset);
@@ -1087,53 +1224,94 @@ fn CmdHelper(
             try tty_config.setColor(writer, .yellow);
             try writer.writeAll("OPTIONS:");
 
-            const help_option_alias_name = "-h, --help";
-
             const name_alias_base_width: u64, //
             const default_value_base_width: ?u64 //
-            = min: {
-                var max_name_alias_width: u64 = help_option_alias_name.len;
-                var max_default_value_width: ?u64 = null;
+            = try writeOptionsHelp(.no_color, std.io.null_writer, 0, null);
 
-                @setEvalBranchQuota(opt_enum_to_field_map.len * 8 + 1);
-                inline for (opt_enum_to_field_map, 0..opt_enum_fields.len) |s_field_idx, e_int| {
-                    const opt_tag: OptEnum = @enumFromInt(e_int);
-                    const s_field = cmd_fields[s_field_idx.index];
-                    const maybe_opt_info = @field(cmd_info.sub, s_field.name);
-                    const opt_info = if (s_field_idx.sub) |s_sub_field_idx| blk: {
-                        const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
-                        const s_sub_field = s_sub_fields[s_sub_field_idx];
-                        break :blk @field(maybe_opt_info, s_sub_field.name);
-                    } else @as(OptionInfo(s_field.type), maybe_opt_info);
+            _ = try writeOptionsHelp(
+                tty_config,
+                writer,
+                name_alias_base_width,
+                default_value_base_width,
+            );
+        }
 
-                    var cw = std.io.countingWriter(std.io.null_writer);
-                    writeOptionNameWithDefault(
-                        opt_info.alias,
-                        @tagName(opt_tag),
-                        cw.writer(),
-                    ) catch |err| switch (err) {};
-                    max_name_alias_width = @max(
-                        max_name_alias_width,
+        fn writeOptionsHelp(
+            tty_config: std.io.tty.Config,
+            writer: anytype,
+            name_alias_base_width: u64,
+            default_value_base_width: ?u64,
+        ) !struct {
+            u64, // max_name_alias_width
+            ?u64, // max_default_value_width
+        } {
+            const help_option_alias_name = "-h, --help";
+
+            var max_name_alias_width: u64 = @max(help_option_alias_name.len, name_alias_base_width);
+            var max_default_value_width: ?u64 = null;
+
+            @setEvalBranchQuota(positional_set.len * 8 + 1);
+            inline for (positional_set, 0..) |s_field_idx, i| {
+                const s_field = cmd_fields[s_field_idx.index];
+                const maybe_opt_info = @field(cmd_info.sub, s_field.name);
+                const opt_info, const opt_name = blk: {
+                    const s_sub_field_idx = s_field_idx.sub orelse {
+                        const opt_info: OptionInfo(s_field.type) = maybe_opt_info;
+                        break :blk .{ opt_info, opt_info.name_override orelse s_field.name };
+                    };
+                    const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
+                    const s_sub_field = s_sub_fields[s_sub_field_idx];
+                    const opt_info: OptionInfo(s_sub_field.type) =
+                        @field(maybe_opt_info, s_sub_field.name);
+                    break :blk .{ opt_info, opt_info.name_override orelse s_sub_field.name };
+                };
+
+                const multiline_help = std.mem.indexOfScalar(u8, opt_info.help, '\n') != null;
+
+                try tty_config.setColor(writer, .green);
+                if (multiline_help) try writer.writeByte('\n');
+                try writer.writeByte('\n');
+                try writer.writeByteNTimes(' ', 2);
+
+                // write option alias & name
+                var cw = std.io.countingWriter(writer);
+                try writeOptionNameWithDefault(null, opt_name, cw.writer());
+                max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
+
+                // write padding
+                try tty_config.setColor(writer, .reset);
+                try writer.writeByteNTimes(
+                    ' ',
+                    @max(cw.bytes_written, name_alias_base_width) - cw.bytes_written + 2,
+                );
+
+                // maybe write default value
+                cw.bytes_written = 0;
+                if (try renderOptionDefaultValue(opt_info.default_value, cw.writer())) {
+                    max_default_value_width = @max(
+                        max_default_value_width orelse 0,
                         cw.bytes_written,
                     );
-
-                    cw.bytes_written = 0;
-                    if (renderOptionDefaultValue(
-                        opt_info.default_value,
-                        cw.writer(),
-                    ) catch |err| switch (err) {}) {
-                        max_default_value_width = @max(
-                            max_default_value_width orelse 0,
-                            cw.bytes_written,
-                        );
-                    }
                 }
-                break :min .{ max_name_alias_width, max_default_value_width };
-            };
+
+                // write padding
+                try writer.writeByteNTimes(' ', 1 + padding: {
+                    const base_width = default_value_base_width orelse break :padding 0;
+                    break :padding base_width - cw.bytes_written + 2;
+                });
+
+                // write help description and newline
+                const indent = 2 + name_alias_base_width + 2 +
+                    if (default_value_base_width) |base_width| (base_width + 3) else 1;
+                try writeIndentedText(writer, indent, opt_info.help);
+                if (multiline_help and i != positional_set.len - 1) try writer.writeByte('\n');
+            }
+
+            if (positional_set.len != 0) try writer.writeByte('\n');
 
             @setEvalBranchQuota(opt_enum_to_field_map.len * 8 + 1);
             inline for (opt_enum_to_field_map, 0..opt_enum_fields.len) |s_field_idx, e_int| {
-                const opt_kebab_tag: OptEnum = @enumFromInt(e_int);
+                const opt_tag: OptEnum = @enumFromInt(e_int);
                 const s_field = cmd_fields[s_field_idx.index];
                 const maybe_opt_info = @field(cmd_info.sub, s_field.name);
                 const opt_info = if (s_field_idx.sub) |s_sub_field_idx| blk: {
@@ -1154,20 +1332,26 @@ fn CmdHelper(
                 var cw = std.io.countingWriter(writer);
                 try writeOptionNameWithDefault(
                     opt_info.alias,
-                    @tagName(opt_kebab_tag),
+                    @tagName(opt_tag),
                     cw.writer(),
                 );
+                max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
 
                 // write padding
                 try tty_config.setColor(writer, .reset);
-                try writer.writeByteNTimes(' ', name_alias_base_width - cw.bytes_written + 2);
+                try writer.writeByteNTimes(
+                    ' ',
+                    @max(cw.bytes_written, name_alias_base_width) - cw.bytes_written + 2,
+                );
 
                 // maybe write default value
                 cw.bytes_written = 0;
-                _ = try renderOptionDefaultValue(
-                    opt_info.default_value,
-                    cw.writer(),
-                );
+                if (try renderOptionDefaultValue(opt_info.default_value, cw.writer())) {
+                    max_default_value_width = @max(
+                        max_default_value_width orelse 0,
+                        cw.bytes_written,
+                    );
+                }
 
                 // write padding
                 try writer.writeByteNTimes(' ', 1 + padding: {
@@ -1188,7 +1372,7 @@ fn CmdHelper(
 
             try writer.writeAll(help_option_alias_name);
             const padding1 =
-                name_alias_base_width -
+                @max(help_option_alias_name.len, name_alias_base_width) -
                 help_option_alias_name.len + 3 -
                 @intFromBool(default_value_base_width != null);
             const padding2 = if (default_value_base_width) |base_width| base_width + 3 else 0;
@@ -1197,6 +1381,11 @@ fn CmdHelper(
             try writer.writeByteNTimes(' ', padding1 + padding2);
 
             try writer.writeAll("Prints help information\n");
+
+            return .{
+                max_name_alias_width,
+                max_default_value_width,
+            };
         }
 
         inline fn optionTagFromAlias(alias: u8) ?OptEnum {
@@ -1231,6 +1420,11 @@ fn computeOptFieldInfo(
     comptime opt_enum_fields: *[]const std.builtin.Type.EnumField,
 
     //
+    comptime opt_struct_index: OptStructIndex,
+    comptime opt_enum_to_field_map: *[]const OptStructIndex,
+    comptime positional_set: *[]const OptStructIndex,
+
+    //
     comptime default_init_ptr: anytype,
 
     //
@@ -1245,17 +1439,6 @@ fn computeOptFieldInfo(
         "Cannot use reserved option name " ++ parent_prefix ++ "help",
     );
 
-    const opt_enum_field_idx = opt_enum_fields.len;
-    opt_enum_fields.* = opt_enum_fields.* ++ .{.{
-        .name = opt_enum_field_name,
-        .value = opt_enum_field_idx,
-    }};
-
-    if (opt_info.alias != .none) {
-        const idx = @intFromEnum(opt_info.alias) - ALIAS_TABLE_IDX_BASE;
-        alias_table_wip[idx] = opt_enum_field_idx;
-    }
-
     const is_slice = switch (@typeInfo(FieldType)) {
         .Pointer => |ptr_info| switch (ptr_info.size) {
             .Slice => ptr_info.child != u8 or opt_info.config == .list,
@@ -1263,6 +1446,36 @@ fn computeOptFieldInfo(
         },
         else => false,
     };
+
+    switch (opt_info.kind) {
+        .named => {
+            const opt_enum_field_idx = opt_enum_fields.len;
+            opt_enum_fields.* = opt_enum_fields.* ++ .{.{
+                .name = opt_enum_field_name,
+                .value = opt_enum_field_idx,
+            }};
+
+            if (opt_info.alias != .none) {
+                const idx = @intFromEnum(opt_info.alias) - ALIAS_TABLE_IDX_BASE;
+                alias_table_wip[idx] = opt_enum_field_idx;
+            }
+
+            opt_enum_to_field_map.* = opt_enum_to_field_map.* ++ .{opt_struct_index};
+        },
+        .positional => {
+            if (is_slice) @compileError(
+                "Option " ++ parent_prefix ++ field_name ++
+                    " cannot be both a list and a positional.",
+            );
+
+            if (opt_info.alias != .none) @compileError(
+                "Option " ++ parent_prefix ++ field_name ++ " cannot have an alias, " ++
+                    "since it's not named, it's " ++ @tagName(opt_info.kind),
+            );
+
+            positional_set.* = positional_set.* ++ .{opt_struct_index};
+        },
+    }
 
     if (is_slice) {
         // default init lists to empty.
@@ -1444,10 +1657,6 @@ fn parseOptionKeyMaybeValStr(
     return .{ key, maybe_val };
 }
 
-const ParseOptValueError =
-    ParseSingleOptValueError ||
-    std.mem.Allocator.Error;
-
 fn parseSingleOptValueMaybeScan(
     comptime option_name: []const u8,
     comptime T: type,
@@ -1510,17 +1719,23 @@ fn parseSingleOptValue(
 /// Writes `"-?, --{name}"`, or `"    --{name}"`.
 /// Replaces all '_' in `name` with '-'.
 fn writeOptionNameWithDefault(
-    opt_alias: OptionAlias,
+    /// Null for positionals
+    maybe_opt_alias: ?OptionAlias,
     opt_name: []const u8,
     /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
     writer: anytype,
 ) @TypeOf(writer).Error!void {
-    if (opt_alias != .none) {
-        try writer.print("-{c}, ", .{@intFromEnum(opt_alias)});
+    if (maybe_opt_alias) |opt_alias| {
+        if (opt_alias != .none) {
+            try writer.print("-{c}, ", .{@intFromEnum(opt_alias)});
+        } else {
+            try writer.writeByteNTimes(' ', 4);
+        }
+        try writer.writeByteNTimes('-', 2);
     } else {
-        try writer.writeByteNTimes(' ', 4);
+        try writer.writeByte('[');
     }
-    try writer.writeAll("--");
+
     var start_idx: usize = 0;
     while (std.mem.indexOfScalarPos(u8, opt_name, start_idx, '_')) |end_idx| {
         defer start_idx = end_idx + 1;
@@ -1528,6 +1743,9 @@ fn writeOptionNameWithDefault(
         try writer.writeByte('-');
     }
     try writer.writeAll(opt_name[start_idx..]);
+    if (maybe_opt_alias == null) {
+        try writer.writeByte(']');
+    }
 }
 
 /// Returns true only if the value was rendered.
