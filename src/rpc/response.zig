@@ -1,27 +1,26 @@
 const std = @import("std");
 
-const Allocator = std.mem.Allocator;
-
 pub const ParseError = std.json.ParseError(std.json.Scanner) || error{MissingResult};
 
 /// Wraps a parsed response from the RPC server with an arena that owns all
 /// contained pointers.
-pub fn Response(comptime Method: type) type {
+pub fn Response(comptime T: type) type {
     return struct {
         arena: *std.heap.ArenaAllocator,
         id: u64,
         jsonrpc: []const u8,
         payload: Payload,
+        const Self = @This();
 
         pub const Payload = union(enum) {
-            result: Method.Response,
+            result: T,
             err: Error,
         };
 
         pub fn fromJson(
-            allocator: Allocator,
+            allocator: std.mem.Allocator,
             response_json: []const u8,
-        ) ParseError!Response(Method) {
+        ) ParseError!Response(T) {
             const arena = try allocator.create(std.heap.ArenaAllocator);
             errdefer allocator.destroy(arena);
             arena.* = std.heap.ArenaAllocator.init(allocator);
@@ -30,7 +29,7 @@ pub fn Response(comptime Method: type) type {
                 struct {
                     id: u64,
                     jsonrpc: []const u8,
-                    result: ?Method.Response = null,
+                    result: ?T = null,
                     @"error": ?Error = null,
                 },
                 arena.allocator(),
@@ -49,13 +48,13 @@ pub fn Response(comptime Method: type) type {
             };
         }
 
-        pub fn deinit(self: Response(Method)) void {
+        pub fn deinit(self: Self) void {
             const allocator = self.arena.child_allocator;
             self.arena.deinit();
             allocator.destroy(self.arena);
         }
 
-        pub fn result(self: Response(Method)) !Method.Response {
+        pub fn result(self: Self) !T {
             return switch (self.payload) {
                 .result => |r| r,
                 .err => error.RpcRequestFailed,
