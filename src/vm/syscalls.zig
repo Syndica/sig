@@ -151,6 +151,11 @@ fn consumeMemoryCompute(ctx: *TransactionContext, length: u64) !void {
     try ctx.consumeCompute(cost);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
+pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
+    // TODO: Implement this
+}
+
 // hashing
 const Parameters = enum(u64) {
     Bn254X5 = 0,

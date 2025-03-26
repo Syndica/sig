@@ -37,6 +37,9 @@ pub const BPF_ACCOUNT_DATA_DIRECT_MAPPING =
 pub const ENABLE_POSEIDON_SYSCALL =
     Pubkey.parseBase58String("FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr") catch unreachable;
 
+pub const DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL =
+    Pubkey.parseBase58String("79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features
