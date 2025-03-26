@@ -726,7 +726,18 @@ fn executeProcessVoteWithAccount(
         @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
     );
 
-    try processVoteWithAccount(allocator, ic, vote_account, vote, slot_hashes, clock);
+    processVoteWithAccount(
+        allocator,
+        ic,
+        vote_account,
+        vote,
+        slot_hashes,
+        clock,
+    ) catch |err| switch (err) {
+        // TODO: How to handle Overflow? Bubble it up or convert?
+        error.Overflow => return InstructionError.Custom,
+        else => |e| return e,
+    };
 }
 
 fn processVoteWithAccount(
@@ -736,7 +747,7 @@ fn processVoteWithAccount(
     vote: Vote,
     slot_hashes: SlotHashes,
     clock: Clock,
-) (error{OutOfMemory} || InstructionError)!void {
+) (error{Overflow} || error{OutOfMemory} || InstructionError)!void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
         ic,

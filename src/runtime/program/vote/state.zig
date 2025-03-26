@@ -560,6 +560,95 @@ pub const VoteState = struct {
         return commission > self.commission;
     }
 
+    pub fn lastLockout(self: *const VoteState) ?Lockout {
+        if (self.votes.getLastOrNull()) |vote| {
+            return vote.lockout;
+        }
+        return null;
+    }
+
+    pub fn lastVotedSlot(self: *const VoteState) ?Slot {
+        if (self.lastLockout()) |lock_out| {
+            return lock_out.slot;
+        }
+        return null;
+    }
+
+    // TODO add logging
+    pub fn checkSlotsAreValid(
+        self: *const VoteState,
+        vote: *const Vote,
+        slot_hashes: *const SlotHashes,
+    ) (error{Overflow} || InstructionError)!?VoteError {
+        const vote_slots = vote.slots;
+        const vote_hash = vote.hash;
+
+        // index into the vote's slots, starting at the oldest slot
+        var i: usize = 0;
+
+        // index into the slot_hashes, starting at the oldest known slot hash
+        var j: usize = slot_hashes.entries.len;
+
+        // Note:
+        //
+        // 1) `vote_slots` is sorted from oldest/smallest vote to newest/largest
+        // vote, due to the way votes are applied to the vote state (newest votes
+        // pushed to the back).
+        //
+        // 2) Conversely, `slot_hashes` is sorted from newest/largest vote to
+        // the oldest/smallest vote
+        //
+        // So:
+        // for vote_states we are iterating from 0 up to the (size - 1) index
+        // for slot_hashes we are iterating from (size - 1) index down to 0
+        while (i < vote_slots.items.len and j > 0) {
+            // 1) increment `i` to find the smallest slot `s` in `vote_slots`
+            // where `s` >= `last_voted_slot`
+            const less_than_last_voted_slot =
+                if (self.lastVotedSlot()) |last_voted_slot|
+                vote_slots.items[i] <= last_voted_slot
+            else
+                false;
+
+            if (less_than_last_voted_slot) {
+                i = try std.math.add(usize, i, 1);
+                continue;
+            }
+
+            // 2) Find the hash for this slot `s`.
+            if (vote_slots.items[i] != slot_hashes.entries[try std.math.sub(usize, j, 1)].@"0") {
+                // Decrement `j` to find newer slots
+                j = try std.math.sub(usize, j, 1);
+                continue;
+            }
+
+            // 3) Once the hash for `s` is found, bump `s` to the next slot
+            // in `vote_slots` and continue.
+            i = try std.math.add(usize, i, 1);
+            j = try std.math.sub(usize, j, 1);
+        }
+
+        if (j == slot_hashes.entries.len) {
+            // This means we never made it to steps 2) or 3) above, otherwise
+            // `j` would have been decremented at least once. This means
+            // there are not slots in `vote_slots` greater than `last_voted_slot`
+            return VoteError.vote_too_old;
+        }
+
+        if (i != vote_slots.items.len) {
+            // This means there existed some slot for which we couldn't find
+            // a matching slot hash in step 2)
+            return VoteError.slots_mismatch;
+        }
+        if (!vote_hash.eql(slot_hashes.entries[j].@"1")) {
+            // This means the newest slot in the `vote_slots` has a match that
+            // doesn't match the expected hash for that slot on this
+            // fork
+            return VoteError.slot_hash_mismatch;
+        }
+        return null;
+    }
+
     pub fn processTimestamp(
         self: *VoteState,
         slot: Slot,
@@ -586,7 +675,7 @@ pub const VoteState = struct {
         slot_hashes: SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+    ) (error{Overflow} || error{OutOfMemory} || InstructionError)!?VoteError {
         if (vote.slots.items.len == 0) {
             return VoteError.empty_slots;
         }
@@ -628,11 +717,12 @@ pub const VoteState = struct {
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) ?VoteError {
-        _ = self;
+    ) (error{Overflow} || InstructionError)!?VoteError {
+        if (try self.checkSlotsAreValid(vote, slot_hashes)) |err| {
+            return err;
+        }
+
         _ = vote_slots;
-        _ = vote;
-        _ = slot_hashes;
         _ = epoch;
         _ = current_slot;
         return null;
