@@ -2,7 +2,6 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const ids = sig.runtime.ids;
 const program = sig.runtime.program;
 const vm = sig.vm;
 
@@ -82,7 +81,10 @@ pub const Serializer = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L91-L92
-    pub fn writeAccount(self: *Serializer, account: *const BorrowedAccount) (error{OutOfMemory} || InstructionError)!u64 {
+    pub fn writeAccount(
+        self: *Serializer,
+        account: *const BorrowedAccount,
+    ) (error{OutOfMemory} || InstructionError)!u64 {
         const vm_data_addr = if (self.copy_account_data) blk: {
             const addr = self.vaddr +| self.buffer.items.len;
             _ = self.writeBytes(account.account.data);
@@ -169,7 +171,10 @@ pub const Serializer = struct {
     pub fn finish(self: *Serializer) error{OutOfMemory}!struct { []u8, []Region } {
         try self.pushRegion(true);
         std.debug.assert(self.region_start == self.buffer.items.len);
-        return .{ try self.buffer.toOwnedSlice(self.allocator), try self.regions.toOwnedSlice(self.allocator) };
+        return .{
+            try self.buffer.toOwnedSlice(self.allocator),
+            try self.regions.toOwnedSlice(self.allocator),
+        };
     }
 
     pub fn getAccountDataRegionMemoryState(account: *const BorrowedAccount) vm.memory.MemoryState {
