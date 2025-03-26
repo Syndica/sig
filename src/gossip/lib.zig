@@ -26,3 +26,10 @@ pub const SocketTag = data.SocketTag;
 pub const PruneData = prune.PruneData;
 
 pub const getClusterEntrypoints = service.getClusterEntrypoints;
+
+
+const svc = @import("svc.zig");
+
+const verify_service = @import("verify_service.zig");
+const recv_service = @import("recv_service.zig");
+const send_service = @import("send_service.zig");
