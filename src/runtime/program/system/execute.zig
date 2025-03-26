@@ -800,8 +800,7 @@ test "executeCreateAccount" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .create_account = .{
                 .lamports = 1_000_000,
@@ -834,6 +833,7 @@ test "executeCreateAccount" {
             },
             .accounts_resize_delta = 2,
         },
+        .{},
     );
 }
 
@@ -848,8 +848,7 @@ test "executeAssign" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .assign = .{
                 .owner = new_owner,
@@ -871,6 +870,7 @@ test "executeAssign" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
+        .{},
     );
 }
 
@@ -885,8 +885,7 @@ test "executeTransfer" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .transfer = .{
                 .lamports = 1_000_000,
@@ -911,6 +910,7 @@ test "executeTransfer" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
+        .{},
     );
 }
 
@@ -928,8 +928,7 @@ test "executeCreateAccountWithSeed" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .create_account_with_seed = .{
                 .base = base,
@@ -961,6 +960,7 @@ test "executeCreateAccountWithSeed" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
+        .{},
     );
 }
 
@@ -1014,8 +1014,7 @@ test "executeAdvanceNonceAccount" {
 
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .advance_nonce_account = {},
         },
@@ -1059,6 +1058,7 @@ test "executeAdvanceNonceAccount" {
                 .recent_blockhashes = recent_blockhashes,
             },
         },
+        .{},
     );
 }
 
@@ -1094,8 +1094,7 @@ test "executeWithdrawNonceAccount" {
 
     try testing.expectProgramExecuteResult(
         allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .withdraw_nonce_account = 1_000,
         },
@@ -1143,6 +1142,7 @@ test "executeWithdrawNonceAccount" {
                 .rent = rent,
             },
         },
+        .{},
     );
 }
 
@@ -1191,9 +1191,8 @@ test "executeInitializeNonceAccount" {
     const account_0_key = Pubkey.initRandom(prng.random());
 
     try testing.expectProgramExecuteResult(
-        std.testing.allocator,
-        {},
-        system_program,
+        allocator,
+        system_program.ID,
         SystemProgramInstruction{
             .initialize_nonce_account = nonce_authority,
         },
@@ -1241,6 +1240,7 @@ test "executeInitializeNonceAccount" {
                 .rent = rent,
             },
         },
+        .{},
     );
 }
 
@@ -1278,9 +1278,8 @@ test "executeAuthorizeNonceAccount" {
     const account_0_key = Pubkey.initRandom(prng.random());
 
     try testing.expectProgramExecuteResult(
-        std.testing.allocator,
-        {},
-        system_program,
+        allocator,
+        system_program.ID,
         SystemProgramInstruction{
             .authorize_nonce_account = final_nonce_authority,
         },
@@ -1311,6 +1310,7 @@ test "executeAuthorizeNonceAccount" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
+        .{},
     );
 }
 
@@ -1326,8 +1326,7 @@ test "executeAllocate" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .allocate = .{
                 .space = allocation_size,
@@ -1357,6 +1356,7 @@ test "executeAllocate" {
             },
             .accounts_resize_delta = allocation_size,
         },
+        .{},
     );
 }
 
@@ -1374,8 +1374,7 @@ test "executeAllocateWithSeed" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .allocate_with_seed = .{
                 .base = base,
@@ -1411,6 +1410,7 @@ test "executeAllocateWithSeed" {
             },
             .accounts_resize_delta = allocation_size,
         },
+        .{},
     );
 }
 
@@ -1428,8 +1428,7 @@ test "executeAssignWithSeed" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .assign_with_seed = .{
                 .base = base,
@@ -1456,6 +1455,7 @@ test "executeAssignWithSeed" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
+        .{},
     );
 }
 
@@ -1474,8 +1474,7 @@ test "executeTransferWithSeed" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        system_program,
+        system_program.ID,
         SystemProgramInstruction{
             .transfer_with_seed = .{
                 .lamports = 1_000_000,
@@ -1505,6 +1504,7 @@ test "executeTransferWithSeed" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
+        .{},
     );
 }
 
@@ -1544,9 +1544,8 @@ test "executeUpgradeNonceAccount" {
     const account_0_key = Pubkey.initRandom(prng.random());
 
     try testing.expectProgramExecuteResult(
-        std.testing.allocator,
-        {},
-        system_program,
+        allocator,
+        system_program.ID,
         SystemProgramInstruction{
             .upgrade_nonce_account = {},
         },
@@ -1574,5 +1573,6 @@ test "executeUpgradeNonceAccount" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
         },
+        .{},
     );
 }
