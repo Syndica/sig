@@ -553,6 +553,32 @@ pub const VoteState = struct {
         return pubkey;
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/9806724b6d49dec06a9d50396adf26565d6b7745/programs/vote/src/vote_state/mod.rs#L792
+    ///
+    /// Given a proposed new commission, returns true if this would be a commission increase, false otherwise
+    pub fn isCommissionIncrease(self: *const VoteState, commission: u8) bool {
+        return commission > self.commission;
+    }
+
+    pub fn processTimestamp(
+        self: *VoteState,
+        slot: Slot,
+        timestamp: i64,
+    ) ?VoteError {
+        const new_timestamp = BlockTimestamp{ .slot = slot, .timestamp = timestamp };
+
+        if (slot < self.last_timestamp.slot or timestamp < self.last_timestamp.timestamp or
+            (slot == self.last_timestamp.slot and
+            !std.meta.eql(new_timestamp, self.last_timestamp) and
+            self.last_timestamp.slot != 0))
+        {
+            return VoteError.timestamp_too_old;
+        }
+
+        self.last_timestamp = new_timestamp;
+        return null;
+    }
+
     pub fn processVote(
         self: *VoteState,
         allocator: std.mem.Allocator,
@@ -560,9 +586,9 @@ pub const VoteState = struct {
         slot_hashes: SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) (error{OutOfMemory} || VoteError)!void {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
         if (vote.slots.items.len == 0) {
-            return VoteError.EmptySlots;
+            return VoteError.empty_slots;
         }
 
         const earliest_slot_in_history = blk: {
@@ -583,10 +609,10 @@ pub const VoteState = struct {
         }
 
         if (vote_slots.items.len == 0) {
-            return VoteError.VotesTooOldAllFiltered;
+            return VoteError.votes_too_old_all_filtered;
         }
 
-        try self.processVoteUnfiltered(
+        return self.processVoteUnfiltered(
             vote_slots.items,
             vote,
             &slot_hashes,
@@ -602,13 +628,14 @@ pub const VoteState = struct {
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) VoteError!void {
+    ) ?VoteError {
         _ = self;
         _ = vote_slots;
         _ = vote;
         _ = slot_hashes;
         _ = epoch;
         _ = current_slot;
+        return null;
     }
 };
 
