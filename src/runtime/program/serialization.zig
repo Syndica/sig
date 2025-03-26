@@ -24,6 +24,7 @@ pub const BPF_ALIGN_OF_U128: usize = 8;
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L26
 pub const SerializedAccount = union(enum) {
     account: struct { u16, BorrowedAccount },
     duplicate: u8,
