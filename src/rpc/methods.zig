@@ -880,8 +880,21 @@ test Call {
     ) catch unreachable;
     const test_pubkey2 = comptime sig.core.Pubkey.ZEROES;
 
-    try std.testing.expectEqualDeep(
-        Call{
+    try testParseCall(
+        .{},
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 123,
+        \\  "method": "getAccountInfo",
+        \\  "params": [
+        \\    "vinesvinesvinesvinesvinesvinesvinesvinesvin",
+        \\    {
+        \\      "encoding": "base58"
+        \\    }
+        \\  ]
+        \\}
+    ,
+        .{
             .id = .{ .int = 123 },
             .method = .{ .getAccountInfo = .{
                 .pubkey = test_pubkey1,
@@ -890,23 +903,24 @@ test Call {
                 },
             } },
         },
-        try std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{
-            \\  "jsonrpc": "2.0",
-            \\  "id": 123,
-            \\  "method": "getAccountInfo",
-            \\  "params": [
-            \\    "vinesvinesvinesvinesvinesvinesvinesvinesvin",
-            \\    {
-            \\      "encoding": "base58"
-            \\    }
-            \\  ]
-            \\}
-        , .{}),
     );
 
-    try std.testing.expectEqualDeep(
-        Call{
+    try testParseCall(
+        .{},
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": "a44",
+        \\  "method": "getBalance",
+        \\  "params": [
+        \\    "11111111111111111111111111111111",
+        \\    {
+        \\      "commitment": "processed",
+        \\      "minContextSlot": 64
+        \\    }
+        \\  ]
+        \\}
+    ,
+        .{
             .id = .{ .str = "a44" },
             .method = .{ .getBalance = .{
                 .pubkey = test_pubkey2,
@@ -916,19 +930,101 @@ test Call {
                 },
             } },
         },
-        try std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{
-            \\  "jsonrpc": "2.0",
-            \\  "id": "a44",
-            \\  "method": "getBalance",
-            \\  "params": [
-            \\    "11111111111111111111111111111111",
-            \\    {
-            \\      "commitment": "processed",
-            \\      "minContextSlot": 64
-            \\    }
-            \\  ]
-            \\}
+    );
+
+    try testParseCall(
+        .{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true },
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "jsonrpc": "2.0",
+        \\  "id": "a33",
+        \\  "method": "getBalance",
+        \\  "params": [
+        \\    "11111111111111111111111111111111",
+        \\    {
+        \\      "commitment": "processed",
+        \\      "minContextSlot": 64
+        \\    }
+        \\  ],
+        \\  "ignored": "foo"
+        \\}
+    ,
+        .{
+            .id = .{ .str = "a33" },
+            .method = .{ .getBalance = .{
+                .pubkey = test_pubkey2,
+                .config = .{
+                    .commitment = .processed,
+                    .minContextSlot = 64,
+                },
+            } },
+        },
+    );
+
+    try std.testing.expectError(
+        error.MissingField,
+        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":42,"id":"33","method":"getBalance","method":"getAccountInfo"}
+        , .{ .duplicate_field_behavior = .use_first }),
+    );
+    try std.testing.expectError(
+        error.MissingField,
+        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":null,"method":"getBalance"}
         , .{}),
     );
+    try std.testing.expectError(
+        error.DuplicateField,
+        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":null,"method":"getBalance","method":"getAccountInfo"}
+        , .{}),
+    );
+    try std.testing.expectError(
+        error.DuplicateField,
+        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":42,"id":"33"}
+        , .{ .duplicate_field_behavior = .@"error" }),
+    );
+
+    try std.testing.expectError(
+        error.DuplicateField,
+        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
+            \\{"jsonrpc":"2.0","jsonrpc":"2.0"}
+        , .{}),
+    );
+    try std.testing.expectError(
+        error.UnexpectedToken,
+        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
+            \\{"jsonrpc":"2.0","method":null}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.UnexpectedToken,
+        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
+            \\{"jsonrpc":2.0}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.UnknownField,
+        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
+            \\{"unexpected":"foo"}
+        , .{}),
+    );
+}
+
+fn testParseCall(
+    options: std.json.ParseOptions,
+    actual_str: []const u8,
+    expected_call: Call,
+) !void {
+    const actual_call = try std.json.parseFromSlice(
+        Call,
+        std.testing.allocator,
+        actual_str,
+        options,
+    );
+    defer actual_call.deinit();
+    try std.testing.expectEqualDeep(expected_call, actual_call.value);
 }
