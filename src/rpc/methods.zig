@@ -26,76 +26,6 @@ pub const Call = struct {
     id: Id,
     method: Method,
 
-    pub const Id = union(enum) {
-        null,
-        int: i128,
-        str: []const u8,
-    };
-
-    pub const Method = union(enum) {
-        getAccountInfo: GetAccountInfo,
-        getBalance: GetBalance,
-        getBlock: GetBlock,
-        getBlockCommitment: GetBlockCommitment,
-        getBlockHeight: GetBlockHeight,
-        getBlockProduction: noreturn,
-        getBlocks: noreturn,
-        getBlocksWithLimit: noreturn,
-        getBlockTime: noreturn,
-        getClusterNodes: GetClusterNodes,
-        getEpochInfo: GetEpochInfo,
-        getEpochSchedule: GetEpochSchedule,
-        getFeeForMessage: noreturn,
-        getFirstAvailableBlock: noreturn,
-        getGenesisHash: noreturn,
-        getHealth: noreturn,
-        getHighestSnapshotSlot: noreturn,
-        getIdentity: noreturn,
-        getInflationGovernor: noreturn,
-        getInflationRate: noreturn,
-        getInflationReward: noreturn,
-        getLargestAccounts: noreturn,
-        getLatestBlockhash: GetLatestBlockhash,
-        getLeaderSchedule: GetLeaderSchedule,
-        getMaxRetransmitSlot: noreturn,
-        getMaxShredInsertSlot: noreturn,
-        getMinimumBalanceForRentExemption: noreturn,
-        getMultipleAccounts: noreturn,
-        getProgramAccounts: noreturn,
-        getRecentPerformanceSamples: noreturn,
-        getRecentPrioritizationFees: noreturn,
-        getSignaturesForAddress: noreturn,
-        getSignatureStatuses: GetSignatureStatuses,
-        getSlot: GetSlot,
-        getSlotLeader: noreturn,
-        getSlotLeaders: noreturn,
-        getStakeMinimumDelegation: noreturn,
-        getSupply: noreturn,
-        getTokenAccountBalance: noreturn,
-        getTokenAccountsByDelegate: noreturn,
-        getTokenAccountsByOwner: noreturn,
-        getTokenLargestAccounts: noreturn,
-        getTokenSupply: noreturn,
-        getTransaction: GetTransaction,
-        getTransactionCount: noreturn,
-        getVersion: GetVersion,
-        getVoteAccounts: GetVoteAccounts,
-        isBlockhashValid: noreturn,
-        minimumLedgerSlot: noreturn,
-        requestAirdrop: RequestAirdrop,
-        sendTransaction: SendTransaction,
-        simulateTransaction: noreturn,
-
-        pub const Tag = @typeInfo(Method).Union.tag_type.?;
-
-        const UntaggedPayload = @Type(.{ .Union = blk: {
-            var info = @typeInfo(Method).Union;
-            info.tag_type = null;
-            info.decls = &.{};
-            break :blk info;
-        } });
-    };
-
     pub fn jsonStringify(
         self: Call,
         /// `*std.json.WriteStream(...)`
@@ -331,6 +261,76 @@ pub const Call = struct {
             },
         };
     }
+};
+
+pub const Id = union(enum) {
+    null,
+    int: i128,
+    str: []const u8,
+};
+
+pub const Method = union(enum) {
+    getAccountInfo: GetAccountInfo,
+    getBalance: GetBalance,
+    getBlock: GetBlock,
+    getBlockCommitment: GetBlockCommitment,
+    getBlockHeight: GetBlockHeight,
+    getBlockProduction: noreturn,
+    getBlocks: noreturn,
+    getBlocksWithLimit: noreturn,
+    getBlockTime: noreturn,
+    getClusterNodes: GetClusterNodes,
+    getEpochInfo: GetEpochInfo,
+    getEpochSchedule: GetEpochSchedule,
+    getFeeForMessage: noreturn,
+    getFirstAvailableBlock: noreturn,
+    getGenesisHash: noreturn,
+    getHealth: noreturn,
+    getHighestSnapshotSlot: noreturn,
+    getIdentity: noreturn,
+    getInflationGovernor: noreturn,
+    getInflationRate: noreturn,
+    getInflationReward: noreturn,
+    getLargestAccounts: noreturn,
+    getLatestBlockhash: GetLatestBlockhash,
+    getLeaderSchedule: GetLeaderSchedule,
+    getMaxRetransmitSlot: noreturn,
+    getMaxShredInsertSlot: noreturn,
+    getMinimumBalanceForRentExemption: noreturn,
+    getMultipleAccounts: noreturn,
+    getProgramAccounts: noreturn,
+    getRecentPerformanceSamples: noreturn,
+    getRecentPrioritizationFees: noreturn,
+    getSignaturesForAddress: noreturn,
+    getSignatureStatuses: GetSignatureStatuses,
+    getSlot: GetSlot,
+    getSlotLeader: noreturn,
+    getSlotLeaders: noreturn,
+    getStakeMinimumDelegation: noreturn,
+    getSupply: noreturn,
+    getTokenAccountBalance: noreturn,
+    getTokenAccountsByDelegate: noreturn,
+    getTokenAccountsByOwner: noreturn,
+    getTokenLargestAccounts: noreturn,
+    getTokenSupply: noreturn,
+    getTransaction: GetTransaction,
+    getTransactionCount: noreturn,
+    getVersion: GetVersion,
+    getVoteAccounts: GetVoteAccounts,
+    isBlockhashValid: noreturn,
+    minimumLedgerSlot: noreturn,
+    requestAirdrop: RequestAirdrop,
+    sendTransaction: SendTransaction,
+    simulateTransaction: noreturn,
+
+    pub const Tag = @typeInfo(Method).Union.tag_type.?;
+
+    const UntaggedPayload = @Type(.{ .Union = blk: {
+        var info = @typeInfo(Method).Union;
+        info.tag_type = null;
+        info.decls = &.{};
+        break :blk info;
+    } });
 };
 
 pub const GetAccountInfo = struct {
