@@ -519,7 +519,10 @@ fn updateCommission(
             };
             const vote_state = try versioned_state.convertToCurrent(allocator);
             maybe_vote_state = vote_state;
-            break :blk vote_state.isCommissionIncrease(commission);
+            // [agave] https://github.com/anza-xyz/agave/blob/9806724b6d49dec06a9d50396adf26565d6b7745/programs/vote/src/vote_state/mod.rs#L792
+            //
+            // Given a proposed new commission, returns true if this would be a commission increase, false otherwise
+            break :blk commission > vote_state.commission;
         } else {
             break :blk true;
         }
