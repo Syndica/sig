@@ -40,8 +40,4 @@ pub const FeatureSet = struct {
     pub fn deinit(self: *FeatureSet, allocator: std.mem.Allocator) void {
         self.active.deinit(allocator);
     }
-
-    pub fn isActive(self: *const FeatureSet, feature: Pubkey) bool {
-        return self.active.contains(feature);
-    }
 };

@@ -511,7 +511,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.tc.feature_set.isActive(feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
+        if (ic.tc.feature_set.active.contains(feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
             const versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,
@@ -526,7 +526,7 @@ fn updateCommission(
         }
     };
 
-    if (enforce_commission_update_rule and ic.tc.feature_set.isActive(
+    if (enforce_commission_update_rule and ic.tc.feature_set.active.contains(
         feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
