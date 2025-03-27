@@ -575,12 +575,13 @@ pub const VoteState = struct {
     }
 
     // TODO add logging
+    // The goal is to check if each slot in vote_slots appears in slot_hashes with the correct hash.
     pub fn checkSlotsAreValid(
         self: *const VoteState,
         vote: *const Vote,
+        recent_vote_slots: []const Slot,
         slot_hashes: *const SlotHashes,
     ) (error{Overflow} || InstructionError)!?VoteError {
-        const vote_slots = vote.slots;
         const vote_hash = vote.hash;
 
         // index into the vote's slots, starting at the oldest slot
@@ -601,12 +602,13 @@ pub const VoteState = struct {
         // So:
         // for vote_states we are iterating from 0 up to the (size - 1) index
         // for slot_hashes we are iterating from (size - 1) index down to 0
-        while (i < vote_slots.items.len and j > 0) {
+        while (i < recent_vote_slots.len and j > 0) {
             // 1) increment `i` to find the smallest slot `s` in `vote_slots`
             // where `s` >= `last_voted_slot`
+            // vote slot `s` to be processed must be newer than last voted slot
             const less_than_last_voted_slot =
                 if (self.lastVotedSlot()) |last_voted_slot|
-                vote_slots.items[i] <= last_voted_slot
+                recent_vote_slots[i] <= last_voted_slot
             else
                 false;
 
@@ -616,7 +618,9 @@ pub const VoteState = struct {
             }
 
             // 2) Find the hash for this slot `s`.
-            if (vote_slots.items[i] != slot_hashes.entries[try std.math.sub(usize, j, 1)].@"0") {
+            if (recent_vote_slots[i] !=
+                slot_hashes.entries[try std.math.sub(usize, j, 1)].@"0")
+            {
                 // Decrement `j` to find newer slots
                 j = try std.math.sub(usize, j, 1);
                 continue;
@@ -635,7 +639,7 @@ pub const VoteState = struct {
             return VoteError.vote_too_old;
         }
 
-        if (i != vote_slots.items.len) {
+        if (i != recent_vote_slots.len) {
             // This means there existed some slot for which we couldn't find
             // a matching slot hash in step 2)
             return VoteError.slots_mismatch;
@@ -688,21 +692,21 @@ pub const VoteState = struct {
                 break :blk 0;
             }
         };
-        var vote_slots = std.ArrayList(Slot).init(allocator);
-        defer vote_slots.deinit();
+        var recent_vote_slots = std.ArrayList(Slot).init(allocator);
+        defer recent_vote_slots.deinit();
 
         for (vote.slots.items) |slot| {
             if (slot >= earliest_slot_in_history) {
-                try vote_slots.append(slot);
+                try recent_vote_slots.append(slot);
             }
         }
 
-        if (vote_slots.items.len == 0) {
+        if (recent_vote_slots.items.len == 0) {
             return VoteError.votes_too_old_all_filtered;
         }
 
         return self.processVoteUnfiltered(
-            vote_slots.items,
+            recent_vote_slots.items,
             vote,
             &slot_hashes,
             epoch,
@@ -712,17 +716,20 @@ pub const VoteState = struct {
 
     pub fn processVoteUnfiltered(
         self: *VoteState,
-        vote_slots: []const Slot,
+        recent_vote_slots: []const Slot,
         vote: *const Vote,
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
     ) (error{Overflow} || InstructionError)!?VoteError {
-        if (try self.checkSlotsAreValid(vote, slot_hashes)) |err| {
+        if (try self.checkSlotsAreValid(
+            vote,
+            recent_vote_slots,
+            slot_hashes,
+        )) |err| {
             return err;
         }
 
-        _ = vote_slots;
         _ = epoch;
         _ = current_slot;
         return null;
