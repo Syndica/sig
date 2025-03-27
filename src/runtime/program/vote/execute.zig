@@ -315,7 +315,7 @@ fn executeAuthorizeWithSeed(
     );
 }
 
-/// Analogous to [process_authorize_with_seed_instruction] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L19
+/// [agave] Analogous to [process_authorize_with_seed_instruction] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L19
 fn authorizeWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
