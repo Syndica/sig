@@ -490,8 +490,8 @@ fn executeUpdateCommission(
         ic,
         vote_account,
         commission,
-        try ic.getSysvar(EpochSchedule),
-        try ic.getSysvar(Clock),
+        try ic.tc.sysvar_cache.get(EpochSchedule),
+        try ic.tc.sysvar_cache.get(Clock),
     );
 }
 
@@ -593,8 +593,8 @@ fn executeWithdraw(
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
-    const rent = try ic.getSysvar(Rent);
-    const clock = try ic.getSysvar(Clock);
+    const rent = try ic.tc.sysvar_cache.get(Rent);
+    const clock = try ic.tc.sysvar_cache.get(Clock);
 
     vote_account.release();
 
