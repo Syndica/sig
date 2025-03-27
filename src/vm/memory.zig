@@ -18,6 +18,7 @@ pub const AccessError = error{ StackAccessViolation, AccessViolation };
 pub const RegionError = AccessError || error{InvalidMemoryRegion};
 pub const InitError = error{InvalidMemoryRegion};
 
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L731
 pub const MemoryMap = union(enum) {
     aligned: AlignedMemoryMap,
     unaligned: UnalignedMemoryMap,
@@ -66,6 +67,7 @@ pub const MemoryMap = union(enum) {
         return accessViolation(vm_addr, version, config);
     }
 
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L782
     pub fn vmap(
         self: MemoryMap,
         comptime state: MemoryState,
@@ -109,16 +111,11 @@ const HostMemory = union(MemoryState) {
     }
 };
 
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L54
 pub const Region = struct {
     host_memory: HostMemory,
     vm_addr_start: u64,
     vm_addr_end: u64,
-
-    const DEFAULT: Region = .{ // NOTE: this isn't nice, maybe remove
-        .host_memory = .{ .constant = &.{} },
-        .vm_addr_start = 0,
-        .vm_addr_end = 0,
-    };
 
     pub fn init(comptime state: MemoryState, slice: state.Slice(), vm_addr: u64) Region {
         const vm_addr_end = vm_addr +| slice.len;
@@ -179,6 +176,7 @@ pub const Region = struct {
     }
 };
 
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L551
 pub const AlignedMemoryMap = struct {
     regions: []const Region,
     version: sbpf.Version,
@@ -203,16 +201,15 @@ pub const AlignedMemoryMap = struct {
 
     fn find_region(self: *const AlignedMemoryMap, vm_addr: u64) ?Region {
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
-
-        if (index >= 1 and index <= self.regions.len) {
-            const reg = self.regions[index - 1];
-            if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
-                return reg;
-            }
+        if (index == 0 or index > self.regions.len) return null;
+        const reg = self.regions[index - 1];
+        if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
+            return reg;
         }
         return null;
     }
 
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L628
     fn vmap(
         self: *const AlignedMemoryMap,
         comptime state: MemoryState,
@@ -225,6 +222,7 @@ pub const AlignedMemoryMap = struct {
     }
 };
 
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L870
 fn accessViolation(
     vm_addr: u64,
     version: sbpf.Version,
@@ -259,6 +257,7 @@ const UnalignedMemoryMap = struct {
     // Cache of the last `MappingCache::SIZE` vm_addr => region_index lookups
     //cache: MappingCache,
 
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L241
     fn init(
         allocator: std.mem.Allocator,
         _regions: []const Region,
@@ -340,6 +339,7 @@ const UnalignedMemoryMap = struct {
         return if (index == 0) null else self.regions[index - 1];
     }
 
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L323
     fn vmap(
         self: UnalignedMemoryMap,
         comptime access_type: MemoryState,
