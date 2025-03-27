@@ -437,7 +437,7 @@ fn executeUpdateValidatorIdentity(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
 
-    // Safe since there are at least 2 accounts, and the new_authority index is 1.
+    // Safe since there are at least 2 accounts, and the new_identity index is 1.
     const new_identity_meta = &ic.info.account_metas.buffer[
         @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity)
     ];
@@ -468,10 +468,9 @@ fn updateValidatorIdentity(
     defer vote_state.deinit();
 
     // Both the current authorized withdrawer and new identity must sign.
-    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
-        return InstructionError.MissingRequiredSignature;
-    }
-    if (!ic.info.isPubkeySigner(new_identity)) {
+    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer) or
+        !ic.info.isPubkeySigner(new_identity))
+    {
         return InstructionError.MissingRequiredSignature;
     }
 
