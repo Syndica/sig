@@ -19,266 +19,7 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
-/// NOTE: for the sake of simplicity, we only support `method: ..., params: ...`,
-/// and reject `params: ..., method: ...`; this is a reasonable expectation for
-/// clients to satisfy.
-pub const Call = struct {
-    id: Id,
-    method: Method,
-
-    pub fn jsonStringify(
-        self: Call,
-        /// `*std.json.WriteStream(...)`
-        jw: anytype,
-    ) @TypeOf(jw.*).Error!void {
-        try jw.beginObject();
-
-        try jw.objectField("jsonrpc");
-        try jw.write("2.0");
-
-        try jw.objectField("id");
-        switch (self.id) {
-            .null => try jw.write(null),
-            .int => |int| try jw.write(int),
-            .str => |str| try jw.write(str),
-        }
-
-        try jw.objectField("method");
-        try jw.write(@tagName(self.method));
-
-        try jw.objectField("params");
-        switch (self.method) {
-            inline else => |maybe_method| {
-                const T = @TypeOf(maybe_method);
-                if (@hasDecl(T, "jsonStringify")) {
-                    try jw.write(maybe_method);
-                } else {
-                    var null_count: usize = 0;
-
-                    try jw.beginArray();
-                    inline for (@typeInfo(T).Struct.fields) |field| cont: {
-                        const maybe_value = @field(maybe_method, field.name);
-                        const value = blk: {
-                            if (@typeInfo(field.type) != .Optional) break :blk maybe_value;
-                            if (maybe_value) |value| break :blk value;
-                            null_count += 1;
-                            break :cont;
-                        };
-
-                        // we counted `null_count` null element before this
-                        // without writing anything, and instead of writing
-                        // them we just skipped them. but since this element
-                        // isn't null, we have to write out the leading null
-                        // elements so that this one is at the correct index
-                        for (0..null_count) |_| try jw.write(null);
-                        null_count = 0;
-                        try jw.write(value);
-                    }
-                    try jw.endArray();
-                }
-            },
-        }
-
-        try jw.endObject();
-    }
-
-    pub fn jsonParse(
-        allocator: std.mem.Allocator,
-        /// * `std.json.Scanner`
-        /// * `std.json.Reader(...)`
-        source: anytype,
-        options: std.json.ParseOptions,
-    ) std.json.ParseError(@TypeOf(source.*))!Call {
-        var jsonrpc_version_field = false;
-
-        const IdState = union(enum) {
-            null,
-            int: i128,
-            str_alloc,
-            str_ref: []const u8,
-        };
-        var maybe_id_state: ?IdState = null;
-        // this is the buffer used if `id_state == .str_alloc`
-        var id_buf = std.ArrayList(u8).init(allocator);
-        defer id_buf.deinit();
-
-        var maybe_method_tag: ?Method.Tag = null;
-        var maybe_method_payload: ?Method.UntaggedPayload = null;
-
-        if (try source.next() != .object_begin) {
-            return error.UnexpectedToken;
-        }
-
-        while (true) {
-            switch (try source.peekNextTokenType()) {
-                .object_end => {
-                    std.debug.assert(try source.next() == .object_end);
-                    break;
-                },
-                .string => {},
-                else => return error.UnexpectedToken,
-            }
-
-            const FieldName = enum { jsonrpc, id, method, params };
-            const field_name = try jsonParseEnumTag(
-                FieldName,
-                source,
-            ) orelse if (!options.ignore_unknown_fields) {
-                return error.UnknownField;
-            } else continue;
-
-            switch (field_name) {
-                .jsonrpc => {
-                    if (jsonrpc_version_field) switch (options.duplicate_field_behavior) {
-                        .use_first => {
-                            try source.skipValue();
-                            continue;
-                        },
-                        .@"error" => return error.DuplicateField,
-                        // it's an error if it's not the expected value regardless
-                        .use_last => {},
-                    };
-
-                    if (try source.peekNextTokenType() != .string) {
-                        try source.skipValue();
-                        return error.UnexpectedToken;
-                    }
-
-                    jsonrpc_version_field = true;
-                    if (!try jsonParseExpectValue(source, "2.0")) {
-                        return error.UnexpectedToken;
-                    }
-                },
-                .id => {
-                    if (maybe_id_state != null) switch (options.duplicate_field_behavior) {
-                        .use_first => {
-                            try source.skipValue();
-                            continue;
-                        },
-                        .@"error" => return error.DuplicateField,
-                        .use_last => {},
-                    };
-
-                    const TokType = enum { null, number, string };
-                    const tok_type: TokType = switch (try source.peekNextTokenType()) {
-                        .null => .null,
-                        .number => .number,
-                        .string => .string,
-                        else => {
-                            try source.skipValue();
-                            return error.UnexpectedToken;
-                        },
-                    };
-
-                    id_buf.clearRetainingCapacity();
-                    maybe_id_state = switch (tok_type) {
-                        .null => id: {
-                            std.debug.assert(try source.next() == .null);
-                            break :id .null;
-                        },
-                        .number, .string => id: {
-                            const maybe_str =
-                                try source.allocNextIntoArrayList(&id_buf, options.allocate.?);
-                            if (std.fmt.parseInt(i128, maybe_str orelse id_buf.items, 10)) |int|
-                                break :id .{ .int = int }
-                            else |err| switch (err) {
-                                error.Overflow,
-                                error.InvalidCharacter,
-                                => {},
-                            }
-                            const str_ref = maybe_str orelse break :id .str_alloc;
-                            break :id .{ .str_ref = str_ref };
-                        },
-                    };
-                },
-                .method => {
-                    if (maybe_method_tag != null) switch (options.duplicate_field_behavior) {
-                        .use_first => {
-                            try source.skipValue();
-                            continue;
-                        },
-                        .@"error" => return error.DuplicateField,
-                        .use_last => {},
-                    };
-
-                    if (try source.peekNextTokenType() != .string) {
-                        try source.skipValue();
-                        return error.UnexpectedToken;
-                    }
-
-                    maybe_method_tag = try jsonParseEnumTag(Method.Tag, source) orelse {
-                        return error.UnexpectedToken;
-                    };
-                },
-                .params => {
-                    if (maybe_method_payload != null) {
-                        std.debug.assert(maybe_method_tag != null);
-                        switch (options.duplicate_field_behavior) {
-                            .use_first => {
-                                try source.skipValue();
-                                continue;
-                            },
-                            .@"error" => return error.DuplicateField,
-                            .use_last => {},
-                        }
-                    }
-
-                    const method_tag = maybe_method_tag orelse return error.MissingField;
-                    maybe_method_payload = switch (method_tag) {
-                        inline else => |method| payload: {
-                            const Params = std.meta.FieldType(Method, method);
-                            if (Params == noreturn) std.debug.panic(
-                                "TODO: implement {s}",
-                                .{@tagName(method)},
-                            );
-
-                            const params = try jsonParseOptFieldStructAsArray(
-                                Params,
-                                allocator,
-                                source,
-                                options,
-                            );
-                            break :payload @unionInit(
-                                Method.UntaggedPayload,
-                                @tagName(method),
-                                params,
-                            );
-                        },
-                    };
-                },
-            }
-        }
-
-        if (!jsonrpc_version_field) return error.MissingField;
-        const id_state = maybe_id_state orelse return error.MissingField;
-        const method_tag = maybe_method_tag orelse return error.MissingField;
-        const method_payload = maybe_method_payload orelse return error.MissingField;
-
-        return .{
-            .id = switch (id_state) {
-                .null => .null,
-                .int => |int| .{ .int = int },
-                .str_alloc => .{ .str = try id_buf.toOwnedSlice() },
-                .str_ref => |str| .{ .str = str },
-            },
-            .method = switch (method_tag) {
-                inline else => |tag| @unionInit(
-                    Method,
-                    @tagName(tag),
-                    @field(method_payload, @tagName(tag)),
-                ),
-            },
-        };
-    }
-};
-
-pub const Id = union(enum) {
-    null,
-    int: i128,
-    str: []const u8,
-};
-
-pub const Method = union(enum) {
+pub const MethodAndParams = union(enum) {
     getAccountInfo: GetAccountInfo,
     getBalance: GetBalance,
     getBlock: GetBlock,
@@ -332,14 +73,54 @@ pub const Method = union(enum) {
     sendTransaction: SendTransaction,
     simulateTransaction: noreturn,
 
-    pub const Tag = @typeInfo(Method).Union.tag_type.?;
+    pub const Tag = @typeInfo(MethodAndParams).Union.tag_type.?;
 
-    const UntaggedPayload = @Type(.{ .Union = blk: {
-        var info = @typeInfo(Method).Union;
-        info.tag_type = null;
-        info.decls = &.{};
-        break :blk info;
-    } });
+    /// Returns a wrapper over `self` which will be stringified as an array.
+    pub fn jsonStringifiedAsParamsArray(self: MethodAndParams) JsonStringifiedAsParamsArray {
+        return .{ .data = self };
+    }
+
+    pub const JsonStringifiedAsParamsArray = struct {
+        data: MethodAndParams,
+
+        pub fn jsonStringify(
+            self: JsonStringifiedAsParamsArray,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) @TypeOf(jw.*).Error!void {
+            switch (self.data) {
+                inline else => |method| {
+                    const T = @TypeOf(method);
+                    if (@hasDecl(T, "jsonStringify")) {
+                        try jw.write(method);
+                    } else {
+                        var null_count: usize = 0;
+
+                        try jw.beginArray();
+                        inline for (@typeInfo(T).Struct.fields) |field| cont: {
+                            const maybe_value = @field(method, field.name);
+                            const value = blk: {
+                                if (@typeInfo(field.type) != .Optional) break :blk maybe_value;
+                                if (maybe_value) |value| break :blk value;
+                                null_count += 1;
+                                break :cont;
+                            };
+
+                            // we counted `null_count` null element before this
+                            // without writing anything, and instead of writing
+                            // them we just skipped them. but since this element
+                            // isn't null, we have to write out the leading null
+                            // elements so that this one is at the correct index
+                            for (0..null_count) |_| try jw.write(null);
+                            null_count = 0;
+                            try jw.write(value);
+                        }
+                        try jw.endArray();
+                    }
+                },
+            }
+        }
+    };
 };
 
 pub const GetAccountInfo = struct {
@@ -646,11 +427,15 @@ pub const GetVersion = struct {
             };
         }
 
-        pub fn jsonStringify(self: *Response, out_stream: anytype) !void {
+        pub fn jsonStringify(
+            self: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) @TypeOf(jw.*).Error!void {
             try std.json.stringify(.{
                 .@"solana-core" = self.solana_core,
                 .@"feature-set" = self.feature_set,
-            }, .{}, out_stream);
+            }, .{}, jw);
         }
     };
 };
@@ -734,297 +519,3 @@ pub const common = struct {
         apiVersion: []const u8,
     };
 };
-
-fn jsonParseOptFieldStructAsArray(
-    comptime T: type,
-    allocator: std.mem.Allocator,
-    source: anytype,
-    options: std.json.ParseOptions,
-) std.json.ParseError(@TypeOf(source.*))!T {
-    if (try source.next() != .array_begin) {
-        return error.UnexpectedToken;
-    }
-
-    var result: T = undefined;
-    var array_ended = false;
-
-    inline for (@typeInfo(T).Struct.fields) |field| cont: {
-        const t_info = @typeInfo(field.type);
-        const field_ptr = &@field(result, field.name);
-
-        const tok_type: std.json.TokenType = if (array_ended)
-            .array_end
-        else tt: {
-            const tt = try source.peekNextTokenType();
-            if (tt == .array_end) {
-                std.debug.assert(try source.next() == .array_end);
-            }
-            break :tt tt;
-        };
-
-        switch (tok_type) {
-            .array_end => {
-                array_ended = true;
-                if (t_info != .Optional) return error.LengthMismatch;
-                field_ptr.* = null;
-                break :cont;
-            },
-            else => field_ptr.* = try std.json.innerParse(
-                field.type,
-                allocator,
-                source,
-                options,
-            ),
-        }
-    }
-
-    if (!array_ended and try source.next() != .array_end) {
-        return error.LengthMismatch;
-    }
-
-    return result;
-}
-
-fn jsonParseEnumTag(
-    comptime E: type,
-    source: anytype,
-) std.json.ParseError(@TypeOf(source.*))!?E {
-    const longest_tag_name_len = comptime max: {
-        var max: usize = 0;
-        const fields = @typeInfo(E).Enum.fields;
-        @setEvalBranchQuota(fields.len + 1);
-        for (fields) |e_field| max = @max(max, e_field.name.len);
-        break :max max;
-    };
-    const str = try jsonParseBoundedStr(source, longest_tag_name_len) orelse return null;
-    return std.meta.stringToEnum(E, str.constSlice());
-}
-
-/// Assumes this is the first token in a sequence of strings predicted by `source.peekNextTokenType()`,
-/// either of type `.string` or `.number`.
-/// Returns true if the parsed string matches `value` exactly, false otherwise.
-fn jsonParseExpectValue(
-    source: anytype,
-    value: []const u8,
-) std.json.ParseError(@TypeOf(source.*))!bool {
-    var index: usize = 0;
-
-    var first_iter = true;
-    while (true) : (first_iter = false) {
-        const tok = try source.next();
-
-        const str: []const u8, const not_partial: bool = switch (tok) {
-            .string => |str| .{ str, true },
-            .partial_string => |str| .{ str, false },
-
-            inline //
-            .partial_string_escaped_1,
-            .partial_string_escaped_2,
-            .partial_string_escaped_3,
-            .partial_string_escaped_4,
-            => |*str| .{ str, false },
-
-            .number => |str| .{ str, true },
-            .partial_number => |str| .{ str, false },
-
-            .allocated_string => unreachable,
-            .allocated_number => unreachable,
-
-            else => return error.UnexpectedToken,
-        };
-
-        if (!std.mem.startsWith(u8, value[index..], str)) return false;
-        index += str.len;
-
-        if (str.len == 0) break;
-        if (first_iter and not_partial) break;
-    }
-
-    return index == value.len;
-}
-
-fn jsonParseBoundedStr(
-    source: anytype,
-    comptime max_len: usize,
-) std.json.ParseError(@TypeOf(source.*))!?std.BoundedArray(u8, max_len) {
-    var result: std.BoundedArray(u8, max_len) = .{};
-
-    var first_iter = true;
-    while (true) : (first_iter = false) {
-        const tok = try source.next();
-        const str: []const u8, const not_partial: bool = switch (tok) {
-            .string => |str| .{ str, true },
-            .partial_string => |str| .{ str, false },
-
-            inline //
-            .partial_string_escaped_1,
-            .partial_string_escaped_2,
-            .partial_string_escaped_3,
-            .partial_string_escaped_4,
-            => |*str| .{ str, false },
-
-            else => return error.UnexpectedToken,
-        };
-
-        result.appendSlice(str) catch return null;
-        if (str.len == 0) break;
-        if (first_iter and not_partial) break;
-    }
-
-    return result;
-}
-
-test Call {
-    const test_pubkey1 = comptime sig.core.Pubkey.parseBase58String(
-        "vinesvinesvinesvinesvinesvinesvinesvinesvin",
-    ) catch unreachable;
-    const test_pubkey2 = comptime sig.core.Pubkey.ZEROES;
-
-    try testParseCall(
-        .{},
-        \\{
-        \\  "jsonrpc": "2.0",
-        \\  "id": 123,
-        \\  "method": "getAccountInfo",
-        \\  "params": [
-        \\    "vinesvinesvinesvinesvinesvinesvinesvinesvin",
-        \\    {
-        \\      "encoding": "base58"
-        \\    }
-        \\  ]
-        \\}
-    ,
-        .{
-            .id = .{ .int = 123 },
-            .method = .{ .getAccountInfo = .{
-                .pubkey = test_pubkey1,
-                .config = .{
-                    .encoding = .base58,
-                },
-            } },
-        },
-    );
-
-    try testParseCall(
-        .{},
-        \\{
-        \\  "jsonrpc": "2.0",
-        \\  "id": "a44",
-        \\  "method": "getBalance",
-        \\  "params": [
-        \\    "11111111111111111111111111111111",
-        \\    {
-        \\      "commitment": "processed",
-        \\      "minContextSlot": 64
-        \\    }
-        \\  ]
-        \\}
-    ,
-        .{
-            .id = .{ .str = "a44" },
-            .method = .{ .getBalance = .{
-                .pubkey = test_pubkey2,
-                .config = .{
-                    .commitment = .processed,
-                    .minContextSlot = 64,
-                },
-            } },
-        },
-    );
-
-    try testParseCall(
-        .{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true },
-        \\{
-        \\  "jsonrpc": "2.0",
-        \\  "jsonrpc": "2.0",
-        \\  "id": "a33",
-        \\  "method": "getBalance",
-        \\  "params": [
-        \\    "11111111111111111111111111111111",
-        \\    {
-        \\      "commitment": "processed",
-        \\      "minContextSlot": 64
-        \\    }
-        \\  ],
-        \\  "ignored": "foo"
-        \\}
-    ,
-        .{
-            .id = .{ .str = "a33" },
-            .method = .{ .getBalance = .{
-                .pubkey = test_pubkey2,
-                .config = .{
-                    .commitment = .processed,
-                    .minContextSlot = 64,
-                },
-            } },
-        },
-    );
-
-    try std.testing.expectError(
-        error.MissingField,
-        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{"jsonrpc":"2.0","id":42,"id":"33","method":"getBalance","method":"getAccountInfo"}
-        , .{ .duplicate_field_behavior = .use_first }),
-    );
-    try std.testing.expectError(
-        error.MissingField,
-        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{"jsonrpc":"2.0","id":null,"method":"getBalance"}
-        , .{}),
-    );
-    try std.testing.expectError(
-        error.DuplicateField,
-        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{"jsonrpc":"2.0","id":null,"method":"getBalance","method":"getAccountInfo"}
-        , .{}),
-    );
-    try std.testing.expectError(
-        error.DuplicateField,
-        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{"jsonrpc":"2.0","id":42,"id":"33"}
-        , .{ .duplicate_field_behavior = .@"error" }),
-    );
-
-    try std.testing.expectError(
-        error.DuplicateField,
-        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{"jsonrpc":"2.0","jsonrpc":"2.0"}
-        , .{}),
-    );
-    try std.testing.expectError(
-        error.UnexpectedToken,
-        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{"jsonrpc":"2.0","method":null}
-        , .{}),
-    );
-
-    try std.testing.expectError(
-        error.UnexpectedToken,
-        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{"jsonrpc":2.0}
-        , .{}),
-    );
-
-    try std.testing.expectError(
-        error.UnknownField,
-        std.json.parseFromSliceLeaky(Call, std.testing.allocator,
-            \\{"unexpected":"foo"}
-        , .{}),
-    );
-}
-
-fn testParseCall(
-    options: std.json.ParseOptions,
-    actual_str: []const u8,
-    expected_call: Call,
-) !void {
-    const actual_call = try std.json.parseFromSlice(
-        Call,
-        std.testing.allocator,
-        actual_str,
-        options,
-    );
-    defer actual_call.deinit();
-    try std.testing.expectEqualDeep(expected_call, actual_call.value);
-}
