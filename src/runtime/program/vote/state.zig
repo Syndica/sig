@@ -37,7 +37,8 @@ pub const BlockTimestamp = struct {
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L85
 pub const Lockout = struct {
     slot: Slot,
-    /// The number of slot voted on top of this slot.
+    /// The count inclusive of this slot plus the number of
+    /// slots voted on top of this slot.
     confirmation_count: u32,
 
     pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) !bool {
@@ -999,6 +1000,43 @@ test "Lockout.lockout" {
             .confirmation_count = 4,
         };
         try std.testing.expectEqual(16, lockout.lockout());
+    }
+}
+
+test "Lockout.lastLockedOutSlot" {
+    // | vote | vote slot | lockout | lock expiration slot |
+    // |------|-----------|---------|----------------------|
+    // | 4    | 4         | 2       | 6                    |
+    // | 3    | 3         | 4       | 7                    |
+    // | 2    | 2         | 8       | 10                   |
+    // | 1    | 1         | 16      | 17                   |
+    {
+        const lockout = Lockout{
+            .slot = 1,
+            .confirmation_count = 4,
+        };
+        try std.testing.expectEqual(17, lockout.lastLockedOutSlot());
+    }
+    {
+        const lockout = Lockout{
+            .slot = 2,
+            .confirmation_count = 3,
+        };
+        try std.testing.expectEqual(10, lockout.lastLockedOutSlot());
+    }
+    {
+        const lockout = Lockout{
+            .slot = 3,
+            .confirmation_count = 2,
+        };
+        try std.testing.expectEqual(7, lockout.lastLockedOutSlot());
+    }
+    {
+        const lockout = Lockout{
+            .slot = 4,
+            .confirmation_count = 1,
+        };
+        try std.testing.expectEqual(6, lockout.lastLockedOutSlot());
     }
 }
 
