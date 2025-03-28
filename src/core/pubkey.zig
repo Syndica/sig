@@ -29,8 +29,8 @@ pub const Pubkey = extern struct {
         return self.equals(&ZEROES);
     }
 
-    pub fn parseBase58String(str: []const u8) error{InvalidPubkey}!Pubkey {
-        if (str.len > BASE58_MAX_SIZE) return error.InvalidPubkey;
+    pub fn parseBase58String(str: []const u8) error{ InvalidLength, InvalidPubkey }!Pubkey {
+        if (str.len > BASE58_MAX_SIZE) return error.InvalidLength;
         var encoded: std.BoundedArray(u8, BASE58_MAX_SIZE) = .{};
         encoded.appendSliceAssumeCapacity(str);
 
@@ -39,7 +39,7 @@ pub const Pubkey = extern struct {
             return error.InvalidPubkey;
         };
 
-        if (decoded.len != SIZE) return error.InvalidPubkey;
+        if (decoded.len != SIZE) return error.InvalidLength;
         return .{ .data = decoded.constSlice()[0..SIZE].* };
     }
 
@@ -71,6 +71,20 @@ pub const Pubkey = extern struct {
     ) std.json.ParseError(@TypeOf(source.*))!Pubkey {
         return switch (try source.next()) {
             .string => |str| parseBase58String(str) catch error.UnexpectedToken,
+            else => error.UnexpectedToken,
+        };
+    }
+
+    pub fn jsonParseFromValue(
+        _: std.mem.Allocator,
+        source: std.json.Value,
+        _: std.json.ParseOptions,
+    ) std.json.ParseFromValueError!Pubkey {
+        return switch (source) {
+            .string => |str| parseBase58String(str) catch |err| switch (err) {
+                error.InvalidPubkey => error.InvalidCharacter,
+                error.InvalidLength => error.LengthMismatch,
+            },
             else => error.UnexpectedToken,
         };
     }

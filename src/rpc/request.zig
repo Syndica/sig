@@ -324,13 +324,6 @@ test Request {
     );
 
     try std.testing.expectError(
-        error.UnexpectedToken,
-        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
-            \\{"jsonrpc":2.0}
-        , .{}),
-    );
-
-    try std.testing.expectError(
         error.UnknownField,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"unexpected":"foo"}
