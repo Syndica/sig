@@ -23,24 +23,36 @@ const GetVoteAccounts = methods.GetVoteAccounts;
 const Response = rpc.response.Response;
 
 fn testRequest(
+    comptime method: methods.MethodAndParams.Tag,
     /// passed into the client
-    request: anytype,
+    // TODO: use this instead of `std.meta.FieldType` to avoid eval branch quota until `@FieldType`'s here.
+    params: @typeInfo(methods.MethodAndParams).Union.fields[@intFromEnum(method)].type,
     /// test will assert the request serializes to this json
     expected_request_json: []const u8,
 ) !void {
-    const actual_request_json = try rpc.request.serialize(std.testing.allocator, request);
+    const request: rpc.request.Request = .{
+        .id = .{ .int = 1 },
+        .method = @unionInit(
+            methods.MethodAndParams,
+            @tagName(method),
+            params,
+        ),
+    };
+
+    const actual_request_json = try std.json.stringifyAlloc(std.testing.allocator, request, .{});
     defer std.testing.allocator.free(actual_request_json);
+
     try std.testing.expectEqualSlices(u8, expected_request_json, actual_request_json);
 }
 
 fn testResponse(
     Method: type,
     /// test will assert the response deserializes to this struct
-    expected_response: Response(Method).Payload,
+    expected_response: Response(Method.Response).Payload,
     /// will be provided to the client as a response
     response_json: []const u8,
 ) !void {
-    const actual_response = try Response(Method).fromJson(std.testing.allocator, response_json);
+    const actual_response = try Response(Method.Response).fromJson(std.testing.allocator, response_json);
     defer actual_response.deinit();
     try std.testing.expect(sig.utils.types.eql(expected_response, actual_response.payload));
 }
@@ -48,8 +60,9 @@ fn testResponse(
 test GetAccountInfo {
     const pubkey = try Pubkey.parseBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
     try testRequest(
-        GetAccountInfo{ .pubkey = pubkey },
-        \\{"id":1,"jsonrpc":"2.0","method":"getAccountInfo","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"]}
+        .getAccountInfo,
+        .{ .pubkey = pubkey },
+        \\{"jsonrpc":"2.0","id":1,"method":"getAccountInfo","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"]}
         ,
     );
     try testResponse(
@@ -81,8 +94,9 @@ test GetAccountInfo {
 
 test GetBalance {
     try testRequest(
-        GetBalance{ .pubkey = try Pubkey.parseBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm") },
-        \\{"id":1,"jsonrpc":"2.0","method":"getBalance","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"]}
+        .getBalance,
+        .{ .pubkey = try Pubkey.parseBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm") },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBalance","params":["Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm"]}
         ,
     );
     try testResponse(GetBalance, .{ .result = .{
@@ -94,8 +108,8 @@ test GetBalance {
 }
 
 test GetBlockHeight {
-    try testRequest(GetBlockHeight{},
-        \\{"id":1,"jsonrpc":"2.0","method":"getBlockHeight","params":[]}
+    try testRequest(.getBlockHeight, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockHeight","params":[]}
     );
     try testResponse(GetBlockHeight, .{ .result = 268651537 },
         \\{"jsonrpc":"2.0","result":268651537,"id":1}
@@ -103,8 +117,8 @@ test GetBlockHeight {
 }
 
 test GetBlockCommitment {
-    try testRequest(GetBlockCommitment{ .slot = 309275321 },
-        \\{"id":1,"jsonrpc":"2.0","method":"getBlockCommitment","params":[309275321]}
+    try testRequest(.getBlockCommitment, .{ .slot = 309275321 },
+        \\{"jsonrpc":"2.0","id":1,"method":"getBlockCommitment","params":[309275321]}
     );
     try testResponse(
         GetBlockCommitment,
@@ -120,8 +134,8 @@ test GetBlockCommitment {
 }
 
 test GetEpochInfo {
-    try testRequest(GetEpochInfo{},
-        \\{"id":1,"jsonrpc":"2.0","method":"getEpochInfo","params":[]}
+    try testRequest(.getEpochInfo, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getEpochInfo","params":[]}
     );
     try testResponse(GetEpochInfo, .{ .result = GetEpochInfo.Response{
         .absoluteSlot = 309275328,
@@ -136,8 +150,8 @@ test GetEpochInfo {
 }
 
 test GetEpochSchedule {
-    try testRequest(GetEpochSchedule{},
-        \\{"id":1,"jsonrpc":"2.0","method":"getEpochSchedule","params":[]}
+    try testRequest(.getEpochSchedule, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getEpochSchedule","params":[]}
     );
     try testResponse(GetEpochSchedule, .{ .result = .{
         .slotsPerEpoch = 432000,
@@ -162,8 +176,8 @@ test GetEpochSchedule {
 // TODO: test getLargeAccounts()
 
 test GetLatestBlockhash {
-    try testRequest(GetLatestBlockhash{},
-        \\{"id":1,"jsonrpc":"2.0","method":"getLatestBlockhash","params":[]}
+    try testRequest(.getLatestBlockhash, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getLatestBlockhash","params":[]}
     );
     try testResponse(GetLatestBlockhash, .{ .result = .{
         .context = .{ .slot = 309275334, .apiVersion = "2.1.6" },
@@ -177,10 +191,10 @@ test GetLatestBlockhash {
 }
 
 test GetLeaderSchedule {
-    try testRequest(GetLeaderSchedule{},
-        \\{"id":1,"jsonrpc":"2.0","method":"getLeaderSchedule","params":[]}
+    try testRequest(.getLeaderSchedule, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getLeaderSchedule","params":[]}
     );
-    const response = try Response(GetLeaderSchedule).fromJson(std.testing.allocator,
+    const response = try Response(GetLeaderSchedule.Response).fromJson(std.testing.allocator,
         \\{"jsonrpc":"2.0","result":{"111uPd5xQyRHSmPzFJuHNUiuHbF55QXsuEbmqxE4ro":[1,3],"123vij84ecQEKUvQ7gYMKxKwKF6PbYSzCzzURYA4xULY":[2,4]},"id":1}
     );
     defer response.deinit();
@@ -215,8 +229,8 @@ test GetSignatureStatuses {
     signatures[1] = try Signature.parseBase58String(
         "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
     );
-    try testRequest(GetSignatureStatuses{ .signatures = signatures },
-        \\{"id":1,"jsonrpc":"2.0","method":"getSignatureStatuses","params":[["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz"]]}
+    try testRequest(.getSignatureStatuses, .{ .signatures = signatures },
+        \\{"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[["56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp","4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz"]]}
     );
     try testResponse(GetSignatureStatuses, .{ .result = .{
         .context = .{ .slot = 309275388, .apiVersion = "2.1.6" },
@@ -229,8 +243,8 @@ test GetSignatureStatuses {
 // TODO: test getSignaturesForAddress()
 
 test GetSlot {
-    try testRequest(GetSlot{},
-        \\{"id":1,"jsonrpc":"2.0","method":"getSlot","params":[]}
+    try testRequest(.getSlot, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getSlot","params":[]}
     );
     try testResponse(GetSlot, .{ .result = 309275353 },
         \\{"jsonrpc":"2.0","result":309275353,"id":1}
@@ -257,8 +271,8 @@ test GetSlot {
 // TODO: test simulateTransaction()
 
 test GetVersion {
-    try testRequest(GetVersion{},
-        \\{"id":1,"jsonrpc":"2.0","method":"getVersion","params":[]}
+    try testRequest(.getVersion, .{},
+        \\{"jsonrpc":"2.0","id":1,"method":"getVersion","params":[]}
     );
     try testResponse(
         GetVersion,
