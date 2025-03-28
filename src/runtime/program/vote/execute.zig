@@ -747,7 +747,7 @@ fn processVoteWithAccount(
     vote: Vote,
     slot_hashes: SlotHashes,
     clock: Clock,
-) (error{Overflow} || error{OutOfMemory} || InstructionError)!void {
+) (error{Overflow} || error{Underflow} || error{OutOfMemory} || InstructionError)!void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
         ic,
