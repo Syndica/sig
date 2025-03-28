@@ -210,9 +210,7 @@ pub const BorrowedAccount = struct {
         self: *BorrowedAccount,
         executable: bool,
     ) InstructionError!void {
-        const rent = self.context.tc.sysvar_cache.get(sysvar.Rent) orelse {
-            return InstructionError.UnsupportedSysvar;
-        };
+        const rent = try self.context.tc.sysvar_cache.get(sysvar.Rent);
 
         if (!rent.isExempt(self.account.lamports, self.account.data.len) or
             !self.account.owner.equals(&self.context.program_id) or
