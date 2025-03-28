@@ -1040,6 +1040,55 @@ test "Lockout.lastLockedOutSlot" {
     }
 }
 
+test "Lockout.isLockedOutAtSlot" {
+    // | vote | vote slot | lockout | lock expiration slot |
+    // |------|-----------|---------|----------------------|
+    // | 4    | 4         | 2       | 6                    |
+    // | 3    | 3         | 4       | 7                    |
+    // | 2    | 2         | 8       | 10                   |
+    // | 1    | 1         | 16      | 17                   |
+    {
+        const lockout = Lockout{
+            .slot = 1,
+            .confirmation_count = 4,
+        };
+        try std.testing.expect(try lockout.isLockedOutAtSlot(16));
+        try std.testing.expect(try lockout.isLockedOutAtSlot(17));
+        try std.testing.expect(!try lockout.isLockedOutAtSlot(18));
+        try std.testing.expect(!try lockout.isLockedOutAtSlot(19));
+    }
+    {
+        const lockout = Lockout{
+            .slot = 2,
+            .confirmation_count = 3,
+        };
+        try std.testing.expect(try lockout.isLockedOutAtSlot(9));
+        try std.testing.expect(try lockout.isLockedOutAtSlot(10));
+        try std.testing.expect(!try lockout.isLockedOutAtSlot(11));
+        try std.testing.expect(!try lockout.isLockedOutAtSlot(12));
+    }
+    {
+        const lockout = Lockout{
+            .slot = 3,
+            .confirmation_count = 2,
+        };
+        try std.testing.expect(try lockout.isLockedOutAtSlot(6));
+        try std.testing.expect(try lockout.isLockedOutAtSlot(7));
+        try std.testing.expect(!try lockout.isLockedOutAtSlot(8));
+        try std.testing.expect(!try lockout.isLockedOutAtSlot(9));
+    }
+    {
+        const lockout = Lockout{
+            .slot = 4,
+            .confirmation_count = 1,
+        };
+        try std.testing.expect(try lockout.isLockedOutAtSlot(5));
+        try std.testing.expect(try lockout.isLockedOutAtSlot(6));
+        try std.testing.expect(!try lockout.isLockedOutAtSlot(7));
+        try std.testing.expect(!try lockout.isLockedOutAtSlot(8));
+    }
+}
+
 test "VoteState.convertToCurrent" {
     const allocator = std.testing.allocator;
     // VoteState0_23_5 -> Current
