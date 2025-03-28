@@ -56,7 +56,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
         return;
     };
 
-    logger.info().field("conn", conn.address).logf(
+    logger.debug().field("conn", conn.address).logf(
         "Responding to request: {} {s}",
         .{ requests.httpMethodFmt(request.head.method), request.head.target },
     );
