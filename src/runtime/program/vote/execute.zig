@@ -711,8 +711,8 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.feature_set.isActive(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.feature_set.isActive(feature_set.DEPRECATE_LEGACY_VOTE_IXS))
+    if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
+        ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS))
     {
         return InstructionError.InvalidInstructionData;
     }

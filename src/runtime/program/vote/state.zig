@@ -654,11 +654,16 @@ pub const VoteState = struct {
                 // if credits were earned previous epoch
                 // append entry at end of list for the new epoch
                 try self.epoch_credits.append(
-                    EpochCredit{ .epoch = epoch, .credits = last_credits, .prev_credits = last_credits },
+                    EpochCredit{
+                        .epoch = epoch,
+                        .credits = last_credits,
+                        .prev_credits = last_credits,
+                    },
                 );
             } else {
                 // else just move the current epoch
-                const last_epoch_credit = &self.epoch_credits.items[self.epoch_credits.items.len - 1];
+                const last_epoch_credit =
+                    &self.epoch_credits.items[self.epoch_credits.items.len - 1];
                 last_epoch_credit.epoch = epoch;
             }
 
@@ -769,7 +774,10 @@ pub const VoteState = struct {
 
         try self.popExpiredVotes(next_vote_slot);
 
-        const landed_vote: LandedVote = .{ .latency = VoteState.computeVoteLatency(next_vote_slot, current_slot), .lockout = Lockout{ .confirmation_count = 1, .slot = next_vote_slot } };
+        const landed_vote: LandedVote = .{
+            .latency = VoteState.computeVoteLatency(next_vote_slot, current_slot),
+            .lockout = Lockout{ .confirmation_count = 1, .slot = next_vote_slot },
+        };
 
         // Once the stack is full, pop the oldest lockout and distribute rewards
         if (self.votes.items.len == MAX_LOCKOUT_HISTORY) {
