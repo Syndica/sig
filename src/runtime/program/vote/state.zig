@@ -16,6 +16,17 @@ const Clock = sig.runtime.sysvar.Clock;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 pub const MAX_PRIOR_VOTERS: usize = 32;
+pub const MAX_LOCKOUT_HISTORY: usize = 31;
+pub const INITIAL_LOCKOUT: usize = 2;
+
+// Maximum number of credits history to keep around
+pub const MAX_EPOCH_CREDITS_HISTORY: usize = 64;
+
+// Number of slots of grace period for which maximum vote credits are awarded - votes landing within this number of slots of the slot that is being voted on are awarded full credits.
+pub const VOTE_CREDITS_GRACE_SLOTS: u8 = 2;
+
+// Maximum number of credits to award for a vote; this number of credits is awarded to votes on slots that land within the grace period. After that grace period, vote credits are reduced.
+pub const VOTE_CREDITS_MAXIMUM_PER_SLOT: u8 = 16;
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L357
 pub const BlockTimestamp = struct {
@@ -27,6 +38,22 @@ pub const BlockTimestamp = struct {
 pub const Lockout = struct {
     slot: Slot,
     confirmation_count: u32,
+
+    pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) !bool {
+        return try self.lastLockedOutSlot() >= slot;
+    }
+
+    // The last slot at which a vote is still locked out. Validators should not
+    // vote on a slot in another fork which is less than or equal to this slot
+    // to avoid having their stake slashed.
+    pub fn lastLockedOutSlot(self: *const Lockout) !Slot {
+        return (self.slot +| (try self.lockout()));
+    }
+
+    // The number of slots for which this vote is locked
+    pub fn lockout(self: *const Lockout) !u64 {
+        return std.math.powi(u64, INITIAL_LOCKOUT, self.confirmation_count);
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L135
@@ -574,6 +601,80 @@ pub const VoteState = struct {
         return null;
     }
 
+    /// Returns the credits to award for a vote at the given lockout slot index
+    pub fn creditsForVoteAtIndex(self: *const VoteState, index: usize) u64 {
+        const latency = if (index < self.votes.items.len)
+            self.votes.items[index].latency
+        else
+            0;
+
+        // If latency is 0, this means that the Lockout was created from a software version
+        // that didn't store vote latencies; in this case, 1 credit is awarded
+        if (latency == 0) {
+            return 1;
+        }
+
+        if (latency <= VOTE_CREDITS_GRACE_SLOTS) {
+            // latency was <= VOTE_CREDITS_GRACE_SLOTS, so maximum credits are awarded
+            return VOTE_CREDITS_MAXIMUM_PER_SLOT;
+        }
+
+        // diff = latency - VOTE_CREDITS_GRACE_SLOTS, and diff > 0
+        const diff = latency - VOTE_CREDITS_GRACE_SLOTS;
+
+        if (diff >= VOTE_CREDITS_MAXIMUM_PER_SLOT) {
+            // If diff >= VOTE_CREDITS_MAXIMUM_PER_SLOT, 1 credit is awarded
+            return 1;
+        }
+
+        // Subtract diff from VOTE_CREDITS_MAXIMUM_PER_SLOT which is the number of credits to award
+        return VOTE_CREDITS_MAXIMUM_PER_SLOT - diff;
+    }
+
+    /// increment credits, record credits for last epoch if new epoch
+    pub fn incrementCredits(
+        self: *VoteState,
+        epoch: Epoch,
+        credits: u64,
+    ) error{OutOfMemory}!void {
+        // increment credits, record by epoch
+
+        // never seen a credit
+        if (self.epoch_credits.items.len == 0) {
+            try self.epoch_credits.append(
+                .{ .epoch = epoch, .credits = 0, .prev_credits = 0 },
+            );
+            // TODO Revisit and compare panic with Agave
+        } else if (epoch != self.epoch_credits.getLast().epoch) {
+            const last = self.epoch_credits.getLast();
+            const last_credits = last.credits;
+            const last_prev_credits = last.prev_credits;
+
+            if (last_credits != last_prev_credits) {
+                // if credits were earned previous epoch
+                // append entry at end of list for the new epoch
+                try self.epoch_credits.append(
+                    EpochCredit{ .epoch = epoch, .credits = last_credits, .prev_credits = last_credits },
+                );
+            } else {
+                // else just move the current epoch
+                const last_epoch_credit = &self.epoch_credits.items[self.epoch_credits.items.len - 1];
+                last_epoch_credit.epoch = epoch;
+            }
+
+            // Remove too old epoch_credits
+            if (self.epoch_credits.items.len > MAX_EPOCH_CREDITS_HISTORY) {
+                _ = self.epoch_credits.orderedRemove(0);
+            }
+        }
+
+        // Saturating add for the credits
+        {
+            const last_epoch_credit = &self.epoch_credits.items[self.epoch_credits.items.len - 1];
+            last_epoch_credit.credits = last_epoch_credit.credits +| credits;
+        }
+    }
+
     // TODO add logging
     // The goal is to check if each slot in vote_slots appears in slot_hashes with the correct hash.
     pub fn checkSlotsAreValid(
@@ -653,6 +754,65 @@ pub const VoteState = struct {
         return null;
     }
 
+    pub fn processNextVoteSlot(
+        self: *VoteState,
+        next_vote_slot: Slot,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) (error{Underflow} || error{Overflow} || error{OutOfMemory})!void {
+        // Ignore votes for slots earlier than we already have votes for
+        if (self.lastVotedSlot()) |last_voted_slot| {
+            if (next_vote_slot <= last_voted_slot) {
+                return;
+            }
+        }
+
+        try self.popExpiredVotes(next_vote_slot);
+
+        const landed_vote: LandedVote = .{ .latency = VoteState.computeVoteLatency(next_vote_slot, current_slot), .lockout = Lockout{ .confirmation_count = 1, .slot = next_vote_slot } };
+
+        // Once the stack is full, pop the oldest lockout and distribute rewards
+        if (self.votes.items.len == MAX_LOCKOUT_HISTORY) {
+            const credits = self.creditsForVoteAtIndex(0);
+            const popped_vote = self.votes.orderedRemove(0);
+            self.root_slot = popped_vote.lockout.slot;
+            try self.incrementCredits(epoch, credits);
+        }
+
+        try self.votes.append(landed_vote);
+        try self.doubleLockouts();
+    }
+
+    /// Pop all recent votes that are not locked out at the next vote slot.
+    /// This allows validators to switch forks once their votes for another fork have
+    /// expired. This also allows validators to continue voting on recent blocks in
+    /// the same fork without increasing lockouts.
+    pub fn popExpiredVotes(
+        self: *VoteState,
+        next_vote_slot: Slot,
+    ) !void {
+        while (self.lastLockout()) |vote| {
+            if (!try vote.isLockedOutAtSlot(next_vote_slot)) {
+                _ = self.votes.popOrNull();
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub fn doubleLockouts(self: *VoteState) error{Overflow}!void {
+        const stack_depth = self.votes.items.len;
+
+        for (self.votes.items, 0..) |*vote, i| {
+            // Don't increase the lockout for this vote until we get more confirmations
+            // than the max number of confirmations this vote has seen
+            const confirmation_count = vote.lockout.confirmation_count;
+            if (stack_depth > try std.math.add(usize, i, confirmation_count)) {
+                vote.lockout.confirmation_count +|= 1;
+            }
+        }
+    }
+
     pub fn processTimestamp(
         self: *VoteState,
         slot: Slot,
@@ -679,7 +839,7 @@ pub const VoteState = struct {
         slot_hashes: SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) (error{Overflow} || error{OutOfMemory} || InstructionError)!?VoteError {
+    ) (error{Overflow} || error{Underflow} || error{OutOfMemory} || InstructionError)!?VoteError {
         if (vote.slots.items.len == 0) {
             return VoteError.empty_slots;
         }
@@ -721,7 +881,7 @@ pub const VoteState = struct {
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) (error{Overflow} || InstructionError)!?VoteError {
+    ) (error{Underflow} || error{Overflow} || error{OutOfMemory} || InstructionError)!?VoteError {
         if (try self.checkSlotsAreValid(
             vote,
             recent_vote_slots,
@@ -730,9 +890,16 @@ pub const VoteState = struct {
             return err;
         }
 
-        _ = epoch;
-        _ = current_slot;
+        for (recent_vote_slots) |recent_vote_slot| {
+            try self.processNextVoteSlot(recent_vote_slot, epoch, current_slot);
+        }
+
         return null;
+    }
+
+    /// Computes the vote latency for vote on voted_for_slot where the vote itself landed in current_slot
+    pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
+        return @intCast(@min(current_slot -| voted_for_slot, std.math.maxInt(u8)));
     }
 };
 
