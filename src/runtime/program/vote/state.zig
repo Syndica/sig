@@ -37,6 +37,7 @@ pub const BlockTimestamp = struct {
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L85
 pub const Lockout = struct {
     slot: Slot,
+    /// The number of slot voted on top of this slot.
     confirmation_count: u32,
 
     pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) !bool {
@@ -968,6 +969,37 @@ pub fn verifyAndGetVoteState(
     }
 
     return vote_state;
+}
+
+test "Lockout.lockout" {
+    {
+        const lockout = Lockout{
+            .slot = 10,
+            .confirmation_count = 1,
+        };
+        try std.testing.expectEqual(2, lockout.lockout());
+    }
+    {
+        const lockout = Lockout{
+            .slot = 10,
+            .confirmation_count = 2,
+        };
+        try std.testing.expectEqual(4, lockout.lockout());
+    }
+    {
+        const lockout = Lockout{
+            .slot = 10,
+            .confirmation_count = 3,
+        };
+        try std.testing.expectEqual(8, lockout.lockout());
+    }
+    {
+        const lockout = Lockout{
+            .slot = 10,
+            .confirmation_count = 4,
+        };
+        try std.testing.expectEqual(16, lockout.lockout());
+    }
 }
 
 test "VoteState.convertToCurrent" {
