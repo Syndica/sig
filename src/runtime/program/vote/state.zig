@@ -547,7 +547,7 @@ pub fn createTestVoteState(
     commission: u8,
 ) !VoteState {
     if (!builtin.is_test) {
-        @panic("createTestVoteState should only be called in test mode");
+        @compileError("createTestVoteState should only be called in test mode");
     }
 
     return .{

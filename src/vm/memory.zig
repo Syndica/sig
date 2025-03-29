@@ -99,6 +99,13 @@ pub const Region = struct {
         };
     }
 
+    pub fn constSlice(self: Region) []const u8 {
+        switch (self.host_memory) {
+            .constant => |constant| return constant,
+            .mutable => |mutable| return mutable,
+        }
+    }
+
     fn translate(
         self: Region,
         comptime state: MemoryState,

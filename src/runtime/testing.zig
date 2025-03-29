@@ -147,17 +147,21 @@ pub fn createInstructionInfo(
 
     const account_metas = try createInstructionContextAccountMetas(tc, accounts_params);
 
+    const instruction_data = if (@TypeOf(instruction) == []const u8)
+        try allocator.dupe(u8, instruction)
+    else
+        try bincode.writeAlloc(
+            allocator,
+            instruction,
+            .{},
+        );
     return .{
         .program_meta = .{
             .pubkey = program_id,
             .index_in_transaction = @intCast(program_index_in_transaction),
         },
         .account_metas = account_metas,
-        .instruction_data = try bincode.writeAlloc(
-            allocator,
-            instruction,
-            .{},
-        ),
+        .instruction_data = instruction_data,
     };
 }
 
