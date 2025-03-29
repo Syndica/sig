@@ -210,7 +210,6 @@ pub const GossipTable = struct {
             }
 
             result.entry.setVersionedData(versioned_value);
-
             self.cursor += 1;
 
             // inserted new entry
@@ -279,11 +278,11 @@ pub const GossipTable = struct {
 
             // do nothing
         } else {
-            const old_entry = result.entry.metadata_ptr.*;
+            const current_entry = result.entry.metadata_ptr.*;
 
-            if (old_entry.value_hash.order(&metadata.value_hash) != .eq) {
+            if (current_entry.value_hash.order(&metadata.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
-                try self.purged.insert(old_entry.value_hash, now);
+                try self.purged.insert(metadata.value_hash, now);
                 return .IgnoredOldValue;
             } else {
                 // hash is the same then its a duplicate value which isnt stored
@@ -414,32 +413,56 @@ pub const GossipTable = struct {
     ///     &caller_cursor,
     /// );
     fn genericGetEntriesWithCursor(
-        allocator: ?std.mem.Allocator,
-        hashmap: anytype,
+        allocator: std.mem.Allocator,
+        cursor_hashmap: anytype,
         store: GossipMap,
         buf: []GossipVersionedData,
         caller_cursor: *usize,
     ) error{OutOfMemory}![]GossipVersionedData {
-        const cursor_indexs = hashmap.keys();
+        const cursor_keys = cursor_hashmap.keys();
 
-        var index: usize = 0;
-        for (cursor_indexs) |cursor_index| {
-            if (cursor_index < caller_cursor.*) {
+        // NOTE: we need a clone so we dont modify (and break) the map.
+        // see .keys() doc comment for more info.
+        const cursors = try allocator.dupe(u64, cursor_keys);
+        defer allocator.free(cursors);
+
+        // sort the cursors so they are increasing
+        std.mem.sort(u64, cursors, {}, struct {
+            fn lessThan(_: void, lhs: u64, rhs: u64) bool {
+                return lhs < rhs;
+            }
+        }.lessThan);
+
+        var count: usize = 0;
+        var last_cursor_included: u64 = caller_cursor.*;
+
+        for (cursors) |cursor| {
+            if (cursor < caller_cursor.*) {
                 continue;
             }
 
-            const entry_index = hashmap.get(cursor_index).?;
+            const entry_index = cursor_hashmap.get(cursor).?;
             const entry = store.getByIndex(entry_index);
-            buf[index] = if (allocator == null) entry else try entry.clone(allocator.?);
-            index += 1;
+            // sanity check
+            std.debug.assert(entry.metadata.cursor_on_insertion == cursor);
 
-            if (index == buf.len) {
+            buf[count] = try entry.clone(allocator);
+            count += 1;
+            // NOTE: cursor values are not guaranteed to be incremental so
+            // we dont use an incremental (/+1) approach
+            last_cursor_included = cursor;
+
+            if (count == buf.len) {
                 break;
             }
         }
-        // move up the caller_cursor
-        caller_cursor.* += index;
-        return buf[0..index];
+
+        // update the caller_cursor
+        caller_cursor.* = last_cursor_included;
+        // +1 do we dont include the last value next loop
+        if (count != 0) caller_cursor.* += 1;
+
+        return buf[0..count];
     }
 
     pub fn getClonedEntriesWithCursor(
