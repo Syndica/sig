@@ -18,7 +18,7 @@ pub const Error = error{
     AccessNotMapped,
     SyscallAbort,
     AccessViolation,
-    VirtualAccessTooLong,
+    StackAccessViolation,
     Overflow,
     Underflow,
     InvalidLength,
