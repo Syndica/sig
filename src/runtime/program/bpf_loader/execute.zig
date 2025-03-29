@@ -890,8 +890,7 @@ pub fn executeV3Close(
                 return InstructionError.IncorrectProgramId;
             }
 
-            var clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse
-                return InstructionError.UnsupportedSysvar;
+            var clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
             if (clock.slot == data.slot) {
                 try ic.tc.log("Program was deployed in this block already", .{});
                 return InstructionError.InvalidArgument;
@@ -914,8 +913,7 @@ pub fn executeV3Close(
                     program_account_released = true;
                     try commonCloseAccount(ic, authority_address);
 
-                    clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse
-                        return InstructionError.UnsupportedSysvar;
+                    clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
                     // TODO: This depends on program cache which isn't implemented yet.
                     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
                 },
@@ -1037,8 +1035,7 @@ pub fn executeV3ExtendProgram(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse
-        return InstructionError.UnsupportedSysvar;
+    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
@@ -1064,8 +1061,7 @@ pub fn executeV3ExtendProgram(
     const required_payment = blk: {
         const balance = programdata.account.lamports;
         // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-        const rent = ic.tc.sysvar_cache.get(sysvar.Rent) orelse
-            return InstructionError.UnsupportedSysvar;
+        const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
     };
@@ -1148,8 +1144,7 @@ pub fn executeV3Migrate(
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse
-        return InstructionError.UnsupportedSysvar;
+    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
     // Verify ProgramData account.
     const progdata_info = info: {

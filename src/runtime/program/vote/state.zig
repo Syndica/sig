@@ -70,7 +70,7 @@ pub const AuthorizedVoters = struct {
         return self.authorized_voters.count();
     }
 
-    /// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L22
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L22
     pub fn getAuthorizedVoter(
         self: *AuthorizedVoters,
         epoch: Epoch,
@@ -82,7 +82,7 @@ pub const AuthorizedVoters = struct {
         }
     }
 
-    /// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L27
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L27
     pub fn getAndCacheAuthorizedVoterForEpoch(self: *AuthorizedVoters, epoch: Epoch) !?Pubkey {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
             const pubkey, const existed = entry;
@@ -99,7 +99,7 @@ pub const AuthorizedVoters = struct {
         try self.authorized_voters.put(epoch, authorized_voter);
     }
 
-    /// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L42
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L42
     pub fn purgeAuthorizedVoters(
         self: *AuthorizedVoters,
         allocator: std.mem.Allocator,
@@ -158,7 +158,7 @@ pub const AuthorizedVoters = struct {
         return self.authorized_voters.contains(epoch);
     }
 
-    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L90
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L90
     ///
     /// Returns the authorized voter at the given epoch if the epoch is >= the
     /// current epoch, and a bool indicating whether the entry for this epoch
@@ -180,13 +180,13 @@ pub const AuthorizedVoters = struct {
     }
 };
 
-/// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
 pub const VoteStateVersions = union(enum) {
     v0_23_5: VoteState0_23_5,
     v1_14_11: VoteState1_14_11,
     current: VoteState,
 
-    /// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L80
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L80
     fn landedVotesFromLockouts(
         allocator: std.mem.Allocator,
         lockouts: std.ArrayList(Lockout),
@@ -212,7 +212,7 @@ pub const VoteStateVersions = union(enum) {
         }
     }
 
-    /// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
     pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
         switch (self) {
             .v0_23_5 => |state| {
@@ -249,7 +249,7 @@ pub const VoteStateVersions = union(enum) {
     }
 };
 
-/// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_0_23_5.rs#L11
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_0_23_5.rs#L11
 pub const VoteState0_23_5 = struct {
     /// the node that votes in this account
     node_pubkey: Pubkey,
@@ -309,7 +309,7 @@ pub const VoteState0_23_5 = struct {
     }
 };
 
-/// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_1_14_11.rs#L16
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_1_14_11.rs#L16
 pub const VoteState1_14_11 = struct {
     /// the node that votes in this account
     node_pubkey: Pubkey,
@@ -386,6 +386,7 @@ pub const VoteState = struct {
     node_pubkey: Pubkey,
 
     /// the signer for withdrawals
+    // TODO rename to withdrawer
     authorized_withdrawer: Pubkey,
     /// percentage (0-100) that represents what part of a rewards
     ///  payout should be given to this VoteAccount
@@ -399,6 +400,7 @@ pub const VoteState = struct {
     root_slot: ?Slot,
 
     /// the signer for vote transactions
+    // TODO rename to voters
     authorized_voters: AuthorizedVoters,
 
     /// history of prior authorized voters and the epochs for which
@@ -416,6 +418,22 @@ pub const VoteState = struct {
     /// Upper limit on the size of the Vote State
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
+
+    pub fn default(allocator: std.mem.Allocator) VoteState {
+        return .{
+            .node_pubkey = Pubkey.ZEROES,
+            .authorized_withdrawer = Pubkey.ZEROES,
+            .commission = 0,
+            .votes = std.ArrayList(LandedVote).init(allocator),
+            .root_slot = null,
+            .authorized_voters = AuthorizedVoters{
+                .authorized_voters = SortedMap(Epoch, Pubkey).init(allocator),
+            },
+            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
+            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+        };
+    }
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -452,12 +470,12 @@ pub const VoteState = struct {
         self.epoch_credits.deinit();
     }
 
-    /// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteState) bool {
         return self.authorized_voters.count() == 0;
     }
 
-    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
         new_authorized_voter: Pubkey,
@@ -499,7 +517,7 @@ pub const VoteState = struct {
         return null;
     }
 
-    /// [agave]  https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
     pub fn getAndUpdateAuthorizedVoter(
         self: *VoteState,
         allocator: std.mem.Allocator,
