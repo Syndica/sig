@@ -13,6 +13,14 @@ pub const requests = @import("requests.zig");
 pub const basic = @import("basic.zig");
 pub const LinuxIoUring = @import("linux_io_uring.zig").LinuxIoUring;
 
+comptime {
+    _ = connection;
+    _ = requests;
+
+    _ = basic;
+    _ = LinuxIoUring;
+}
+
 const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
 
 /// The minimum buffer read size.
@@ -118,7 +126,7 @@ pub fn serve(
     }
 }
 
-test serveSpawn {
+test "serveSpawn snapshots" {
     if (sig.build_options.no_network_tests) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
