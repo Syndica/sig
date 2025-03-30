@@ -746,7 +746,7 @@ pub const EpochStakes = struct {
     stakes: Stakes(.delegation),
     total_stake: u64,
     node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
-    epoch_authorized_voters: EpochAuthorizedVoters,
+    epoch_voters: EpochAuthorizedVoters,
 
     pub fn deinit(epoch_stakes: EpochStakes, allocator: std.mem.Allocator) void {
         epoch_stakes.stakes.deinit(allocator);
@@ -1039,7 +1039,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
         stakes: Stakes(.stake),
         total_stake: u64,
         node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
-        epoch_authorized_voters: EpochAuthorizedVoters,
+        epoch_voters: EpochAuthorizedVoters,
 
         pub fn deinit(current: Current, allocator: std.mem.Allocator) void {
             current.stakes.deinit(allocator);
