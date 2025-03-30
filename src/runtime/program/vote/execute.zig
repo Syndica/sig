@@ -766,13 +766,10 @@ fn processVoteWithAccount(
             return InstructionError.Custom;
         }
 
-        // TODO any better way to do this?
-        var max_slot: u64 = 0;
-        for (vote.slots.items) |slot| {
-            if (slot > max_slot) {
-                max_slot = slot;
-            }
-        }
+        const max_slot: u64 = if (vote.slots.items.len > 0)
+            std.mem.max(u64, vote.slots.items)
+        else
+            0;
 
         if (vote_state.processTimestamp(max_slot, timestamp)) |err| {
             ic.tc.custom_error = @intFromEnum(err);
