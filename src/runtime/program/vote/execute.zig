@@ -51,7 +51,7 @@ pub fn execute(
             &vote_account,
             args.node_pubkey,
             args.authorized_voter,
-            args.authorized_withdrawer,
+            args.withdrawer,
             args.commission,
         ),
         .authorize => |args| try executeAuthorize(
@@ -127,7 +127,7 @@ fn executeIntializeAccount(
     vote_account: *BorrowedAccount,
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
-    authorized_withdrawer: Pubkey,
+    withdrawer: Pubkey,
     commission: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
     const rent = try ic.getSysvarWithAccountCheck(
@@ -150,7 +150,7 @@ fn executeIntializeAccount(
         ic,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         vote_account,
         clock,
@@ -167,7 +167,7 @@ fn intializeAccount(
     ic: *InstructionContext,
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
-    authorized_withdrawer: Pubkey,
+    withdrawer: Pubkey,
     commission: u8,
     vote_account: *BorrowedAccount,
     clock: Clock,
@@ -192,7 +192,7 @@ fn intializeAccount(
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     );
@@ -251,8 +251,8 @@ fn authorize(
         .voter => {
             const current_epoch = clock.epoch;
 
-            const authorized_withdrawer_signer = !std.meta.isError(validateIsSigner(
-                vote_state.authorized_withdrawer,
+            const withdrawer_signer = !std.meta.isError(validateIsSigner(
+                vote_state.withdrawer,
                 signers,
             ));
 
@@ -270,7 +270,7 @@ fn authorize(
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // current authorized withdrawer or epoch authorized voter must sign transaction.
-            if (!authorized_withdrawer_signer) {
+            if (!withdrawer_signer) {
                 _ = try validateIsSigner(
                     epoch_authorized_voter,
                     signers,
@@ -288,15 +288,15 @@ fn authorize(
         },
         .withdrawer => {
             // current authorized withdrawer must say "yay".
-            const authorized_withdrawer_signer = !std.meta.isError(validateIsSigner(
-                vote_state.authorized_withdrawer,
+            const withdrawer_signer = !std.meta.isError(validateIsSigner(
+                vote_state.withdrawer,
                 signers,
             ));
 
-            if (!authorized_withdrawer_signer) {
+            if (!withdrawer_signer) {
                 return InstructionError.MissingRequiredSignature;
             }
-            vote_state.authorized_withdrawer = authorized;
+            vote_state.withdrawer = authorized;
         },
     }
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
@@ -482,7 +482,7 @@ fn updateValidatorIdentity(
     defer vote_state.deinit();
 
     // Both the current authorized withdrawer and new identity must sign.
-    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer) or
+    if (!ic.info.isPubkeySigner(vote_state.withdrawer) or
         !ic.info.isPubkeySigner(new_identity))
     {
         return InstructionError.MissingRequiredSignature;
@@ -572,7 +572,7 @@ fn updateCommission(
     defer vote_state.deinit();
 
     // Current authorized withdrawer must sign transaction.
-    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
+    if (!ic.info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -644,7 +644,7 @@ fn widthraw(
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
-    if (!ic.info.isPubkeySigner(vote_state.authorized_withdrawer)) {
+    if (!ic.info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -836,7 +836,7 @@ test "vote_program: executeIntializeAccount" {
     // Insturction data.
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
     // Account data.
@@ -845,7 +845,7 @@ test "vote_program: executeIntializeAccount" {
         allocator,
         node_publey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -862,7 +862,7 @@ test "vote_program: executeIntializeAccount" {
             .initialize_account = .{
                 .node_pubkey = node_publey,
                 .authorized_voter = authorized_voter,
-                .authorized_withdrawer = authorized_withdrawer,
+                .withdrawer = withdrawer,
                 .commission = commission,
             },
         },
@@ -929,11 +929,11 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
     };
 
     // Insturction data.
-    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const new_withdrawer = Pubkey.initRandom(prng.random());
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
     // Account data.
@@ -943,7 +943,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -953,7 +953,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        new_authorized_withdrawer,
+        new_withdrawer,
         commission,
         clock,
     ) };
@@ -971,7 +971,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
         vote_program,
         VoteProgramInstruction{
             .authorize = .{
-                .new_authority = new_authorized_withdrawer,
+                .new_authority = new_withdrawer,
                 .vote_authorize = VoteAuthorize.withdrawer,
             },
         },
@@ -989,7 +989,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
                     .data = initial_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1006,7 +1006,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
                     .data = final_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -1037,7 +1037,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const new_authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
     // Account data.
@@ -1047,7 +1047,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1057,11 +1057,11 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     );
-    try final_vote_state.authorized_voters.insert(1, new_authorized_voter);
+    try final_vote_state.voters.insert(1, new_authorized_voter);
     final_vote_state.prior_voters.append(PriorVote{
         .key = authorized_voter,
         .start = 0,
@@ -1101,7 +1101,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
                     .data = initial_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1118,7 +1118,7 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
                     .data = final_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -1145,7 +1145,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
     };
 
     // Insturction data.
-    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const new_withdrawer = Pubkey.initRandom(prng.random());
 
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
@@ -1157,7 +1157,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
     const current_withdrawer_owner = Pubkey.initRandom(prng.random());
     const current_withdrawer_seed = &[_]u8{0x10} ** 32;
 
-    const authorized_withdrawer = try pubkey_utils.createWithSeed(
+    const withdrawer = try pubkey_utils.createWithSeed(
         base,
         current_withdrawer_seed,
         current_withdrawer_owner,
@@ -1167,7 +1167,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1177,7 +1177,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        new_authorized_withdrawer,
+        new_withdrawer,
         commission,
         clock,
     ) };
@@ -1198,7 +1198,7 @@ test "vote_program: authorizeWithSeed withdrawer" {
                 .authorization_type = VoteAuthorize.withdrawer,
                 .current_authority_derived_key_owner = current_withdrawer_owner,
                 .current_authority_derived_key_seed = current_withdrawer_seed,
-                .new_authority = new_authorized_withdrawer,
+                .new_authority = new_withdrawer,
             },
         },
         &.{
@@ -1259,7 +1259,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
     };
 
     // Insturction data.
-    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const new_withdrawer = Pubkey.initRandom(prng.random());
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
@@ -1270,7 +1270,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
     const current_withdrawer_owner = Pubkey.initRandom(prng.random());
     const current_withdrawer_seed = &[_]u8{0x10} ** 32;
 
-    const authorized_withdrawer = try pubkey_utils.createWithSeed(
+    const withdrawer = try pubkey_utils.createWithSeed(
         base,
         current_withdrawer_seed,
         current_withdrawer_owner,
@@ -1280,7 +1280,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1290,7 +1290,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        new_authorized_withdrawer,
+        new_withdrawer,
         commission,
         clock,
     ) };
@@ -1329,7 +1329,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = new_authorized_withdrawer },
+                .{ .pubkey = new_withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1347,7 +1347,7 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
                 },
                 .{ .pubkey = Clock.ID },
                 .{ .pubkey = base },
-                .{ .pubkey = new_authorized_withdrawer },
+                .{ .pubkey = new_withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -1376,8 +1376,8 @@ test "vote_program: authorizeChecked withdrawer" {
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const new_authorized_withdrawer = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const new_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
 
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
@@ -1386,7 +1386,7 @@ test "vote_program: authorizeChecked withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1396,7 +1396,7 @@ test "vote_program: authorizeChecked withdrawer" {
         allocator,
         node_pubkey,
         authorized_voter,
-        new_authorized_withdrawer,
+        new_withdrawer,
         commission,
         clock,
     ) };
@@ -1430,8 +1430,8 @@ test "vote_program: authorizeChecked withdrawer" {
                     .data = initial_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
-                .{ .pubkey = authorized_withdrawer },
-                .{ .pubkey = new_authorized_withdrawer },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = new_withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1448,8 +1448,8 @@ test "vote_program: authorizeChecked withdrawer" {
                     .data = final_vote_state_bytes[0..],
                 },
                 .{ .pubkey = Clock.ID },
-                .{ .pubkey = authorized_withdrawer },
-                .{ .pubkey = new_authorized_withdrawer },
+                .{ .pubkey = withdrawer },
+                .{ .pubkey = new_withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -1479,7 +1479,7 @@ test "vote_program: update_validator_identity" {
     const node_pubkey = Pubkey.initRandom(prng.random());
     const new_node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -1487,7 +1487,7 @@ test "vote_program: update_validator_identity" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1497,7 +1497,7 @@ test "vote_program: update_validator_identity" {
         allocator,
         new_node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1528,7 +1528,7 @@ test "vote_program: update_validator_identity" {
                     .data = initial_vote_state_bytes[0..],
                 },
                 .{ .pubkey = new_node_pubkey },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1542,7 +1542,7 @@ test "vote_program: update_validator_identity" {
                     .data = final_vote_state_bytes[0..],
                 },
                 .{ .pubkey = new_node_pubkey },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -1572,7 +1572,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
     const node_pubkey = Pubkey.initRandom(prng.random());
     const new_node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -1580,7 +1580,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1590,7 +1590,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
         allocator,
         new_node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1622,7 +1622,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
                     .data = initial_vote_state_bytes[0..],
                 },
                 .{ .pubkey = new_node_pubkey },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1636,7 +1636,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
                     .data = final_vote_state_bytes[0..],
                 },
                 .{ .pubkey = new_node_pubkey },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -1668,7 +1668,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
     const node_pubkey = Pubkey.initRandom(prng.random());
     const new_node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -1676,7 +1676,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1686,7 +1686,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
         allocator,
         new_node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1718,7 +1718,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
                     .data = initial_vote_state_bytes[0..],
                 },
                 .{ .pubkey = new_node_pubkey },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1732,7 +1732,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
                     .data = final_vote_state_bytes[0..],
                 },
                 .{ .pubkey = new_node_pubkey },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -1771,7 +1771,7 @@ test "vote_program: update_commission increasing commission" {
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const initial_commission: u8 = 10;
     const final_commission: u8 = 20;
@@ -1780,7 +1780,7 @@ test "vote_program: update_commission increasing commission" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         initial_commission,
         clock,
     ) };
@@ -1790,7 +1790,7 @@ test "vote_program: update_commission increasing commission" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         final_commission,
         clock,
     ) };
@@ -1821,7 +1821,7 @@ test "vote_program: update_commission increasing commission" {
                     .owner = vote_program.ID,
                     .data = initial_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1848,7 +1848,7 @@ test "vote_program: update_commission increasing commission" {
                     .owner = vote_program.ID,
                     .data = final_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -1896,7 +1896,7 @@ test "vote_program: update_commission decreasing commission" {
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const initial_commission: u8 = 10;
     const final_commission: u8 = 5;
@@ -1905,7 +1905,7 @@ test "vote_program: update_commission decreasing commission" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         initial_commission,
         clock,
     ) };
@@ -1915,7 +1915,7 @@ test "vote_program: update_commission decreasing commission" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         final_commission,
         clock,
     ) };
@@ -1946,7 +1946,7 @@ test "vote_program: update_commission decreasing commission" {
                     .owner = vote_program.ID,
                     .data = initial_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -1973,7 +1973,7 @@ test "vote_program: update_commission decreasing commission" {
                     .owner = vote_program.ID,
                     .data = final_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2021,7 +2021,7 @@ test "vote_program: update_commission commission update too late passes with fea
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const initial_commission: u8 = 10;
     const final_commission: u8 = 15;
@@ -2030,7 +2030,7 @@ test "vote_program: update_commission commission update too late passes with fea
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         initial_commission,
         clock,
     ) };
@@ -2040,7 +2040,7 @@ test "vote_program: update_commission commission update too late passes with fea
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         final_commission,
         clock,
     ) };
@@ -2071,7 +2071,7 @@ test "vote_program: update_commission commission update too late passes with fea
                     .owner = vote_program.ID,
                     .data = initial_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2089,7 +2089,7 @@ test "vote_program: update_commission commission update too late passes with fea
                     .owner = vote_program.ID,
                     .data = final_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2128,7 +2128,7 @@ test "vote_program: update_commission error commission update too late failure" 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const initial_commission: u8 = 10;
     const final_commission: u8 = 15;
@@ -2137,7 +2137,7 @@ test "vote_program: update_commission error commission update too late failure" 
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         initial_commission,
         clock,
     ) };
@@ -2147,7 +2147,7 @@ test "vote_program: update_commission error commission update too late failure" 
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         final_commission,
         clock,
     ) };
@@ -2178,7 +2178,7 @@ test "vote_program: update_commission error commission update too late failure" 
                     .owner = vote_program.ID,
                     .data = initial_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2205,7 +2205,7 @@ test "vote_program: update_commission error commission update too late failure" 
                     .owner = vote_program.ID,
                     .data = final_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2257,7 +2257,7 @@ test "vote_program: update_commission missing signature" {
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const initial_commission: u8 = 10;
     const final_commission: u8 = 20;
@@ -2266,7 +2266,7 @@ test "vote_program: update_commission missing signature" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         initial_commission,
         clock,
     ) };
@@ -2276,7 +2276,7 @@ test "vote_program: update_commission missing signature" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         final_commission,
         clock,
     ) };
@@ -2308,7 +2308,7 @@ test "vote_program: update_commission missing signature" {
                     .owner = vote_program.ID,
                     .data = initial_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2335,7 +2335,7 @@ test "vote_program: update_commission missing signature" {
                     .owner = vote_program.ID,
                     .data = final_vote_state_bytes[0..],
                 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2374,7 +2374,7 @@ test "vote_program: widthdraw no changes" {
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -2384,7 +2384,7 @@ test "vote_program: widthdraw no changes" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -2416,7 +2416,7 @@ test "vote_program: widthdraw no changes" {
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2435,7 +2435,7 @@ test "vote_program: widthdraw no changes" {
                 },
                 // no lamports withdrawn
                 .{ .pubkey = recipient_withdrawer, .lamports = 0 },
-                .{ .pubkey = authorized_withdrawer, .lamports = 0 },
+                .{ .pubkey = withdrawer, .lamports = 0 },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2462,7 +2462,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -2472,7 +2472,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -2505,7 +2505,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = 0 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2523,7 +2523,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = withdraw_amount },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2561,7 +2561,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 //     // Account data.
 //     const node_pubkey = Pubkey.initRandom(prng.random());
 //     const authorized_voter = Pubkey.initRandom(prng.random());
-//     const authorized_withdrawer = Pubkey.initRandom(prng.random());
+//     const withdrawer = Pubkey.initRandom(prng.random());
 //     const vote_account = Pubkey.initRandom(prng.random());
 //     const commission: u8 = 10;
 
@@ -2571,7 +2571,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 //         allocator,
 //         node_pubkey,
 //         authorized_voter,
-//         authorized_withdrawer,
+//         withdrawer,
 //         commission,
 //         clock,
 //     );
@@ -2618,7 +2618,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 //                     .data = initial_vote_state_bytes[0..],
 //                 },
 //                 .{ .pubkey = recipient_withdrawer, .lamports = 0 },
-//                 .{ .pubkey = authorized_withdrawer },
+//                 .{ .pubkey = withdrawer },
 //                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
 //             },
 //             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2636,7 +2636,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 //                     .data = final_vote_state_bytes[0..], // account closed down,
 //                 },
 //                 .{ .pubkey = recipient_withdrawer, .lamports = RENT_EXEMPT_THRESHOLD },
-//                 .{ .pubkey = authorized_withdrawer },
+//                 .{ .pubkey = withdrawer },
 //                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
 //             },
 //             .compute_meter = 0,
@@ -2670,7 +2670,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -2680,7 +2680,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     );
@@ -2727,7 +2727,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
                     .data = initial_vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = 0 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2745,7 +2745,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
                     .data = final_vote_state_bytes[0..], // account closed down,
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = RENT_EXEMPT_THRESHOLD },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2776,7 +2776,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -2786,7 +2786,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -2820,7 +2820,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = 0 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2838,7 +2838,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = withdraw_amount },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2867,7 +2867,7 @@ test "vote_program: widthdraw insufficient funds" {
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -2877,7 +2877,7 @@ test "vote_program: widthdraw insufficient funds" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -2909,7 +2909,7 @@ test "vote_program: widthdraw insufficient funds" {
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = 0 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -2927,7 +2927,7 @@ test "vote_program: widthdraw insufficient funds" {
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
@@ -2956,7 +2956,7 @@ test "vote_program: widthdraw with missing signature" {
     // Account data.
     const node_pubkey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const vote_account = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
@@ -2966,7 +2966,7 @@ test "vote_program: widthdraw with missing signature" {
         allocator,
         node_pubkey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -2988,7 +2988,7 @@ test "vote_program: widthdraw with missing signature" {
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
-            // missing signature for authorized_withdrawer
+            // missing signature for withdrawer
             .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
         },
         .{
@@ -3000,7 +3000,7 @@ test "vote_program: widthdraw with missing signature" {
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = 0 },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = vote_program.COMPUTE_UNITS,
@@ -3018,7 +3018,7 @@ test "vote_program: widthdraw with missing signature" {
                     .data = vote_state_bytes[0..],
                 },
                 .{ .pubkey = recipient_withdrawer, .lamports = withdraw_amount },
-                .{ .pubkey = authorized_withdrawer },
+                .{ .pubkey = withdrawer },
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,

@@ -94,20 +94,20 @@ pub const Vote = struct {
 };
 
 pub const AuthorizedVoters = struct {
-    authorized_voters: SortedMap(Epoch, Pubkey),
+    voters: SortedMap(Epoch, Pubkey),
 
     pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
         var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
         try authorized_voters.put(epoch, pubkey);
-        return AuthorizedVoters{ .authorized_voters = authorized_voters };
+        return AuthorizedVoters{ .voters = authorized_voters };
     }
 
     pub fn deinit(self: AuthorizedVoters) void {
-        self.authorized_voters.deinit();
+        self.voters.deinit();
     }
 
     pub fn count(self: *const AuthorizedVoters) usize {
-        return self.authorized_voters.count();
+        return self.voters.count();
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L22
@@ -127,7 +127,7 @@ pub const AuthorizedVoters = struct {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
             const pubkey, const existed = entry;
             if (!existed) {
-                try self.authorized_voters.put(epoch, pubkey);
+                try self.voters.put(epoch, pubkey);
             }
             return pubkey;
         } else {
@@ -136,7 +136,7 @@ pub const AuthorizedVoters = struct {
     }
 
     pub fn insert(self: *AuthorizedVoters, epoch: Epoch, authorized_voter: Pubkey) !void {
-        try self.authorized_voters.put(epoch, authorized_voter);
+        try self.voters.put(epoch, authorized_voter);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L42
@@ -148,7 +148,7 @@ pub const AuthorizedVoters = struct {
         var expired_keys = std.ArrayList(Epoch).init(allocator);
         defer expired_keys.deinit();
 
-        var voter_iter = self.authorized_voters.iterator();
+        var voter_iter = self.voters.iterator();
         while (voter_iter.next()) |entry| {
             if (entry.key_ptr.* < current_epoch) {
                 try expired_keys.append(entry.key_ptr.*);
@@ -156,24 +156,24 @@ pub const AuthorizedVoters = struct {
         }
 
         for (expired_keys.items) |key| {
-            _ = self.authorized_voters.swapRemoveNoSort(key);
+            _ = self.voters.swapRemoveNoSort(key);
         }
-        self.authorized_voters.sort();
+        self.voters.sort();
 
         // Have to uphold this invariant b/c this is
         // 1) The check for whether the vote state is initialized
         // 2) How future authorized voters for uninitialized epochs are set
         //    by this function
-        std.debug.assert(self.authorized_voters.count() != 0);
+        std.debug.assert(self.voters.count() != 0);
         return true;
     }
 
     pub fn isEmpty(self: *const AuthorizedVoters) bool {
-        return self.authorized_voters.count() == 0;
+        return self.voters.count() == 0;
     }
 
     pub fn first(self: *AuthorizedVoters) ?struct { Epoch, Pubkey } {
-        var voter_iter = self.authorized_voters.iterator();
+        var voter_iter = self.voters.iterator();
         if (voter_iter.next()) |entry| {
             return .{ entry.key_ptr.*, entry.value_ptr.* };
         } else {
@@ -182,8 +182,8 @@ pub const AuthorizedVoters = struct {
     }
 
     pub fn last(self: *const AuthorizedVoters) ?struct { Epoch, Pubkey } {
-        const last_epoch = self.authorized_voters.max orelse return null;
-        if (self.authorized_voters.get(last_epoch)) |last_pubkey| {
+        const last_epoch = self.voters.max orelse return null;
+        if (self.voters.get(last_epoch)) |last_pubkey| {
             return .{ last_epoch, last_pubkey };
         } else {
             return null;
@@ -191,11 +191,11 @@ pub const AuthorizedVoters = struct {
     }
 
     pub fn len(self: *const AuthorizedVoters) usize {
-        return self.authorized_voters.count();
+        return self.voters.count();
     }
 
     pub fn contains(self: *const AuthorizedVoters, epoch: Epoch) bool {
-        return self.authorized_voters.contains(epoch);
+        return self.voters.contains(epoch);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L90
@@ -207,10 +207,10 @@ pub const AuthorizedVoters = struct {
         self: *AuthorizedVoters,
         epoch: Epoch,
     ) ?struct { Pubkey, bool } {
-        if (self.authorized_voters.get(epoch)) |pubkey| {
+        if (self.voters.get(epoch)) |pubkey| {
             return .{ pubkey, true };
         } else {
-            _, const values = self.authorized_voters.range(0, epoch);
+            _, const values = self.voters.range(0, epoch);
             if (values.len == 0) {
                 return null;
             }
@@ -258,16 +258,16 @@ pub const VoteStateVersions = union(enum) {
             .v0_23_5 => |state| {
                 const authorized_voters = try AuthorizedVoters.init(
                     allocator,
-                    state.authorized_voter_epoch,
-                    state.authorized_voter,
+                    state.voter_epoch,
+                    state.voter,
                 );
                 return VoteState{
                     .node_pubkey = state.node_pubkey,
-                    .authorized_withdrawer = state.authorized_withdrawer,
+                    .withdrawer = state.withdrawer,
                     .commission = state.commission,
                     .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
                     .root_slot = state.root_slot,
-                    .authorized_voters = authorized_voters,
+                    .voters = authorized_voters,
                     .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
                     .epoch_credits = state.epoch_credits,
                     .last_timestamp = state.last_timestamp,
@@ -275,11 +275,11 @@ pub const VoteStateVersions = union(enum) {
             },
             .v1_14_11 => |state| return VoteState{
                 .node_pubkey = state.node_pubkey,
-                .authorized_withdrawer = state.authorized_withdrawer,
+                .withdrawer = state.withdrawer,
                 .commission = state.commission,
                 .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
                 .root_slot = state.root_slot,
-                .authorized_voters = state.authorized_voters,
+                .voters = state.voters,
                 .prior_voters = state.prior_voters,
                 .epoch_credits = state.epoch_credits,
                 .last_timestamp = state.last_timestamp,
@@ -291,9 +291,9 @@ pub const VoteStateVersions = union(enum) {
     /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteStateVersions) bool {
         switch (self) {
-            .v0_23_5 => |state| return state.authorized_voter.equals(&Pubkey.ZEROES),
-            .v1_14_11 => |state| return state.authorized_voters.count() == 0,
-            .current => |state| return state.authorized_voters.count() == 0,
+            .v0_23_5 => |state| return state.voter.equals(&Pubkey.ZEROES),
+            .v1_14_11 => |state| return state.voters.count() == 0,
+            .current => |state| return state.voters.count() == 0,
         }
     }
 };
@@ -304,16 +304,16 @@ pub const VoteState0_23_5 = struct {
     node_pubkey: Pubkey,
 
     /// the signer for vote transactions
-    authorized_voter: Pubkey,
+    voter: Pubkey,
     /// when the authorized voter was set/initialized
-    authorized_voter_epoch: Epoch,
+    voter_epoch: Epoch,
 
     /// history of prior authorized voters and the epoch ranges for which
     ///  they were set
     prior_voters: RingBuffer(PriorVote, MAX_PRIOR_VOTERS),
 
     /// the signer for withdrawals
-    authorized_withdrawer: Pubkey,
+    withdrawer: Pubkey,
     /// percentage (0-100) that represents what part of a rewards
     ///  payout should be given to this VoteAccount
     commission: u8,
@@ -334,7 +334,7 @@ pub const VoteState0_23_5 = struct {
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
-        authorized_withdrawer: Pubkey,
+        withdrawer: Pubkey,
         commission: u8,
         clock: Clock,
     ) !VoteState0_23_5 {
@@ -343,7 +343,7 @@ pub const VoteState0_23_5 = struct {
             .authorized_voter = authorized_voter,
             .authorized_voter_epoch = clock.epoch,
             .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
-            .authorized_withdrawer = authorized_withdrawer,
+            .withdrawer = withdrawer,
             .commission = commission,
             .votes = std.ArrayList(Lockout).init(allocator),
             .root_slot = null,
@@ -364,7 +364,7 @@ pub const VoteState1_14_11 = struct {
     node_pubkey: Pubkey,
 
     /// the signer for withdrawals
-    authorized_withdrawer: Pubkey,
+    withdrawer: Pubkey,
     /// percentage (0-100) that represents what part of a rewards
     ///  payout should be given to this VoteAccount
     commission: u8,
@@ -377,7 +377,7 @@ pub const VoteState1_14_11 = struct {
     root_slot: ?Slot,
 
     /// the signer for vote transactions
-    authorized_voters: AuthorizedVoters,
+    voters: AuthorizedVoters,
 
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
@@ -399,7 +399,7 @@ pub const VoteState1_14_11 = struct {
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
-        authorized_withdrawer: Pubkey,
+        withdrawer: Pubkey,
         commission: u8,
         clock: Clock,
     ) !VoteState1_14_11 {
@@ -411,11 +411,11 @@ pub const VoteState1_14_11 = struct {
 
         return .{
             .node_pubkey = node_pubkey,
-            .authorized_withdrawer = authorized_withdrawer,
+            .withdrawer = withdrawer,
             .commission = commission,
             .votes = std.ArrayList(Lockout).init(allocator),
             .root_slot = null,
-            .authorized_voters = authorized_voters,
+            .voters = authorized_voters,
             .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
@@ -424,7 +424,7 @@ pub const VoteState1_14_11 = struct {
 
     pub fn deinit(self: VoteState1_14_11) void {
         self.votes.deinit();
-        self.authorized_voters.deinit();
+        self.voters.deinit();
         self.epoch_credits.deinit();
     }
 };
@@ -435,8 +435,7 @@ pub const VoteState = struct {
     node_pubkey: Pubkey,
 
     /// the signer for withdrawals
-    // TODO rename to withdrawer
-    authorized_withdrawer: Pubkey,
+    withdrawer: Pubkey,
     /// percentage (0-100) that represents what part of a rewards
     ///  payout should be given to this VoteAccount
     commission: u8,
@@ -448,8 +447,7 @@ pub const VoteState = struct {
     root_slot: ?Slot,
 
     /// the signer for vote transactions
-    // TODO rename to voters
-    authorized_voters: AuthorizedVoters,
+    voters: AuthorizedVoters,
 
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
@@ -470,12 +468,12 @@ pub const VoteState = struct {
     pub fn default(allocator: std.mem.Allocator) VoteState {
         return .{
             .node_pubkey = Pubkey.ZEROES,
-            .authorized_withdrawer = Pubkey.ZEROES,
+            .withdrawer = Pubkey.ZEROES,
             .commission = 0,
             .votes = std.ArrayList(LandedVote).init(allocator),
             .root_slot = null,
-            .authorized_voters = AuthorizedVoters{
-                .authorized_voters = SortedMap(Epoch, Pubkey).init(allocator),
+            .voters = AuthorizedVoters{
+                .voters = SortedMap(Epoch, Pubkey).init(allocator),
             },
             .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
@@ -487,7 +485,7 @@ pub const VoteState = struct {
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
-        authorized_withdrawer: Pubkey,
+        withdrawer: Pubkey,
         commission: u8,
         clock: Clock,
     ) !VoteState {
@@ -501,8 +499,8 @@ pub const VoteState = struct {
 
         return .{
             .node_pubkey = node_pubkey,
-            .authorized_voters = authorized_voters,
-            .authorized_withdrawer = authorized_withdrawer,
+            .voters = authorized_voters,
+            .withdrawer = withdrawer,
             .commission = commission,
             .votes = std.ArrayList(LandedVote).init(allocator),
             .root_slot = null,
@@ -514,13 +512,13 @@ pub const VoteState = struct {
 
     pub fn deinit(self: VoteState) void {
         self.votes.deinit();
-        self.authorized_voters.deinit();
+        self.voters.deinit();
         self.epoch_credits.deinit();
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteState) bool {
-        return self.authorized_voters.count() == 0;
+        return self.voters.count() == 0;
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
@@ -535,12 +533,12 @@ pub const VoteState = struct {
         // calculated is the number of slots available from the
         // first slot `S` of an epoch in which to set a new voter for
         // the epoch at `S` + `n`
-        if (self.authorized_voters.contains(target_epoch)) {
+        if (self.voters.contains(target_epoch)) {
             // Failure, return VoteError.
             return VoteError.too_soon_to_reauthorize;
         }
 
-        const latest_epoch, const latest_pubkey = self.authorized_voters.last() orelse
+        const latest_epoch, const latest_pubkey = self.voters.last() orelse
             return InstructionError.InvalidAccountData;
 
         if (!latest_pubkey.equals(&new_authorized_voter)) {
@@ -560,7 +558,7 @@ pub const VoteState = struct {
             });
         }
 
-        try self.authorized_voters.insert(target_epoch, new_authorized_voter);
+        try self.voters.insert(target_epoch, new_authorized_voter);
         // Success, return null.
         return null;
     }
@@ -571,13 +569,13 @@ pub const VoteState = struct {
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
-        const pubkey = self.authorized_voters
+        const pubkey = self.voters
             .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch |err| {
             return switch (err) {
                 error.OutOfMemory => err,
             };
         } orelse return InstructionError.InvalidAccountData;
-        _ = try self.authorized_voters.purgeAuthorizedVoters(allocator, current_epoch);
+        _ = try self.voters.purgeAuthorizedVoters(allocator, current_epoch);
         return pubkey;
     }
 
@@ -922,7 +920,7 @@ pub fn createTestVoteState(
     allocator: std.mem.Allocator,
     node_pubkey: Pubkey,
     authorized_voter: ?Pubkey,
-    authorized_withdrawer: Pubkey,
+    withdrawer: Pubkey,
     commission: u8,
 ) !VoteState {
     if (!builtin.is_test) {
@@ -931,13 +929,13 @@ pub fn createTestVoteState(
 
     return .{
         .node_pubkey = node_pubkey,
-        .authorized_voters = if (authorized_voter) |authorized_voter_|
+        .voters = if (authorized_voter) |authorized_voter_|
             try AuthorizedVoters.init(allocator, 0, authorized_voter_)
         else
             AuthorizedVoters{
-                .authorized_voters = SortedMap(Epoch, Pubkey).init(allocator),
+                .voters = SortedMap(Epoch, Pubkey).init(allocator),
             },
-        .authorized_withdrawer = authorized_withdrawer,
+        .withdrawer = withdrawer,
         .commission = commission,
         .votes = std.ArrayList(LandedVote).init(allocator),
         .root_slot = null,
@@ -1109,10 +1107,10 @@ test "VoteState.convertToCurrent" {
         ) };
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator);
         defer vote_state.deinit();
-        try std.testing.expectEqual(1, vote_state.authorized_voters.count());
-        var authorized_voter = vote_state.authorized_voters;
+        try std.testing.expectEqual(1, vote_state.voters.count());
+        var authorized_voter = vote_state.voters;
         try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
-        try std.testing.expect(vote_state.authorized_withdrawer.equals(&Pubkey.ZEROES));
+        try std.testing.expect(vote_state.withdrawer.equals(&Pubkey.ZEROES));
         try std.testing.expectEqual(10, vote_state.commission);
         try std.testing.expectEqual(0, vote_state.votes.items.len);
         try std.testing.expectEqual(null, vote_state.root_slot);
@@ -1139,10 +1137,10 @@ test "VoteState.convertToCurrent" {
         ) };
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
         defer vote_state.deinit();
-        try std.testing.expectEqual(1, vote_state.authorized_voters.count());
-        var authorized_voter = vote_state.authorized_voters;
+        try std.testing.expectEqual(1, vote_state.voters.count());
+        var authorized_voter = vote_state.voters;
         try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
-        try std.testing.expect(vote_state.authorized_withdrawer.equals(&Pubkey.ZEROES));
+        try std.testing.expect(vote_state.withdrawer.equals(&Pubkey.ZEROES));
         try std.testing.expectEqual(10, vote_state.commission);
         try std.testing.expectEqual(0, vote_state.votes.items.len);
         try std.testing.expectEqual(null, vote_state.root_slot);
@@ -1173,18 +1171,18 @@ test "VoteState.convertToCurrent" {
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
         defer vote_state.deinit();
         try std.testing.expectEqual(
-            expected.authorized_voters.count(),
-            vote_state.authorized_voters.count(),
+            expected.voters.count(),
+            vote_state.voters.count(),
         );
-        var authorized_voter = vote_state.authorized_voters;
-        var expected_authorized_voter = expected.authorized_voters;
+        var authorized_voter = vote_state.voters;
+        var expected_authorized_voter = expected.voters;
         try std.testing.expectEqual(
             expected_authorized_voter.getAuthorizedVoter(0).?,
             authorized_voter.getAuthorizedVoter(0).?,
         );
         try std.testing.expectEqual(
-            expected.authorized_withdrawer,
-            vote_state.authorized_withdrawer,
+            expected.withdrawer,
+            vote_state.withdrawer,
         );
         try std.testing.expectEqual(expected.commission, vote_state.commission);
         try std.testing.expectEqual(expected.votes.items.len, vote_state.votes.items.len);
@@ -1211,7 +1209,7 @@ test "VoteState.setNewAuthorizedVoter: success" {
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const new_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
     const clock = Clock{
@@ -1226,7 +1224,7 @@ test "VoteState.setNewAuthorizedVoter: success" {
         allocator,
         node_publey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     );
@@ -1235,7 +1233,7 @@ test "VoteState.setNewAuthorizedVoter: success" {
     const target_epoch: Epoch = 5;
     _ = try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
 
-    const retrived_voter = vote_state.authorized_voters.getAuthorizedVoter(target_epoch).?;
+    const retrived_voter = vote_state.voters.getAuthorizedVoter(target_epoch).?;
     try std.testing.expectEqual(new_voter, retrived_voter);
 }
 
@@ -1245,7 +1243,7 @@ test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const new_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
     const clock = Clock{
@@ -1260,7 +1258,7 @@ test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
         allocator,
         node_publey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     );
@@ -1282,7 +1280,7 @@ test "VoteState.setNewAuthorizedVoter: invalid account data" {
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
     const new_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
     const clock = Clock{
@@ -1297,7 +1295,7 @@ test "VoteState.setNewAuthorizedVoter: invalid account data" {
         allocator,
         node_publey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     );
@@ -1316,7 +1314,7 @@ test "VoteState.isUninitialized: invalid account data" {
     var prng = std.Random.DefaultPrng.init(5083);
     const node_publey = Pubkey.initRandom(prng.random());
     const authorized_voter = Pubkey.initRandom(prng.random());
-    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
     const commission: u8 = 10;
 
     const clock = Clock{
@@ -1331,7 +1329,7 @@ test "VoteState.isUninitialized: invalid account data" {
         allocator,
         node_publey,
         authorized_voter,
-        authorized_withdrawer,
+        withdrawer,
         commission,
         clock,
     ) };
@@ -1344,7 +1342,7 @@ test "VoteState.isUninitialized: invalid account data" {
             allocator,
             node_publey,
             null, // Authorized voters not set
-            authorized_withdrawer,
+            withdrawer,
             commission,
         ),
     };
