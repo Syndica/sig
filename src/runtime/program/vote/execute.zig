@@ -101,18 +101,6 @@ pub fn execute(
             &vote_account,
             args,
         ),
-        .update_commission => |args| executeUpdateCommission(
-            allocator,
-            ic,
-            &vote_account,
-            args,
-        ),
-        .withdraw => |args| executeWithdraw(
-            allocator,
-            ic,
-            &vote_account,
-            args,
-        ),
         .vote => |args| executeProcessVoteWithAccount(
             allocator,
             ic,
