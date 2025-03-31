@@ -1993,6 +1993,34 @@ test "state.VoteState.checkSlotsAreValid new vote" {
     var vote_state = VoteState.default(allocator);
     defer vote_state.deinit();
 
+    var votes = std.ArrayList(Slot).init(allocator);
+    defer votes.deinit();
+
+    try votes.append(0);
+    const vote = Vote{
+        .slots = votes,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    };
+
+    const slot_hashes = SlotHashes{
+        .entries = &.{
+            .{ vote.slots.getLast(), vote.hash },
+        },
+    };
+
+    try std.testing.expectEqual(
+        null,
+        try vote_state.checkSlotsAreValid(&vote, vote.slots.items, &slot_hashes),
+    );
+}
+
+test "state.VoteState.checkSlotsAreValid bad timestamp" {
+    const allocator = std.testing.allocator;
+
+    var vote_state = VoteState.default(allocator);
+    defer vote_state.deinit();
+
     var slots = [_]u64{0};
 
     const vote = Vote{
