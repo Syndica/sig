@@ -702,7 +702,7 @@ fn executeProcessVoteWithAccount(
     vote: Vote,
 ) !void {
     if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS))
+        ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
     {
         return InstructionError.InvalidInstructionData;
     }
