@@ -713,7 +713,7 @@ fn executeProcessVoteWithAccount(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote: Vote,
-) (error{OutOfMemory} || InstructionError)!void {
+) !void {
     if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
         ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
     {
@@ -747,7 +747,7 @@ fn processVoteWithAccount(
     vote: Vote,
     slot_hashes: SlotHashes,
     clock: Clock,
-) (error{Overflow} || error{Underflow} || error{OutOfMemory} || InstructionError)!void {
+) !void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
         ic,
