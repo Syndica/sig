@@ -23,9 +23,8 @@ pub const SysvarCache = struct {
     fees: ?sysvar.Fees = null,
     recent_blockhashes: ?sysvar.RecentBlockhashes = null,
 
-    /// TODO: [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    pub fn get(self: SysvarCache, comptime T: type) ?T {
-        return switch (T) {
+    pub fn get(self: SysvarCache, comptime T: type) error{UnsupportedSysvar}!T {
+        const maybe_sysvar = switch (T) {
             sysvar.Clock => self.clock,
             sysvar.EpochRewards => self.epoch_rewards,
             sysvar.EpochSchedule => self.epoch_schedule,
@@ -37,5 +36,6 @@ pub const SysvarCache = struct {
             sysvar.RecentBlockhashes => self.recent_blockhashes,
             else => @compileError("Invalid sysvar type"),
         };
+        return maybe_sysvar orelse error.UnsupportedSysvar;
     }
 };
