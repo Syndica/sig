@@ -725,9 +725,10 @@ pub const VoteState = struct {
 
             // 2) Find the hash for this slot `s`.
             if (recent_vote_slots[i] !=
-                slot_hashes.entries[std.math.sub(usize, j, 1) catch
-                    return error.ArithmeticOverflow].@"0")
-            {
+                slot_hashes.entries[
+                std.math.sub(usize, j, 1) catch
+                    return error.ArithmeticOverflow
+            ].@"0") {
                 // Decrement `j` to find newer slots
                 j = std.math.sub(usize, j, 1) catch return error.ArithmeticOverflow;
                 continue;
@@ -817,7 +818,8 @@ pub const VoteState = struct {
             // than the max number of confirmations this vote has seen
             const confirmation_count = vote.lockout.confirmation_count;
             if (stack_depth > std.math.add(usize, i, confirmation_count) catch
-                return error.ArithmeticOverflow) {
+                return error.ArithmeticOverflow)
+            {
                 vote.lockout.confirmation_count +|= 1;
             }
         }
