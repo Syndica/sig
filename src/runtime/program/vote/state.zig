@@ -696,7 +696,7 @@ pub const VoteState = struct {
         vote: *const Vote,
         recent_vote_slots: []const Slot,
         slot_hashes: *const SlotHashes,
-    ) !?VoteError {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
         const vote_hash = vote.hash;
 
         // index into the vote's slots, starting at the oldest slot
@@ -866,7 +866,7 @@ pub const VoteState = struct {
         slot_hashes: SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) !?VoteError {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
         if (vote.slots.len == 0) {
             return VoteError.empty_slots;
         }
@@ -906,7 +906,7 @@ pub const VoteState = struct {
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) !?VoteError {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
         if (try self.checkSlotsAreValid(
             vote,
             recent_vote_slots,
