@@ -1509,8 +1509,7 @@ test "vote_program: update_validator_identity" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction.update_validator_identity,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1548,6 +1547,7 @@ test "vote_program: update_validator_identity" {
                 .clock = clock,
             },
         },
+        .{},
     );
 }
 
@@ -1602,8 +1602,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
 
     const result = testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction.update_validator_identity,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1642,6 +1641,7 @@ test "vote_program: update_validator_identity new authority did not sign" {
                 .clock = clock,
             },
         },
+        .{},
     );
 
     try std.testing.expectError(InstructionError.MissingRequiredSignature, result);
@@ -1698,8 +1698,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
 
     const result = testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction.update_validator_identity,
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1738,6 +1737,7 @@ test "vote_program: update_validator_identity current authority did not sign" {
                 .clock = clock,
             },
         },
+        .{},
     );
 
     try std.testing.expectError(InstructionError.MissingRequiredSignature, result);
@@ -1802,8 +1802,7 @@ test "vote_program: update_commission increasing commission" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .update_commission = final_commission,
         },
@@ -1865,6 +1864,7 @@ test "vote_program: update_commission increasing commission" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -1927,8 +1927,7 @@ test "vote_program: update_commission decreasing commission" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .update_commission = final_commission,
         },
@@ -1990,6 +1989,7 @@ test "vote_program: update_commission decreasing commission" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -2052,8 +2052,7 @@ test "vote_program: update_commission commission update too late passes with fea
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .update_commission = final_commission,
         },
@@ -2097,6 +2096,7 @@ test "vote_program: update_commission commission update too late passes with fea
             },
             .feature_set = &.{}, // None of the required feature_set is set,
         },
+        .{},
     );
 }
 
@@ -2159,8 +2159,7 @@ test "vote_program: update_commission error commission update too late failure" 
 
     testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .update_commission = final_commission,
         },
@@ -2222,6 +2221,7 @@ test "vote_program: update_commission error commission update too late failure" 
                 },
             },
         },
+        .{},
     ) catch |err| {
         // TODO is there a way to assert VoteError.CommissionUpdateTooLate
         // is stored in ic.tc.custom_error
@@ -2288,8 +2288,7 @@ test "vote_program: update_commission missing signature" {
 
     testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .update_commission = final_commission,
         },
@@ -2352,6 +2351,7 @@ test "vote_program: update_commission missing signature" {
                 },
             },
         },
+        .{},
     ) catch |err| {
         try std.testing.expectEqual(InstructionError.MissingRequiredSignature, err);
     };
@@ -2395,8 +2395,7 @@ test "vote_program: widthdraw no changes" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .withdraw = 0,
         },
@@ -2442,6 +2441,7 @@ test "vote_program: widthdraw no changes" {
                 .rent = rent,
             },
         },
+        .{},
     );
 }
 
@@ -2484,8 +2484,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
     const withdraw_amount = 400;
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .withdraw = withdraw_amount,
         },
@@ -2530,6 +2529,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
                 .rent = rent,
             },
         },
+        .{},
     );
 }
 
@@ -2593,8 +2593,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
 
     testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .withdraw = RENT_EXEMPT_THRESHOLD, // withdrawal will close down account.
         },
@@ -2639,6 +2638,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
                 .rent = rent,
             },
         },
+        .{},
     ) catch |err| {
         // TODO is there a way to assert VoteError.ActiveVoteAccountClose
         // is stored in ic.tc.custom_error
@@ -2685,8 +2685,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
     const withdraw_amount = 400;
     testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .withdraw = withdraw_amount,
         },
@@ -2732,6 +2731,7 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
                 .rent = rent,
             },
         },
+        .{},
     ) catch |err| {
         try std.testing.expectEqual(InstructionError.InsufficientFunds, err);
     };
@@ -2775,8 +2775,7 @@ test "vote_program: widthdraw insufficient funds" {
 
     testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .withdraw = RENT_EXEMPT_THRESHOLD + 1, // withdraw more than account balance
         },
@@ -2821,6 +2820,7 @@ test "vote_program: widthdraw insufficient funds" {
                 .rent = rent,
             },
         },
+        .{},
     ) catch |err| {
         try std.testing.expectEqual(InstructionError.InsufficientFunds, err);
     };
@@ -2865,8 +2865,7 @@ test "vote_program: widthdraw with missing signature" {
     const withdraw_amount = 400;
     testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .withdraw = withdraw_amount,
         },
@@ -2912,6 +2911,7 @@ test "vote_program: widthdraw with missing signature" {
                 .rent = rent,
             },
         },
+        .{},
     ) catch |err| {
         try std.testing.expectEqual(InstructionError.MissingRequiredSignature, err);
     };
