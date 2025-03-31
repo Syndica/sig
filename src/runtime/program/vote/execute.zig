@@ -284,7 +284,7 @@ fn authorize(
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // current authorized withdrawer or epoch authorized voter must sign transaction.
-            if (!withdrawer_signer) {
+            if (!authorized_withdrawer_signer) {
                 _ = try validateIsSigner(
                     epoch_authorized_voter,
                     signers,
@@ -307,7 +307,7 @@ fn authorize(
                 signers,
             ));
 
-            if (!withdrawer_signer) {
+            if (!authorized_withdrawer_signer) {
                 return InstructionError.MissingRequiredSignature;
             }
             vote_state.withdrawer = authorized;
