@@ -11,7 +11,7 @@ pub const IntializeAccount = struct {
     authorized_voter: Pubkey,
     /// The authorized withdrawer keypair is used to withdraw funds from a vote account,
     /// including validator rewards. Only this keypair can access the funds.
-    withdrawer: Pubkey,
+    authorized_withdrawer: Pubkey,
     /// Commission is the percentage of network rewards kept by the validator.
     /// The rest is distributed to delegators based on their stake weight.
     commission: u8,
