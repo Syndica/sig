@@ -86,6 +86,17 @@ fn prepMultishotAccept(
     sqe.user_data = @bitCast(Entry.ACCEPT);
 }
 
+const ConnErrLogger =
+    sig.trace.NewEntry(LOGGER_SCOPE)
+    .Field("conn", std.posix.GetSockNameError!std.net.Address);
+
+fn connErrLogger(
+    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+    entry_data: *const EntryData,
+) ConnErrLogger {
+    return logger.err().field("conn", entry_data.getSocketName());
+}
+
 const ConsumeOurCqeError =
     HandleRecvBodyError ||
     std.mem.Allocator.Error ||
@@ -130,11 +141,11 @@ fn consumeOurCqe(
                 => return,
             }
 
-            const stream: std.net.Stream = .{ .handle = cqe.res };
-            errdefer stream.close();
-
             server_ctx.wait_group.start();
             errdefer server_ctx.wait_group.finish();
+
+            const stream: std.net.Stream = .{ .handle = cqe.res };
+            errdefer stream.close();
 
             const buffer = try server_ctx.allocator.alloc(u8, server_ctx.read_buffer_size);
             errdefer server_ctx.allocator.free(buffer);
@@ -154,13 +165,6 @@ fn consumeOurCqe(
         },
     };
     errdefer server_ctx.wait_group.finish();
-
-    const addr_err_logger = logger.err().field(
-        "address",
-        // if we fail to getSockName, just print the error in place of the address;
-        getSocketName(entry_data.stream.handle),
-    );
-    errdefer addr_err_logger.log("Dropping connection");
 
     // Panic message for handling `EAGAIN`; we're not using nonblocking sockets at all,
     // so it should be impossible to receive that error, or for such an error to be
@@ -214,7 +218,8 @@ fn consumeOurCqe(
             const head_info: HeadInfo = head_info: {
                 const head_bytes = entry_data.buffer[0..head.end];
                 const std_head = std.http.Server.Request.Head.parse(head_bytes) catch |err| {
-                    logger.err().logf("Head parse error: {s}", .{@errorName(err)});
+                    connErrLogger(logger, entry_data)
+                        .logf("Head parse error: {s}", .{@errorName(err)});
                     entry.deinit(server_ctx.allocator);
                     return;
                 };
@@ -223,12 +228,12 @@ fn consumeOurCqe(
                 std.debug.assert(std_head.compression == .none);
                 break :head_info HeadInfo.parseFromStdHead(std_head) catch |err| {
                     switch (err) {
-                        error.RequestTargetTooLong => {
-                            logger.err().logf("Request target was too long: '{}'", .{
-                                std.zig.fmtEscapes(std_head.target),
-                            });
-                        },
-                        else => {},
+                        error.RequestTargetTooLong => connErrLogger(logger, entry_data).logf(
+                            "Request target was too long: '{}'",
+                            .{std.zig.fmtEscapes(std_head.target)},
+                        ),
+                        else => |e| connErrLogger(logger, entry_data)
+                            .logf("Request error: {s}", .{@errorName(e)}),
                     }
                     entry.deinit(server_ctx.allocator);
                     return;
@@ -253,7 +258,7 @@ fn consumeOurCqe(
             } };
             const body = &entry_data.state.recv_body;
             handleRecvBody(liou, server_ctx, entry, body) catch |err| {
-                logger.err().logf("{s}", .{@errorName(err)});
+                connErrLogger(logger, entry_data).logf("{s}", .{@errorName(err)});
                 entry.deinit(server_ctx.allocator);
             };
             return;
@@ -276,7 +281,7 @@ fn consumeOurCqe(
             const recv_len: usize = @intCast(cqe.res);
             body.content_end += recv_len;
             handleRecvBody(liou, server_ctx, entry, body) catch |err| {
-                logger.err().logf("{s}", .{@errorName(err)});
+                connErrLogger(logger, entry_data).logf("handleRecvBody: {s}", .{@errorName(err)});
                 entry.deinit(server_ctx.allocator);
             };
             return;
@@ -415,25 +420,14 @@ fn handleRecvBody(
 
     if (!body.head_info.method.requestHasBody()) {
         if (body.head_info.content_len) |content_len| {
-            logger.err().logf(
+            connErrLogger(logger, entry_data).logf(
                 "{} request isn't expected to have a body, but got Content-Length: {d}",
-                .{ requests.methodFmt(body.head_info.method), content_len },
+                .{ requests.httpMethodFmt(body.head_info.method), content_len },
             );
         }
     }
 
     switch (body.head_info.method) {
-        .POST => {
-            entry_data.state = .{
-                .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(
-                    .service_unavailable,
-                ),
-            };
-            const snb = &entry_data.state.send_static_string;
-            try snb.prepSend(entry, &liou.io_uring);
-            return;
-        },
-
         inline .HEAD, .GET => |method| switch (requests.getRequestTargetResolve(
             logger.unscoped(),
             body.head_info.target.constSlice(),
@@ -504,13 +498,40 @@ fn handleRecvBody(
                 return;
             },
 
-            .genesis_file => {},
+            .genesis_file => {
+                connErrLogger(logger, entry_data).logf("Attempt to get our genesis file", .{});
+                entry_data.state = .{
+                    .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(
+                        .service_unavailable,
+                    ),
+                };
+                const snb = &entry_data.state.send_static_string;
+                try snb.prepSend(entry, &liou.io_uring);
+                return;
+            },
+
             .not_found => {},
+        },
+
+        .POST => {
+            connErrLogger(logger, entry_data).logf("Attempt to invoke our RPC service", .{});
+            entry_data.state = .{
+                .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(
+                    .service_unavailable,
+                ),
+            };
+            const snb = &entry_data.state.send_static_string;
+            try snb.prepSend(entry, &liou.io_uring);
+            return;
         },
 
         else => {},
     }
 
+    logger.err().logf(
+        "Unrecognized request '{} {s}'",
+        .{ requests.httpMethodFmt(body.head_info.method), body.head_info.target.constSlice() },
+    );
     entry_data.state = .{
         .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(
             .not_found,
@@ -581,6 +602,13 @@ const EntryData = struct {
         self.state.deinit();
         allocator.free(self.buffer);
         self.stream.close();
+    }
+
+    fn getSocketName(self: EntryData) std.posix.GetSockNameError!std.net.Address {
+        var addr: std.net.Address = .{ .any = undefined };
+        var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(addr.any));
+        try std.posix.getsockname(self.stream.handle, &addr.any, &addr_len);
+        return addr;
     }
 };
 
@@ -832,15 +860,6 @@ const EntryState = union(enum) {
         }
     };
 };
-
-fn getSocketName(
-    socket_handle: std.posix.socket_t,
-) std.posix.GetSockNameError!std.net.Address {
-    var addr: std.net.Address = .{ .any = undefined };
-    var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(addr.any));
-    try std.posix.getsockname(socket_handle, &addr.any, &addr_len);
-    return addr;
-}
 
 const GetSqeRetryError = IouEnterError;
 
