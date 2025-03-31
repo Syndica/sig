@@ -3035,7 +3035,6 @@ test "test large push messages" {
         try as.initRotate(prng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
-        std.debug.print("{}\n", .{as.len()});
     }
 
     var cursor: u64 = 0;
