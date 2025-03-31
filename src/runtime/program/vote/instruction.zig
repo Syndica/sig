@@ -156,7 +156,7 @@ pub const VoteSwitch = struct {
 };
 
 pub const VoteStateUpdate = struct {
-    vote_state_update: vote_program.state.Vote,
+    vote_state_update: vote_program.state.VoteStateUpdate,
 
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to vote with
@@ -167,7 +167,30 @@ pub const VoteStateUpdate = struct {
 };
 
 pub const VoteStateUpdateSwitch = struct {
-    vote_state_update: vote_program.state.Vote,
+    vote_state_update: vote_program.state.VoteStateUpdate,
+    hash: Hash,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to vote with
+        account = 0,
+        /// `[]` Vote authority
+        vote_authority = 1,
+    };
+};
+
+pub const TowerSync = struct {
+    tower_sync: vote_program.state.TowerSync,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to vote with
+        account = 0,
+        /// `[]` Vote authority
+        vote_authority = 1,
+    };
+};
+
+pub const TowerSyncSwitch = struct {
+    tower_sync: vote_program.state.TowerSync,
     hash: Hash,
 
     pub const AccountIndex = enum(u8) {
@@ -294,4 +317,16 @@ pub const Instruction = union(enum) {
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
     compact_update_vote_state_switch: VoteStateUpdateSwitch,
+    /// Sync the onchain vote state with local tower
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    tower_sync: TowerSync,
+    /// Sync the onchain vote state with local tower along with a switching proof
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    tower_sync_switch: TowerSyncSwitch,
 };
