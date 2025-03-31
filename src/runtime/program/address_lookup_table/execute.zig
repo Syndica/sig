@@ -113,8 +113,7 @@ fn createLookupTable(
     };
 
     const derivation_slot = blk: {
-        const slot_hashes = ic.tc.sysvar_cache.get(sysvar.SlotHashes) orelse
-            return error.UnsupportedSysvar;
+        const slot_hashes = try ic.tc.sysvar_cache.get(sysvar.SlotHashes);
 
         if (slot_hashes.get(untrusted_recent_slot)) |_| {
             break :blk untrusted_recent_slot;
@@ -146,7 +145,7 @@ fn createLookupTable(
         return; // success
     }
 
-    const rent = ic.tc.sysvar_cache.get(sysvar.Rent) orelse return error.UnsupportedSysvar;
+    const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
     const required_lamports = @max(
         rent.minimumBalance(LOOKUP_TABLE_META_SIZE),
         1,
@@ -357,7 +356,7 @@ fn extendLookupTable(
             return error.InvalidInstructionData;
         }
 
-        const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse return error.UnsupportedSysvar;
+        const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
         if (clock.slot != lookup_table.meta.last_extended_slot) {
             lookup_table.meta.last_extended_slot = clock.slot;
             lookup_table.meta.last_extended_slot_start_index = std.math.cast(
@@ -399,7 +398,7 @@ fn extendLookupTable(
         break :blk .{ lookup_table_account.account.lamports, new_table_data_len };
     };
 
-    const rent = ic.tc.sysvar_cache.get(sysvar.Rent) orelse return error.UnsupportedSysvar;
+    const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
     const required_lamports = @max(rent.minimumBalance(new_table_data_len), 1) -|
         lookup_table_lamports;
 
@@ -490,7 +489,7 @@ fn deactivateLookupTable(
         return error.InvalidArgument;
     }
 
-    const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse return error.UnsupportedSysvar;
+    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
     var lookup_table_meta = lookup_table.meta;
     lookup_table_meta.deactivation_slot = clock.slot;
@@ -560,10 +559,8 @@ fn closeLookupTable(
             return error.Immutable;
         }
 
-        const clock = ic.tc.sysvar_cache.get(sysvar.Clock) orelse
-            return error.UnsupportedSysvar;
-        const slot_hashes = ic.tc.sysvar_cache.get(sysvar.SlotHashes) orelse
-            return error.UnsupportedSysvar;
+        const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+        const slot_hashes = try ic.tc.sysvar_cache.get(sysvar.SlotHashes);
 
         switch (lookup_table.meta.status(clock.slot, slot_hashes)) {
             .Activated => {
