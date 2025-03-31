@@ -12,6 +12,7 @@ const LandedVote = vote_program.state.LandedVote;
 const Lockout = vote_program.state.Lockout;
 const Vote = vote_program.state.Vote;
 const VoteStateUpdate = vote_program.state.VoteStateUpdate;
+const TowerSync = vote_program.state.TowerSync;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
 const VoteError = vote_program.VoteError;
@@ -151,6 +152,18 @@ pub fn execute(
             ic,
             &vote_account,
             args.vote_state_update,
+        ),
+        .tower_sync => |args| try executeTowerSync(
+            allocator,
+            ic,
+            &vote_account,
+            args.tower_sync,
+        ),
+        .tower_sync_switch => |args| try executeTowerSync(
+            allocator,
+            ic,
+            &vote_account,
+            args.tower_sync,
         ),
     };
 }
@@ -821,7 +834,7 @@ fn executeUpdateVoteState(
     vote_state_update: VoteStateUpdate,
 ) !void {
     if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS))
+        ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
     {
         return InstructionError.InvalidInstructionData;
     }
@@ -835,7 +848,14 @@ fn executeUpdateVoteState(
         @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
     );
 
-    try updateVoteState(allocator, ic, vote_account, slot_hashes, clock, vote_state_update);
+    try updateVoteState(
+        allocator,
+        ic,
+        vote_account,
+        slot_hashes,
+        clock,
+        vote_state_update,
+    );
 }
 
 fn updateVoteState(
@@ -852,6 +872,51 @@ fn updateVoteState(
     _ = slot_hashes;
     _ = clock;
     _ = vote_state_update;
+}
+
+fn executeTowerSync(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    tower_sync: TowerSync,
+) !void {
+    if (!ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX)) {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    const slot_hashes = try ic.getSysvarWithAccountCheck(
+        SlotHashes,
+        @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
+    );
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
+    );
+
+    try towerSync(
+        allocator,
+        ic,
+        vote_account,
+        slot_hashes,
+        clock,
+        tower_sync,
+    );
+}
+
+fn towerSync(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    slot_hashes: SlotHashes,
+    clock: Clock,
+    tower_sync: TowerSync,
+) !void {
+    _ = allocator;
+    _ = ic;
+    _ = vote_account;
+    _ = slot_hashes;
+    _ = clock;
+    _ = tower_sync;
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L905

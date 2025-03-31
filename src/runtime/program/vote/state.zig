@@ -106,6 +106,21 @@ pub const VoteStateUpdate = struct {
     timestamp: ?i64,
 };
 
+pub const TowerSync = struct {
+    /// The proposed tower
+    lockouts: []Lockout,
+    /// The proposed root
+    root: ?Slot,
+    /// signature of the bank's state at the last slot
+    hash: Hash,
+    /// processing timestamp of last slot
+    timestamp: ?i64,
+    /// the unique identifier for the chain up to and
+    /// including this block. Does not require replaying
+    /// in order to compute.
+    block_id: Hash,
+};
+
 pub const AuthorizedVoters = struct {
     voters: SortedMap(Epoch, Pubkey),
 
