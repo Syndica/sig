@@ -5,7 +5,6 @@ const sbpf = sig.vm.sbpf;
 const program = sig.runtime.program;
 
 const Pubkey = sig.core.Pubkey;
-const LogCollector = sig.runtime.LogCollector;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 

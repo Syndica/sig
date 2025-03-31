@@ -19,7 +19,9 @@ pub fn execute(
         defer program_account.release();
 
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!ic.tc.feature_set.active.contains(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
+        if (!ic.tc.feature_set.active.contains(
+            feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+        ) and
             !program_account.account.executable)
         {
             try ic.tc.log("Program is not executable", .{});
@@ -58,10 +60,13 @@ pub fn execute(
     // TODO: jit
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.tc.feature_set.active.contains(feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING);
+    const direct_mapping = ic.tc.feature_set.active.contains(
+        feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
-    const parameter_bytes, const regions, const accounts_metadata = try serialize.serializeParameters(
+    const parameter_bytes, const regions, const accounts_metadata =
+        try serialize.serializeParameters(
         allocator,
         ic,
         !direct_mapping,
@@ -123,7 +128,10 @@ pub fn execute(
         switch (result) {
             .ok => |status| if (status != 0) {
                 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1659-L1663
-                std.debug.print("Program {} failed: {}\n", .{ ic.info.program_meta.pubkey, status });
+                std.debug.print(
+                    "Program {} failed: {}\n",
+                    .{ ic.info.program_meta.pubkey, status },
+                );
                 @panic("sbpf error handling not implemented!");
             } else {
                 break :blk null;
@@ -231,113 +239,157 @@ fn registerSyscalls(
     errdefer syscalls.deinit(allocator);
 
     // Abort
-    _ = try syscalls.functions.registerHashed(allocator, "abort", vm.syscalls.abort);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "abort",
+        vm.syscalls.abort,
+    );
 
     // Panic
-    _ = try syscalls.functions.registerHashed(allocator, "sol_panic_", vm.syscalls.panic);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_panic_",
+        vm.syscalls.panic,
+    );
 
     // Logging
-    _ = try syscalls.functions.registerHashed(allocator, "sol_log_", vm.syscalls.log);
-    _ = try syscalls.functions.registerHashed(allocator, "sol_log_64_", vm.syscalls.log64);
-    _ = try syscalls.functions.registerHashed(allocator, "sol_log_pubkey", vm.syscalls.logPubkey);
-    _ = try syscalls.functions.registerHashed(allocator, "sol_log_compute_units_", vm.syscalls.logComputeUnits);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_log_",
+        vm.syscalls.log,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_log_64_",
+        vm.syscalls.log64,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_log_pubkey",
+        vm.syscalls.logPubkey,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_log_compute_units_",
+        vm.syscalls.logComputeUnits,
+    );
 
     // Program derived addresses
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_create_program_address", vm.syscalls.createProgramAddress);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_try_find_program_address", vm.syscalls.createProgramAddress);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_create_program_address", vm.syscalls.createProgramAddress,);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_try_find_program_address", vm.syscalls.createProgramAddress,);
 
     // Sha256, Keccak256, Secp256k1Recover
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_sha256", vm.syscalls.sha256);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_keccak256", vm.syscalls.keccak256);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", vm.syscalls.secp256k1Recover);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_sha256", vm.syscalls.sha256,);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_keccak256", vm.syscalls.keccak256,);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", vm.syscalls.secp256k1Recover,);
 
     // Blake3
     // if (tc.feature_set.active.contains(feature_set.BLAKE3_SYSCALL_ENABLED)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_blake3", vm.syscalls.blake3);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_blake3", vm.syscalls.blake3,);
     // }
 
     // Elliptic Curve
     // if (tc.feature_set.active.contains(feature_set.CURVE25519_SYSCALL_ENABLED)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_validate_point", vm.syscalls.curveValidatePoint);
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_group_op", vm.syscalls.curveGroupOp);
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_multiscalar_mul", vm.syscalls.curveMultiscalarMul);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_validate_point", vm.syscalls.curveValidatePoint,);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_group_op", vm.syscalls.curveGroupOp,);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_multiscalar_mul", vm.syscalls.curveMultiscalarMul,);
     // }
 
     // Sysvars
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_clock_sysvar", vm.syscalls.getClockSysvar);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_schedule_sysvar", vm.syscalls.getEpochScheduleSysvar);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", vm.syscalls.getFeesSysvar);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_clock_sysvar", vm.syscalls.getClockSysvar,);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_schedule_sysvar", vm.syscalls.getEpochScheduleSysvar,);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", vm.syscalls.getFeesSysvar,);
     // if (!tc.feature_set.active.contains(feature_set.DISABLE_FEES_SYSVAR)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", vm.syscalls.getFeesSysvar);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", vm.syscalls.getFeesSysvar,);
     // }
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_rent_sysvar", vm.syscalls.getRentSysvar);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_rent_sysvar", vm.syscalls.getRentSysvar,);
     // if (tc.feature_set.active.contains(feature_set.LAST_RESTART_SLOT_SYSVAR)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_last_restart_slot", vm.syscalls.getLastRestartSlotSysvar);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_last_restart_slot", vm.syscalls.getLastRestartSlotSysvar,);
     // }
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_rewards_sysvar", vm.syscalls.getEpochRewardsSysvar);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_rewards_sysvar", vm.syscalls.getEpochRewardsSysvar,);
 
     // Memory
-    _ = try syscalls.functions.registerHashed(allocator, "sol_memcpy_", vm.syscalls.memcpy);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_memmove_", vm.syscalls.memmove);
-    _ = try syscalls.functions.registerHashed(allocator, "sol_memset_", vm.syscalls.memset);
-    _ = try syscalls.functions.registerHashed(allocator, "sol_memcmp_", vm.syscalls.memcmp);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_memcpy_",
+        vm.syscalls.memcpy,
+    );
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_memmove_", vm.syscalls.memmove,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_memset_",
+        vm.syscalls.memset,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_memcmp_",
+        vm.syscalls.memcmp,
+    );
 
     // Processed Sibling
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_processed_sibling_instruction", vm.syscalls.getProcessedSiblingInstruction);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_processed_sibling_instruction", vm.syscalls.getProcessedSiblingInstruction,);
 
     // Stack Height
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_stack_height", vm.syscalls.getStackHeight);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_stack_height", vm.syscalls.getStackHeight,);
 
     // Return Data
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_set_return_data", vm.syscalls.setReturnData);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_return_data", vm.syscalls.getReturnData);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_set_return_data", vm.syscalls.setReturnData,);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_return_data", vm.syscalls.getReturnData,);
 
     // Cross Program Invocation
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_c", vm.syscalls.invokeSignedC);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_c", vm.syscalls.invokeSignedC,);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust,);
 
     // Memory Allocator
     if (!tc.feature_set.active.contains(feature_set.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
-        _ = try syscalls.functions.registerHashed(allocator, "sol_alloc_free_", vm.syscalls.allocFree);
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_alloc_free_",
+            vm.syscalls.allocFree,
+        );
     }
 
     // Alt_bn128
     // if (tc.feature_set.active.contains(feature_set.ENABLE_ALT_BN128_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", vm.syscalls.altBn128GroupOp);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", vm.syscalls.altBn128GroupOp,);
     // }
 
     // Big_mod_exp
     // if (tc.feature_set.active.contains(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", vm.syscalls.bigModExp);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", vm.syscalls.bigModExp,);
     // }
 
     // Poseidon
     if (tc.feature_set.active.contains(feature_set.ENABLE_POSEIDON_SYSCALL)) {
-        _ = try syscalls.functions.registerHashed(allocator, "sol_poseidon", vm.syscalls.poseidon);
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_poseidon",
+            vm.syscalls.poseidon,
+        );
     }
 
     // Remaining Compute Units
     // if (tc.feature_set.active.contains(feature_set.ENABLE_REMAINING_COMPUTE_UNITS_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_remaining_compute_units", vm.syscalls.remainingComputeUnits);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_remaining_compute_units", vm.syscalls.remainingComputeUnits,);
     // }
 
     // Alt_bn_128_compression
     // if (tc.feature_set.active.contains(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", vm.syscalls.altBn128Compression);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", vm.syscalls.altBn128Compression,);
     // }
 
     // Sysvar Getter
     // if (tc.feature_set.active.contains(feature_set.ENABLE_SYSVAR_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", vm.syscalls.getSysvar);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", vm.syscalls.getSysvar,);
     // }
 
     // Get Epoch Stake
     // if (tc.feature_set.active.contains(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", vm.syscalls.getEpochStake);
+    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", vm.syscalls.getEpochStake,);
     // }
 
     // Log Data
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_log_data", vm.syscalls.logData);
+    // _ = try syscalls.functions.registerHashed(allocator, "sol_log_data", vm.syscalls.logData,);
 
     return syscalls;
 }
