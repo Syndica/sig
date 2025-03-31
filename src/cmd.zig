@@ -82,7 +82,7 @@ pub fn main() !void {
     current_config.log_level = cmd.log_level;
     current_config.metrics_port = cmd.metrics_port;
 
-    switch (cmd.subcmd) {
+    switch (cmd.subcmd orelse return error.MissingSubcommand) {
         .identity => try identity(gpa, current_config),
         .gossip => |params| {
             current_config.shred_version = params.shred_version;
@@ -181,7 +181,7 @@ const Cmd = struct {
     metrics_port: u16,
     log_file: ?[]const u8,
     tee_logs: bool,
-    subcmd: union(enum) {
+    subcmd: ?union(enum) {
         identity,
         gossip: Gossip,
         validator: Validator,
