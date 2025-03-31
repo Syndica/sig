@@ -1,18 +1,99 @@
+//! # Commands
+//! This library is built for parsing subcommand-based argument structures.
+//! Tha means there is an implicit parent command (ie the executable itself),
+//! which has zero or more subcommands, each of which itself may have zero or
+//! more subcommands themselves, recusively. If a (sub)command does not have
+//! any subcommands, it may accept positional arguments.
+//!
+//! For example, the command `foo --fizz="1" bar --buzz baz --fizzbuzz` can be broken
+//! down like so:
+//! ```zig
+//! .foo = .{
+//!     .fizz = "1",
+//!     .bar = .{
+//!         .buzz = true,
+//!         .baz = .{
+//!             .fizzbuzz = true,
+//!         },
+//!     },
+//! }
+//! ```
+//!
+//! # Options
+//! A given command may accept zero or more options, named arguments that may
+//! also be specified via an alias that is unique to it (per subcommand).
+//! An option may be of type bool, int, string, enum, and an optional xor
+//! list of any of the former primitives.
+//!
+//! Note: the `-h, --help` option cannot be used by the programmer, it is
+//! controlled by the parser.
+//!
+//! ## Optional Options, Required Options, Default Values
+//! All options must have a default value, but may be treated as "required" by
+//! the application by using an optional type with a default value of `null`,
+//! and issue an error if the option posseses this value.
+//!
+//! `null` is not a specifiable value for an optional on the command line itself,
+//! meaning if the value is `null`, the application can know for certain that the
+//! option was not specified at all.
+//!
+//! ## List Options
+//! List options are inherently "optional", in the sense that they are not allowed
+//! to have a non-empty default value, and will always default to an empty value
+//! if no values are specified. For this reason, a list cannot be optional, because
+//! whether or not the option was specified can be detected by whether or not the
+//! list is empty.
+//!
+//! Syntactically, lists are specified as a repeating series of the option.
+//! Example: `foo --bar 1 --bar 2 --bar 3 --bar 4`, would parse to a command
+//! where the option `bar` is equal to `&.{ 1, 2, 3, 4 }`.
+//!
+//! ## Positional Options
+//! A positional option is only allowed if there is no subcommand, and vice versa.
+//! They are specified before named options, and not after; for example:
+//! `foo file/path --opt=a`, but not `foo --opt=a file/path`.
+
 const std = @import("std");
 
-pub const CommandHelp = struct {
-    short: []const u8,
-    long: ?[]const u8,
-};
+// -- API -- //
 
+/// This is the core tool you will use to describe the shape of the command line parser.
+///
+/// The input `S` must be a struct type where each field is one of the following:
+/// * A union where each tag represents a subcommand.
+/// * A struct where each field is an option.
+/// * A simple value which is assigned to an option.
+///
+/// Up to one union field is allowed, because at most one subcommand field is permitted,
+/// which is what a union represents (each tag of the union is a subcommand name).
+///
+/// The `sub: SubInfo` field is a struct with all of the same fields as the input struct `S`,
+/// except:
+/// * each union field type is replaced with `CommandInfo(FieldType)`.
+/// * each struct field type is replaced with `OptionInfoGroup(FieldType)`.
+/// * each normal field type is replaced with `OptionInfo(FieldType)`.
+///
+/// NOTE: each subcommand field must be optional, such that its absence in the command line
+/// can be represented as `null`, allowing the calling code to take appropriate action for
+/// any missing subcommand.
+///
+/// This can be specified directly at the usage site, but is conventionally declared as a
+/// constant in the namespace of the struct type, ie:
+/// ```zig
+/// const cmd_info: cli.CommandInfo(@This()) = .{
+///     .help = .{
+///         .short = "A brief but helpful description.",
+///         .long = "A much longer description, potentially on multiple lines, or null.",
+///     },
+///     .sub = .{
+///         // -- snip --
+///     },
+/// };
+/// ```
+/// This can then be passed `Parser` as `Parser(Cmd, Cmd.cmd_info)`.
 pub fn CommandInfo(comptime S: type) type {
     return struct {
         help: CommandHelp,
-        /// Struct with all the same fields as `S`, but: the subcommand union
-        /// field type is replaced with struct with all the same fields, but
-        /// where each field is of type `CommandInfo(FieldType)`; each option
-        /// field type is replaced with `OptionInfo(FieldType)`; each option
-        /// group field type is replaced with `OptionInfoGroup(FieldType)`.
         sub: SubInfo,
 
         pub const Cmd = S;
@@ -20,8 +101,126 @@ pub fn CommandInfo(comptime S: type) type {
     };
 }
 
-/// Returns a struct with all the same fields as input struct `S`,
-/// but where each field is of type `OptionInfo(FieldType)`.
+pub const CommandHelp = struct {
+    /// Brief description of the command to be displayed as part of the parent command's help message,
+    /// recommended but not required to be one line.
+    ///
+    /// Also displayed as part of the target command's help message, just before the long description.
+    short: []const u8,
+    /// Long description of the command to be displayed as part of the target command's help message,
+    /// optionally applicable if a more verbose description is helpful or required.
+    ///
+    /// It is recommended that this be worded in a way which is not redundant with the brief, since it
+    /// will be displayed as a paragraph that follows the brief.
+    long: ?[]const u8,
+};
+
+/// This struct describes everything related to a given option within the scope of a (sub)command.
+///
+/// Similar to `CommandInfo`, it can be instantiated directly at the site of usage, or it can
+/// be pre-declared, which allows re-using the option info in multiple sub-commands.
+pub fn OptionInfo(comptime Opt: type) type {
+    return struct {
+        /// A named option will be specifiable as `--{name_override orelse field_name}(=<value>)?`,
+        /// irrespective of position within the scope of the (sub)command.
+        /// A positional option
+        kind: enum { named, positional },
+
+        /// Used to override the name displayed on the command line, or null
+        /// to simply use the associated field name; snake case strings are
+        /// transformed into kebab case strings, both for specification on the
+        /// command line, and for display on the help message.
+        /// For positionals, this is not specifiable on the command line, but
+        /// is used in the help message.
+        name_override: ?[]const u8,
+
+        /// The alias associated with this option, or `.none`.
+        alias: OptionAlias,
+
+        /// Default value to use for this value.
+        default_value: Option,
+
+        /// Options describing how the value(s) should be parsed.
+        /// For `Opt = []const T` & `Opt = ?T`, applies to `T`,
+        /// except for `T = []const u8`, which would always be
+        /// interpeted as a string.
+        config: Config,
+
+        /// The help information associated with this option.
+        help: []const u8,
+
+        pub const Option = Opt;
+        pub const Config = OptionConfig(Option);
+
+        comptime {
+            if (!isOptionInfo(@This())) @compileError(
+                "isOptionInfo has gone out of sync with " ++ @typeName(@This()),
+            );
+        }
+    };
+}
+
+/// Describes how the value for a `[]const u8` should be interpreted.
+pub const BytesConfig = enum {
+    /// Should be parsed as a single string value.
+    string,
+    /// Should be parsed as a list of unsigned 8 bit integers.
+    list,
+
+    /// Used in place of `BytesConfig` when `[]const u8` is in an optional or list,
+    /// since the only logical thing for such a composite to be would be a string.
+    pub const StringOnly = enum { string };
+};
+
+/// Exhaustive enum representing a single alphabetic character,
+/// aside from the letter 'h' (`[A-Za-gi-z]`).
+pub const OptionAlias = enum(u7) {
+    none = 0,
+    // zig fmt: off
+    a = 'a', A = 'A',
+    b = 'b', B = 'B',
+    c = 'c', C = 'C',
+    d = 'd', D = 'D',
+    e = 'e', E = 'E',
+    f = 'f', F = 'F',
+    g = 'g', G = 'G',
+    // zig fmt: on
+
+    // NOTE: 'h' excluded as the reserved help flag.
+    // h = 'h',
+    H = 'H',
+
+    // zig fmt: off
+    i = 'i', I = 'I',
+    j = 'j', J = 'J',
+    k = 'k', K = 'K',
+    l = 'l', L = 'L',
+    m = 'm', M = 'M',
+    n = 'n', N = 'N',
+    o = 'o', O = 'O',
+    p = 'p', P = 'P',
+    q = 'q', Q = 'Q',
+    r = 'r', R = 'R',
+    s = 's', S = 'S',
+    t = 't', T = 'T',
+    u = 'u', U = 'U',
+    v = 'v', V = 'V',
+    w = 'w', W = 'W',
+    x = 'x', X = 'X',
+    y = 'y', Y = 'Y',
+    z = 'z', Z = 'Z',
+    // zig fmt: on
+};
+
+/// Returns a struct with all the same fields as input struct `S`, but where each
+/// field is of type `OptionInfo(FieldType)`.
+///
+/// Certain groups of options may appear together repeatedly across subcommands;
+/// for this reason, struct fields in the struct passed to `CommandInfo` are described
+/// using this type, allowing re-use of those struct types across subcommands.
+///
+/// Each of the option infos in the struct are embedded into the parent pool of
+/// options; an error is issued if any name or alias collisions occur.
 pub fn OptionInfoGroup(comptime S: type) type {
     const Type = std.builtin.Type;
     const s_info = @typeInfo(S).Struct;
@@ -53,172 +252,26 @@ pub fn OptionInfoGroup(comptime S: type) type {
     } });
 }
 
-/// Describes how the value for a `[]const u8` should be interpreted.
-pub const BytesConfig = enum {
-    /// Should be parsed as a single string value.
-    string,
-    /// Should be parsed as a list of unsigned 8 bit integers.
-    list,
-
-    /// Used in place of `BytesConfig` when `[]const u8` is in an optional or list,
-    /// since the only logical thing for such a composite to be would be a string.
-    pub const StringOnly = enum { string };
-};
-
-pub fn OptionInfo(comptime Opt: type) type {
-    return struct {
-        kind: enum { named, positional },
-
-        /// Used to override the name displayed on the command line, or null
-        /// to simply use the associated field name in kebab-case form.
-        /// For positionals, this is not specifiable, but is used in the
-        /// help message.
-        name_override: ?[]const u8,
-
-        /// The alias associated with this option, or `.none`.
-        alias: OptionAlias,
-
-        /// Default value to use for this value.
-        default_value: Option,
-
-        /// Options describing how the value(s) should be parsed.
-        /// For `Opt = []const T` & `Opt = ?T`, applies to `T`,
-        /// except for `T = []const u8`, which would always be
-        /// interpeted as a string.
-        config: Config,
-
-        /// The help information associated with this option.
-        help: []const u8,
-
-        pub const Option = Opt;
-        pub const Config = OptionConfig(Option);
-    };
-}
-
-inline fn isOptionInfo(comptime T: type) bool {
-    comptime {
-        if (@typeInfo(T) != .Struct) return false;
-        if (!@hasDecl(T, "Option")) return false;
-        if (@TypeOf(&T.Option) != *const type) return false;
-        return OptionInfo(T.Option) == T;
-    }
-}
-
-fn OptionConfig(comptime Opt: type) type {
-    return switch (@typeInfo(Opt)) {
-        .Pointer => |p_info| blk: {
-            if (p_info.size != .Slice) {
-                @compileError("Cannot have non-slice pointer options");
-            }
-
-            if (p_info.child == u8) break :blk BytesConfig;
-            const SubConfig = OptionConfig(p_info.child);
-
-            // []const []const u8 is always a list of strings
-            if (SubConfig == BytesConfig) break :blk BytesConfig.StringOnly;
-
-            break :blk SubConfig;
-        },
-        .Optional => |o_info| blk: {
-            switch (@typeInfo(o_info.child)) {
-                .Optional => {
-                    @compileError("Cannot have optional optional options");
-                },
-                .Pointer => |p_info| if (p_info.size == .Slice and p_info.child != u8) {
-                    @compileError("Cannot have optional list options;" ++
-                        " an unspecified list is simply empty");
-                },
-                else => {},
-            }
-
-            const SubConfig = OptionConfig(o_info.child);
-
-            // ?[]const u8 is always an optional string
-            if (SubConfig == BytesConfig) break :blk BytesConfig.StringOnly;
-
-            break :blk SubConfig;
-        },
-        .Int, .Enum, .Bool => void,
-        else => @compileError("Unexpected option type: " ++ @typeName(Opt)),
-    };
-}
-
-/// Exhaustive enum representing a single alphabetic character,
-/// aside from the letter 'h' (`[A-Za-gi-z]`).
-pub const OptionAlias = enum(u7) {
-    none = 0,
-    // zig fmt: off
-    a = 'a', A = 'A',
-    b = 'b', B = 'B',
-    c = 'c', C = 'C',
-    d = 'd', D = 'D',
-    e = 'e', E = 'E',
-    f = 'f', F = 'F',
-    g = 'g', G = 'G',
-    // zig fmt: on
-
-    // NOTE: exclude 'h' as the reserved help flag.
-    // h = 'h',
-    H = 'H',
-
-    // zig fmt: off
-    i = 'i', I = 'I',
-    j = 'j', J = 'J',
-    k = 'k', K = 'K',
-    l = 'l', L = 'L',
-    m = 'm', M = 'M',
-    n = 'n', N = 'N',
-    o = 'o', O = 'O',
-    p = 'p', P = 'P',
-    q = 'q', Q = 'Q',
-    r = 'r', R = 'R',
-    s = 's', S = 'S',
-    t = 't', T = 'T',
-    u = 'u', U = 'U',
-    v = 'v', V = 'V',
-    w = 'w', W = 'W',
-    x = 'x', X = 'X',
-    y = 'y', Y = 'Y',
-    z = 'z', Z = 'Z',
-    // zig fmt: on
-
-    pub fn from(char: u8) OptionAlias {
-        return switch (char) {
-            'A'...'Z',
-            'a'...('h' - 1),
-            ('h' + 1)...'z',
-            => |c| @enumFromInt(c),
-            else => .none,
-        };
-    }
-};
-
 pub const ParseCmdError = error{
     /// Unrecognized `--{name}`.
     UnrecognizedOptionName,
     /// Unrecognized `-{c}`.
     UnrecognizedOptionAlias,
-
     /// Unexpected positional in command with no subcommand and not expecting positionals.
     UnexpectedPositional,
-
+    /// Unrecognized command string.
     UnrecognizedCommand,
-    MissingOptions,
-    MissingCommand,
 } || ParseOptionKeyMaybeValStrError ||
     ParseSingleOptValueError ||
     std.mem.Allocator.Error ||
     std.os.windows.SetConsoleTextAttributeError; // for the TTY for the help message
 
 pub fn Parser(
-    /// Must be a struct type containing zero or more option fields, and zero or one
-    /// sub-command fields which is a tagged union (possibly optional) wherein each
+    /// Must be a struct type containing zero or more option fields, and optionally
+    /// one sub-command field which is an optional tagged union, wherein each
     /// member is a sub-command struct following the same description as this one,
     /// recursively.
-    ///
-    /// An option field must either be a parsed value such as a
-    /// boolean, integer, enum, string, or list or optional there-of,
-    /// or a struct of parsed values.
+    /// See `CommandInfo`.
     comptime Cmd: type,
     comptime cmd_info: CommandInfo(Cmd),
 ) type {
@@ -254,6 +307,8 @@ pub fn Parser(
         }
     };
 }
+
+// -- UNIT TESTING -- //
 
 fn ParserTester(
     comptime Cmd: type,
@@ -311,7 +366,7 @@ test "TestCmd" {
     const TestCmd = struct {
         log_level: std.log.Level,
         metrics_port: u16,
-        subcmd: union(enum) {
+        subcmd: ?union(enum) {
             identity: Identity,
             gossip: Gossip,
             rpc: Rpc,
@@ -461,7 +516,11 @@ test "TestCmd" {
     const expectParsed = parser_tester.expectParsed;
     const expectHelp = parser_tester.expectHelp;
 
-    try expectParsed(&.{}, error.MissingCommand);
+    try expectParsed(&.{}, .{
+        .log_level = .debug,
+        .metrics_port = 12345,
+        .subcmd = null,
+    });
 
     try expectParsed(&.{"identity"}, .{
         .log_level = .debug,
@@ -651,6 +710,56 @@ test "TestCmd" {
     );
 }
 
+// -- IMPLEMENTATION DETAILS -- //
+
+inline fn isOptionInfo(comptime T: type) bool {
+    comptime {
+        if (@typeInfo(T) != .Struct) return false;
+        if (!@hasDecl(T, "Option")) return false;
+        if (@TypeOf(&T.Option) != *const type) return false;
+        return OptionInfo(T.Option) == T;
+    }
+}
+
+fn OptionConfig(comptime Opt: type) type {
+    return switch (@typeInfo(Opt)) {
+        .Pointer => |p_info| blk: {
+            if (p_info.size != .Slice) {
+                @compileError("Cannot have non-slice pointer options");
+            }
+
+            if (p_info.child == u8) break :blk BytesConfig;
+            const SubConfig = OptionConfig(p_info.child);
+
+            // []const []const u8 is always a list of strings
+            if (SubConfig == BytesConfig) break :blk BytesConfig.StringOnly;
+
+            break :blk SubConfig;
+        },
+        .Optional => |o_info| blk: {
+            switch (@typeInfo(o_info.child)) {
+                .Optional => {
+                    @compileError("Cannot have optional optional options");
+                },
+                .Pointer => |p_info| if (p_info.size == .Slice and p_info.child != u8) {
+                    @compileError("Cannot have optional list options;" ++
+                        " an unspecified list is simply empty");
+                },
+                else => {},
+            }
+
+            const SubConfig = OptionConfig(o_info.child);
+
+            // ?[]const u8 is always an optional string
+            if (SubConfig == BytesConfig) break :blk BytesConfig.StringOnly;
+
+            break :blk SubConfig;
+        },
+        .Int, .Enum, .Bool => void,
+        else => @compileError("Unexpected option type: " ++ @typeName(Opt)),
+    };
+}
+
 const ALIAS_TABLE_IDX_BASE = 'A';
 const MAX_ALIAS_TABLE_LEN = 'z' + 1 - 'A';
 
@@ -704,6 +813,89 @@ fn CmdHelper(
 
         var default_init: Cmd = undefined;
 
+        const computeOptFieldInfo = struct {
+            /// shared logic for each option field, and each option group field.
+            fn computeOptFieldInfo(
+                //
+                comptime field_name: []const u8,
+                comptime FieldType: type,
+                comptime opt_info: OptionInfo(FieldType),
+
+                //
+                comptime opt_enum_fields_ptr: *@TypeOf(opt_enum_fields),
+
+                //
+                comptime opt_struct_index: OptStructIndex,
+                comptime opt_enum_to_field_map_ptr: *@TypeOf(opt_enum_to_field_map),
+                comptime positional_set_ptr: *@TypeOf(positional_set),
+
+                //
+                comptime default_init_ptr: anytype,
+
+                //
+                comptime alias_table_wip_ptr: *@TypeOf(alias_table_wip),
+            ) void {
+                const opt_enum_field_name = (opt_info.name_override orelse field_name) ++ "";
+                if (constEql(opt_enum_field_name, "help")) @compileError(
+                    "Cannot use reserved option name " ++ parent_prefix ++ "help",
+                );
+
+                const is_slice = switch (@typeInfo(FieldType)) {
+                    .Pointer => |ptr_info| switch (ptr_info.size) {
+                        .Slice => ptr_info.child != u8 or opt_info.config == .list,
+                        else => false,
+                    },
+                    else => false,
+                };
+
+                switch (opt_info.kind) {
+                    .named => {
+                        const opt_enum_field_idx = opt_enum_fields_ptr.len;
+                        opt_enum_fields_ptr.* = opt_enum_fields_ptr.* ++ .{.{
+                            .name = opt_enum_field_name,
+                            .value = opt_enum_field_idx,
+                        }};
+
+                        if (opt_info.alias != .none) {
+                            const idx = @intFromEnum(opt_info.alias) - ALIAS_TABLE_IDX_BASE;
+                            alias_table_wip_ptr[idx] = opt_enum_field_idx;
+                        }
+
+                        opt_enum_to_field_map_ptr.* =
+                            opt_enum_to_field_map_ptr.* ++ .{opt_struct_index};
+                    },
+                    .positional => {
+                        if (is_slice) @compileError(
+                            "Option " ++ parent_prefix ++ field_name ++
+                                " cannot be both a list and a positional.",
+                        );
+
+                        if (opt_info.alias != .none) @compileError(
+                            "Option " ++ parent_prefix ++ field_name ++ " cannot have an alias, " ++
+                                "since it's not named, it's " ++ @tagName(opt_info.kind),
+                        );
+
+                        positional_set_ptr.* =
+                            positional_set_ptr.* ++ .{opt_struct_index};
+                    },
+                }
+
+                if (is_slice) {
+                    // default init lists to empty.
+                    @field(default_init_ptr, field_name) = &.{};
+                }
+
+                const default_value = opt_info.default_value;
+                @field(default_init_ptr, field_name) = default_value;
+
+                if (is_slice and default_value.len != 0 and
+                    @TypeOf(default_value[0]) != u8) @compileError(
+                    "Don't default initialize slice field with a buffer: " ++
+                        parent_prefix ++ field_name,
+                );
+            }
+        }.computeOptFieldInfo;
+
         @setEvalBranchQuota(cmd_fields.len * 3 + 1);
         for (cmd_fields, 0..) |s_field, s_field_i| {
             if (@typeInfo(s_field.type) == .Union or
@@ -716,8 +908,6 @@ fn CmdHelper(
             const maybe_opt_info = @field(cmd_info.sub, s_field.name);
             if (isOptionInfo(@TypeOf(maybe_opt_info))) {
                 computeOptFieldInfo(
-                    maybe_parent_name,
-
                     s_field.name,
                     s_field.type,
                     maybe_opt_info,
@@ -730,7 +920,6 @@ fn CmdHelper(
 
                     &default_init,
 
-                    OptEnumIntPlusOne,
                     &alias_table_wip,
                 );
                 continue;
@@ -741,8 +930,6 @@ fn CmdHelper(
             @setEvalBranchQuota(cmd_fields.len * 3 + 1 + s_sub_info.fields.len * 2 + 1);
             for (s_sub_info.fields, 0..) |s_sub_field, s_sub_field_i| {
                 computeOptFieldInfo(
-                    maybe_parent_name,
-
                     s_sub_field.name,
                     s_sub_field.type,
                     @field(maybe_opt_info, s_sub_field.name),
@@ -755,7 +942,6 @@ fn CmdHelper(
 
                     &@field(default_init, s_field.name),
 
-                    OptEnumIntPlusOne,
                     &alias_table_wip,
                 );
             }
@@ -1010,9 +1196,12 @@ fn CmdHelper(
                 const CmdMaybeUnion = sub_cmd_s_field_info.type;
 
                 const sub_cmd_info_map = @field(cmd_info.sub, sub_cmd_s_field_name);
-                const CmdUnion, const is_optional_cmd = switch (@typeInfo(CmdMaybeUnion)) {
-                    .Union => .{ CmdMaybeUnion, false },
-                    .Optional => |o_info| .{ o_info.child, true },
+                const CmdUnion = switch (@typeInfo(CmdMaybeUnion)) {
+                    .Union => @compileError(
+                        "The subcommand field " ++ parent_prefix ++ sub_cmd_s_field_name ++
+                            " must be optional.",
+                    ),
+                    .Optional => |o_info| o_info.child,
                     else => unreachable,
                 };
 
@@ -1025,7 +1214,7 @@ fn CmdHelper(
                 ) orelse return error.UnrecognizedCommand;
 
                 const maybe_cmd_field_ptr = &@field(result, sub_cmd_s_field_name);
-                const cmd_field_ptr = if (!is_optional_cmd) maybe_cmd_field_ptr else blk: {
+                const cmd_field_ptr = blk: {
                     maybe_cmd_field_ptr.* = @as(CmdUnion, undefined);
                     break :blk &maybe_cmd_field_ptr.*.?;
                 };
@@ -1062,9 +1251,6 @@ fn CmdHelper(
                 .subcmd_unset => if (maybe_sub_cmd_s_field_index) |sub_cmd_s_field_index| {
                     const sub_cmd_s_field_info = cmd_fields[sub_cmd_s_field_index];
                     const sub_cmd_s_field_name = sub_cmd_s_field_info.name;
-                    const CmdMaybeUnion = sub_cmd_s_field_info.type;
-
-                    if (@typeInfo(CmdMaybeUnion) != .Optional) return error.MissingCommand;
                     @field(result, sub_cmd_s_field_name) = null;
                 },
             }
@@ -1404,92 +1590,6 @@ fn CmdHelper(
             return enumFromStringAfterReplacingScalarInTag(name, OptEnum, '_', '-');
         }
     };
-}
-
-/// compute information about this option field, using information
-/// only known after `computeCmdAndOptBasicInfo(Cmd)`.
-fn computeOptFieldInfo(
-    comptime maybe_parent_name: ?[]const u8,
-
-    //
-    comptime field_name: []const u8,
-    comptime FieldType: type,
-    comptime opt_info: OptionInfo(FieldType),
-
-    //
-    comptime opt_enum_fields: *[]const std.builtin.Type.EnumField,
-
-    //
-    comptime opt_struct_index: OptStructIndex,
-    comptime opt_enum_to_field_map: *[]const OptStructIndex,
-    comptime positional_set: *[]const OptStructIndex,
-
-    //
-    comptime default_init_ptr: anytype,
-
-    //
-    comptime OptEnumIntMax: type,
-    comptime alias_table_wip: *[MAX_ALIAS_TABLE_LEN]OptEnumIntMax,
-) void {
-    const parent_name = maybe_parent_name orelse "root";
-    const parent_prefix = parent_name ++ ".";
-
-    const opt_enum_field_name = (opt_info.name_override orelse field_name) ++ "";
-    if (constEql(opt_enum_field_name, "help")) @compileError(
-        "Cannot use reserved option name " ++ parent_prefix ++ "help",
-    );
-
-    const is_slice = switch (@typeInfo(FieldType)) {
-        .Pointer => |ptr_info| switch (ptr_info.size) {
-            .Slice => ptr_info.child != u8 or opt_info.config == .list,
-            else => false,
-        },
-        else => false,
-    };
-
-    switch (opt_info.kind) {
-        .named => {
-            const opt_enum_field_idx = opt_enum_fields.len;
-            opt_enum_fields.* = opt_enum_fields.* ++ .{.{
-                .name = opt_enum_field_name,
-                .value = opt_enum_field_idx,
-            }};
-
-            if (opt_info.alias != .none) {
-                const idx = @intFromEnum(opt_info.alias) - ALIAS_TABLE_IDX_BASE;
-                alias_table_wip[idx] = opt_enum_field_idx;
-            }
-
-            opt_enum_to_field_map.* = opt_enum_to_field_map.* ++ .{opt_struct_index};
-        },
-        .positional => {
-            if (is_slice) @compileError(
-                "Option " ++ parent_prefix ++ field_name ++
-                    " cannot be both a list and a positional.",
-            );
-
-            if (opt_info.alias != .none) @compileError(
-                "Option " ++ parent_prefix ++ field_name ++ " cannot have an alias, " ++
-                    "since it's not named, it's " ++ @tagName(opt_info.kind),
-            );
-
-            positional_set.* = positional_set.* ++ .{opt_struct_index};
-        },
-    }
-
-    if (is_slice) {
-        // default init lists to empty.
-        @field(default_init_ptr, field_name) = &.{};
-    }
-
-    const default_value = opt_info.default_value;
-    @field(default_init_ptr, field_name) = default_value;
-
-    if (is_slice and default_value.len != 0 and
-        @TypeOf(default_value[0]) != u8) @compileError(
-        "Don't default initialize slice field with a buffer: " ++
-            parent_prefix ++ field_name,
-    );
 }
 
 /// compute the sub-info struct and some basic facts about the option fields
