@@ -756,13 +756,13 @@ fn processVoteWithAccount(
     }
 
     if (vote.timestamp) |timestamp| {
-        if (vote.slots.items.len == 0) {
+        if (vote.slots.len == 0) {
             ic.tc.custom_error = @intFromEnum(VoteError.empty_slots);
             return InstructionError.Custom;
         }
 
-        const max_slot: u64 = if (vote.slots.items.len > 0)
-            std.mem.max(u64, vote.slots.items)
+        const max_slot: u64 = if (vote.slots.len > 0)
+            std.mem.max(u64, vote.slots)
         else
             0;
 
@@ -2943,19 +2943,17 @@ test "vote_program: vote" {
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    var votes = std.ArrayList(sig.core.Slot).init(allocator);
-    defer votes.deinit();
+    var slots = [_]u64{0};
 
-    try votes.append(0);
     const vote = Vote{
-        .slots = votes,
+        .slots = &slots,
         .hash = sig.core.Hash.ZEROES,
         .timestamp = null,
     };
 
     const slot_hashes = SlotHashes{
         .entries = &.{
-            .{ vote.slots.getLast(), vote.hash },
+            .{ slots[slots.len - 1], vote.hash },
         },
     };
 
@@ -3065,19 +3063,17 @@ test "vote_program: vote switch" {
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    var votes = std.ArrayList(sig.core.Slot).init(allocator);
-    defer votes.deinit();
+    var slots = [_]u64{0};
 
-    try votes.append(0);
     const vote = Vote{
-        .slots = votes,
+        .slots = &slots,
         .hash = sig.core.Hash.ZEROES,
         .timestamp = null,
     };
 
     const slot_hashes = SlotHashes{
         .entries = &.{
-            .{ vote.slots.getLast(), vote.hash },
+            .{ slots[slots.len - 1], vote.hash },
         },
     };
 
@@ -3187,19 +3183,17 @@ test "vote_program: vote missing signature" {
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    var votes = std.ArrayList(sig.core.Slot).init(allocator);
-    defer votes.deinit();
+    var slots = [_]u64{0};
 
-    try votes.append(0);
     const vote = Vote{
-        .slots = votes,
+        .slots = &slots,
         .hash = sig.core.Hash.ZEROES,
         .timestamp = null,
     };
 
     const slot_hashes = SlotHashes{
         .entries = &.{
-            .{ vote.slots.getLast(), vote.hash },
+            .{ slots[slots.len - 1], vote.hash },
         },
     };
 
@@ -3312,12 +3306,11 @@ test "vote_program: empty vote" {
     var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    var votes = std.ArrayList(sig.core.Slot).init(allocator);
-    defer votes.deinit();
+    var slots = [_]u64{0};
 
     const vote = Vote{
         // No vote added
-        .slots = votes,
+        .slots = &slots,
         .hash = sig.core.Hash.ZEROES,
         .timestamp = null,
     };
