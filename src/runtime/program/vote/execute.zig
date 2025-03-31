@@ -53,7 +53,7 @@ pub fn execute(
             &vote_account,
             args.node_pubkey,
             args.authorized_voter,
-            args.withdrawer,
+            args.authorized_withdrawer,
             args.commission,
         ),
         .authorize => |args| try executeAuthorize(
@@ -871,7 +871,7 @@ test "vote_program: executeIntializeAccount" {
             .initialize_account = .{
                 .node_pubkey = node_publey,
                 .authorized_voter = authorized_voter,
-                .withdrawer = withdrawer,
+                .authorized_withdrawer = withdrawer,
                 .commission = commission,
             },
         },
