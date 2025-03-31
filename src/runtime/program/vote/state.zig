@@ -340,8 +340,8 @@ pub const VoteState0_23_5 = struct {
     ) !VoteState0_23_5 {
         return .{
             .node_pubkey = node_pubkey,
-            .authorized_voter = authorized_voter,
-            .authorized_voter_epoch = clock.epoch,
+            .voter = authorized_voter,
+            .voter_epoch = clock.epoch,
             .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
             .withdrawer = withdrawer,
             .commission = commission,
@@ -680,7 +680,6 @@ pub const VoteState = struct {
         }
     }
 
-    // TODO add logging
     // The goal is to check if each slot in vote_slots appears in slot_hashes with the correct hash.
     pub fn checkSlotsAreValid(
         self: *const VoteState,
@@ -1308,7 +1307,91 @@ test "VoteState.setNewAuthorizedVoter: invalid account data" {
     );
 }
 
-test "VoteState.isUninitialized: invalid account data" {
+test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
+    // Test attempt to set a voter with an invalid target epoch
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 2, // epoch of current authorized voter
+        .leader_schedule_epoch = 1,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        withdrawer,
+        commission,
+        clock,
+    ) };
+    defer vote_state.deinit();
+
+    try std.testing.expect(!vote_state.isUninitialized());
+
+    const uninitialized_state = VoteStateVersions{
+        .current = try createTestVoteState(
+            allocator,
+            node_publey,
+            null, // Authorized voters not set
+            withdrawer,
+            commission,
+        ),
+    };
+
+    try std.testing.expect(uninitialized_state.isUninitialized());
+}
+
+test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
+    // Test attempt to set a voter with an invalid target epoch
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const node_publey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const withdrawer = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    const clock = Clock{
+        .slot = 0,
+        .epoch_start_timestamp = 0,
+        .epoch = 2, // epoch of current authorized voter
+        .leader_schedule_epoch = 1,
+        .unix_timestamp = 0,
+    };
+
+    var vote_state = VoteStateVersions{ .v1_14_11 = try VoteState1_14_11.init(
+        allocator,
+        node_publey,
+        authorized_voter,
+        withdrawer,
+        commission,
+        clock,
+    ) };
+    defer vote_state.deinit();
+
+    try std.testing.expect(!vote_state.isUninitialized());
+
+    const uninitialized_state = VoteStateVersions{
+        .current = try createTestVoteState(
+            allocator,
+            node_publey,
+            null, // Authorized voters not set
+            withdrawer,
+            commission,
+        ),
+    };
+
+    try std.testing.expect(uninitialized_state.isUninitialized());
+}
+
+test "state.VoteState.isUninitialized: current invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1499,8 +1582,10 @@ test "state.VoteState.lastLockout" {
         } });
 
         const actual = vote_state.lastLockout().?;
-        try std.testing.expectEqual(1, actual.slot);
-        try std.testing.expectEqual(1, actual.confirmation_count);
+        try std.testing.expectEqualDeep(
+            Lockout{ .slot = 1, .confirmation_count = 1 },
+            actual,
+        );
     }
 
     {
@@ -1510,8 +1595,10 @@ test "state.VoteState.lastLockout" {
         } });
 
         const actual = vote_state.lastLockout().?;
-        try std.testing.expectEqual(2, actual.slot);
-        try std.testing.expectEqual(2, actual.confirmation_count);
+        try std.testing.expectEqualDeep(
+            Lockout{ .slot = 2, .confirmation_count = 2 },
+            actual,
+        );
     }
 }
 
@@ -1890,6 +1977,34 @@ test "state.VoteState.processVote empty slot hashes" {
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1688
 test "state.VoteState.checkSlotsAreValid new vote" {
+    const allocator = std.testing.allocator;
+
+    var vote_state = VoteState.default(allocator);
+    defer vote_state.deinit();
+
+    var votes = std.ArrayList(Slot).init(allocator);
+    defer votes.deinit();
+
+    try votes.append(0);
+    const vote = Vote{
+        .slots = votes,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    };
+
+    const slot_hashes = SlotHashes{
+        .entries = &.{
+            .{ vote.slots.getLast(), vote.hash },
+        },
+    };
+
+    try std.testing.expectEqual(
+        null,
+        try vote_state.checkSlotsAreValid(&vote, vote.slots.items, &slot_hashes),
+    );
+}
+
+test "state.VoteState.checkSlotsAreValid bad timestamp" {
     const allocator = std.testing.allocator;
 
     var vote_state = VoteState.default(allocator);
