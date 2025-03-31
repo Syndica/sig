@@ -85,6 +85,7 @@ pub const EpochCredit = struct {
     prev_credits: u64,
 };
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L58
 pub const Vote = struct {
     /// A stack of votes starting with the oldest vote
     slots: []const Slot,
