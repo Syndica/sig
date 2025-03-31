@@ -11,6 +11,7 @@ const VoteState = vote_program.state.VoteState;
 const LandedVote = vote_program.state.LandedVote;
 const Lockout = vote_program.state.Lockout;
 const Vote = vote_program.state.Vote;
+const VoteStateUpdate = vote_program.state.VoteStateUpdate;
 const VoteStateVersions = vote_program.state.VoteStateVersions;
 const VoteAuthorize = vote_program.state.VoteAuthorize;
 const VoteError = vote_program.VoteError;
@@ -126,6 +127,18 @@ pub fn execute(
             ic,
             &vote_account,
             args.vote,
+        ),
+        .update_vote_state => |args| try executeUpdateVoteState(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote_state_update,
+        ),
+        .update_vote_state_switch => |args| try executeUpdateVoteState(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote_state_update,
         ),
     };
 }
@@ -787,6 +800,46 @@ fn processVoteWithAccount(
     }
 
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+}
+
+fn executeUpdateVoteState(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    vote_state_update: VoteStateUpdate,
+) !void {
+    if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
+        ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS))
+    {
+        return InstructionError.InvalidInstructionData;
+    }
+
+    const slot_hashes = try ic.getSysvarWithAccountCheck(
+        SlotHashes,
+        @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
+    );
+    const clock = try ic.getSysvarWithAccountCheck(
+        Clock,
+        @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
+    );
+
+    try updateVoteState(allocator, ic, vote_account, slot_hashes, clock, vote_state_update);
+}
+
+fn updateVoteState(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    vote_account: *BorrowedAccount,
+    slot_hashes: SlotHashes,
+    clock: Clock,
+    vote_state_update: VoteStateUpdate,
+) !void {
+    _ = allocator;
+    _ = ic;
+    _ = vote_account;
+    _ = slot_hashes;
+    _ = clock;
+    _ = vote_state_update;
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L905
