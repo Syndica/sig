@@ -103,13 +103,13 @@ pub fn execute(
             &vote_account,
             args,
         ),
-        .vote => |args| executeProcessVoteWithAccount(
+        .vote => |args| try executeProcessVoteWithAccount(
             allocator,
             ic,
             &vote_account,
             args.vote,
         ),
-        .vote_switch => |args| executeProcessVoteWithAccount(
+        .vote_switch => |args| try executeProcessVoteWithAccount(
             allocator,
             ic,
             &vote_account,
@@ -695,6 +695,7 @@ fn widthraw(
     try recipient_account.addLamports(lamports);
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_processor.rs#L133
 fn executeProcessVoteWithAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -726,6 +727,7 @@ fn executeProcessVoteWithAccount(
     );
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L923
 fn processVoteWithAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -775,6 +777,7 @@ fn processVoteWithAccount(
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L905
 fn verifyAndGetVoteState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,

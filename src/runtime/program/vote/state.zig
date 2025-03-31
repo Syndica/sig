@@ -289,7 +289,7 @@ pub const VoteStateVersions = union(enum) {
         }
     }
 
-    /// Agave https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteStateVersions) bool {
         switch (self) {
             .v0_23_5 => |state| return state.voter.equals(&Pubkey.ZEROES),
@@ -594,6 +594,8 @@ pub const VoteState = struct {
         return null;
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L777
+    ///
     /// Returns the credits to award for a vote at the given lockout slot index
     pub fn creditsForVoteAtIndex(self: *const VoteState, index: usize) u64 {
         const latency = if (index < self.votes.items.len)
@@ -624,6 +626,8 @@ pub const VoteState = struct {
         return VOTE_CREDITS_MAXIMUM_PER_SLOT - diff;
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L845
+    ///
     /// Number of "credits" owed to this account from the mining pool. Submit this
     /// VoteState to the Rewards program to trade credits for lamports.
     pub fn getCredits(self: *const VoteState) u64 {
@@ -633,6 +637,8 @@ pub const VoteState = struct {
             self.epoch_credits.getLast().credits;
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L743
+    ///
     /// increment credits, record credits for last epoch if new epoch
     pub fn incrementCredits(
         self: *VoteState,
@@ -681,6 +687,8 @@ pub const VoteState = struct {
         }
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L303
+    ///
     // The goal is to check if each slot in vote_slots appears in slot_hashes with the correct hash.
     pub fn checkSlotsAreValid(
         self: *const VoteState,
@@ -761,6 +769,7 @@ pub const VoteState = struct {
         return null;
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L709
     pub fn processNextVoteSlot(
         self: *VoteState,
         next_vote_slot: Slot,
@@ -793,6 +802,8 @@ pub const VoteState = struct {
         try self.doubleLockouts();
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L939
+    ///
     /// Pop all recent votes that are not locked out at the next vote slot.
     /// This allows validators to switch forks once their votes for another fork have
     /// expired. This also allows validators to continue voting on recent blocks in
@@ -810,6 +821,7 @@ pub const VoteState = struct {
         }
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L949
     pub fn doubleLockouts(self: *VoteState) !void {
         const stack_depth = self.votes.items.len;
 
@@ -825,6 +837,7 @@ pub const VoteState = struct {
         }
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L963
     pub fn processTimestamp(
         self: *VoteState,
         slot: Slot,
@@ -844,6 +857,7 @@ pub const VoteState = struct {
         return null;
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L618
     pub fn processVote(
         self: *VoteState,
         allocator: std.mem.Allocator,
@@ -883,6 +897,7 @@ pub const VoteState = struct {
         );
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L603
     pub fn processVoteUnfiltered(
         self: *VoteState,
         recent_vote_slots: []const Slot,
@@ -906,6 +921,8 @@ pub const VoteState = struct {
         return null;
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L772
+    ///
     /// Computes the vote latency for vote on voted_for_slot where the vote itself landed in current_slot
     pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
         return @min(current_slot -| voted_for_slot, std.math.maxInt(u8));
