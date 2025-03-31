@@ -7,7 +7,7 @@ const servePrometheus = sig.prometheus.servePrometheus;
 const globalRegistry = sig.prometheus.globalRegistry;
 
 const Cmd = struct {
-    subcmd: union(enum) {
+    subcmd: ?union(enum) {
         benchmark: Benchmark,
         csv: Csv,
     },
@@ -135,7 +135,7 @@ pub fn main() !void {
     ) orelse return;
     defer parser.free(gpa, cmd);
 
-    switch (cmd.subcmd) {
+    switch (cmd.subcmd orelse return error.MissingSubcommand) {
         .benchmark => |params| try benchmark(params),
         .csv => |params| try csvDump(gpa, params),
     }
