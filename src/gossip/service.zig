@@ -79,8 +79,6 @@ pub const PRUNE_MSG_TIMEOUT = Duration.fromMillis(500);
 pub const FAILED_INSERTS_RETENTION = Duration.fromSecs(20);
 pub const PURGED_RETENTION = Duration.fromSecs(PULL_REQUEST_RATE.asSecs() * 5);
 
-pub const MAX_PACKETS_PER_PUSH: usize = 64;
-pub const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_PUSH);
 // 4 (enum) + 32 (pubkey) + 8 (len) = 44
 pub const MAX_PUSH_MESSAGE_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
@@ -961,11 +959,13 @@ pub const GossipService = struct {
                     var push_msg_queue, var push_msg_queue_lock = self.push_msg_queue_mux.writeWithLock();
                     defer push_msg_queue_lock.unlock();
 
+                    // NOTE: wallclock is updated when draining the push_msg_queue
+                    // in drainPushQueueToGossipTable
                     const contact_info: ContactInfo = try self.my_contact_info.clone();
                     errdefer contact_info.deinit();
 
                     const legacy_contact_info = LegacyContactInfo.fromContactInfo(
-                        &self.my_contact_info,
+                        &contact_info,
                     );
 
                     try push_msg_queue.queue.appendSlice(&.{
@@ -1049,14 +1049,26 @@ pub const GossipService = struct {
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
     fn buildPushMessages(self: *Self, push_cursor: *u64) !ArrayList(Packet) {
-        // TODO: find a better static value?
-        var buf: [512]GossipVersionedData = undefined;
+        // TODO: find a better static value for the length?
+        // NOTE: this size seems to work reasonably well given the rate of
+        // cursor growth from new insertions and how fast we generate
+        // push messages. if its too small, then our new contact infos may
+        // not be pushed out which would cause things to break.
+        var buf: [5000]GossipVersionedData = undefined;
 
+        const start_cursor = push_cursor.*;
+        // NOTE: the cursor is modified in getClonedEntriesWithCursor and will
+        // be reset if the active_set.len == 0.
+        defer self.metrics.gen_push_message_cursor_value.set(push_cursor.*);
+
+        // find new values to push in gossip table
         const gossip_entries = blk: {
             var gossip_table_lock = self.gossip_table_rw.read();
             defer gossip_table_lock.unlock();
 
             const gossip_table: *const GossipTable = gossip_table_lock.get();
+            self.metrics.table_cursor.set(gossip_table.cursor);
+
             break :blk try gossip_table.getClonedEntriesWithCursor(
                 self.gossip_data_allocator,
                 &buf,
@@ -1072,12 +1084,7 @@ pub const GossipService = struct {
             return packet_batch;
         }
 
-        const now = getWallclockMs();
-        var total_byte_size: usize = 0;
-
-        // find new values in gossip table
         // TODO: benchmark different approach of HashMapping(origin, value) first
-        // then deriving the active set per origin in a batch
         var push_messages = std.AutoHashMap(EndPoint, ArrayList(SignedGossipData)).init(self.allocator);
         defer {
             var push_iter = push_messages.iterator();
@@ -1087,14 +1094,37 @@ pub const GossipService = struct {
             push_messages.deinit();
         }
 
-        var num_values_considered: usize = 0;
+        // derive the push msgs with a map : active_set_peer -> []new_gossip_data_messages
+        // , accounting for prune messages per origin/endpoint
         {
             var active_set_lock = self.active_set_rw.read();
             var active_set: *const ActiveSet = active_set_lock.get();
             defer active_set_lock.unlock();
 
-            if (active_set.len() == 0) return packet_batch;
+            const active_set_len = active_set.len();
+            self.metrics.gen_push_message_active_set_len.set(active_set_len);
 
+            if (active_set_len == 0) {
+                // we have done nothing with the data, so reset the cursor
+                // back to what it was originally
+                push_cursor.* = start_cursor;
+                return packet_batch;
+            }
+
+            const now = getWallclockMs();
+
+            var n_values_sent: u64 = 0;
+            var n_values_timeout: u64 = 0;
+            var n_zero_active_set_count: u64 = 0;
+            defer {
+                self.metrics.gen_push_message_send_count.add(n_values_sent);
+                self.metrics.gen_push_message_send_timeout_count.add(n_values_timeout);
+                self.metrics.gen_push_message_zero_active_set_count.add(n_zero_active_set_count);
+            }
+
+            // NOTE: we have no limit on push message size so that
+            // the push queue doesnt fall behind which would result in
+            // our updated contact_info's not being propogated to the cluster.
             for (gossip_entries) |entry| {
                 const value = entry.signedData();
 
@@ -1102,15 +1132,8 @@ pub const GossipService = struct {
                 const too_old = entry_time < now -| PUSH_MSG_TIMEOUT.asMillis();
                 const too_new = entry_time > now +| PUSH_MSG_TIMEOUT.asMillis();
                 if (too_old or too_new) {
-                    num_values_considered += 1;
+                    n_values_timeout += 1;
                     continue;
-                }
-
-                const byte_size = bincode.sizeOf(value, .{});
-                total_byte_size +|= byte_size;
-
-                if (total_byte_size > MAX_BYTES_PER_PUSH) {
-                    break;
                 }
 
                 // get the active set for these values *PER ORIGIN* due to prunes
@@ -1124,6 +1147,13 @@ pub const GossipService = struct {
                 };
                 defer active_set_peers.deinit();
 
+                if (active_set_peers.items.len == 0) {
+                    n_zero_active_set_count += 1;
+                    continue;
+                } else {
+                    n_values_sent += 1;
+                }
+
                 for (active_set_peers.items) |peer| {
                     const maybe_peer_entry = push_messages.getEntry(peer);
                     if (maybe_peer_entry) |peer_entry| {
@@ -1134,21 +1164,15 @@ pub const GossipService = struct {
                         try push_messages.put(peer, peer_entry);
                     }
                 }
-                num_values_considered += 1;
             }
         }
-
-        // adjust cursor for values not sent this round
-        // NOTE: labs client doesnt do this - bug?
-        const num_values_not_considered = gossip_entries.len - num_values_considered;
-        push_cursor.* -= num_values_not_considered;
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
             const gossip_values: *const ArrayList(SignedGossipData) = push_entry.value_ptr;
             const to_endpoint: *const EndPoint = push_entry.key_ptr;
 
-            // send the values as a pull response
+            // send the values as a push message packet
             const packets = try gossipDataToPackets(
                 self.allocator,
                 &self.my_pubkey,
@@ -2119,6 +2143,26 @@ pub const GossipMetrics = struct {
     table_n_pubkeys: *GaugeU64,
     table_pubkeys_dropped: *Counter,
     table_old_values_removed: *Counter,
+    // this is the value of the `cursor` field on the gossip table at the
+    // time of generating push messages. it should be close to `gen_push_message_cursor_value`
+    // so gossip values are being sent out to peers.
+    table_cursor: *GaugeU64,
+
+    // this value tracks the cursor value used to generate push messages.
+    // this value should incrementally increase and ideally follow the table_cursor
+    // closely to ensure we are pushing all the data in the table.
+    gen_push_message_cursor_value: *GaugeU64,
+    // this is how many gossip values we have sent in push messages
+    gen_push_message_send_count: *Counter,
+    // this is how many of the values which we attempted to push but
+    // their wallclock was too old or new (ie, the value timed out)
+    gen_push_message_send_timeout_count: *Counter,
+    // this is how many values who had zero peers in the active set to
+    // send to (because of prune messages)
+    gen_push_message_zero_active_set_count: *Counter,
+    // this is the length of the active set while generating push
+    // messages
+    gen_push_message_active_set_len: *GaugeU64,
 
     const GaugeU64 = Gauge(u64);
 
@@ -2997,7 +3041,7 @@ test "test large push messages" {
     const msgs = try gossip_service.buildPushMessages(&cursor);
     defer msgs.deinit();
 
-    try std.testing.expect(msgs.items.len < 2_000);
+    try std.testing.expectEqual(3_780, msgs.items.len);
 }
 
 test "test packet verification" {
