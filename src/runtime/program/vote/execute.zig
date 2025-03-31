@@ -140,6 +140,18 @@ pub fn execute(
             &vote_account,
             args.vote_state_update,
         ),
+        .compact_update_vote_state => |args| try executeUpdateVoteState(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote_state_update,
+        ),
+        .compact_update_vote_state_switch => |args| try executeUpdateVoteState(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote_state_update,
+        ),
     };
 }
 

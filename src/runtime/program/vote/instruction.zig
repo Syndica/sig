@@ -282,4 +282,16 @@ pub const Instruction = union(enum) {
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
     update_vote_state_switch: VoteStateUpdateSwitch,
+    /// Update the onchain vote state for the signer.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    compact_update_vote_state: VoteStateUpdate,
+    /// Update the onchain vote state for the signer along with a switching proof.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    compact_update_vote_state_switch: VoteStateUpdateSwitch,
 };
