@@ -964,7 +964,6 @@ pub fn createTestVoteState(
     };
 }
 
-// TODO how can InstructionContext be easily passed/mocked for testing?
 pub fn verifyAndGetVoteState(
     allocator: std.mem.Allocator,
     ic: *sig.runtime.InstructionContext,
