@@ -253,7 +253,7 @@ fn authorize(
         .voter => {
             const current_epoch = clock.epoch;
 
-            const withdrawer_signer = !std.meta.isError(validateIsSigner(
+            const authorized_withdrawer_signer = !std.meta.isError(validateIsSigner(
                 vote_state.withdrawer,
                 signers,
             ));
@@ -272,7 +272,7 @@ fn authorize(
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // current authorized withdrawer or epoch authorized voter must sign transaction.
-            if (!withdrawer_signer) {
+            if (!authorized_withdrawer_signer) {
                 _ = try validateIsSigner(
                     epoch_authorized_voter,
                     signers,
@@ -290,12 +290,12 @@ fn authorize(
         },
         .withdrawer => {
             // current authorized withdrawer must say "yay".
-            const withdrawer_signer = !std.meta.isError(validateIsSigner(
+            const authorized_withdrawer_signer = !std.meta.isError(validateIsSigner(
                 vote_state.withdrawer,
                 signers,
             ));
 
-            if (!withdrawer_signer) {
+            if (!authorized_withdrawer_signer) {
                 return InstructionError.MissingRequiredSignature;
             }
             vote_state.withdrawer = authorized;
