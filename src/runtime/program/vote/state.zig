@@ -54,7 +54,8 @@ pub const Lockout = struct {
 
     // The number of slots for which this vote is locked
     pub fn lockout(self: *const Lockout) !u64 {
-        return std.math.powi(u64, INITIAL_LOCKOUT, self.confirmation_count);
+        return std.math.powi(u64, INITIAL_LOCKOUT, self.confirmation_count) catch
+            return error.ArithmeticOverflow;
     }
 };
 
@@ -686,7 +687,7 @@ pub const VoteState = struct {
         vote: *const Vote,
         recent_vote_slots: []const Slot,
         slot_hashes: *const SlotHashes,
-    ) (error{Overflow} || InstructionError)!?VoteError {
+    ) !?VoteError {
         const vote_hash = vote.hash;
 
         // index into the vote's slots, starting at the oldest slot
@@ -718,23 +719,24 @@ pub const VoteState = struct {
                 false;
 
             if (less_than_last_voted_slot) {
-                i = try std.math.add(usize, i, 1);
+                i = std.math.add(usize, i, 1) catch return error.ArithmeticOverflow;
                 continue;
             }
 
             // 2) Find the hash for this slot `s`.
             if (recent_vote_slots[i] !=
-                slot_hashes.entries[try std.math.sub(usize, j, 1)].@"0")
+                slot_hashes.entries[std.math.sub(usize, j, 1) catch
+                    return error.ArithmeticOverflow].@"0")
             {
                 // Decrement `j` to find newer slots
-                j = try std.math.sub(usize, j, 1);
+                j = std.math.sub(usize, j, 1) catch return error.ArithmeticOverflow;
                 continue;
             }
 
             // 3) Once the hash for `s` is found, bump `s` to the next slot
             // in `vote_slots` and continue.
-            i = try std.math.add(usize, i, 1);
-            j = try std.math.sub(usize, j, 1);
+            i = std.math.add(usize, i, 1) catch return error.ArithmeticOverflow;
+            j = std.math.sub(usize, j, 1) catch return error.ArithmeticOverflow;
         }
 
         if (j == slot_hashes.entries.len) {
@@ -763,7 +765,7 @@ pub const VoteState = struct {
         next_vote_slot: Slot,
         epoch: Epoch,
         current_slot: Slot,
-    ) (error{Underflow} || error{Overflow} || error{OutOfMemory})!void {
+    ) !void {
         // Ignore votes for slots earlier than we already have votes for
         if (self.lastVotedSlot()) |last_voted_slot| {
             if (next_vote_slot <= last_voted_slot) {
@@ -807,14 +809,15 @@ pub const VoteState = struct {
         }
     }
 
-    pub fn doubleLockouts(self: *VoteState) error{Overflow}!void {
+    pub fn doubleLockouts(self: *VoteState) !void {
         const stack_depth = self.votes.items.len;
 
         for (self.votes.items, 0..) |*vote, i| {
             // Don't increase the lockout for this vote until we get more confirmations
             // than the max number of confirmations this vote has seen
             const confirmation_count = vote.lockout.confirmation_count;
-            if (stack_depth > try std.math.add(usize, i, confirmation_count)) {
+            if (stack_depth > std.math.add(usize, i, confirmation_count) catch
+                return error.ArithmeticOverflow) {
                 vote.lockout.confirmation_count +|= 1;
             }
         }
@@ -846,19 +849,16 @@ pub const VoteState = struct {
         slot_hashes: SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) (error{Overflow} || error{Underflow} || error{OutOfMemory} || InstructionError)!?VoteError {
+    ) !?VoteError {
         if (vote.slots.items.len == 0) {
             return VoteError.empty_slots;
         }
 
-        const earliest_slot_in_history = blk: {
-            if (slot_hashes.entries.len > 0) {
-                const slot, _ = slot_hashes.entries[slot_hashes.entries.len - 1];
-                break :blk slot;
-            } else {
-                break :blk 0;
-            }
-        };
+        const earliest_slot_in_history = if (slot_hashes.entries.len != 0)
+            slot_hashes.entries[slot_hashes.entries.len - 1].@"0"
+        else
+            0;
+
         var recent_vote_slots = std.ArrayList(Slot).init(allocator);
         defer recent_vote_slots.deinit();
 
@@ -888,7 +888,7 @@ pub const VoteState = struct {
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         current_slot: Slot,
-    ) (error{Underflow} || error{Overflow} || error{OutOfMemory} || InstructionError)!?VoteError {
+    ) !?VoteError {
         if (try self.checkSlotsAreValid(
             vote,
             recent_vote_slots,

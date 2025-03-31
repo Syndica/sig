@@ -700,7 +700,7 @@ fn executeProcessVoteWithAccount(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote: Vote,
-) (error{OutOfMemory} || InstructionError)!void {
+) !void {
     if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
         ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS))
     {
@@ -716,19 +716,14 @@ fn executeProcessVoteWithAccount(
         @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
     );
 
-    processVoteWithAccount(
+    try processVoteWithAccount(
         allocator,
         ic,
         vote_account,
         vote,
         slot_hashes,
         clock,
-    ) catch |err| switch (err) {
-        // TODO: How to handle Overflow? Bubble it up or convert?
-        error.Overflow => return InstructionError.Custom,
-        error.Underflow => return InstructionError.Custom,
-        else => |e| return e,
-    };
+    );
 }
 
 fn processVoteWithAccount(
@@ -738,7 +733,7 @@ fn processVoteWithAccount(
     vote: Vote,
     slot_hashes: SlotHashes,
     clock: Clock,
-) (error{Overflow} || error{Underflow} || error{OutOfMemory} || InstructionError)!void {
+) !void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
         ic,
