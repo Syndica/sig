@@ -40,8 +40,7 @@ pub const WorkPool = union(enum) {
 pub const Context = struct {
     allocator: std.mem.Allocator,
     logger: sig.trace.log.ScopedLogger(LOGGER_SCOPE),
-    snapshot_dir: std.fs.Dir,
-    latest_snapshot_gen_info: *sig.sync.RwMux(?SnapshotGenerationInfo),
+    accountsdb: *sig.accounts_db.AccountsDB,
 
     /// Wait group for all currently running tasks, used to wait for
     /// all of them to finish before deinitializing.
@@ -55,12 +54,7 @@ pub const Context = struct {
         /// Must be a thread-safe allocator.
         allocator: std.mem.Allocator,
         logger: sig.trace.Logger,
-
-        /// Not closed by the `Server`, but must live at least as long as it.
-        snapshot_dir: std.fs.Dir,
-        /// Should reflect the latest generated snapshot eligible for propagation at any
-        /// given time with respect to the contents of the specified `snapshot_dir`.
-        latest_snapshot_gen_info: *sig.sync.RwMux(?SnapshotGenerationInfo),
+        accountsdb: *sig.accounts_db.AccountsDB,
 
         /// The size for the read buffer allocated to every request.
         /// Clamped to be greater than or equal to `MIN_READ_BUFFER_SIZE`.
@@ -79,8 +73,7 @@ pub const Context = struct {
         return .{
             .allocator = params.allocator,
             .logger = params.logger.withScope(LOGGER_SCOPE),
-            .snapshot_dir = params.snapshot_dir,
-            .latest_snapshot_gen_info = params.latest_snapshot_gen_info,
+            .accountsdb = params.accountsdb,
 
             .wait_group = .{},
             .read_buffer_size = @max(params.read_buffer_size, MIN_READ_BUFFER_SIZE),
@@ -142,20 +135,31 @@ test "serveSpawn snapshots" {
 
     const logger = logger_unscoped.withScope(@src().fn_name);
 
-    // the directory into which the snapshots will be unpacked.
-    var unpacked_snap_dir = try tmp_dir.makeOpenPath("snapshot", .{});
-    defer unpacked_snap_dir.close();
-
     // the source from which `fundAndUnpackTestSnapshots` will unpack the snapshots.
     var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer test_data_dir.close();
+
+    // the directory into which the snapshots will be unpacked.
+    var unpacked_snap_dir = try tmp_dir.makeOpenPath("snapshot", .{});
+    defer unpacked_snap_dir.close();
 
     const snap_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(
         std.Thread.getCpuCount() catch 1,
         unpacked_snap_dir,
     );
 
-    var latest_snapshot_gen_info = sig.sync.RwMux(?SnapshotGenerationInfo).init(blk: {
+    var accountsdb = try sig.accounts_db.AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .noop,
+        .snapshot_dir = test_data_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 1,
+    });
+    defer accountsdb.deinit();
+
+    {
         const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
         const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
             allocator,
@@ -165,33 +169,24 @@ test "serveSpawn snapshots" {
         );
         defer all_snap_fields.deinit(allocator);
 
-        break :blk .{
-            .full = .{
-                .slot = snap_files.full.slot,
-                .hash = snap_files.full.hash,
-                .capitalization = all_snap_fields.full.bank_fields.capitalization,
-            },
-            .inc = inc: {
-                const inc = all_snap_fields.incremental orelse break :inc null;
-                // if the incremental snapshot field is not null, these shouldn't be either
-                const inc_info = snap_files.incremental_info.?;
-                const inc_persist = inc.bank_extra.snapshot_persistence.?;
-                break :inc .{
-                    .slot = inc_info.slot,
-                    .hash = inc_info.hash,
-                    .capitalization = inc_persist.incremental_capitalization,
-                };
-            },
-        };
-    });
+        const manifest = try accountsdb.loadWithDefaults(
+            allocator,
+            all_snap_fields,
+            1,
+            true,
+            1500,
+            false,
+            false,
+        );
+        defer manifest.deinit(allocator);
+    }
 
     const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
     const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = logger.unscoped(),
-        .snapshot_dir = test_data_dir,
-        .latest_snapshot_gen_info = &latest_snapshot_gen_info,
+        .accountsdb = &accountsdb,
         .socket_addr = sock_addr,
         .read_buffer_size = 4096,
         .reuse_address = true,

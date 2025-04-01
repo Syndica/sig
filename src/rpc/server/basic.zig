@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const sig = @import("../../sig.zig");
+const rpc = sig.rpc;
 
 const server = @import("server.zig");
 const requests = server.requests;
@@ -17,7 +18,10 @@ pub const AcceptAndServeConnectionError =
     std.mem.Allocator.Error ||
     std.fs.File.GetSeekPosError ||
     std.fs.File.OpenError ||
-    std.fs.File.ReadError;
+    std.fs.File.ReadError ||
+
+    // TODO: eventually remove this once not directly called?
+    sig.accounts_db.AccountsDB.GetAccountError;
 
 pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
     const logger = server_ctx.logger.withScope(LOGGER_SCOPE);
@@ -44,16 +48,41 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
             .logf("Receive head error: {s}", .{@errorName(err)});
         return;
     };
-    const head_info = requests.HeadInfo.parseFromStdHead(request.head) catch |err| {
-        switch (err) {
-            error.RequestTargetTooLong => logger.err().field("conn", conn.address).logf(
+    const head_info = requests.HeadInfo.parseFromStdHead(request.head) catch |err| switch (err) {
+        error.RequestTargetTooLong => {
+            logger.err().field("conn", conn.address).logf(
                 "Request target was too long: '{}'",
                 .{std.zig.fmtEscapes(request.head.target)},
-            ),
-            else => |e| logger.err().field("conn", conn.address)
-                .logf("Request error: {s}", .{@errorName(e)}),
-        }
-        return;
+            );
+            return;
+        },
+        error.UnexpectedTransferEncoding => if (request.head.content_length == null) {
+            logger.err().field("conn", conn.address).log("Request missing content-length");
+            try request.respond("", .{
+                .status = .length_required,
+                .keep_alive = false,
+            });
+            return;
+        } else {
+            logger.err().field("conn", conn.address).log(
+                "Request missing content-length",
+            );
+            try request.respond("", .{
+                .status = .bad_request,
+                .keep_alive = false,
+            });
+            return;
+        },
+        error.RequestContentTypeUnrecognized => {
+            logger.err().field("conn", conn.address).log(
+                "Request contained both content-length and transfer-encoding",
+            );
+            try request.respond("", .{
+                .status = .not_acceptable,
+                .keep_alive = false,
+            });
+            return;
+        },
     };
 
     logger.debug().field("conn", conn.address).logf(
@@ -65,7 +94,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
         .HEAD, .GET => switch (requests.getRequestTargetResolve(
             logger.unscoped(),
             request.head.target,
-            server_ctx.latest_snapshot_gen_info,
+            &server_ctx.accountsdb.latest_snapshot_gen_info,
         )) {
             inline .full_snapshot, .inc_snapshot => |pair| {
                 const snap_info, var full_info_lg = pair;
@@ -74,7 +103,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
                 const archive_name_bounded = snap_info.snapshotArchiveName();
                 const archive_name = archive_name_bounded.constSlice();
 
-                const archive_file = try server_ctx.snapshot_dir.openFile(archive_name, .{});
+                const archive_file = try server_ctx.accountsdb.snapshot_dir.openFile(archive_name, .{});
                 defer archive_file.close();
 
                 const archive_len = try archive_file.getEndPos();
@@ -140,37 +169,166 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) !void {
         },
         .POST => {
             if (head_info.content_type != .@"application/json") {
-                std.debug.panic("TODO: handle bad or missing content type", .{});
+                try request.respond("", .{
+                    .status = .not_acceptable,
+                    .keep_alive = false,
+                });
+                return;
             }
 
-            // make the server handle the 100-continue in case there is one
-            const any_reader = request.reader() catch |err| switch (err) {
-                error.HttpExpectationFailed => return,
-                else => |e| return e,
-            };
             const req_reader = sig.utils.io.narrowAnyReader(
-                any_reader,
+                // make the server handle the 100-continue in case there is one
+                request.reader() catch |err| switch (err) {
+                    error.HttpExpectationFailed => return,
+                    else => |e| return e,
+                },
                 std.http.Server.Request.ReadError,
             );
-            _ = req_reader; // autofix
 
-            switch (head_info.transfer_encoding) {
-                .none => {
-                    const content_len = head_info.content_len orelse
-                        std.debug.panic("TODO: handle content_len xor transfer_encoding", .{});
-                    if (content_len > requests.MAX_REQUEST_BODY_SIZE) {
-                        std.debug.panic("TODO: handle oversized request body", .{});
-                    }
-                    std.debug.panic("TODO: handle content_len-based transfer", .{});
+            const content_len = head_info.content_len orelse {
+                try request.respond("", .{
+                    .status = .length_required,
+                    .keep_alive = false,
+                });
+                return;
+            };
+            if (content_len > requests.MAX_REQUEST_BODY_SIZE) {
+                try request.respond("", .{
+                    .status = .payload_too_large,
+                    .keep_alive = false,
+                });
+                return;
+            }
+
+            var send_buffer: [4096]u8 = undefined;
+            var response = request.respondStreaming(.{
+                .send_buffer = &send_buffer,
+                .content_length = null,
+                .respond_options = .{ .keep_alive = false },
+            });
+            const resp_writer = sig.utils.io.narrowAnyWriter(
+                response.writer(),
+                std.http.Server.Response.WriteError,
+            );
+            var json_writer = std.json.writeStream(resp_writer, .{});
+
+            const parsed_result = json: {
+                var limited_reader = std.io.limitedReader(req_reader, content_len);
+                var json_reader = std.json.reader(server_ctx.allocator, limited_reader.reader());
+                defer json_reader.deinit();
+
+                break :json std.json.parseFromTokenSource(
+                    rpc.request.Request.JsonParseResult,
+                    server_ctx.allocator,
+                    &json_reader,
+                    .{},
+                ) catch |err| switch (err) {
+                    error.HttpChunkInvalid,
+                    error.HttpHeadersOversize,
+                    => {
+                        try request.respond("", .{
+                            .status = .bad_request,
+                            .keep_alive = false,
+                        });
+                        return;
+                    },
+
+                    error.InvalidEnumTag,
+                    error.UnexpectedToken,
+                    error.InvalidNumber,
+                    error.DuplicateField,
+                    error.UnknownField,
+                    error.MissingField,
+                    error.LengthMismatch,
+                    error.SyntaxError,
+                    error.UnexpectedEndOfInput,
+                    error.ValueTooLong,
+                    error.Overflow,
+                    error.InvalidCharacter,
+                    => {
+                        try json_writer.write(.{
+                            .jsonrpc = "2.0",
+                            .id = .null,
+                            .@"error" = rpc.response.Error{
+                                .code = .parse_error,
+                                .message = "Invalid json",
+                            },
+                        });
+                        try response.end();
+                        return;
+                    },
+
+                    else => |e| return e,
+                };
+            };
+            defer parsed_result.deinit();
+            const rpc_request = switch (parsed_result.value) {
+                .ok => |req| req,
+
+                inline //
+                .invalid_request,
+                .method_not_found,
+                .invalid_params,
+                => |maybe_id, tag| {
+                    try json_writer.write(.{
+                        .jsonrpc = "2.0",
+                        .id = maybe_id orelse .null,
+                        .@"error" = rpc.response.Error{
+                            .code = switch (tag) {
+                                .invalid_request => .invalid_request,
+                                .method_not_found => .method_not_found,
+                                .invalid_params => .invalid_params,
+                                else => comptime unreachable,
+                            },
+                            .message = switch (tag) {
+                                .invalid_request => "Invalid request",
+                                .method_not_found => "Method not found",
+                                .invalid_params => "Invalid parameters",
+                                else => comptime unreachable,
+                            },
+                        },
+                    });
+                    try response.end();
+                    return;
                 },
-                .chunked => {
-                    if (head_info.content_len != null) {
-                        std.debug.panic("TODO: handle content_len xor transfer_encoding", .{});
+            };
+
+            switch (rpc_request.method) {
+                .getAccountInfo => |params| {
+                    const config: rpc.methods.GetAccountInfo.Config = params.config orelse .{};
+                    if (config.commitment) |commitment| {
+                        std.debug.panic("TODO: handle commitment={s}", .{@tagName(commitment)});
                     }
-                    std.debug.panic("TODO: handle chunked transfer encoding", .{});
+
+                    const account: sig.accounts_db.AccountsDB.AccountInCacheOrFile, //
+                    var account_lg: sig.accounts_db.AccountsDB.AccountInCacheOrFileLock //
+                    = try server_ctx.accountsdb.getAccountInSlotRangeWithReadLock(
+                        &params.pubkey,
+                        // if it's null, it's null, there's no floor to the query.
+                        config.minContextSlot orelse null,
+                        null,
+                    ) orelse {
+                        try request.respond("", .{
+                            .status = .range_not_satisfiable,
+                            .keep_alive = false,
+                        });
+                        return;
+                    };
+                    _ = account; // autofix
+                    defer account_lg.unlock();
+
+                    return;
+                },
+                else => {
+                    try request.respond("", .{
+                        .status = .not_implemented,
+                        .keep_alive = false,
+                    });
+                    return;
                 },
             }
 
+            try response.end();
             return;
         },
         else => {},
