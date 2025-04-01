@@ -4,9 +4,6 @@ const sig = @import("../sig.zig");
 const rpc = sig.rpc;
 const MethodAndParams = rpc.methods.MethodAndParams;
 
-/// NOTE: for the sake of simplicity, we only support `method: ..., params: ...`,
-/// and reject `params: ..., method: ...`; this is a reasonable expectation for
-/// clients to satisfy.
 pub const Request = struct {
     id: Id,
     method: MethodAndParams,
