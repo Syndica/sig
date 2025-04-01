@@ -400,7 +400,7 @@ const CallerAccount = struct {
             };
 
             const vm_data_addr = @intFromPtr(data.ptr);
-            const serialized = if (direct_mapping) ser: {
+            const serialized: []u8 = if (direct_mapping) ser: {
                 // when direct mapping is enabled, the permissions on the
                 // realloc region can change during CPI so we must delay
                 // translating until when we know whether we're going to mutate
@@ -498,7 +498,7 @@ const CallerAccount = struct {
             ic.tc.compute_budget.cpi_bytes_per_unit,
         ) catch std.math.maxInt(u64));
 
-        const serialized_data = if (direct_mapping) ser: {
+        const serialized_data: []u8 = if (direct_mapping) ser: {
             // See comment in CallerAccount.fromAccountInfo()
             break :ser &.{}; // &mut []
         } else try translateSlice(
@@ -624,7 +624,7 @@ const MockAccountInfo = struct {
             self.data.len;
 
         const data = try allocator.alloc(u8, size);
-        defer allocator.free(data);
+        errdefer allocator.free(data);
 
         const key_addr = vm_addr + @sizeOf(AccountInfo);
         const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
@@ -736,9 +736,11 @@ test "CallerAccount" {
 
         // NOTE: init aligned false
         // https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L1792
-        const memory_map = try MemoryMap.init(&.{region}, .v3);
+        const regions = [_]memory.Region{ region };
+        const memory_map = try MemoryMap.init(&regions, .v3);
 
         const account_info = try translateType(AccountInfo, .constant, &memory_map, vm_addr, false);
+        
         var caller_account = try CallerAccount.fromAccountInfo(
             &ic,
             &memory_map,
