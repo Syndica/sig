@@ -702,12 +702,6 @@ pub const Elf = struct {
             return error.VersionUnsupported;
         }
 
-        if (sbpf_version.enableElfVaddr() and
-            config.optimize_rodata != true)
-        {
-            return error.UnsupportedSBPFVersion;
-        }
-
         if (sbpf_version.enableStricterElfHeaders()) {
             return try parseStrict(
                 allocator,
@@ -718,6 +712,15 @@ pub const Elf = struct {
                 config,
             );
         } else {
+            if (sbpf_version.enableElfVaddr() and
+                config.optimize_rodata != true)
+            {
+                return error.UnsupportedSBPFVersion;
+            }
+            if (headers.phdrs.len >= 10) {
+                return error.InvalidProgramHeader;
+            }
+
             return try parseLenient(
                 allocator,
                 bytes,
