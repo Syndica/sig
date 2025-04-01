@@ -213,10 +213,7 @@ fn translateSlice(
     .constant => []const T,
 } {
     if (len == 0) {
-        const Static = struct {
-            var _: [0]T = undefined;
-        };
-        return &Static._;
+        return &.{}; // &mut []
     }
 
     const total_size = std.math.mul(u64, len, @sizeOf(u64)) catch std.math.maxInt(u64);
@@ -416,10 +413,7 @@ const CallerAccount = struct {
                 // If we always translated the realloc area here, we'd get a
                 // memory access violation since we can't write to the account
                 // _yet_, but we will be able to once the caller returns.
-                const Static = struct {
-                    var _: [0]u8 = undefined;
-                };
-                break :ser &Static._;
+                break :ser &.{}; // &mut []
             } else try translateSlice(
                 u8,
                 .mutable,
@@ -505,11 +499,8 @@ const CallerAccount = struct {
         ) catch std.math.maxInt(u64));
 
         const serialized_data = if (direct_mapping) ser: {
-            // See comment in CallerAccount::from_account_info()
-            const Static = struct {
-                var _: [0]u8 = undefined;
-            };
-            break :ser &Static._;
+            // See comment in CallerAccount.fromAccountInfo()
+            break :ser &.{}; // &mut []
         } else try translateSlice(
             u8,
             .mutable,
