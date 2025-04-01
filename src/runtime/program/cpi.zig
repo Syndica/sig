@@ -280,8 +280,8 @@ const CallerAccount = struct {
     fn fromAccountInfo(
         ic: *InstructionContext,
         memory_map: *const MemoryMap,
-        account_info: AccountInfo,
-        account_metadata: SerializedAccountMetadata,
+        account_info: *const AccountInfo,
+        account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
         const direct_mapping = ic.tc.feature_set.active.contains(
             feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
@@ -534,12 +534,12 @@ const CallerAccount = struct {
                 .check_aligned = ic.getCheckAligned(),
             } }
         else
-            VmValue(u64){ .translated = translate(
+            VmValue(u64){ .translated = @ptrFromInt(try translate(
                 memory_map,
                 .mutable,
                 data_len_vm_addr,
                 @sizeOf(u64),
-            ) };
+            )) };
 
         return .{
             .lamports = lamports,
@@ -744,13 +744,13 @@ test "CallerAccount" {
     // NOTE: init aligned false
     // https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L1792
     const memory_map = try MemoryMap.init(&.{region}, .v3);
-
+    
     const account_info = try translateType(AccountInfo, .constant, &memory_map, vm_addr, false);
-    const caller_account = try CallerAccount.fromAccountInfo(
+    var caller_account = try CallerAccount.fromAccountInfo(
         &ic,
         &memory_map,
-        account_info.*,
-        account_metadata,
+        account_info,
+        &account_metadata,
     );
 
     try std.testing.expectEqual(caller_account.lamports.*, acc_shared.lamports);
@@ -763,4 +763,77 @@ test "CallerAccount" {
     try std.testing.expect(
         std.mem.eql(u8, caller_account.serialized_data, acc_shared.data),
     );
+
+    // test fromSolAccountInfo
+    {
+        const size = @sizeOf(SolAccountInfo) +
+            @sizeOf(Pubkey) * 2 +
+            @sizeOf(u64) + 
+            acc_shared.data.len;
+
+        const key_offset = @sizeOf(SolAccountInfo);
+        const owner_offset = key_offset + @sizeOf(Pubkey);
+        const lamports_offset = owner_offset + @sizeOf(Pubkey);
+        const data_offset = lamports_offset + @sizeOf(u64);
+
+        const buffer = try allocator.alignedAlloc(u8, @alignOf(SolAccountInfo), size);
+        defer allocator.free(buffer);
+
+        // Just have VM memory point to host memory.
+        const sol_vm_addr: u64 = @intFromPtr(buffer.ptr);
+        buffer[sol_vm_addr + key_offset..][0..@sizeOf(Pubkey)].* = @bitCast(acc_meta.pubkey);
+        buffer[sol_vm_addr + owner_offset..][0..@sizeOf(Pubkey)].* = @bitCast(acc_shared.owner);
+        buffer[sol_vm_addr + lamports_offset..][0..@sizeOf(u64)].* = @bitCast(acc_shared.lamports);
+        @memcpy(buffer[sol_vm_addr + data_offset..][0..acc_shared.data.len], acc_shared.data);
+
+        buffer[0..@sizeOf(SolAccountInfo)].* = @bitCast(SolAccountInfo{
+            .key_addr = sol_vm_addr + key_offset,
+            .lamports_addr = sol_vm_addr + lamports_offset,
+            .data_len = acc_shared.data.len,
+            .data_addr = sol_vm_addr + data_offset,
+            .owner_addr = sol_vm_addr + owner_offset,
+            .rent_epoch = acc_shared.rent_epoch,
+            .is_signer = acc_meta.is_signer,
+            .is_writable = acc_meta.is_writable,
+            .executable = acc_shared.executable,
+        });
+
+        const sol_account_metadata = SerializedAccountMetadata{
+            .original_data_len = buffer.len,
+            .vm_data_addr = sol_vm_addr + data_offset,
+            .vm_key_addr = sol_vm_addr + key_offset,
+            .vm_lamports_addr = sol_vm_addr + lamports_offset,
+            .vm_owner_addr = sol_vm_addr + owner_offset,
+        };
+
+        const sol_region = memory.Region.init(.mutable, buffer, sol_vm_addr);
+        const sol_memory_map = try memory.MemoryMap.init(&.{sol_region}, .v3);
+
+        const sol_account_info = try translateType(
+            SolAccountInfo,
+            .constant,
+            &sol_memory_map,
+            sol_vm_addr,
+            false,
+        );
+
+        caller_account = try CallerAccount.fromSolAccountInfo(
+            &ic,
+            &memory_map,
+            sol_vm_addr,
+            sol_account_info,
+            &sol_account_metadata,
+        );
+
+        try std.testing.expectEqual(caller_account.lamports.*, acc_shared.lamports);
+        try std.testing.expect(caller_account.owner.*.equals(&acc_shared.owner));
+        try std.testing.expectEqual(caller_account.original_data_len, acc_shared.data.len);
+        try std.testing.expectEqual(
+            (try caller_account.ref_to_len_in_vm.get(.constant)).*,
+            acc_shared.data.len,
+        );
+        try std.testing.expect(
+            std.mem.eql(u8, caller_account.serialized_data, acc_shared.data),
+        );
+    }
 }
