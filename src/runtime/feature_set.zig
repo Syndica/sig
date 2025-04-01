@@ -25,6 +25,12 @@ pub const ALLOW_COMMISSION_DECREASE_AT_ANY_TIME =
 pub const COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH =
     Pubkey.parseBase58String("noRuG2kzACwgaY7TVmLRnUNPLKNVQE1fb7X55YWBehp") catch unreachable;
 
+pub const DEPRECATE_LEGACY_VOTE_IXS =
+    Pubkey.parseBase58String("depVvnQ2UysGrhwdiwU42tCadZL8GcBb1i2GYhMopQv") catch unreachable;
+
+pub const ENABLE_TOWER_SYNC_IX =
+    Pubkey.parseBase58String("tSynMCspg4xFiCj1v3TDb4c7crMR5tSBhLz4sF7rrNA") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features
