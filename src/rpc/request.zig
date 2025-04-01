@@ -69,7 +69,7 @@ pub const Request = struct {
             .jsonrpc = "2.0",
             .id = self.id,
             .method = @tagName(self.method),
-            .params = self.method.jsonStringifiedAsParamsArray(),
+            .params = self.method.jsonStringifyAsParamsArray(),
         });
     }
 };

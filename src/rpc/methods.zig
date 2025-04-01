@@ -76,7 +76,7 @@ pub const MethodAndParams = union(enum) {
     pub const Tag = @typeInfo(MethodAndParams).Union.tag_type.?;
 
     /// Returns a wrapper over `self` which will be stringified as an array.
-    pub fn jsonStringifiedAsParamsArray(self: MethodAndParams) JsonStringifiedAsParamsArray {
+    pub fn jsonStringifyAsParamsArray(self: MethodAndParams) JsonStringifiedAsParamsArray {
         return .{ .data = self };
     }
 
