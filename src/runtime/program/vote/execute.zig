@@ -2985,8 +2985,7 @@ test "vote_program: vote" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .vote = .{ .vote = vote },
         },
@@ -3034,6 +3033,7 @@ test "vote_program: vote" {
                 .slot_hashes = slot_hashes,
             },
         },
+        .{},
     );
 }
 
@@ -3105,8 +3105,7 @@ test "vote_program: vote switch" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .vote_switch = .{ .vote = vote, .hash = sig.core.Hash.ZEROES },
         },
@@ -3154,6 +3153,7 @@ test "vote_program: vote switch" {
                 .slot_hashes = slot_hashes,
             },
         },
+        .{},
     );
 }
 
@@ -3225,8 +3225,7 @@ test "vote_program: vote missing signature" {
 
     testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .vote = .{ .vote = vote },
         },
@@ -3275,6 +3274,7 @@ test "vote_program: vote missing signature" {
                 .slot_hashes = slot_hashes,
             },
         },
+        .{},
     ) catch |err| {
         try std.testing.expectEqual(InstructionError.MissingRequiredSignature, err);
     };
@@ -3349,8 +3349,7 @@ test "vote_program: empty vote" {
 
     testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .vote = .{ .vote = vote },
         },
@@ -3398,6 +3397,7 @@ test "vote_program: empty vote" {
                 .slot_hashes = slot_hashes,
             },
         },
+        .{},
     ) catch |err| {
         // TODO is there a way to assert VoteError.empty_slots
         // is stored in ic.tc.custom_error
