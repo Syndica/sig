@@ -6,18 +6,15 @@ const MemoryMap = memory.MemoryMap;
 
 const ids = sig.runtime.ids;
 const bincode = sig.bincode;
-const program = sig.runtime.program;
-const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
+const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 const system_program = sig.runtime.program.system_program;
 const feature_set = sig.runtime.feature_set;
 
 const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const FeatureSet = sig.runtime.FeatureSet;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
@@ -102,6 +99,10 @@ fn RcBox(comptime T: type) type {
         value: T,
 
         const VALUE_OFFSET = @sizeOf(usize) * 2;
+
+        fn asPtr(self: *@This()) *T {
+            return &self.value;
+        }
     };
 }
 
@@ -110,7 +111,7 @@ fn Rc(comptime T: type) type {
     return extern struct {
         ptr: *RcBox(T),
 
-        fn fromRaw(value_ptr: *const T) @This() {
+        fn fromRaw(value_ptr: *T) @This() {
             return .{ .ptr = @fieldParentPtr("value", value_ptr) };
         }
     };
@@ -120,7 +121,11 @@ fn Rc(comptime T: type) type {
 fn RefCell(comptime T: type) type {
     return extern struct {
         borrow: isize = 0,
-        value: T,
+        value: [@sizeOf(T)]u8 align(@alignOf(T)), // support defined-layout when T isnt.
+
+        pub fn init(value: T) @This() {
+            return .{ .value = std.mem.asBytes(&value)[0..@sizeOf(T)].* };
+        }
     };
 }
 
@@ -215,9 +220,7 @@ fn translateSlice(
     }
 
     const total_size = std.math.mul(u64, len, @sizeOf(u64)) catch std.math.maxInt(u64);
-    _ = std.math.cast(isize, total_size) catch {
-        return SyscallError.InvalidLength;
-    };
+    _ = std.math.cast(isize, total_size) orelse return SyscallError.InvalidLength;
 
     const host_addr = try translate(memory_map, state, vm_addr, total_size);
     if (check_aligned and host_addr % @alignOf(T) != 0) {
@@ -238,7 +241,7 @@ fn checkAccountInfoPtr(
     field: []const u8,
 ) !void {
     if (vm_addr != expected_vm_addr) {
-        try ic.tc.log("Invalid account info pointer `{}`: {x} != {x}", .{
+        try ic.tc.log("Invalid account info pointer `{s}`: {x} != {x}", .{
             field,
             vm_addr,
             expected_vm_addr,
@@ -302,7 +305,9 @@ const CallerAccount = struct {
         // account_info points to host memory. The addresses used internally are
         // in vm space so they need to be translated.
         const lamports: *u64 = blk: {
-            const lamports_addr: u64 = @intFromPtr(account_info.lamports.value.value);
+            // NOTE: trying to model the ptr stuff going on here:
+            // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L151
+            const lamports_addr: u64 = @intFromPtr(account_info.lamports.ptr.asPtr());
 
             // Double translate lamports out of RefCell
             const ptr: *const u64 = try translateType(
@@ -341,7 +346,10 @@ const CallerAccount = struct {
         );
 
         const serialized, const vm_data_addr, const ref_to_len = blk: {
-            const data_ptr: u64 = @intFromPtr(&account_info.data.value.value);
+            // NOTE: trying to model the ptr stuff going on here:
+            // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L183
+            const data_ptr: u64 = @intFromPtr(account_info.data.ptr.asPtr());
+
             if (direct_mapping and data_ptr >= MM_INPUT_START) {
                 return SyscallError.InvalidPointer;
             }
@@ -358,7 +366,7 @@ const CallerAccount = struct {
             if (direct_mapping) {
                 try checkAccountInfoPtr(
                     ic,
-
+                    data_ptr,
                     account_metadata.vm_data_addr,
                     "data",
                 );
@@ -417,7 +425,7 @@ const CallerAccount = struct {
                 .mutable,
                 memory_map,
                 vm_data_addr,
-                data.len(),
+                data.len,
                 ic.getCheckAligned(),
             );
 
@@ -652,12 +660,16 @@ const MockAccountInfo = struct {
         data[0..@sizeOf(AccountInfo)].* = @bitCast(info);
         data[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.key);
         data[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
-            RcBox(RefCell(*u64)){ .value = @intFromPtr(lamports_addr) },
+            RcBox(RefCell(*u64)){
+                .value = RefCell(*u64).init(@ptrFromInt(lamports_addr)),
+            },
         );
         data[lamports_addr - vm_addr ..][0..@sizeOf(u64)].* = @bitCast(self.lamports);
         data[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.owner);
         data[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
-            RcBox(RefCell([]u8)){ .value = @as([*]u8, @ptrFromInt(data_addr))[0..self.data.len] },
+            RcBox(RefCell([]u8)){
+                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(data_addr))[0..self.data.len]),
+            },
         );
         @memcpy(data[data_addr - vm_addr ..][0..self.data.len], self.data);
 
@@ -685,6 +697,11 @@ test "CallerAccount" {
     var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
+                .pubkey = account_key,
+                .owner = bpf_loader_program.v3.ID,
+                .lamports = 100,
+            },
+            .{
                 .pubkey = system_program.ID,
                 .owner = ids.NATIVE_LOADER_ID,
             },
@@ -700,13 +717,16 @@ test "CallerAccount" {
             &tc,
             system_program.ID,
             system_program.Instruction{ .assign = .{ .owner = account_key } }, // can be whatever.
-            &.{},
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            },
         ),
     };
     defer ic.deinit(allocator);
 
-    const acc_meta = ic.info.account_metas.get(1);
-    const acc_shared = ic.tc.accounts[1].account;
+    const acc_meta = ic.info.account_metas.get(0);
+    const acc_shared = ic.tc.accounts[0].account;
 
     const vm_addr = MM_INPUT_START;
     const data, const region, const account_metadata = try (MockAccountInfo{
@@ -736,6 +756,11 @@ test "CallerAccount" {
     try std.testing.expectEqual(caller_account.lamports.*, acc_shared.lamports);
     try std.testing.expect(caller_account.owner.*.equals(&acc_shared.owner));
     try std.testing.expectEqual(caller_account.original_data_len, acc_shared.data.len);
-    try std.testing.expectEqual((try caller_account.ref_to_len_in_vm.get()).*, acc_shared.data.len);
-    try std.testing.expect(std.mem.eql(u8, caller_account.serialized_data, acc_shared.data));
+    try std.testing.expectEqual(
+        (try caller_account.ref_to_len_in_vm.get(.constant)).*,
+        acc_shared.data.len,
+    );
+    try std.testing.expect(
+        std.mem.eql(u8, caller_account.serialized_data, acc_shared.data),
+    );
 }
