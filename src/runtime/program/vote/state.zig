@@ -986,9 +986,12 @@ pub const VoteState = struct {
             return err;
         }
 
-        _ = try self.processNewVoteState(vote_state_update, epoch, slot);
-
-        return null;
+        return try self.processNewVoteState(
+            allocator,
+            vote_state_update,
+            epoch,
+            slot,
+        );
     }
 
     pub fn checkAndFilterProposedVoteState(
@@ -1271,14 +1274,203 @@ pub const VoteState = struct {
     // popped off.
     pub fn processNewVoteState(
         self: *VoteState,
+        allocator: std.mem.Allocator,
         vote_state_update: *VoteStateUpdate,
         epoch: Epoch,
-        slot: Slot,
+        current_slot: Slot,
     ) !?VoteError {
-        _ = self;
-        _ = vote_state_update;
-        _ = epoch;
-        _ = slot;
+        const new_root = vote_state_update.*.root;
+        // TODO BoundedArray?
+        var new_state = try std.ArrayList(LandedVote).initCapacity(
+            allocator,
+            vote_state_update.lockouts.items.len,
+        );
+        for (vote_state_update.lockouts.items) |lockout| {
+            try new_state.append(
+                LandedVote{ .latency = 0, .lockout = lockout },
+            );
+        }
+        std.debug.assert(new_state.items.len != 0);
+
+        if (new_state.items.len > MAX_LOCKOUT_HISTORY) {
+            return VoteError.too_many_votes;
+        }
+
+        if (new_root) |proposed_new_root| {
+            if (self.root_slot) |current_root| {
+                if (proposed_new_root < current_root) {
+                    return VoteError.root_roll_back;
+                }
+            }
+        } else {
+            if (self.root_slot != null) {
+                return VoteError.root_roll_back;
+            }
+        }
+
+        var maybe_previous_vote: ?*LandedVote = null;
+
+        // Check that all the votes in the new proposed state are:
+        // 1) Strictly sorted from oldest to newest vote
+        // 2) The confirmations are strictly decreasing
+        // 3) Not zero confirmation votes
+
+        for (new_state.items) |*vote| {
+            if (vote.lockout.confirmation_count == 0) {
+                return VoteError.zero_confirmations;
+            } else if (vote.lockout.confirmation_count > MAX_LOCKOUT_HISTORY) {
+                return VoteError.confirmation_too_large;
+            } else if (new_root) |proposed_new_root| {
+                if (vote.lockout.slot <= proposed_new_root and
+                    // This check is necessary because
+                    // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L120
+                    // always sets a root for even empty towers, which is then hard unwrapped here
+                    // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L776
+                    new_root != 0)
+                {
+                    return VoteError.slot_smaller_than_root;
+                }
+            }
+
+            if (maybe_previous_vote) |previous_vote| {
+                if (previous_vote.lockout.slot >= vote.lockout.slot) {
+                    return VoteError.slots_not_ordered;
+                } else if (previous_vote.lockout.confirmation_count <=
+                    vote.lockout.confirmation_count)
+                {
+                    return VoteError.confirmations_not_ordered;
+                } else if (vote.lockout.slot > try previous_vote.lockout.lastLockedOutSlot()) {
+                    return VoteError.new_vote_state_lockout_mismatch;
+                }
+            }
+            maybe_previous_vote = vote;
+        }
+
+        // Find the first vote in the current vote state for a slot greater
+        // than the new proposed root
+        var current_vote_state_index: usize = 0;
+        var new_vote_state_index: usize = 0;
+
+        // Accumulate credits earned by newly rooted slots
+        var earned_credits: u64 = 0;
+
+        if (new_root) |proposed_new_root| {
+            for (self.votes.items) |current_vote| {
+                // Find the first vote in the current vote state for a slot greater
+                // than the new proposed root
+                if (current_vote.lockout.slot <= proposed_new_root) {
+                    earned_credits = std.math.add(u64, earned_credits, self.creditsForVoteAtIndex(
+                        current_vote_state_index,
+                    )) catch return InstructionError.ArithmeticOverflow;
+                    current_vote_state_index = std.math.add(
+                        usize,
+                        current_vote_state_index,
+                        1,
+                    ) catch return InstructionError.ArithmeticOverflow;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        // For any slots newly added to the new vote state, the vote latency of that slot is not provided by the
+        // vote instruction contents, but instead is computed from the actual latency of the vote
+        // instruction. This prevents other validators from manipulating their own vote latencies within their vote states
+        // and forcing the rest of the cluster to accept these possibly fraudulent latency values.  If the
+        // timly_vote_credits feature is not enabled then vote latency is set to 0 for new votes.
+        //
+        // For any slot that is in both the new state and the current state, the vote latency of the new state is taken
+        // from the current state.
+        //
+        // Thus vote latencies are set here for any newly vote-on slots when a vote instruction is received.
+        // They are copied into the new vote state after every vote for already voted-on slots.
+        // And when voted-on slots are rooted, the vote latencies stored in the vote state of all the rooted slots is used
+        // to compute credits earned.
+        // All validators compute the same vote latencies because all process the same vote instruction at the
+        // same slot, and the only time vote latencies are ever computed is at the time that their slot is first voted on;
+        // after that, the latencies are retained unaltered until the slot is rooted.
+
+        // All the votes in our current vote state that are missing from the new vote state
+        // must have been expired by later votes. Check that the lockouts match this assumption.
+        while (current_vote_state_index < self.votes.items.len and
+            new_vote_state_index < new_state.items.len)
+        {
+            const current_vote = &self.votes.items[current_vote_state_index];
+            const new_vote = &new_state.items[new_vote_state_index];
+
+            // If the current slot is less than the new proposed slot, then the
+            // new slot must have popped off the old slot, so check that the
+            // lockouts are correct
+            switch (std.math.order(current_vote.lockout.slot, new_vote.lockout.slot)) {
+                .lt => {
+                    if ((try current_vote.lockout.lastLockedOutSlot()) >= new_vote.lockout.slot) {
+                        return VoteError.lockout_conflict;
+                    }
+                    current_vote_state_index = std.math.add(
+                        usize,
+                        current_vote_state_index,
+                        1,
+                    ) catch
+                        return InstructionError.ArithmeticOverflow;
+                },
+                .eq => {
+                    // The new vote state should never have less lockout than
+                    // the previous vote state for the same slot
+                    if (new_vote.lockout.confirmation_count <
+                        current_vote.lockout.confirmation_count)
+                    {
+                        return VoteError.confirmation_roll_back;
+                    }
+
+                    // Copy the vote slot latency in from the current state to the new state
+                    new_vote.latency = self.votes.items[current_vote_state_index].latency;
+
+                    current_vote_state_index = std.math.add(
+                        usize,
+                        current_vote_state_index,
+                        1,
+                    ) catch
+                        return InstructionError.ArithmeticOverflow;
+                    new_vote_state_index = std.math.add(usize, new_vote_state_index, 1) catch
+                        return InstructionError.ArithmeticOverflow;
+                },
+                .gt => {
+                    new_vote_state_index = std.math.add(usize, new_vote_state_index, 1) catch
+                        return InstructionError.ArithmeticOverflow;
+                },
+            }
+        }
+
+        // `new_vote_state` passed all the checks, finalize the change by rewriting
+        // our state.
+
+        // Now set the vote latencies on new slots not in the current state.  New slots not in the current vote state will
+        // have had their latency initialized to 0 by the above loop.  Those will now be updated to their actual latency.
+        for (new_state.items) |*new_vote| {
+            if (new_vote.latency == 0) {
+                new_vote.latency = VoteState.computeVoteLatency(
+                    new_vote.lockout.slot,
+                    current_slot,
+                );
+            }
+        }
+
+        if (self.root_slot != new_root) {
+            // Award vote credits based on the number of slots that were voted on and have reached finality
+            // For each finalized slot, there was one voted-on slot in the new vote state that was responsible for
+            // finalizing it. Each of those votes is awarded 1 credit.
+            try self.incrementCredits(epoch, earned_credits);
+        }
+        if (vote_state_update.timestamp) |timestamp| {
+            const last_slot = vote_state_update.lockouts.getLast().slot;
+            if (self.processTimestamp(last_slot, timestamp)) |err| {
+                return err;
+            }
+        }
+
+        self.root_slot = vote_state_update.root;
+        self.votes = new_state;
+
         return null;
     }
 };
