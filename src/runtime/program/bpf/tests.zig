@@ -6,6 +6,7 @@ const program = sig.runtime.program;
 const Pubkey = sig.core.Pubkey;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
+const expectProgramExecuteError = program.testing.expectProgramExecuteError;
 
 const MAX_FILE_BYTES: usize = 1024 * 1024; // 1MiB
 
@@ -195,6 +196,59 @@ test "fast_copy" {
     );
 }
 
+test "set_return_data" {
+    // pub fn process_instruction(
+    //     _program_id: &Pubkey,
+    //     _accounts: &[AccountInfo],
+    //     _instruction_data: &[u8]
+    // ) -> ProgramResult {
+    //     solana_program::program::set_return_data("Hello, world!".as_bytes());
+    //     Ok(())
+    // }
+
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const program_bytes = try readProgramBytes(
+        allocator,
+        sig.ELF_DATA_DIR ++ "set_return_data.so",
+    );
+    defer allocator.free(program_bytes);
+
+    const accounts = &.{
+        .{
+            .pubkey = program_id,
+            .lamports = 1_000_000_000,
+            .owner = program.bpf_loader_program.v3.ID,
+            .executable = true,
+            .rent_epoch = 0,
+            .data = program_bytes,
+        },
+    };
+
+    try expectProgramExecuteResult(
+        allocator,
+        program_id,
+        &[_]u8{},
+        &.{},
+        .{
+            .accounts = accounts,
+            .compute_meter = 141,
+        },
+        .{
+            .accounts = accounts,
+            .return_data = .{
+                .program_id = program_id,
+                .data = "Hello, world!",
+            },
+        },
+        .{
+            .print_logs = true,
+        },
+    );
+}
+
 test "program_is_not_executable" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
@@ -218,7 +272,8 @@ test "program_is_not_executable" {
         },
     };
 
-    const result = expectProgramExecuteResult(
+    try expectProgramExecuteError(
+        error.IncorrectProgramId,
         allocator,
         program_id,
         &[_]u8{},
@@ -227,13 +282,8 @@ test "program_is_not_executable" {
             .accounts = accounts,
             .compute_meter = 137,
         },
-        .{
-            .accounts = accounts,
-        },
         .{},
     );
-
-    try std.testing.expectError(error.IncorrectProgramId, result);
 }
 
 test "program_invalid_account_data" {

@@ -51,14 +51,13 @@ pub const INCREASE_TX_ACCOUNT_LOCK_LIMIT =
 /// TODO: add features
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/feature-set/src/lib.rs#L1188
-pub const FeatureSet = struct {
+pub const Features = struct {
     active: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
 
-    pub const EMPTY = FeatureSet{
-        .active = .{},
-    };
+    pub const EMPTY: Features = .{ .active = .{} };
 
-    pub fn deinit(self: *FeatureSet, allocator: std.mem.Allocator) void {
-        self.active.deinit(allocator);
+    pub fn deinit(self: Features, allocator: std.mem.Allocator) void {
+        var active_ = self.active;
+        active_.deinit(allocator);
     }
 };

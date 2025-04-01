@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const ids = sig.runtime.ids;
 const program = sig.runtime.program;
 const stable_log = sig.runtime.stable_log;
-const feature_set = sig.runtime.feature_set;
+const feature_set = sig.runtime.features;
 
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -161,12 +161,12 @@ fn processNextInstruction(
     // Invoke the program and log the result
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
-    try stable_log.programInvoke(&ic.tc.log_collector, program_id, ic.tc.instruction_stack.len);
+    try stable_log.programInvoke(ic.tc, program_id, ic.tc.instruction_stack.len);
     native_program_fn(allocator, ic) catch |execute_error| {
-        try stable_log.programFailure(&ic.tc.log_collector, program_id, execute_error);
+        try stable_log.programFailure(ic.tc, program_id, execute_error);
         return execute_error;
     };
-    try stable_log.programSuccess(&ic.tc.log_collector, program_id);
+    try stable_log.programSuccess(ic.tc, program_id);
 }
 
 /// Pop an instruction from the instruction stack\
@@ -303,7 +303,7 @@ pub fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const program_index_in_transaction = if (tc.feature_set.active.contains(
+    const program_index_in_transaction = if (tc.sc.ec.features.active.contains(
         feature_set.LIFT_CPI_CALLER_RESTRICTION,
     )) blk: {
         break :blk tc.getAccountIndex(callee.program_id) orelse {
@@ -321,7 +321,7 @@ pub fn prepareCpiInstructionInfo(
             try caller.borrowInstructionAccount(index_in_caller);
         defer borrowed_account.release();
 
-        if (!tc.feature_set.active.contains(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
+        if (!tc.sc.ec.features.active.contains(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
             !borrowed_account.account.executable)
         {
             try tc.log("Account {} is not executable", .{callee.program_id});
@@ -371,9 +371,11 @@ fn sumAccountLamports(
 test "pushInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
-    var tc = try testing.createTransactionContext(
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
         prng.random(),
         .{
@@ -384,10 +386,14 @@ test "pushInstruction" {
             },
         },
     );
-    defer tc.deinit(allocator);
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        allocator.destroy(sc);
+        tc.deinit();
+    }
 
     var instruction_info = try testing.createInstructionInfo(
-        allocator,
         &tc,
         system_program.ID,
         system_program.Instruction{
@@ -454,10 +460,11 @@ test "pushInstruction" {
 test "processNextInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    const ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
         prng.random(),
         .{
@@ -469,10 +476,14 @@ test "processNextInstruction" {
             .compute_meter = system_program.COMPUTE_UNITS,
         },
     );
-    defer tc.deinit(allocator);
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        allocator.destroy(sc);
+        tc.deinit();
+    }
 
     var instruction_info = try testing.createInstructionInfo(
-        allocator,
         &tc,
         system_program.ID,
         system_program.Instruction{
@@ -518,9 +529,11 @@ test "processNextInstruction" {
 test "popInstruction" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
-    var tc = try testing.createTransactionContext(
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
         prng.random(),
         .{
@@ -531,10 +544,14 @@ test "popInstruction" {
             },
         },
     );
-    defer tc.deinit(allocator);
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        allocator.destroy(sc);
+        tc.deinit();
+    }
 
     var instruction_info = try testing.createInstructionInfo(
-        allocator,
         &tc,
         system_program.ID,
         system_program.Instruction{
@@ -598,10 +615,11 @@ test "popInstruction" {
 test "prepareCpiInstructionInfo" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
         prng.random(),
         .{
@@ -613,10 +631,14 @@ test "prepareCpiInstructionInfo" {
             },
         },
     );
-    defer tc.deinit(allocator);
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        allocator.destroy(sc);
+        tc.deinit();
+    }
 
     const caller = try testing.createInstructionInfo(
-        allocator,
         &tc,
         system_program.ID,
         system_program.Instruction{
@@ -733,12 +755,12 @@ test "prepareCpiInstructionInfo" {
         tc.accounts[2].account.executable = false;
         defer tc.accounts[2].account.executable = true;
 
-        try tc.feature_set.active.put(
+        try ec.features.active.put(
             allocator,
             feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
             0,
         );
-        defer _ = tc.feature_set.active.swapRemove(
+        defer _ = ec.features.active.swapRemove(
             feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         );
 
@@ -748,9 +770,11 @@ test "prepareCpiInstructionInfo" {
 
 test "sumAccountLamports" {
     const testing = sig.runtime.testing;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
-    var tc = try testing.createTransactionContext(
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
         prng.random(),
         .{
@@ -762,11 +786,16 @@ test "sumAccountLamports" {
             },
         },
     );
-    defer tc.deinit(allocator);
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        allocator.destroy(sc);
+        tc.deinit();
+    }
 
     {
         // Success: 0 + 1 + 2 + 3 = 6
-        const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
+        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
             .{ .index_in_transaction = 2 },
@@ -781,7 +810,7 @@ test "sumAccountLamports" {
     {
         // Success: 0 + 1 + 2 + 0 = 3
         // First and last instruction account metas reference the same transaction account
-        const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
+        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
             .{ .index_in_transaction = 2 },
@@ -796,7 +825,7 @@ test "sumAccountLamports" {
 
     {
         // Failure: NotEnoughAccountKeys
-        var account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
+        var account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
             .{ .index_in_transaction = 2 },
@@ -821,7 +850,7 @@ test "sumAccountLamports" {
         });
         defer borrowed_account.release();
 
-        const account_metas = try testing.createInstructionContextAccountMetas(&tc, &.{
+        const account_metas = try testing.createInstructionInfoAccountMetas(&tc, &.{
             .{ .index_in_transaction = 0 },
             .{ .index_in_transaction = 1 },
             .{ .index_in_transaction = 2 },

@@ -23,7 +23,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
-const feature_set = sig.runtime.feature_set;
+const feature_set = sig.runtime.features;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 
@@ -544,8 +544,8 @@ fn executeUpdateCommission(
         ic,
         vote_account,
         commission,
-        try ic.tc.sysvar_cache.get(EpochSchedule),
-        try ic.tc.sysvar_cache.get(Clock),
+        try ic.tc.sc.sysvar_cache.get(EpochSchedule),
+        try ic.tc.sc.sysvar_cache.get(Clock),
     );
 }
 
@@ -564,7 +564,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.tc.feature_set.active.contains(feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
+        if (ic.tc.sc.ec.features.active.contains(feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
             const versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,
@@ -582,7 +582,7 @@ fn updateCommission(
         }
     };
 
-    if (enforce_commission_update_rule and ic.tc.feature_set.active.contains(
+    if (enforce_commission_update_rule and ic.tc.sc.ec.features.active.contains(
         feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
@@ -647,8 +647,8 @@ fn executeWithdraw(
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
-    const rent = try ic.tc.sysvar_cache.get(Rent);
-    const clock = try ic.tc.sysvar_cache.get(Clock);
+    const rent = try ic.tc.sc.sysvar_cache.get(Rent);
+    const clock = try ic.tc.sc.sysvar_cache.get(Clock);
 
     vote_account.release();
 
@@ -740,8 +740,8 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
+    if (ic.tc.sc.ec.features.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
+        ic.tc.sc.ec.features.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
     {
         return InstructionError.InvalidInstructionData;
     }
@@ -2142,7 +2142,7 @@ test "vote_program: update_commission increasing commission" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
+            .features = &.{
                 .{
                     .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
@@ -2169,7 +2169,7 @@ test "vote_program: update_commission increasing commission" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
+            .features = &.{
                 .{
                     .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
@@ -2267,7 +2267,7 @@ test "vote_program: update_commission decreasing commission" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
+            .features = &.{
                 .{
                     .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
@@ -2294,7 +2294,7 @@ test "vote_program: update_commission decreasing commission" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
+            .features = &.{
                 .{
                     .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
@@ -2392,7 +2392,7 @@ test "vote_program: update_commission commission update too late passes with fea
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{}, // None of the required feature_set is set,
+            .features = &.{}, // None of the required feature_set is set,
         },
         .{
             .accounts = &.{
@@ -2410,7 +2410,7 @@ test "vote_program: update_commission commission update too late passes with fea
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{}, // None of the required feature_set is set,
+            .features = &.{}, // None of the required feature_set is set,
         },
         .{},
     );
@@ -2499,7 +2499,7 @@ test "vote_program: update_commission error commission update too late failure" 
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
+            .features = &.{
                 .{
                     .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
@@ -2526,7 +2526,7 @@ test "vote_program: update_commission error commission update too late failure" 
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
+            .features = &.{
                 .{
                     .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
@@ -2629,7 +2629,7 @@ test "vote_program: update_commission missing signature" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
+            .features = &.{
                 .{
                     .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
@@ -2656,7 +2656,7 @@ test "vote_program: update_commission missing signature" {
                 .clock = clock,
                 .epoch_schedule = epoch_schedule,
             },
-            .feature_set = &.{
+            .features = &.{
                 .{
                     .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,

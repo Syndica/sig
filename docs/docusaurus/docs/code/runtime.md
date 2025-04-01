@@ -56,7 +56,7 @@ Currently, this document is scoped to the logic contained within the [`execute_l
 - For convenience, it contains dependencies that are required for transaction execution but should ultimately be located in a broader context. For example:
     - `sysvar_cache`
     - `lamports_per_signature`
-    - `last_blockhash`
+    - `prev_blockhash`
     - `feature_set`
 
 ## Feature Set
