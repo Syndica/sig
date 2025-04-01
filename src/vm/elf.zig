@@ -530,18 +530,20 @@ pub const Elf = struct {
                         const imm_offset = r_offset +| 4;
 
                         // If the relocation is targetting an address inside of the text section
-                        // the target is a lddw instruction which takes up two instruction slots.
+                        // the target is a LDDW instruction which takes up two instruction slots.
                         if (headers.inRangeOfShdr(text_section_index, imm_offset)) {
                             const va_low = val: {
                                 const imm_slice = try safeSlice(bytes, imm_offset, 4);
                                 break :val std.mem.readInt(u32, imm_slice[0..4], .little);
                             };
                             const va_high = val: {
-                                const imm_high_offset = r_offset +| 12;
+                                // One instruction slot over.
+                                const imm_high_offset = imm_offset +| 8;
                                 const imm_slice = try safeSlice(bytes, imm_high_offset, 4);
                                 break :val std.mem.readInt(u32, imm_slice[0..4], .little);
                             };
 
+                            // Combine both halfs to get the full 64-bit address.
                             var ref_addr = (@as(u64, va_high) << 32) | va_low;
                             if (ref_addr == 0) return error.InvalidVirtualAddress;
 
@@ -675,8 +677,13 @@ pub const Elf = struct {
         const headers = try Headers.parse(bytes);
         const data = try Data.parse(headers);
 
+        // The behaviour for parsing the version changed in v1. Before it was
+        // either equal `EM_SBPF_V1` or it wasn't. This method didn't allow
+        // for specifying more than 2 possible versions, so now we have
+        // well-defined values for the versions. We will determine which method
+        // to use based on the configuration of the VM.
         const sbpf_version: sbpf.Version = if (config.maximum_version == .v0)
-            if (headers.header.e_flags == sbpf.EF_SBPF_v1)
+            if (headers.header.e_flags == sbpf.EM_SBPF_V1)
                 .v1
             else
                 .v0
@@ -688,10 +695,17 @@ pub const Elf = struct {
             else => |v| @enumFromInt(v),
         };
 
+        // Ensure that the sbpf version we find is within the range that's enabled.
         if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version) or
             @intFromEnum(sbpf_version) > @intFromEnum(config.maximum_version))
         {
             return error.VersionUnsupported;
+        }
+
+        if (sbpf_version.enableElfVaddr() and
+            config.optimize_rodata != true)
+        {
+            return error.UnsupportedSBPFVersion;
         }
 
         if (sbpf_version.enableStricterElfHeaders()) {
@@ -736,6 +750,8 @@ pub const Elf = struct {
     ) !Elf {
         const header = headers.header;
 
+        // A list of the first 5 expected program headers.
+        // Since this is a stricter parsing scheme, we need them to match exactly.
         const expected_phdrs = .{
             .{ elf.PT_LOAD, elf.PF_X, memory.BYTECODE_START },
             .{ elf.PT_LOAD, elf.PF_R, memory.RODATA_START },
@@ -773,6 +789,8 @@ pub const Elf = struct {
             headers.phdrs[0..expected_phdrs.len],
         ) |entry, phdr| {
             const p_type, const p_flags, const p_vaddr = entry;
+            // For writable sections, (those with the PF_W bit set), we expect their
+            // value for p_filesz to be zero.
             const p_filesz = if (p_flags & elf.PF_W != 0) 0 else phdr.p_memsz;
 
             if (phdr.p_type != p_type or
@@ -937,28 +955,28 @@ pub const Elf = struct {
     fn validate(self: *Elf) !void {
         const header = self.headers.header;
 
-        // ensure 64-bit class
+        // Ensure 64-bit class
         if (header.e_ident[elf.EI_CLASS] != elf.ELFCLASS64) {
             return error.WrongClass;
         }
-        // ensure little endian
+        // Ensure little endian
         if (header.e_ident[elf.EI_DATA] != elf.ELFDATA2LSB) {
             return error.WrongEndianess;
         }
-        // ensure no OS_ABI was set
+        // Ensure no OS_ABI was set
         if (header.e_ident[sbpf.EI_OSABI] != sbpf.ELFOSABI_NONE) {
             return error.WrongAbi;
         }
-        // ensure the ELF was compiled for BPF or possibly the custom SBPF machine number
+        // Ensure the ELF was compiled for BPF or possibly the custom SBPF machine number
         if (header.e_machine != elf.EM.BPF and @intFromEnum(header.e_machine) != sbpf.EM_SBPF) {
             return error.WrongMachine;
         }
-        // ensure that this is a `.so`, dynamic library file
+        // Ensure that this is a `.so`, dynamic library file
         if (header.e_type != .DYN) {
             return error.NotDynElf;
         }
 
-        // ensure there is only one ".text" section
+        // Ensure there is only one `.text` section
         {
             var count: u32 = 0;
             for (self.headers.shdrs) |shdr| {
@@ -971,9 +989,9 @@ pub const Elf = struct {
             }
         }
 
-        // writable sections are not supported in our usecase
-        // that will include ".bss", and ".data" sections that are writable
-        // ".data.rel" is allowed though.
+        // Writable sections are not supported in our usecase that will include
+        // ".bss", and ".data" sections that are writable ".data.rel" is
+        // allowed though.
         for (self.headers.shdrs) |shdr| {
             const name = self.data.getString(shdr.sh_name);
             if (std.mem.startsWith(u8, name, ".bss")) {
@@ -989,7 +1007,7 @@ pub const Elf = struct {
             }
         }
 
-        // ensure all of the section headers are within bounds
+        // Ensure all of the section headers are within bounds
         for (self.headers.shdrs) |shdr| {
             const start = shdr.sh_offset;
             const end = try std.math.add(u64, start, shdr.sh_size);
@@ -998,18 +1016,12 @@ pub const Elf = struct {
             if (start > file_size or end > file_size) return error.SectionHeaderOutOfBounds;
         }
 
-        // ensure that the entry point is inside of the ".text" section
+        // Ensure that the entry point is inside of the ".text" section
         const entrypoint = header.e_entry;
         const text_section_index = self.getShdrIndexByName(".text") orelse
             return error.NoTextSection;
         if (!self.inRangeOfShdrVaddr(text_section_index, entrypoint)) {
             return error.EntrypointOutsideTextSection;
-        }
-
-        if (self.version.enableElfVaddr() and
-            self.config.optimize_rodata != true)
-        {
-            return error.UnsupportedSBPFVersion;
         }
     }
 
