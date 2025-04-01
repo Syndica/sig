@@ -26,7 +26,7 @@ pub const TransactionContextAccountParams = struct {
 };
 
 pub const TransactionContextParams = struct {
-    accounts: []const TransactionContextAccountParams,
+    accounts: []const TransactionContextAccountParams = &.{},
     accounts_resize_delta: i64 = 0,
     compute_meter: u64 = 0,
     custom_error: ?u32 = null,
