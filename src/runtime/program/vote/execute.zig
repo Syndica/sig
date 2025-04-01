@@ -93,13 +93,13 @@ pub fn execute(
             ic,
             &vote_account,
         ),
-        .update_commission => |args| executeUpdateCommission(
+        .update_commission => |args| try executeUpdateCommission(
             allocator,
             ic,
             &vote_account,
             args,
         ),
-        .withdraw => |args| executeWithdraw(
+        .withdraw => |args| try executeWithdraw(
             allocator,
             ic,
             &vote_account,
@@ -123,7 +123,7 @@ pub fn execute(
             &vote_account,
             args.vote,
         ),
-        .vote_switch => |args| executeProcessVoteWithAccount(
+        .vote_switch => |args| try executeProcessVoteWithAccount(
             allocator,
             ic,
             &vote_account,
