@@ -216,7 +216,7 @@ fn translateSlice(
         return &.{}; // &mut []
     }
 
-    const total_size = std.math.mul(u64, len, @sizeOf(u64)) catch std.math.maxInt(u64);
+    const total_size = len *| @sizeOf(u64);
     _ = std.math.cast(isize, total_size) orelse return SyscallError.InvalidLength;
 
     const host_addr = try translate(memory_map, state, vm_addr, total_size);
