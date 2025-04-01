@@ -117,18 +117,6 @@ pub fn execute(
             &vote_account,
             args.vote,
         ),
-        .vote => |args| executeProcessVoteWithAccount(
-            allocator,
-            ic,
-            &vote_account,
-            args.vote,
-        ),
-        .vote_switch => |args| try executeProcessVoteWithAccount(
-            allocator,
-            ic,
-            &vote_account,
-            args.vote,
-        ),
         .update_vote_state => |args| try executeUpdateVoteState(
             allocator,
             ic,
