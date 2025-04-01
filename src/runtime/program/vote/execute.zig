@@ -866,11 +866,15 @@ fn updateVoteState(
     clock: Clock,
     vote_state_update: VoteStateUpdate,
 ) !void {
-    _ = allocator;
-    _ = ic;
-    _ = vote_account;
+    var vote_state = try verifyAndGetVoteState(
+        allocator,
+        ic,
+        vote_account,
+        clock,
+    );
+    defer vote_state.deinit();
+
     _ = slot_hashes;
-    _ = clock;
     _ = vote_state_update;
 }
 

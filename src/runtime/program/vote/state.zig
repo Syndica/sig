@@ -954,6 +954,268 @@ pub const VoteState = struct {
     pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
         return @min(current_slot -| voted_for_slot, std.math.maxInt(u8));
     }
+
+    fn compareFn(context: void, key: Slot, mid_item: LandedVote) std.math.Order {
+        _ = context;
+        return std.math.order(key, mid_item.lockout.slot);
+    }
+
+    pub fn contains_slot(self: *const VoteState, candidate_slot: Slot) bool {
+        return std.sort.binarySearch(
+            LandedVote,
+            candidate_slot,
+            self.votes.items,
+            {},
+            compareFn,
+        ) != null;
+    }
+
+    pub fn checkBeforeProcessVoteStateUpdate(
+        self: *VoteState,
+        allocator: std.mem.Allocator,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        slot: Slot,
+        vote_state_update: *VoteStateUpdate,
+    ) !?VoteError {
+        try self.checkAndFilterProposedVoteState(
+            allocator,
+            slot_hashes,
+            vote_state_update,
+        );
+
+        _ = epoch;
+        _ = slot;
+    }
+
+    pub fn checkAndFilterProposedVoteState(
+        self: *VoteState,
+        allocator: std.mem.Allocator,
+        slot_hashes: *const SlotHashes,
+        vote_state_update: *VoteStateUpdate,
+    ) !?VoteError {
+        if (vote_state_update.lockouts.len == 0) {
+            return VoteError.empty_slots;
+        }
+
+        const last_proposed_slot = vote_state_update
+        // must be nonempty, checked above
+            .lockouts[vote_state_update.lockouts.len - 1].slot;
+
+        // If the proposed state is not new enough, return
+        if (self.votes.getLastOrNull()) |last_vote| {
+            if (last_proposed_slot <= last_vote.lockout.slot) {
+                return VoteError.vote_too_old;
+            }
+        }
+
+        if (slot_hashes.entries.len == 0) {
+            return VoteError.vote_too_old;
+        }
+
+        const earliest_slot_hash_in_history = slot_hashes
+            .entries[slot_hashes.entries.len - 1].@"0";
+
+        // Check if the proposed vote state is too old to be in the SlotHash history
+        if (last_proposed_slot < earliest_slot_hash_in_history) {
+            // If this is the last slot in the vote update, it must be in SlotHashes,
+            // otherwise we have no way of confirming if the hash matches
+            return VoteError.vote_too_old;
+        }
+
+        if (vote_state_update.*.root) |root| {
+            // If the new proposed root `R` is less than the earliest slot hash in the history
+            // such that we cannot verify whether the slot was actually was on this fork, set
+            // the root to the latest vote in the vote state that's less than R. If no
+            // votes from the vote state are less than R, use its root instead.
+            if (root < earliest_slot_hash_in_history) {
+                // First overwrite the proposed root with the vote state's root
+                vote_state_update.*.root = self.root_slot;
+                // Then try to find the latest vote in vote state that's less than R
+                var iter = std.mem.reverseIterator(self.votes);
+                while (iter.next()) |vote| {
+                    if (vote.lockout.slot <= root) {
+                        vote_state_update.*.root = vote.lockout.slot;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Index into the new proposed vote state's slots, starting with the root if it exists then
+        // we use this mutable root to fold checking the root slot into the below loop
+        // for performance
+        var root_to_check = if (vote_state_update.*.root) |root| root else null;
+        var proposed_lockouts_index = 0;
+        // index into the slot_hashes, starting at the oldest known
+        // slot hash
+        var slot_hashes_index = slot_hashes.entries.len;
+        var proposed_lockouts_indices_to_filter = std.ArrayList(usize).init(allocator);
+        // Note:
+        //
+        // 1) `proposed_lockouts` is sorted from oldest/smallest vote to newest/largest
+        // vote, due to the way votes are applied to the vote state (newest votes
+        // pushed to the back).
+        //
+        // 2) Conversely, `slot_hashes` is sorted from newest/largest vote to
+        // the oldest/smallest vote
+        //
+        // We check every proposed lockout because have to ensure that every slot is actually part of
+        // the history, not just the most recent ones
+        while (proposed_lockouts_index < vote_state_update.*.lockouts.len and
+            slot_hashes_index > 0)
+        {
+            const proposed_vote_slot: Slot = blk: {
+                if (root_to_check) |root| {
+                    break :blk root;
+                } else {
+                    break :blk vote_state_update.*.lockouts[proposed_lockouts_index].slot;
+                }
+            };
+
+            if (root_to_check == null and
+                proposed_lockouts_index > 0 and
+                proposed_vote_slot <= vote_state_update.*.lockouts[
+                try std.math.sub(proposed_lockouts_index, 1)
+            ].slot) {
+                return VoteError.slots_not_ordered;
+            }
+            const ancestor_slot = slot_hashes.entries[
+                try std.math.sub(slot_hashes_index, 1)
+            ].@"0";
+
+            // Find if this slot in the proposed vote state exists in the SlotHashes history
+            // to confirm if it was a valid ancestor on this fork
+            const order = std.math.order(proposed_vote_slot, ancestor_slot);
+            switch (order) {
+                .lt => {
+                    if (slot_hashes_index == slot_hashes.entries.len) {
+                        // The vote slot does not exist in the SlotHashes history because it's too old,
+                        // i.e. older than the oldest slot in the history.
+                        if (proposed_vote_slot >= earliest_slot_hash_in_history) {
+                            return VoteError.assertion_failed;
+                        }
+                        if (!self.contains_slot(proposed_vote_slot) and (root_to_check == null)) {
+                            // If the vote slot is both:
+                            // 1) Too old
+                            // 2) Doesn't already exist in vote state
+                            //
+                            // Then filter it out
+                            try proposed_lockouts_indices_to_filter.append(
+                                @as(usize, proposed_lockouts_index),
+                            );
+                        }
+                        if (root_to_check) |new_proposed_root| {
+                            // 1. Because `root_to_check.is_some()`, then we know that
+                            // we haven't checked the root yet in this loop, so
+                            // `proposed_vote_slot` == `new_proposed_root` == `proposed_root`.
+                            std.debug.assert(new_proposed_root == proposed_vote_slot);
+                            // 2. We know from the assert earlier in the function that
+                            // `proposed_vote_slot < earliest_slot_hash_in_history`,
+                            // so from 1. we know that `new_proposed_root < earliest_slot_hash_in_history`.
+                            if (new_proposed_root >= earliest_slot_hash_in_history) {
+                                return VoteError.assertion_failed;
+                            }
+                            root_to_check = null;
+                        } else {
+                            proposed_lockouts_index = std.math.add(proposed_lockouts_index, 1) catch
+                                return InstructionError.ArithmeticOverflow;
+                        }
+                        continue;
+                    } else {
+                        // If the vote slot is new enough to be in the slot history,
+                        // but is not part of the slot history, then it must belong to another fork,
+                        // which means this proposed vote state is invalid.
+                        if (root_to_check != null) {
+                            return VoteError.root_on_different_fork;
+                        } else {
+                            return VoteError.slots_mismatch;
+                        }
+                    }
+                },
+                .gt => {
+                    // Decrement `slot_hashes_index` to find newer slots in the SlotHashes history
+                    slot_hashes_index = std.math.sub(slot_hashes_index, 1) catch
+                        return InstructionError.ArithmeticOverflow;
+                    continue;
+                },
+                .eq => {
+                    // Once the slot in `proposed_lockouts` is found, bump to the next slot
+                    // in `proposed_lockouts` and continue. If we were checking the root,
+                    // start checking the vote state instead.
+                    if (root_to_check != null) {
+                        root_to_check = null;
+                    } else {
+                        proposed_lockouts_index = std.math.add(proposed_lockouts_index, 1) catch
+                            return InstructionError.ArithmeticOverflow;
+                        slot_hashes_index = std.math.sub(slot_hashes_index, 1) catch
+                            return InstructionError.ArithmeticOverflow;
+                    }
+                },
+            }
+        }
+
+        if (proposed_lockouts_index != vote_state_update.*.lockouts.len) {
+            // The last vote slot in the proposed vote state did not exist in SlotHashes
+            return VoteError.slots_mismatch;
+        }
+
+        // This assertion must be true at this point because we can assume by now:
+        // 1) proposed_lockouts_index == proposed_lockouts.len()
+        // 2) last_proposed_slot >= earliest_slot_hash_in_history
+        // 3) !proposed_lockouts.is_empty()
+        //
+        // 1) implies that during the last iteration of the loop above,
+        // `proposed_lockouts_index` was equal to `proposed_lockouts.len() - 1`,
+        // and was then incremented to `proposed_lockouts.len()`.
+        // This means in that last loop iteration,
+        // `proposed_vote_slot ==
+        //  proposed_lockouts[proposed_lockouts.len() - 1] ==
+        //  last_proposed_slot`.
+        //
+        // Then we know the last comparison `match proposed_vote_slot.cmp(&ancestor_slot)`
+        // is equivalent to `match last_proposed_slot.cmp(&ancestor_slot)`. The result
+        // of this match to increment `proposed_lockouts_index` must have been either:
+        //
+        // 1) The Equal case ran, in which case then we know this assertion must be true
+        // 2) The Less case ran, and more specifically the case
+        // `proposed_vote_slot < earliest_slot_hash_in_history` ran, which is equivalent to
+        // `last_proposed_slot < earliest_slot_hash_in_history`, but this is impossible
+        // due to assumption 3) above.
+        std.debug.assert(last_proposed_slot == slot_hashes.entries[slot_hashes_index].@"0");
+
+        if (slot_hashes[slot_hashes_index].@"1" != vote_state_update.*.hash) {
+            return VoteError.slot_hash_mismatch;
+        }
+
+        // Filter out the irrelevant votes
+        proposed_lockouts_index = 0;
+        var filter_votes_index = 0;
+
+        var i: usize = 0;
+        while (i < vote_state_update.items.len) {
+            const should_retain = blk: {
+                if (filter_votes_index == proposed_lockouts_indices_to_filter.len) {
+                    break :blk true;
+                } else if (proposed_lockouts_index ==
+                    proposed_lockouts_indices_to_filter[filter_votes_index])
+                {
+                    filter_votes_index +%= 1; // checked add with wrapping
+                    break :blk true;
+                } else {
+                    break :blk true;
+                }
+            };
+
+            proposed_lockouts_index +%= 1; // checked add with wrapping
+
+            if (!should_retain) {
+                _ = vote_state_update.*.lockouts.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
 };
 
 pub const VoteAuthorize = enum {
