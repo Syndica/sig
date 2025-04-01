@@ -117,30 +117,42 @@ pub fn execute(
             &vote_account,
             args.vote,
         ),
-        .update_vote_state => |args| try executeUpdateVoteState(
-            allocator,
-            ic,
-            &vote_account,
-            args.vote_state_update,
-        ),
-        .update_vote_state_switch => |args| try executeUpdateVoteState(
-            allocator,
-            ic,
-            &vote_account,
-            args.vote_state_update,
-        ),
-        .compact_update_vote_state => |args| try executeUpdateVoteState(
-            allocator,
-            ic,
-            &vote_account,
-            args.vote_state_update,
-        ),
-        .compact_update_vote_state_switch => |args| try executeUpdateVoteState(
-            allocator,
-            ic,
-            &vote_account,
-            args.vote_state_update,
-        ),
+        .update_vote_state => |args| {
+            var vote_state_update = args.vote_state_update;
+            try executeUpdateVoteState(
+                allocator,
+                ic,
+                &vote_account,
+                &vote_state_update,
+            );
+        },
+        .update_vote_state_switch => |args| {
+            var vote_state_update = args.vote_state_update;
+            try executeUpdateVoteState(
+                allocator,
+                ic,
+                &vote_account,
+                &vote_state_update,
+            );
+        },
+        .compact_update_vote_state => |args| {
+            var vote_state_update = args.vote_state_update;
+            try executeUpdateVoteState(
+                allocator,
+                ic,
+                &vote_account,
+                &vote_state_update,
+            );
+        },
+        .compact_update_vote_state_switch => |args| {
+            var vote_state_update = args.vote_state_update;
+            try executeUpdateVoteState(
+                allocator,
+                ic,
+                &vote_account,
+                &vote_state_update,
+            );
+        },
         .tower_sync => |args| try executeTowerSync(
             allocator,
             ic,
@@ -819,7 +831,7 @@ fn executeUpdateVoteState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    vote_state_update: VoteStateUpdate,
+    vote_state_update: *VoteStateUpdate,
 ) !void {
     if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
         ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
@@ -852,7 +864,7 @@ fn updateVoteState(
     vote_account: *BorrowedAccount,
     slot_hashes: SlotHashes,
     clock: Clock,
-    vote_state_update: VoteStateUpdate,
+    vote_state_update: *VoteStateUpdate,
 ) !void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
@@ -862,8 +874,20 @@ fn updateVoteState(
     );
     defer vote_state.deinit();
 
-    _ = slot_hashes;
-    _ = vote_state_update;
+    const maybe_err = try vote_state.doProcessVoteStateUpdate(
+        allocator,
+        &slot_hashes,
+        clock.epoch,
+        clock.slot,
+        vote_state_update,
+    );
+
+    if (maybe_err) |err| {
+        ic.tc.custom_error = @intFromEnum(err);
+        return InstructionError.Custom;
+    }
+
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
 fn executeTowerSync(
