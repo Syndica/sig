@@ -51,9 +51,7 @@ test "hello_world" {
         .{
             .accounts = accounts,
         },
-        .{
-            .print_logs = true,
-        },
+        .{},
     );
 }
 
@@ -121,9 +119,7 @@ test "print_account" {
         .{
             .accounts = accounts,
         },
-        .{
-            .print_logs = true,
-        },
+        .{},
     );
 }
 
@@ -191,13 +187,138 @@ test "fast_copy" {
                 final_instruction_account,
             },
         },
-        .{
-            .print_logs = true,
-        },
+        .{},
     );
 }
 
-fn readProgramBytes(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+test "program_is_not_executable" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const program_bytes = try readProgramBytes(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+    );
+    defer allocator.free(program_bytes);
+
+    const accounts = &.{
+        .{
+            .pubkey = program_id,
+            .lamports = 1_000_000_000,
+            .owner = program.bpf_loader_program.v3.ID,
+            .executable = false,
+            .rent_epoch = 0,
+            .data = program_bytes,
+        },
+    };
+
+    const result = expectProgramExecuteResult(
+        allocator,
+        program_id,
+        &[_]u8{},
+        &.{},
+        .{
+            .accounts = accounts,
+            .compute_meter = 137,
+        },
+        .{
+            .accounts = accounts,
+        },
+        .{},
+    );
+
+    try std.testing.expectError(error.IncorrectProgramId, result);
+}
+
+// TODO: Uncomment once panic is removed from https://github.com/Syndica/sig/blob/f56db13502051c74b22cb8d54982d51fc34084ca/src/vm/executable.zig#L506-L507
+// test "program_invalid_account_data" {
+//     const allocator = std.testing.allocator;
+//     var prng = std.rand.DefaultPrng.init(0);
+
+//     const program_id = Pubkey.initRandom(prng.random());
+//     var program_bytes = try readProgramBytes(
+//         allocator,
+//         sig.ELF_DATA_DIR ++ "hello_world.so",
+//     );
+//     program_bytes[3] = 0x00; // corrupt the program
+//     defer allocator.free(program_bytes);
+
+//     const accounts = &.{
+//         .{
+//             .pubkey = program_id,
+//             .lamports = 1_000_000_000,
+//             .owner = program.bpf_loader_program.v3.ID,
+//             .executable = true,
+//             .rent_epoch = 0,
+//             .data = program_bytes,
+//         },
+//     };
+
+//     const result = expectProgramExecuteResult(
+//         allocator,
+//         program_id,
+//         &[_]u8{},
+//         &.{},
+//         .{
+//             .accounts = accounts,
+//             .compute_meter = 137,
+//         },
+//         .{
+//             .accounts = accounts,
+//         },
+//         .{
+//             .print_logs = true,
+//         },
+//     );
+
+//     try std.testing.expectError(error.InvalidAccountData, result);
+// }
+
+test "program_init_vm_not_enough_compute" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const program_bytes = try readProgramBytes(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+    );
+    defer allocator.free(program_bytes);
+
+    const accounts = &.{
+        .{
+            .pubkey = program_id,
+            .lamports = 1_000_000_000,
+            .owner = program.bpf_loader_program.v3.ID,
+            .executable = true,
+            .rent_epoch = 0,
+            .data = program_bytes,
+        },
+    };
+
+    var compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    // Set heap size so that heap cost is 8
+    compute_budget.heap_size = 2 * 32 * 1024;
+
+    const result = expectProgramExecuteResult(
+        allocator,
+        program_id,
+        &[_]u8{},
+        &.{},
+        .{
+            .accounts = accounts,
+            .compute_meter = 7,
+            .compute_budget = compute_budget,
+        },
+        .{},
+        .{},
+    );
+
+    try std.testing.expectError(error.ProgramEnvironmentSetupFailure, result);
+}
+
+fn readProgramBytes(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const input_file = try std.fs.cwd().openFile(path, .{});
     return try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
 }
