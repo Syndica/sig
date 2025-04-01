@@ -1535,8 +1535,18 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         snapshot_dir,
     );
 
-    const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
-    var latest_snapshot_gen_info = sig.sync.RwMux(?SnapshotGenerationInfo).init(blk: {
+    var accountsdb = try sig.accounts_db.AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .noop,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 1,
+    });
+    defer accountsdb.deinit();
+
+    {
         const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
             allocator,
             logger.unscoped(),
@@ -1545,32 +1555,22 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         );
         defer all_snap_fields.deinit(allocator);
 
-        break :blk .{
-            .full = .{
-                .slot = snap_files.full.slot,
-                .hash = snap_files.full.hash,
-                .capitalization = all_snap_fields.full.bank_fields.capitalization,
-            },
-            .inc = inc: {
-                const inc = all_snap_fields.incremental orelse break :inc null;
-                // if the incremental snapshot field is not null, these shouldn't be either
-                const inc_info = snap_files.incremental_info.?;
-                const inc_persist = inc.bank_extra.snapshot_persistence.?;
-                break :inc .{
-                    .slot = inc_info.slot,
-                    .hash = inc_info.hash,
-                    .capitalization = inc_persist.incremental_capitalization,
-                };
-            },
-        };
-    });
+        const manifest = try accountsdb.loadWithDefaults(
+            allocator,
+            all_snap_fields,
+            1,
+            true,
+            1500,
+            false,
+            false,
+        );
+        defer manifest.deinit(allocator);
+    }
 
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,
         .logger = logger,
-
-        .snapshot_dir = snapshot_dir,
-        .latest_snapshot_gen_info = &latest_snapshot_gen_info,
+        .accountsdb = &accountsdb,
 
         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
         .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),

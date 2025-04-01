@@ -64,7 +64,7 @@ pub fn Response(comptime T: type) type {
 }
 
 pub const Error = struct {
-    code: i64,
+    code: ErrorCode,
     message: []const u8,
     data: ?std.json.Value = null,
 
@@ -75,5 +75,59 @@ pub const Error = struct {
 
     pub fn eql(self: Error, other: Error) bool {
         return self.code == other.code and std.mem.eql(u8, self.message, other.message);
+    }
+};
+
+pub const ErrorCode = enum(i64) {
+    /// Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.
+    parse_error = -32700,
+    /// The JSON sent is not a valid Request object.
+    invalid_request = -32600,
+    /// The method does not exist / is not available.
+    method_not_found = -32601,
+    /// Invalid method parameter(s).
+    invalid_params = -32602,
+    /// Internal JSON-RPC error.
+    internal_error = -32603,
+
+    _,
+
+    pub const server_error_first: ErrorCode = @enumFromInt(-32_000);
+    pub const server_error_last: ErrorCode = @enumFromInt(-32_099);
+
+    pub const reserved_error_first: ErrorCode = @enumFromInt(-32_100);
+    pub const reserved_error_last: ErrorCode = @enumFromInt(-32_768);
+
+    pub fn isServerError(code: ErrorCode) bool {
+        return switch (code) {
+            server_error_first...server_error_last => true,
+            else => false,
+        };
+    }
+
+    pub fn isAppError(code: ErrorCode) bool {
+        return switch (code) {
+            server_error_first...server_error_last => false,
+            reserved_error_first...reserved_error_last => false,
+            else => true,
+        };
+    }
+
+    pub fn jsonParse(
+        allocator: std.mem.Allocator,
+        /// * `std.json.Scanner`
+        /// * `std.json.Reader(...)`
+        source: anytype,
+        options: std.json.ParseOptions,
+    ) std.json.ParseError(@TypeOf(source.*))!ErrorCode {
+        return @enumFromInt(try std.json.innerParse(i64, allocator, source, options));
+    }
+
+    pub fn jsonStringify(
+        self: ErrorCode,
+        /// `*std.json.WriteStream(...)`
+        jw: anytype,
+    ) @TypeOf(jw.*).Error!void {
+        try jw.write(@intFromEnum(self));
     }
 };
