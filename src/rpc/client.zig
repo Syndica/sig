@@ -12,41 +12,6 @@ const Response = rpc.response.Response;
 
 pub const FetchRpcError = Allocator.Error || HttpPostFetcher.Error || rpc.response.ParseError;
 
-/// Send a typed RPC request and await a response.
-/// Pass a struct, such as those defined in `rpc.methods`.
-/// Returns data allocated with the passed allocator.
-pub fn fetchRpc(
-    fetcher: *HttpPostFetcher,
-    allocator: Allocator,
-    id: rpc.request.Id,
-    /// The name of the RPC method to use.
-    method_name: []const u8,
-    /// Should be a request parameter struct defined in `rpc.methods`, but
-    /// can be anything serializable; it is up to the caller to supply a
-    /// request which is valid and expected by the target RPC server.
-    /// Just as is expected of the types in `rpc.methods`, a type decl
-    /// of name `Response` is expected, to declare the type of the response.
-    ///
-    /// NOTE: typically the parameter field is an array, despite being
-    /// represented as a record struct in zig code; unless this is for
-    /// named parameters, this should likely be a tuple, or otherwise
-    /// serialized as an array.
-    method_params: anytype,
-) FetchRpcError!Response(@TypeOf(method_params).Response) {
-    const request_json = try std.json.stringifyAlloc(allocator, .{
-        .jsonrpc = "2.0",
-        .id = id,
-        .method = method_name,
-        .params = method_params,
-    }, .{});
-    defer allocator.free(request_json);
-
-    const response_json = try fetcher.fetchWithRetries(allocator, request_json);
-    defer allocator.free(response_json);
-
-    return try Response(@TypeOf(method_params).Response).fromJson(allocator, response_json);
-}
-
 pub const Client = struct {
     fetcher: HttpPostFetcher,
 
@@ -72,15 +37,20 @@ pub const Client = struct {
         id: rpc.request.Id,
         comptime method: MethodAndParams.Tag,
         // TODO: use this instead of `std.meta.FieldType` to avoid eval branch quota until `@FieldType`'s here.
-        request: @typeInfo(MethodAndParams).Union.fields[@intFromEnum(method)].type,
-    ) Error!Response(@TypeOf(request).Response) {
-        return try fetchRpc(
-            &self.fetcher,
-            allocator,
-            id,
-            @tagName(method),
-            request,
-        );
+        params: @typeInfo(MethodAndParams).Union.fields[@intFromEnum(method)].type,
+    ) Error!Response(@TypeOf(params).Response) {
+        const request: rpc.request.Request = .{
+            .id = id,
+            .method = @unionInit(MethodAndParams, @tagName(method), params),
+        };
+
+        const request_json = try std.json.stringifyAlloc(allocator, request, .{});
+        defer allocator.free(request_json);
+
+        const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);
+        defer allocator.free(response_json);
+
+        return try Response(@TypeOf(params).Response).fromJson(allocator, response_json);
     }
 
     /// Call fetchRpc using the contained allocator and fetcher.
