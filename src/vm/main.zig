@@ -125,9 +125,11 @@ pub fn main() !void {
         .return_data = .{},
         .custom_error = null,
         .log_collector = null,
-        .compute_meter = std.math.maxInt(u64),
-        .prev_blockhash = Hash.ZEROES,
-        .prev_lamports_per_signature = 0,
+        .sysvar_cache = .{},
+        .compute_meter = cmd.limit,
+        .feature_set = FeatureSet.EMPTY,
+        .lamports_per_signature = 0,
+        .last_blockhash = Hash.ZEROES,
         .compute_budget = ComputeBudget.default(1_400_000),
     };
     defer tc.deinit();
@@ -150,6 +152,7 @@ const Cmd = struct {
     input_path: ?[]const u8,
     assemble: bool,
     version: sbpf.Version,
+    limit: u64,
 
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
@@ -180,6 +183,14 @@ const Cmd = struct {
                 .default_value = .v3,
                 .config = {},
                 .help = "sBPF version to execute under",
+            },
+            .limit = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .l,
+                .default_value = std.math.maxInt(u64),
+                .config = {},
+                .help = "number of compute units that can be used",
             },
         },
     };

@@ -957,6 +957,7 @@ pub const Config = struct {
     aligned_memory_mapping: bool = true,
     /// Allowed [SBPFVersion]s
     minimum_version: sbpf.Version = .v0,
+    enable_stack_frame_gaps: bool = true,
 
     maximum_version: sbpf.Version = .v3,
 
