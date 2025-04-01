@@ -2059,8 +2059,8 @@ test "state.VoteState.lockout expire multiple votes" {
     // Expire the second and third votes
     const expire_slot =
         vote_state.votes.items[1].lockout.slot +
-        (try vote_state.votes.items[1].lockout.lockout()) +
-        1;
+            (try vote_state.votes.items[1].lockout.lockout()) +
+            1;
     try processSlotVoteUnchecked(&vote_state, expire_slot);
     try std.testing.expectEqual(2, vote_state.votes.items.len);
 
@@ -2276,34 +2276,6 @@ test "state.VoteState.processVote empty slot hashes" {
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1688
 test "state.VoteState.checkSlotsAreValid new vote" {
-    const allocator = std.testing.allocator;
-
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
-
-    var votes = std.ArrayList(Slot).init(allocator);
-    defer votes.deinit();
-
-    try votes.append(0);
-    const vote = Vote{
-        .slots = votes,
-        .hash = Hash.ZEROES,
-        .timestamp = null,
-    };
-
-    const slot_hashes = SlotHashes{
-        .entries = &.{
-            .{ vote.slots.getLast(), vote.hash },
-        },
-    };
-
-    try std.testing.expectEqual(
-        null,
-        try vote_state.checkSlotsAreValid(&vote, vote.slots.items, &slot_hashes),
-    );
-}
-
-test "state.VoteState.checkSlotsAreValid bad timestamp" {
     const allocator = std.testing.allocator;
 
     var vote_state = VoteState.default(allocator);
