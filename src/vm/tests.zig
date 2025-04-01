@@ -16,7 +16,7 @@ const MemoryMap = memory.MemoryMap;
 const OpCode = sbpf.Instruction.OpCode;
 
 const expectEqual = std.testing.expectEqual;
-const createTransactionContext = sig.runtime.testing.createTransactionContext;
+const createTransactionContext = sig.runtime.testing.createExecutionContexts;
 
 // Execution tests
 

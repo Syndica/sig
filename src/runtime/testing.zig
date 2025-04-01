@@ -8,99 +8,93 @@ const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 
-const FeatureSet = sig.runtime.FeatureSet;
+const Features = sig.runtime.Features;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
+const EpochContext = sig.runtime.transaction_context.EpochContext;
+const SlotContext = sig.runtime.transaction_context.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
+const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const ComputeBudget = sig.runtime.ComputeBudget;
 
-pub const TransactionContextAccountParams = struct {
-    pubkey: ?Pubkey = null,
-    lamports: u64 = 0,
-    data: []const u8 = &.{},
-    owner: ?Pubkey = null,
-    executable: bool = false,
-    rent_epoch: u64 = 0,
-};
+pub const ExecuteContextsParams = struct {
+    // Epoch context
+    features: []const FeatureParams = &.{},
 
-pub const TransactionContextParams = struct {
-    accounts: []const TransactionContextAccountParams = &.{},
+    // Slot Context
+    sysvar_cache: SysvarCache = .{},
+
+    // Transaction Context
+    accounts: []const AccountParams = &.{},
+    return_data: ReturnDataParams = .{},
     accounts_resize_delta: i64 = 0,
     compute_meter: u64 = 0,
+    compute_budget: ComputeBudget = ComputeBudget.default(1_400_000),
     custom_error: ?u32 = null,
     log_collector: ?LogCollector = null,
-    sysvar_cache: SysvarCache = .{},
-    lamports_per_signature: u64 = 0,
-    last_blockhash: Hash = Hash.ZEROES,
-    feature_set: FeatureSetParams = &.{},
-    compute_budget: ComputeBudget = ComputeBudget.default(1_400_000),
+    prev_blockhash: Hash = Hash.ZEROES,
+    prev_lamports_per_signature: u64 = 0,
+
+    pub const FeatureParams = struct {
+        pubkey: Pubkey,
+        slot: Slot = 0,
+    };
+
+    pub const AccountParams = struct {
+        pubkey: ?Pubkey = null,
+        lamports: u64 = 0,
+        data: []const u8 = &.{},
+        owner: ?Pubkey = null,
+        executable: bool = false,
+        rent_epoch: u64 = 0,
+    };
+
+    pub const ReturnDataParams = struct {
+        program_id: Pubkey = Pubkey.ZEROES,
+        data: []const u8 = &.{},
+    };
 };
 
-pub const FeatureSetParams = []const struct { pubkey: Pubkey, slot: Slot = 0 };
-
-pub const InstructionContextAccountMetaParams = struct {
-    index_in_transaction: u16 = 0,
-    index_in_caller: ?u16 = null,
-    index_in_callee: ?u16 = null,
-    is_signer: bool = false,
-    is_writable: bool = false,
-};
-
-pub fn createTransactionContext(
+pub fn createExecutionContexts(
     allocator: std.mem.Allocator,
     random: std.Random,
-    params: TransactionContextParams,
-) !TransactionContext {
+    params: ExecuteContextsParams,
+) !struct { *EpochContext, *SlotContext, TransactionContext } {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
-    const accounts = try createTransactionContextAccounts(
-        allocator,
-        random,
-        params.accounts,
-    );
-    errdefer {
-        for (accounts) |account| {
-            account.deinit(allocator);
-        }
-        allocator.free(accounts);
+    // Create Epoch Context
+    var features = Features{ .active = .{} };
+    errdefer features.deinit(allocator);
+
+    for (params.features) |args| {
+        try features.active.put(
+            allocator,
+            args.pubkey,
+            args.slot,
+        );
     }
 
-    const feature_set = try createFeatureSet(
-        allocator,
-        params.feature_set,
-    );
-
-    return .{
-        .accounts = accounts,
-        .instruction_stack = .{},
-        .instruction_trace = .{},
-        .return_data = .{},
-        .accounts_resize_delta = params.accounts_resize_delta,
-        .compute_meter = params.compute_meter,
-        .custom_error = params.custom_error,
-        .log_collector = params.log_collector,
-        .sysvar_cache = params.sysvar_cache,
-        .lamports_per_signature = params.lamports_per_signature,
-        .last_blockhash = params.last_blockhash,
-        .feature_set = feature_set,
-        .compute_budget = params.compute_budget,
+    const ec = try allocator.create(EpochContext);
+    ec.* = .{
+        .allocator = allocator,
+        .features = features,
     };
-}
 
-pub fn createTransactionContextAccounts(
-    allocator: std.mem.Allocator,
-    random: std.Random,
-    params: []const TransactionContextAccountParams,
-) ![]TransactionContextAccount {
-    if (!builtin.is_test)
-        @compileError("createTransactionContext should only be called in test mode");
+    // Create Slot Context
+    const sc = try allocator.create(SlotContext);
+    sc.* = .{
+        .ec = ec,
+        .sysvar_cache = params.sysvar_cache,
+    };
 
+    // Create Transaction Context
     var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
     errdefer accounts.deinit();
-    for (params) |account_params| {
+
+    for (params.accounts) |account_params| {
         try accounts.append(
             TransactionContextAccount.init(
                 account_params.pubkey orelse Pubkey.initRandom(random),
@@ -114,30 +108,37 @@ pub fn createTransactionContextAccounts(
             ),
         );
     }
-    return accounts.toOwnedSlice();
-}
 
-pub fn createFeatureSet(
-    allocator: std.mem.Allocator,
-    params: FeatureSetParams,
-) !FeatureSet {
-    if (!builtin.is_test)
-        @compileError("createFeatureSet should only be called in test mode");
+    var return_data_array = std.ArrayListUnmanaged(u8){};
+    try return_data_array.appendSlice(allocator, params.return_data.data);
 
-    var feature_set = FeatureSet.EMPTY;
+    const tc = TransactionContext{
+        .allocator = allocator,
+        .sc = sc,
+        .accounts = try accounts.toOwnedSlice(),
+        .instruction_stack = .{},
+        .instruction_trace = .{},
+        .return_data = .{
+            .program_id = params.return_data.program_id,
+            .data = return_data_array,
+        },
+        .accounts_resize_delta = params.accounts_resize_delta,
+        .compute_meter = params.compute_meter,
+        .compute_budget = params.compute_budget,
+        .custom_error = params.custom_error,
+        .log_collector = params.log_collector,
+        .prev_blockhash = params.prev_blockhash,
+        .prev_lamports_per_signature = params.prev_lamports_per_signature,
+    };
 
-    for (params) |feature|
-        try feature_set.active.put(allocator, feature.pubkey, feature.slot);
-
-    return feature_set;
+    return .{ ec, sc, tc };
 }
 
 pub fn createInstructionInfo(
-    allocator: std.mem.Allocator,
     tc: *TransactionContext,
     program_id: Pubkey,
     instruction: anytype,
-    accounts_params: []const InstructionContextAccountMetaParams,
+    accounts_params: []const InstructionInfoAccountMetaParams,
 ) !InstructionInfo {
     if (!builtin.is_test)
         @compileError("createInstructionContext should only be called in test mode");
@@ -146,16 +147,17 @@ pub fn createInstructionInfo(
         if (account.pubkey.equals(&program_id)) break index;
     } else return error.CouldNotFindProgramAccount;
 
-    const account_metas = try createInstructionContextAccountMetas(tc, accounts_params);
+    const account_metas = try createInstructionInfoAccountMetas(tc, accounts_params);
 
     const instruction_data = if (@TypeOf(instruction) == []const u8)
-        try allocator.dupe(u8, instruction)
+        try tc.allocator.dupe(u8, instruction)
     else
         try bincode.writeAlloc(
-            allocator,
+            tc.allocator,
             instruction,
             .{},
         );
+
     return .{
         .program_meta = .{
             .pubkey = program_id,
@@ -166,9 +168,17 @@ pub fn createInstructionInfo(
     };
 }
 
-pub fn createInstructionContextAccountMetas(
+pub const InstructionInfoAccountMetaParams = struct {
+    index_in_transaction: u16 = 0,
+    index_in_caller: ?u16 = null,
+    index_in_callee: ?u16 = null,
+    is_signer: bool = false,
+    is_writable: bool = false,
+};
+
+pub fn createInstructionInfoAccountMetas(
     tc: *const TransactionContext,
-    account_meta_params: []const InstructionContextAccountMetaParams,
+    account_meta_params: []const InstructionInfoAccountMetaParams,
 ) !std.BoundedArray(
     InstructionInfo.AccountMeta,
     InstructionInfo.MAX_ACCOUNT_METAS,
@@ -241,15 +251,31 @@ pub fn expectTransactionContextEqual(
     // if (expected.sysvar_cache != actual.sysvar_cache)
     //     return error.SysvarCacheMismatch;
 
-    if (expected.lamports_per_signature != actual.lamports_per_signature)
+    if (expected.prev_lamports_per_signature != actual.prev_lamports_per_signature)
         return error.LamportsPerSignatureMismatch;
 
-    if (!expected.last_blockhash.eql(actual.last_blockhash))
+    if (!expected.prev_blockhash.eql(actual.prev_blockhash))
         return error.LastBlockhashMismatch;
 
     // TODO: implement eqls for FeatureSet
     // if (expected.feature_set != actual.feature_set)
     //     return error.FeatureSetMismatch;
+
+    try expectTransactionReturnDataEqual(expected.return_data, actual.return_data);
+}
+
+pub fn expectTransactionReturnDataEqual(
+    expected: TransactionReturnData,
+    actual: TransactionReturnData,
+) !void {
+    if (!expected.program_id.equals(&actual.program_id))
+        return error.ProgramIdMismatch;
+
+    if (expected.data.items.len != actual.data.items.len)
+        return error.DataLenMismatch;
+
+    if (!std.mem.eql(u8, expected.data.items, actual.data.items))
+        return error.DataMismatch;
 }
 
 pub fn expectTransactionAccountEqual(
