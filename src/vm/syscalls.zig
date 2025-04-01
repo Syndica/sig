@@ -25,6 +25,7 @@ pub const Error = error{
     NonCanonical,
     Unexpected,
     ComputationalBudgetExceeded,
+    ReturnDataTooLarge,
 } || std.fs.File.WriteError || InstructionError;
 
 pub const Syscall = *const fn (
@@ -154,6 +155,38 @@ fn consumeMemoryCompute(ctx: *TransactionContext, length: u64) !void {
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
     @panic("TODO: implement allocFree syscall");
+}
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
+pub const MAX_RETURN_DATA: usize = 1024;
+
+/// [agave] https://github.com/anza-xyz/agave/blob/4f68141ba70b7574da0bc185ef5d08fe33d19887/programs/bpf_loader/src/syscalls/mod.rs#L1450
+pub fn setReturnData(tc: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) Error!void {
+    const addr = rm.get(.r1);
+    const len = rm.get(.r2);
+
+    const cost = if (tc.compute_budget.cpi_bytes_per_unit > 0)
+        (len / tc.compute_budget.cpi_bytes_per_unit) +| tc.compute_budget.syscall_base_cost
+    else
+        std.math.maxInt(u64);
+
+    try tc.consumeCompute(cost);
+
+    if (len > MAX_RETURN_DATA) {
+        return error.ReturnDataTooLarge;
+    }
+
+    const empty_return_data: []const u8 = &[_]u8{};
+    const return_data = if (len == 0)
+        empty_return_data
+    else
+        try mm.vmap(.constant, addr, len);
+
+    if (tc.instruction_stack.len == 0) return error.CallDepth;
+    const ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+    const program_id = ic.info.program_meta.pubkey;
+
+    try tc.setReturnData(program_id, return_data);
 }
 
 // hashing

@@ -575,7 +575,7 @@ fn advanceNonceAccount(
                 return InstructionError.MissingRequiredSignature;
             }
 
-            const next_durable_nonce = nonce.createDurableNonce(ic.tc.last_blockhash);
+            const next_durable_nonce = nonce.createDurableNonce(ic.tc.prev_blockhash);
 
             if (data.durable_nonce.eql(next_durable_nonce)) {
                 try ic.tc.log("Advance nonce account: nonce can only advance once per slot", .{});
@@ -588,7 +588,7 @@ fn advanceNonceAccount(
                 nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
                     data.authority,
                     next_durable_nonce,
-                    ic.tc.lamports_per_signature,
+                    ic.tc.prev_lamports_per_signature,
                 ) } },
             );
         },
@@ -634,7 +634,7 @@ fn withdrawNonceAccount(
             },
             .initialized => |data| blk: {
                 if (lamports == from_account.account.lamports) {
-                    const durable_nonce = nonce.createDurableNonce(ic.tc.last_blockhash);
+                    const durable_nonce = nonce.createDurableNonce(ic.tc.prev_blockhash);
                     if (durable_nonce.eql(data.durable_nonce)) {
                         try ic.tc.log(
                             "Withdraw nonce account: nonce can only advance once per slot",
@@ -709,8 +709,8 @@ fn initializeNonceAccount(
             try account.serializeIntoAccountData(nonce.Versions{
                 .current = nonce.State{ .initialized = nonce.Data.init(
                     authority,
-                    nonce.createDurableNonce(ic.tc.last_blockhash),
-                    ic.tc.lamports_per_signature,
+                    nonce.createDurableNonce(ic.tc.prev_blockhash),
+                    ic.tc.prev_lamports_per_signature,
                 ) },
             });
         },
@@ -973,7 +973,7 @@ test "executeAdvanceNonceAccount" {
     var prng = std.Random.DefaultPrng.init(5083);
 
     // Last Blockhash is used to compute the next durable nonce
-    const last_blockhash = Hash.initRandom(prng.random());
+    const prev_blockhash = Hash.initRandom(prng.random());
 
     // Lamports per signature is set when the nonce is advanced
     const lamports_per_signature = 5_000;
@@ -994,7 +994,7 @@ test "executeAdvanceNonceAccount" {
         .current = nonce.State{
             .initialized = nonce.Data.init(
                 nonce_authority, // Unchanged
-                nonce.createDurableNonce(last_blockhash), // Updated
+                nonce.createDurableNonce(prev_blockhash), // Updated
                 lamports_per_signature, // Updated
             ),
         },
@@ -1035,8 +1035,8 @@ test "executeAdvanceNonceAccount" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
-            .lamports_per_signature = lamports_per_signature,
-            .last_blockhash = last_blockhash,
+            .prev_blockhash = prev_blockhash,
+            .prev_lamports_per_signature = lamports_per_signature,
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
             },
@@ -1052,8 +1052,8 @@ test "executeAdvanceNonceAccount" {
                 .{ .pubkey = nonce_authority },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
-            .lamports_per_signature = lamports_per_signature,
-            .last_blockhash = last_blockhash,
+            .prev_blockhash = prev_blockhash,
+            .prev_lamports_per_signature = lamports_per_signature,
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
             },
@@ -1155,7 +1155,7 @@ test "executeInitializeNonceAccount" {
     var prng = std.Random.DefaultPrng.init(5083);
 
     // Last Blockhash is used to compute the next durable nonce
-    const last_blockhash = Hash.initRandom(prng.random());
+    const prev_blockhash = Hash.initRandom(prng.random());
 
     // Lamports per signature is set when the nonce is advanced
     const lamports_per_signature = 5_000;
@@ -1165,7 +1165,7 @@ test "executeInitializeNonceAccount" {
     const final_nonce_state = nonce.Versions{
         .current = nonce.State{ .initialized = nonce.Data.init(
             nonce_authority,
-            nonce.createDurableNonce(last_blockhash),
+            nonce.createDurableNonce(prev_blockhash),
             lamports_per_signature,
         ) },
     };
@@ -1214,8 +1214,8 @@ test "executeInitializeNonceAccount" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
-            .lamports_per_signature = lamports_per_signature,
-            .last_blockhash = last_blockhash,
+            .prev_lamports_per_signature = lamports_per_signature,
+            .prev_blockhash = prev_blockhash,
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
                 .rent = rent,
@@ -1233,8 +1233,8 @@ test "executeInitializeNonceAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
-            .lamports_per_signature = lamports_per_signature,
-            .last_blockhash = last_blockhash,
+            .prev_lamports_per_signature = lamports_per_signature,
+            .prev_blockhash = prev_blockhash,
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
                 .rent = rent,

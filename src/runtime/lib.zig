@@ -1,6 +1,6 @@
 pub const borrowed_account = @import("borrowed_account.zig");
 pub const executor = @import("executor.zig");
-pub const feature_set = @import("feature_set.zig");
+pub const features = @import("features.zig");
 pub const ids = @import("ids.zig");
 pub const instruction_context = @import("instruction_context.zig");
 pub const instruction_info = @import("instruction_info.zig");
@@ -18,7 +18,7 @@ pub const compute_budget = @import("compute_budget.zig");
 
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;
-pub const FeatureSet = feature_set.FeatureSet;
+pub const Features = features.Features;
 pub const InstructionContext = instruction_context.InstructionContext;
 pub const InstructionInfo = instruction_info.InstructionInfo;
 pub const LogCollector = log_collector.LogCollector;

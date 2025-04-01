@@ -9,12 +9,12 @@ const sysvar = sig.runtime.sysvar;
 const bpf_program = sig.runtime.program.bpf;
 const system_program = sig.runtime.program.system_program;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
-const feature_set = sig.runtime.feature_set;
+const feature_set = sig.runtime.features;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const FeatureSet = sig.runtime.FeatureSet;
+const Features = sig.runtime.Features;
 const InstructionContext = sig.runtime.InstructionContext;
 const LogCollector = sig.runtime.LogCollector;
 
@@ -389,7 +389,7 @@ pub fn executeV3DeployWithMaxDataLen(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
             buffer_data[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
             clock.slot,
-            ic.tc.feature_set,
+            ic.tc.sc.ec.features,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
         );
     }
@@ -598,7 +598,7 @@ pub fn executeV3Upgrade(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
-            ic.tc.feature_set,
+            ic.tc.sc.ec.features,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
         );
     }
@@ -735,7 +735,7 @@ pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.feature_set.active.contains(
+    if (!ic.tc.sc.ec.features.active.contains(
         feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -882,7 +882,7 @@ pub fn executeV3Close(
                 return InstructionError.IncorrectProgramId;
             }
 
-            var clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+            var clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
             if (clock.slot == data.slot) {
                 try ic.tc.log("Program was deployed in this block already", .{});
                 return InstructionError.InvalidArgument;
@@ -905,7 +905,7 @@ pub fn executeV3Close(
                     program_account_released = true;
                     try commonCloseAccount(ic, authority_address);
 
-                    clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+                    clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
                     // TODO: This depends on program cache which isn't implemented yet.
                     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
                 },
@@ -1027,7 +1027,7 @@ pub fn executeV3ExtendProgram(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
@@ -1053,7 +1053,7 @@ pub fn executeV3ExtendProgram(
     const required_payment = blk: {
         const balance = programdata.account.lamports;
         // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-        const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
+        const rent = try ic.tc.sc.sysvar_cache.get(sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
     };
@@ -1096,7 +1096,7 @@ pub fn executeV3ExtendProgram(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
             data[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
-            ic.tc.feature_set,
+            ic.tc.sc.ec.features,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
         );
     }
@@ -1119,7 +1119,7 @@ pub fn executeV3Migrate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.feature_set.active.contains(
+    if (!ic.tc.sc.ec.features.active.contains(
         feature_set.ENABLE_LOADER_V4,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -1136,7 +1136,7 @@ pub fn executeV3Migrate(
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
 
     // Verify ProgramData account.
     const progdata_info = info: {
@@ -1335,7 +1335,7 @@ pub fn deployProgram(
     program_len: usize,
     program_data: []const u8,
     slot: u64,
-    features: FeatureSet,
+    features: Features,
     maybe_log_collector: ?*LogCollector,
 ) (error{OutOfMemory} || InstructionError)!void {
     _ = allocator;
@@ -1568,9 +1568,6 @@ test "executeDeployWithMaxDataLen" {
     );
     // TODO: set buffer account data to random bytes and set as final program account data
 
-    const log_collector = sig.runtime.LogCollector.default(allocator);
-    defer log_collector.deinit();
-
     try testing.expectProgramExecuteResult(
         allocator,
         bpf_loader_program.v3.ID,
@@ -1628,7 +1625,6 @@ test "executeDeployWithMaxDataLen" {
             },
             // TODO: Should we need extra for system program cpi???
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS + 150,
-            .log_collector = log_collector,
         },
         .{
             .accounts = &.{
@@ -1899,7 +1895,7 @@ test "executeV3SetAuthorityChecked" {
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
-            .feature_set = &.{
+            .features = &.{
                 .{ .pubkey = feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
             },
         },
@@ -1975,7 +1971,7 @@ test "executeV3SetAuthorityChecked" {
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
-            .feature_set = &.{
+            .features = &.{
                 .{ .pubkey = feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
             },
         },
@@ -2689,7 +2685,7 @@ test "executeV3Migrate" {
                 },
             },
             .compute_meter = compute_units,
-            .feature_set = &.{
+            .features = &.{
                 .{ .pubkey = feature_set.ENABLE_LOADER_V4, .slot = 0 },
             },
             .sysvar_cache = .{

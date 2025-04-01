@@ -711,7 +711,7 @@ fn deserializeParametersAligned(
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L778
 test "serializeParameters" {
     const TransactionContextAccount = sig.runtime.TransactionContextAccount;
-    const createTransactionContext = sig.runtime.testing.createTransactionContext;
+    const createExecutionContexts = sig.runtime.testing.createExecutionContexts;
     const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
 
     // const allocator = std.testing.allocator;
@@ -729,7 +729,7 @@ test "serializeParameters" {
         }) |copy_account_data| {
             const program_id = Pubkey.initRandom(prng.random());
 
-            var tc = try createTransactionContext(
+            const ec, const sc, var tc = try createExecutionContexts(
                 allocator,
                 prng.random(),
                 .{
@@ -792,10 +792,14 @@ test "serializeParameters" {
                     },
                 },
             );
-            defer tc.deinit(allocator);
+            defer {
+                ec.deinit();
+                allocator.destroy(ec);
+                allocator.destroy(sc);
+                tc.deinit();
+            }
 
             const instruction_info = try createInstructionInfo(
-                allocator,
                 &tc,
                 program_id,
                 [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 },
