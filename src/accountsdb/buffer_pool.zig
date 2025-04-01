@@ -966,11 +966,11 @@ pub const AccountDataHandle = union(enum) {
         }
     }
 
-    pub fn slice(self: *const AccountDataHandle, start: usize, end: usize) AccountDataHandle {
+    pub fn slice(self: *const AccountDataHandle, start: u32, end: u32) AccountDataHandle {
         return .{ .sub_read = .{
+            .parent = self,
             .end = end,
             .start = start,
-            .self = self,
         } };
     }
 

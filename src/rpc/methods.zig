@@ -127,10 +127,17 @@ pub const GetAccountInfo = struct {
     pubkey: Pubkey,
     config: ?Config = null,
 
+    pub const Encoding = enum {
+        base58,
+        base64,
+        @"base64+zstd",
+        jsonParsed,
+    };
+
     pub const Config = struct {
         commitment: ?common.Commitment = null,
         minContextSlot: ?u64 = null,
-        encoding: ?enum { base58, base64, @"base64+zstd", jsonParsed } = null,
+        encoding: ?Encoding = null,
         dataSlice: ?common.DataSlice = null,
     };
 
@@ -139,12 +146,66 @@ pub const GetAccountInfo = struct {
         value: ?Value,
 
         pub const Value = struct {
-            data: []const u8,
+            data: Data,
             executable: bool,
             lamports: u64,
             owner: Pubkey,
             rentEpoch: u64,
             space: u64,
+
+            pub const Data = union(enum) {
+                base64: []const u8,
+                encoded: struct { []const u8, Encoding },
+                // TODO: this should be a json value/map, test cases can't compare that though
+                jsonParsed: noreturn,
+
+                pub fn jsonStringify(
+                    self: Data,
+                    /// `*std.json.WriteStream(...)`
+                    jw: anytype,
+                ) @TypeOf(jw.*).Error!void {
+                    switch (self) {
+                        .base64 => |str| try jw.write(str),
+                        .encoded => |pair| try jw.write(pair),
+                        .jsonParsed => |map| try jw.write(map),
+                    }
+                }
+
+                pub fn jsonParse(
+                    allocator: std.mem.Allocator,
+                    source: anytype,
+                    options: std.json.ParseOptions,
+                ) std.json.ParseError(@TypeOf(source.*))!Data {
+                    return switch (try source.peekNextTokenType()) {
+                        .string => .{ .base64 = try std.json.innerParse(
+                            []const u8,
+                            allocator,
+                            source,
+                            options,
+                        ) },
+                        .array_begin => .{ .encoded = try std.json.innerParse(
+                            struct { []const u8, Encoding },
+                            allocator,
+                            source,
+                            options,
+                        ) },
+                        .object_begin => if (true)
+                            std.debug.panic("TODO: implement jsonParsed for GetAccountInfo", .{})
+                        else
+                            .{ .jsonParsed = try std.json.innerParse(
+                                std.json.ArrayHashMap(std.json.Value),
+                                allocator,
+                                source,
+                                options,
+                            ) },
+                        .array_end, .object_end => error.UnexpectedToken,
+                        else => {
+                            try source.skipValue();
+                            return error.UnexpectedToken;
+                        },
+                    };
+                }
+            };
         };
     };
 };
