@@ -27,7 +27,7 @@ const LogCollector = sig.runtime.LogCollector;
 const Epoch = sig.core.Epoch;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L86
-const SyscallError = error {
+const SyscallError = error{
     InvalidPointer,
     InvalidLength,
     UnalignedPointer,
@@ -93,25 +93,71 @@ const SolAccountInfo = extern struct {
     executable: bool,
 };
 
-const AccountInfo = struct {
+/// [rust] https://doc.rust-lang.org/src/alloc/rc.rs.html#281-289
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L2971
+fn RcBox(comptime T: type) type {
+    return extern struct {
+        strong: usize = 0,
+        weak: usize = 0,
+        value: T,
+
+        const VALUE_OFFSET = @sizeOf(usize) * 2;
+    };
+}
+
+/// [rust] https://doc.rust-lang.org/src/alloc/rc.rs.html#314-317
+fn Rc(comptime T: type) type {
+    return extern struct {
+        ptr: *RcBox(T),
+
+        fn fromRaw(value_ptr: *const T) @This() {
+            return .{ .ptr = @fieldParentPtr("value", value_ptr) };
+        }
+    };
+}
+
+/// [rust] https://doc.rust-lang.org/src/core/cell.rs.html#730
+fn RefCell(comptime T: type) type {
+    return extern struct {
+        borrow: isize = 0,
+        value: T,
+    };
+}
+
+/// [???] https://docs.rs/anchor-lang/latest/anchor_lang/prelude/struct.AccountInfo.html
+const AccountInfo = extern struct {
     key: *const Pubkey,
+    lamports: Rc(RefCell(*u64)),
+    data: Rc(RefCell([]u8)),
+    owner: *const Pubkey,
+    rent_epoch: Epoch,
     is_signer: bool,
     is_writable: bool,
-    lamports: *const u64,
-    data: []const u8,
-    owner: *const Pubkey,
     executable: bool,
-    rent_epoch: Epoch,
 };
 
 fn VmValue(comptime T: type) type {
     return union(enum) {
+        const Self = @This();
+
         vm_address: struct {
             vm_addr: u64,
             memory_map: *const MemoryMap,
             check_aligned: bool,
         },
         translated: *T,
+
+        pub fn get(self: Self, comptime state: memory.MemoryState) !(switch (state) {
+            .constant => *const T,
+            .mutable => *T,
+        }) {
+            switch (self) {
+                .translated => |ptr| return ptr,
+                .vm_address => |vma| {
+                    return translateType(T, state, vma.memory_map, vma.vm_addr, vma.check_aligned);
+                },
+            }
+        }
     };
 }
 
@@ -135,10 +181,10 @@ fn translateType(
     memory_map: *const MemoryMap,
     vm_addr: u64,
     check_aligned: bool,
-) !switch (state) {
+) !(switch (state) {
     .mutable => *T,
     .constant => *const T,
-} {
+}) {
     const host_addr = try translate(memory_map, state, vm_addr, @sizeOf(u64));
     if (!check_aligned) {
         return @ptrFromInt(host_addr);
@@ -162,7 +208,9 @@ fn translateSlice(
     .constant => []const T,
 } {
     if (len == 0) {
-        const Static = struct { var _: [0]T = undefined; };
+        const Static = struct {
+            var _: [0]T = undefined;
+        };
         return &Static._;
     }
 
@@ -175,7 +223,7 @@ fn translateSlice(
     if (check_aligned and host_addr % @alignOf(T) != 0) {
         return SyscallError.UnalignedPointer;
     }
-    
+
     return switch (state) {
         .mutable => @as([*]T, @ptrFromInt(host_addr))[0..len],
         .constant => @as([*]const T, @ptrFromInt(host_addr))[0..len],
@@ -203,7 +251,7 @@ fn checkAccountInfoPtr(
 ///
 /// At the start of a CPI, this can be different from the data stored in the
 /// corresponding BorrowedAccount, and needs to be synched.
-/// 
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L96
 const CallerAccount = struct {
     lamports: *u64,
@@ -229,8 +277,8 @@ const CallerAccount = struct {
     fn fromAccountInfo(
         ic: *InstructionContext,
         memory_map: *const MemoryMap,
-        account_info: *const AccountInfo,
-        account_metadata: *const SerializedAccountMetadata,
+        account_info: AccountInfo,
+        account_metadata: SerializedAccountMetadata,
     ) !CallerAccount {
         const direct_mapping = ic.tc.feature_set.active.contains(
             feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
@@ -253,22 +301,24 @@ const CallerAccount = struct {
 
         // account_info points to host memory. The addresses used internally are
         // in vm space so they need to be translated.
-        const lamports = blk: {
+        const lamports: *u64 = blk: {
+            const lamports_addr: u64 = @intFromPtr(account_info.lamports.value.value);
+
             // Double translate lamports out of RefCell
-            const ptr = try translateType(
+            const ptr: *const u64 = try translateType(
                 u64,
                 .constant,
                 memory_map,
-                @intFromPtr(account_info.lamports),
+                lamports_addr,
                 ic.getCheckAligned(),
             );
             if (direct_mapping) {
-                if (@intFromPtr(account_info.lamports) >= MM_INPUT_START) {
+                if (lamports_addr >= MM_INPUT_START) {
                     return SyscallError.InvalidPointer;
                 }
                 try checkAccountInfoPtr(
                     ic,
-                    ptr,
+                    ptr.*,
                     account_metadata.vm_lamports_addr,
                     "lamports",
                 );
@@ -277,12 +327,12 @@ const CallerAccount = struct {
                 u64,
                 .mutable,
                 memory_map,
-                ptr,
+                ptr.*,
                 ic.getCheckAligned(),
             );
         };
 
-        const owner = try translateType(
+        const owner: *Pubkey = try translateType(
             Pubkey,
             .mutable,
             memory_map,
@@ -291,22 +341,24 @@ const CallerAccount = struct {
         );
 
         const serialized, const vm_data_addr, const ref_to_len = blk: {
-            if (direct_mapping and @intFromPtr(account_info.data.ptr) >= MM_INPUT_START) {
+            const data_ptr: u64 = @intFromPtr(&account_info.data.value.value);
+            if (direct_mapping and data_ptr >= MM_INPUT_START) {
                 return SyscallError.InvalidPointer;
             }
 
+            // Double translate data out of RefCell
             const data: []const u8 = (try translateType(
                 []const u8,
                 .constant,
                 memory_map,
-                @intFromPtr(account_info.data.ptr),
+                data_ptr,
                 ic.getCheckAligned(),
             )).*;
 
             if (direct_mapping) {
                 try checkAccountInfoPtr(
                     ic,
-                    @intFromPtr(data.ptr),
+
                     account_metadata.vm_data_addr,
                     "data",
                 );
@@ -320,7 +372,7 @@ const CallerAccount = struct {
             ) catch std.math.maxInt(u64));
 
             const ref_to_len = if (direct_mapping) r2l: {
-                const vm_addr = @as(u64, @intFromPtr(account_info.data.ptr)) +| @sizeOf(u64);
+                const vm_addr = data_ptr +| @sizeOf(u64);
                 if (vm_addr >= MM_INPUT_START) {
                     return SyscallError.InvalidPointer;
                 }
@@ -332,11 +384,11 @@ const CallerAccount = struct {
                     .memory_map = memory_map,
                     .check_aligned = ic.getCheckAligned(),
                 } };
-            } else r2l: { 
+            } else r2l: {
                 const translated: *u64 = @ptrFromInt(try translate(
                     memory_map,
                     .constant,
-                    @as(u64, @intFromPtr(account_info.data.ptr)) +| @sizeOf(u64),
+                    data_ptr +| @sizeOf(u64),
                     8,
                 ));
                 break :r2l VmValue(u64){ .translated = translated };
@@ -356,7 +408,9 @@ const CallerAccount = struct {
                 // If we always translated the realloc area here, we'd get a
                 // memory access violation since we can't write to the account
                 // _yet_, but we will be able to once the caller returns.
-                const Static = struct { var _: [0]u8 = undefined; };
+                const Static = struct {
+                    var _: [0]u8 = undefined;
+                };
                 break :ser &Static._;
             } else try translateSlice(
                 u8,
@@ -441,10 +495,12 @@ const CallerAccount = struct {
             account_info.data_len,
             ic.tc.compute_budget.cpi_bytes_per_unit,
         ) catch std.math.maxInt(u64));
-        
+
         const serialized_data = if (direct_mapping) ser: {
             // See comment in CallerAccount::from_account_info()
-            const Static = struct { var _: [0]u8 = undefined; };
+            const Static = struct {
+                var _: [0]u8 = undefined;
+            };
             break :ser &Static._;
         } else try translateSlice(
             u8,
@@ -464,7 +520,7 @@ const CallerAccount = struct {
             @intFromPtr(account_info);
 
         const ref_to_len = if (direct_mapping)
-            VmValue(u64){ .vm_address = .{ 
+            VmValue(u64){ .vm_address = .{
                 .vm_addr = data_len_vm_addr,
                 .memory_map = memory_map,
                 .check_aligned = ic.getCheckAligned(),
@@ -482,7 +538,7 @@ const CallerAccount = struct {
             .owner = owner,
             .original_data_len = account_metadata.original_data_len,
             .serialized_data = serialized_data,
-            .vm_data_addr = account_info.data_addr, 
+            .vm_data_addr = account_info.data_addr,
             .ref_to_len_in_vm = ref_to_len,
         };
     }
@@ -503,14 +559,18 @@ const CallerAccount = struct {
     // }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L2770
-const MockInst = struct {
+/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2770
+const MockInstruction = struct {
     program_id: Pubkey,
     accounts: []const AccountMeta,
     data: []const u8,
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L2777
-    fn intoRegion(self: MockInst, allocator: std.mem.Allocator, vm_addr: u64) !memory.Region {
+    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2777
+    fn intoRegion(
+        self: MockInstruction,
+        allocator: std.mem.Allocator,
+        vm_addr: u64,
+    ) !struct { []u8, memory.Region } {
         const accounts_len = @sizeOf(AccountMeta) * self.accounts.len;
         const size = @sizeOf(StableInstruction) + accounts_len + self.data.len;
 
@@ -535,7 +595,83 @@ const MockInst = struct {
         try buf.writer().writeAll(std.mem.asBytes(&ins));
         try buf.writer().writeAll(std.mem.sliceAsBytes(self.accounts));
         try buf.writer().writeAll(self.data);
-        return memory.Region.init(.mutable, data, vm_addr);
+
+        return .{ data, memory.Region.init(.mutable, data, vm_addr) };
+    }
+};
+
+/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2870
+const MockAccountInfo = struct {
+    key: Pubkey,
+    is_signer: bool,
+    is_writable: bool,
+    lamports: u64,
+    data: []const u8,
+    owner: Pubkey,
+    executable: bool,
+    rent_epoch: Epoch,
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
+    fn intoRegion(
+        self: MockAccountInfo,
+        allocator: std.mem.Allocator,
+        vm_addr: u64,
+    ) !struct { []u8, memory.Region, SerializedAccountMetadata } {
+        const size = @sizeOf(AccountInfo) +
+            @sizeOf(Pubkey) * 2 +
+            @sizeOf(RcBox(RefCell(*u64))) +
+            @sizeOf(u64) +
+            @sizeOf(RcBox(RefCell([]u8))) +
+            self.data.len;
+
+        const data = try allocator.alloc(u8, size);
+        defer allocator.free(data);
+
+        const key_addr = vm_addr + @sizeOf(AccountInfo);
+        const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
+        const lamports_addr = lamports_cell_addr + @sizeOf(RcBox(RefCell(*u64)));
+        const owner_addr = lamports_addr + @sizeOf(u64);
+        const data_cell_addr = owner_addr + @sizeOf(Pubkey);
+        const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
+
+        const info = AccountInfo{
+            .key = @ptrFromInt(key_addr),
+            .is_signer = self.is_signer,
+            .is_writable = self.is_writable,
+            .lamports = Rc(RefCell(*u64)).fromRaw(
+                @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
+            ),
+            .data = Rc(RefCell([]u8)).fromRaw(
+                @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
+            ),
+            .owner = @ptrFromInt(owner_addr),
+            .executable = self.executable,
+            .rent_epoch = self.rent_epoch,
+        };
+
+        data[0..@sizeOf(AccountInfo)].* = @bitCast(info);
+        data[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.key);
+        data[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
+            RcBox(RefCell(*u64)){ .value = @intFromPtr(lamports_addr) },
+        );
+        data[lamports_addr - vm_addr ..][0..@sizeOf(u64)].* = @bitCast(self.lamports);
+        data[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.owner);
+        data[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
+            RcBox(RefCell([]u8)){ .value = @as([*]u8, @ptrFromInt(data_addr))[0..self.data.len] },
+        );
+        @memcpy(data[data_addr - vm_addr ..][0..self.data.len], self.data);
+
+        return .{
+            data,
+            memory.Region.init(.mutable, data, vm_addr),
+            .{
+                .original_data_len = data.len,
+                .vm_key_addr = key_addr,
+                .vm_lamports_addr = lamports_addr,
+                .vm_owner_addr = owner_addr,
+                .vm_data_addr = data_addr,
+            },
+        };
     }
 };
 
@@ -569,56 +705,37 @@ test "CallerAccount" {
     };
     defer ic.deinit(allocator);
 
-    const mock = MockInst{
-        .accounts = &.{
-            .{
+    const acc_meta = ic.info.account_metas.get(1);
+    const acc_shared = ic.tc.accounts[1].account;
 
-            },
-        },
-        .data = "hello world",
-        .program_id = system_program.ID,
-    };
+    const vm_addr = MM_INPUT_START;
+    const data, const region, const account_metadata = try (MockAccountInfo{
+        .key = acc_meta.pubkey,
+        .is_signer = acc_meta.is_signer,
+        .is_writable = acc_meta.is_writable,
+        .lamports = acc_shared.lamports,
+        .data = acc_shared.data,
+        .owner = acc_shared.owner,
+        .executable = acc_shared.executable,
+        .rent_epoch = acc_shared.rent_epoch,
+    }).intoRegion(allocator, vm_addr);
+    defer allocator.free(data);
 
-    const region = try mock.intoRegion(allocator, MM_INPUT_START);
-    const region_mem = region.getSlice(.mutable) catch unreachable;
-    defer allocator.free(region_mem);
+    // NOTE: init aligned false
+    // https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L1792
+    const memory_map = try MemoryMap.init(&.{region}, .v3);
 
-    const memory_map = MemoryMap.init(&.{region}, .v3);
-
-    const rg_inst_offset = 0;
-    const rg_inst: StableInstruction = @bitCast(region_mem[0..@sizeOf(StableInstruction)].*);
-
-    const rg_acc_offset = @sizeOf(StableInstruction);
-    const rg_acc = std.mem.sliceAsBytes(
-        region_mem[rg_acc_offset..][0..rg_inst.accounts.len * @sizeOf(AccountMeta)],
-    );
-
-    const rg_data_offset = rg_acc_offset + rg_acc.len * @sizeOf(AccountMeta);
-    const rg_data = region_mem[rg_data_offset..][0..rg_inst.data.len];
-
-    const account_metadata = SerializedAccountMetadata{
-        .original_data_len = region_mem.len,
-        .vm_data_addr = region.vm_addr_start + rg_data_offset,
-        .vm_key_addr = rg_inst_offset + @offsetOf(StableInstruction, "program_id"),
-        .vm_lamports_addr = rg_acc_offset + @offsetOf(AccountMeta, "lamports"),
-        .vm_owner_addr = rg_acc_offset + @offsetOf(AccountMeta, "owner"),
-    };
-
-    const account_info = AccountInfo{
-        .key = account_key, 
-        .is_signer = false,
-        .is_writable = true,
-        .lamports = &lamports,
-        .data = data,
-        .owner = &owner,
-        .executable = true,
-        .rent_epoch = 0,
-    };
-
+    const account_info = try translateType(AccountInfo, .constant, &memory_map, vm_addr, false);
     const caller_account = try CallerAccount.fromAccountInfo(
         &ic,
         &memory_map,
-        &account_info,
-        &account_metadata,
+        account_info.*,
+        account_metadata,
     );
+
+    try std.testing.expectEqual(caller_account.lamports.*, acc_shared.lamports);
+    try std.testing.expect(caller_account.owner.*.equals(&acc_shared.owner));
+    try std.testing.expectEqual(caller_account.original_data_len, acc_shared.data.len);
+    try std.testing.expectEqual((try caller_account.ref_to_len_in_vm.get()).*, acc_shared.data.len);
+    try std.testing.expect(std.mem.eql(u8, caller_account.serialized_data, acc_shared.data));
 }
