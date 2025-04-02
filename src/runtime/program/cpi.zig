@@ -1,27 +1,20 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
-
 const memory = @import("../../vm/memory.zig");
-const MemoryMap = memory.MemoryMap;
 
 const ids = sig.runtime.ids;
-const bincode = sig.bincode;
-const sysvar = sig.runtime.sysvar;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 const system_program = sig.runtime.program.system_program;
 const feature_set = sig.runtime.feature_set;
 
 const Pubkey = sig.core.Pubkey;
-const ComputeBudget = sig.runtime.ComputeBudget;
-const InstructionError = sig.core.instruction.InstructionError;
+const Epoch = sig.core.Epoch;
 
 const InstructionContext = sig.runtime.InstructionContext;
-const TransactionContext = sig.runtime.TransactionContext;
-const TransactionContextAccount = sig.runtime.TransactionContextAccount;
-const AccountSharedData = sig.runtime.AccountSharedData;
 const LogCollector = sig.runtime.LogCollector;
 
-const Epoch = sig.core.Epoch;
+const MemoryMap = memory.MemoryMap;
+const MM_INPUT_START = memory.INPUT_START;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L86
 const SyscallError = error{
@@ -165,8 +158,6 @@ fn VmValue(comptime T: type) type {
         }
     };
 }
-
-const MM_INPUT_START = memory.INPUT_START;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L604
 fn translate(
@@ -736,8 +727,12 @@ test "CallerAccount" {
 
         // NOTE: init aligned false
         // https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L1792
-        const regions = [_]memory.Region{region};
-        const memory_map = try MemoryMap.init(&regions, .v3);
+        const memory_map = try MemoryMap.init(&.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START), // nothing in .rodata,
+            memory.Region.init(.mutable, &.{}, memory.STACK_START), // nothing in the stack,
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
+            region, // INPUT_START
+        }, .v3);
 
         const account_info = try translateType(AccountInfo, .constant, &memory_map, vm_addr, false);
 
@@ -767,58 +762,60 @@ test "CallerAccount" {
             @sizeOf(u64) +
             acc_shared.data.len;
 
-        const key_offset = @sizeOf(SolAccountInfo);
-        const owner_offset = key_offset + @sizeOf(Pubkey);
-        const lamports_offset = owner_offset + @sizeOf(Pubkey);
-        const data_offset = lamports_offset + @sizeOf(u64);
-
         const buffer = try allocator.alignedAlloc(u8, @alignOf(SolAccountInfo), size);
         defer allocator.free(buffer);
 
-        // Just have VM memory point to host memory.
-        const sol_vm_addr: u64 = @intFromPtr(buffer.ptr);
-        buffer[key_offset..][0..@sizeOf(Pubkey)].* = @bitCast(acc_meta.pubkey);
-        buffer[owner_offset..][0..@sizeOf(Pubkey)].* = @bitCast(acc_shared.owner);
-        buffer[lamports_offset..][0..@sizeOf(u64)].* = @bitCast(acc_shared.lamports);
-        @memcpy(buffer[data_offset..][0..acc_shared.data.len], acc_shared.data);
+        const memory_map = try MemoryMap.init(&.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, buffer, memory.HEAP_START),
+            // no INPUT_START
+        }, .v3);
 
-        buffer[0..@sizeOf(SolAccountInfo)].* = @bitCast(SolAccountInfo{
-            .key_addr = sol_vm_addr + key_offset,
-            .lamports_addr = sol_vm_addr + lamports_offset,
+        const vm_addr = memory.HEAP_START;
+        const key_addr = vm_addr + @sizeOf(SolAccountInfo);
+        const owner_addr = key_addr + @sizeOf(Pubkey);
+        const lamports_addr = owner_addr + @sizeOf(Pubkey);
+        const data_addr = lamports_addr + @sizeOf(u64);
+
+        var buf = std.io.fixedBufferStream(buffer);
+        try buf.writer().writeAll(std.mem.asBytes(&SolAccountInfo{
+            .key_addr = key_addr,
+            .lamports_addr = lamports_addr,
             .data_len = acc_shared.data.len,
-            .data_addr = sol_vm_addr + data_offset,
-            .owner_addr = sol_vm_addr + owner_offset,
+            .data_addr = data_addr,
+            .owner_addr = owner_addr,
             .rent_epoch = acc_shared.rent_epoch,
             .is_signer = acc_meta.is_signer,
             .is_writable = acc_meta.is_writable,
             .executable = acc_shared.executable,
-        });
+        }));
 
-        const sol_account_metadata = SerializedAccountMetadata{
-            .original_data_len = acc_shared.data.len,
-            .vm_data_addr = sol_vm_addr + data_offset,
-            .vm_key_addr = sol_vm_addr + key_offset,
-            .vm_lamports_addr = sol_vm_addr + lamports_offset,
-            .vm_owner_addr = sol_vm_addr + owner_offset,
-        };
+        try buf.writer().writeAll(std.mem.asBytes(&acc_meta.pubkey));
+        try buf.writer().writeAll(std.mem.asBytes(&acc_shared.owner));
+        try buf.writer().writeAll(std.mem.asBytes(&acc_shared.lamports));
+        try buf.writer().writeAll(acc_shared.data);
 
-        const sol_region = memory.Region.init(.mutable, buffer, sol_vm_addr);
-        const sol_memory_map = try memory.MemoryMap.init(&.{sol_region}, .v3);
-
-        const sol_account_info = try translateType(
+        const account_info = try translateType(
             SolAccountInfo,
             .constant,
-            &sol_memory_map,
-            sol_vm_addr,
+            &memory_map,
+            vm_addr,
             false,
         );
 
         const caller_account = try CallerAccount.fromSolAccountInfo(
             &ic,
-            &sol_memory_map,
-            sol_vm_addr,
-            sol_account_info,
-            &sol_account_metadata,
+            &memory_map,
+            vm_addr,
+            account_info,
+            &SerializedAccountMetadata{
+                .original_data_len = acc_shared.data.len,
+                .vm_data_addr = data_addr,
+                .vm_key_addr = key_addr,
+                .vm_lamports_addr = lamports_addr,
+                .vm_owner_addr = owner_addr,
+            },
         );
 
         try std.testing.expectEqual(caller_account.lamports.*, acc_shared.lamports);
