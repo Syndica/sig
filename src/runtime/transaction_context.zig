@@ -157,7 +157,7 @@ pub const TransactionContext = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/43e1f62c9fa318daedec80b3f0ea1f9e7da71b11/transaction-context/src/lib.rs#L441
-    pub fn set_return_data(
+    pub fn setReturnData(
         self: *TransactionContext,
         program_id: Pubkey,
         data: []const u8,

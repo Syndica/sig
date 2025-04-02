@@ -8,6 +8,8 @@ const Pubkey = sig.core.Pubkey;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 
+const MAX_FILE_BYTES: usize = 1024 * 1024; // 1MiB
+
 test "hello_world" {
     // pub fn process_instruction(
     //     _program_id: &Pubkey,
@@ -22,9 +24,10 @@ test "hello_world" {
     var prng = std.rand.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try readProgramBytes(
+    const program_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "hello_world.so",
+        MAX_FILE_BYTES,
     );
     defer allocator.free(program_bytes);
 
@@ -76,9 +79,10 @@ test "print_account" {
     var prng = std.rand.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try readProgramBytes(
+    const program_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "print_account.so",
+        MAX_FILE_BYTES,
     );
     defer allocator.free(program_bytes);
 
@@ -130,9 +134,10 @@ test "fast_copy" {
     var prng = std.rand.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try readProgramBytes(
+    const program_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "fast_copy.so",
+        MAX_FILE_BYTES,
     );
     defer allocator.free(program_bytes);
     const program_account = .{
@@ -196,9 +201,10 @@ test "program_is_not_executable" {
     var prng = std.rand.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try readProgramBytes(
+    const program_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "hello_world.so",
+        MAX_FILE_BYTES,
     );
     defer allocator.free(program_bytes);
 
@@ -236,9 +242,10 @@ test "program_invalid_account_data" {
     var prng = std.rand.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
-    var program_bytes = try readProgramBytes(
+    var program_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "hello_world.so",
+        MAX_FILE_BYTES,
     );
     program_bytes[3] = 0x00; // corrupt the program
     defer allocator.free(program_bytes);
@@ -277,9 +284,10 @@ test "program_init_vm_not_enough_compute" {
     var prng = std.rand.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try readProgramBytes(
+    const program_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "hello_world.so",
+        MAX_FILE_BYTES,
     );
     defer allocator.free(program_bytes);
 
@@ -313,9 +321,4 @@ test "program_init_vm_not_enough_compute" {
     );
 
     try std.testing.expectError(error.ProgramEnvironmentSetupFailure, result);
-}
-
-fn readProgramBytes(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const input_file = try std.fs.cwd().openFile(path, .{});
-    return try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
 }
