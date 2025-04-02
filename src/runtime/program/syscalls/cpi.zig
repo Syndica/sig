@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../../sig.zig");
-const memory = @import("../../vm/memory.zig");
+const sig = @import("../../../sig.zig");
+const memory = @import("../../../vm/memory.zig");
 
 const ids = sig.runtime.ids;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
