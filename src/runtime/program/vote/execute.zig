@@ -927,11 +927,15 @@ fn towerSync(
     clock: Clock,
     tower_sync: TowerSync,
 ) !void {
-    _ = allocator;
-    _ = ic;
-    _ = vote_account;
+    var vote_state = try verifyAndGetVoteState(
+        allocator,
+        ic,
+        vote_account,
+        clock,
+    );
+    defer vote_state.deinit();
+
     _ = slot_hashes;
-    _ = clock;
     _ = tower_sync;
 }
 

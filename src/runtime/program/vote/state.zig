@@ -970,6 +970,20 @@ pub const VoteState = struct {
         ) != null;
     }
 
+    pub fn doProcessTowerSync(
+        self: *VoteState,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        slot: Slot,
+        tower_sync: *TowerSync,
+    ) !?VoteError {
+        _ = self;
+        _ = slot_hashes;
+        _ = epoch;
+        _ = slot;
+        _ = tower_sync;
+    }
+
     pub fn doProcessVoteStateUpdate(
         self: *VoteState,
         allocator: std.mem.Allocator,
@@ -981,14 +995,29 @@ pub const VoteState = struct {
         if (try self.checkAndFilterProposedVoteState(
             allocator,
             slot_hashes,
-            vote_state_update,
+            &vote_state_update.lockouts,
+            &vote_state_update.root,
+            vote_state_update.hash,
         )) |err| {
             return err;
         }
 
-        return try self.processNewVoteState(
+        // TODO BoundedArray?
+        var lockouts = try std.ArrayList(LandedVote).initCapacity(
             allocator,
-            vote_state_update,
+            vote_state_update.lockouts.items.len,
+        );
+        defer lockouts.deinit();
+        for (vote_state_update.lockouts.items) |lockout| {
+            try lockouts.append(
+                LandedVote{ .latency = 0, .lockout = lockout },
+            );
+        }
+
+        return try self.processNewVoteState(
+            &lockouts,
+            vote_state_update.root,
+            vote_state_update.timestamp,
             epoch,
             slot,
         );
@@ -998,15 +1027,16 @@ pub const VoteState = struct {
         self: *VoteState,
         allocator: std.mem.Allocator,
         slot_hashes: *const SlotHashes,
-        vote_state_update: *VoteStateUpdate,
+        proposed_lockouts: *std.ArrayList(Lockout),
+        proposed_root: *?Slot,
+        proposed_hash: Hash,
     ) !?VoteError {
-        if (vote_state_update.lockouts.items.len == 0) {
+        if (proposed_lockouts.items.len == 0) {
             return VoteError.empty_slots;
         }
 
-        const last_proposed_slot = vote_state_update
         // must be nonempty, checked above
-            .lockouts.items[vote_state_update.lockouts.items.len - 1].slot;
+        const last_proposed_slot = proposed_lockouts.getLast().slot;
 
         // If the proposed state is not new enough, return
         if (self.votes.getLastOrNull()) |last_vote| {
@@ -1029,19 +1059,19 @@ pub const VoteState = struct {
             return VoteError.vote_too_old;
         }
 
-        if (vote_state_update.*.root) |root| {
+        if (proposed_root.*) |root| {
             // If the new proposed root `R` is less than the earliest slot hash in the history
             // such that we cannot verify whether the slot was actually was on this fork, set
             // the root to the latest vote in the vote state that's less than R. If no
             // votes from the vote state are less than R, use its root instead.
             if (root < earliest_slot_hash_in_history) {
                 // First overwrite the proposed root with the vote state's root
-                vote_state_update.*.root = self.root_slot;
+                proposed_root.* = self.root_slot;
                 // Then try to find the latest vote in vote state that's less than R
                 var iter = std.mem.reverseIterator(self.votes.items);
                 while (iter.next()) |vote| {
                     if (vote.lockout.slot <= root) {
-                        vote_state_update.*.root = vote.lockout.slot;
+                        proposed_root.* = vote.lockout.slot;
                         break;
                     }
                 }
@@ -1051,7 +1081,7 @@ pub const VoteState = struct {
         // Index into the new proposed vote state's slots, starting with the root if it exists then
         // we use this mutable root to fold checking the root slot into the below loop
         // for performance
-        var root_to_check = if (vote_state_update.*.root) |root| root else null;
+        var root_to_check = proposed_root.*;
         var proposed_lockouts_index: usize = 0;
         // index into the slot_hashes, starting at the oldest known
         // slot hash
@@ -1068,20 +1098,20 @@ pub const VoteState = struct {
         //
         // We check every proposed lockout because have to ensure that every slot is actually part of
         // the history, not just the most recent ones
-        while (proposed_lockouts_index < vote_state_update.*.lockouts.items.len and
+        while (proposed_lockouts_index < proposed_lockouts.*.items.len and
             slot_hashes_index > 0)
         {
             const proposed_vote_slot: Slot = blk: {
                 if (root_to_check) |root| {
                     break :blk root;
                 } else {
-                    break :blk vote_state_update.*.lockouts.items[proposed_lockouts_index].slot;
+                    break :blk proposed_lockouts.*.items[proposed_lockouts_index].slot;
                 }
             };
 
             if (root_to_check == null and
                 proposed_lockouts_index > 0 and
-                proposed_vote_slot <= vote_state_update.*.lockouts.items[
+                proposed_vote_slot <= proposed_lockouts.*.items[
                 std.math.sub(usize, proposed_lockouts_index, 1) catch
                     return error.ArithmeticOverflow
             ].slot) {
@@ -1171,7 +1201,7 @@ pub const VoteState = struct {
             }
         }
 
-        if (proposed_lockouts_index != vote_state_update.*.lockouts.items.len) {
+        if (proposed_lockouts_index != proposed_lockouts.*.items.len) {
             // The last vote slot in the proposed vote state did not exist in SlotHashes
             return VoteError.slots_mismatch;
         }
@@ -1200,7 +1230,7 @@ pub const VoteState = struct {
         // due to assumption 3) above.
         std.debug.assert(last_proposed_slot == slot_hashes.entries[slot_hashes_index].@"0");
 
-        if (slot_hashes.entries[slot_hashes_index].@"1".eql(vote_state_update.*.hash)) {
+        if (slot_hashes.entries[slot_hashes_index].@"1".eql(proposed_hash)) {
             return VoteError.slot_hash_mismatch;
         }
 
@@ -1209,7 +1239,7 @@ pub const VoteState = struct {
         var filter_votes_index: usize = 0;
 
         var i: usize = 0;
-        while (i < vote_state_update.*.lockouts.items.len) {
+        while (i < proposed_lockouts.*.items.len) {
             const should_retain = blk: {
                 if (filter_votes_index == proposed_lockouts_indices_to_filter.items.len) {
                     break :blk true;
@@ -1226,7 +1256,7 @@ pub const VoteState = struct {
             proposed_lockouts_index +%= 1; // checked add with wrapping
 
             if (!should_retain) {
-                _ = vote_state_update.*.lockouts.orderedRemove(i);
+                _ = proposed_lockouts.*.orderedRemove(i);
             } else {
                 i += 1;
             }
@@ -1274,22 +1304,12 @@ pub const VoteState = struct {
     // popped off.
     pub fn processNewVoteState(
         self: *VoteState,
-        allocator: std.mem.Allocator,
-        vote_state_update: *VoteStateUpdate,
+        new_state: *std.ArrayList(LandedVote),
+        new_root: ?Slot,
+        timestamp: ?i64,
         epoch: Epoch,
         current_slot: Slot,
     ) !?VoteError {
-        const new_root = vote_state_update.*.root;
-        // TODO BoundedArray?
-        var new_state = try std.ArrayList(LandedVote).initCapacity(
-            allocator,
-            vote_state_update.lockouts.items.len,
-        );
-        for (vote_state_update.lockouts.items) |lockout| {
-            try new_state.append(
-                LandedVote{ .latency = 0, .lockout = lockout },
-            );
-        }
         std.debug.assert(new_state.items.len != 0);
 
         if (new_state.items.len > MAX_LOCKOUT_HISTORY) {
@@ -1461,15 +1481,15 @@ pub const VoteState = struct {
             // finalizing it. Each of those votes is awarded 1 credit.
             try self.incrementCredits(epoch, earned_credits);
         }
-        if (vote_state_update.timestamp) |timestamp| {
-            const last_slot = vote_state_update.lockouts.getLast().slot;
-            if (self.processTimestamp(last_slot, timestamp)) |err| {
+        if (timestamp) |tstamp| {
+            const last_slot = new_state.getLast().lockout.slot;
+            if (self.processTimestamp(last_slot, tstamp)) |err| {
                 return err;
             }
         }
 
-        self.root_slot = vote_state_update.root;
-        self.votes = new_state;
+        self.root_slot = new_root;
+        self.votes = new_state.*;
 
         return null;
     }
