@@ -1353,7 +1353,7 @@ pub const VoteState = struct {
             }
         }
 
-        var maybe_previous_vote: ?*LandedVote = null;
+        var maybe_previous_vote: ?*const LandedVote = null;
 
         // Check that all the votes in the new proposed state are:
         // 1) Strictly sorted from oldest to newest vote
@@ -1514,7 +1514,9 @@ pub const VoteState = struct {
         }
 
         self.root_slot = new_root;
-        self.votes = new_state.*;
+        // TODO can this be imprpoved?
+        self.votes.clearRetainingCapacity();
+        try self.votes.appendSlice(new_state.*.items);
 
         return null;
     }
@@ -2839,8 +2841,12 @@ test "state.VoteState.containsSlot" {
     var vote_state = VoteState.default(allocator);
     defer vote_state.deinit();
 
-    try vote_state.votes.append(LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 1, .confirmation_count = 1 } });
-    try vote_state.votes.append(LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 2, .confirmation_count = 2 } });
+    try vote_state.votes.append(
+        LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 1, .confirmation_count = 1 } },
+    );
+    try vote_state.votes.append(
+        LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 2, .confirmation_count = 2 } },
+    );
 
     try std.testing.expect(vote_state.contains_slot(1));
     try std.testing.expect(vote_state.contains_slot(2));
@@ -2866,7 +2872,8 @@ test "state.VoteState process new vote too many votes" {
     }
 
     const current_epoch = currentEpoch(&vote_state);
-    const maybe_error = processNewVoteStateFromLockouts(
+    const maybe_error = try processNewVoteStateFromLockouts(
+        allocator,
         &vote_state,
         bad_votes.items,
         null,
@@ -2874,6 +2881,419 @@ test "state.VoteState process new vote too many votes" {
         current_epoch,
     );
     try std.testing.expectEqual(VoteError.too_many_votes, maybe_error);
+}
+
+test "state.VoteState process new vote state root rollback" {
+    const allocator = std.testing.allocator;
+
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    for (0..MAX_LOCKOUT_HISTORY + 2) |i| {
+        try processSlotVoteUnchecked(&vote_state1, @as(Slot, i));
+    }
+
+    try std.testing.expectEqual(1, vote_state1.root_slot);
+    // Update vote_state2 with a higher slot so that `process_new_vote_state`
+    // doesn't panic.
+    var vote_state2 = try cloneVoteState(allocator, &vote_state1);
+    defer vote_state2.deinit();
+    try processSlotVoteUnchecked(&vote_state2, @intCast((MAX_LOCKOUT_HISTORY + 3)));
+
+    // Trying to set a lesser root should error
+    const lesser_root: ?Slot = 0;
+
+    const current_epoch = currentEpoch(&vote_state2);
+    const maybe_error = try vote_state1.processNewVoteState(
+        &vote_state2.votes,
+        lesser_root,
+        null,
+        current_epoch,
+        0,
+    );
+
+    try std.testing.expectEqual(VoteError.root_roll_back, maybe_error);
+}
+
+test "state.VoteState process new vote state zero confirmations" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 0 },
+        Lockout{ .slot = 1, .confirmation_count = 1 },
+    };
+
+    const maybe_error = try processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.zero_confirmations, maybe_error);
+
+    var anoter_bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 2 },
+        Lockout{ .slot = 1, .confirmation_count = 0 },
+    };
+
+    const another_maybe_error = try processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &anoter_bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.zero_confirmations, another_maybe_error);
+}
+
+test "state.VoteState process new vote state confirmations too large" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var good_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = @as(u32, MAX_LOCKOUT_HISTORY) },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &good_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(null, maybe_error);
+
+    var another_vote_state1 = VoteState.default(allocator);
+    var bad_votes = [_]Lockout{
+        Lockout{
+            .slot = 0,
+            .confirmation_count = @as(u32, MAX_LOCKOUT_HISTORY + 1),
+        },
+    };
+
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &another_vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.confirmation_too_large, another_maybe_error);
+}
+
+test "state.VoteState process new vote state slot smaller than root" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    const current_epoch = currentEpoch(&vote_state1);
+
+    const root_slot: u64 = 5;
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = root_slot, .confirmation_count = 2 },
+        Lockout{ .slot = root_slot + 1, .confirmation_count = 1 },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        root_slot,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.slot_smaller_than_root, maybe_error);
+
+    var another_bad_votes = [_]Lockout{
+        Lockout{ .slot = root_slot - 1, .confirmation_count = 2 },
+        Lockout{ .slot = root_slot + 1, .confirmation_count = 1 },
+    };
+
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &another_bad_votes,
+        root_slot,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.slot_smaller_than_root, another_maybe_error);
+}
+
+test "state.VoteState process new vote state slots not ordered" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = 1, .confirmation_count = 2 },
+        Lockout{ .slot = 0, .confirmation_count = 1 },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.slots_not_ordered, maybe_error);
+
+    var another_bad_votes = [_]Lockout{
+        Lockout{ .slot = 1, .confirmation_count = 2 },
+        Lockout{ .slot = 1, .confirmation_count = 1 },
+    };
+
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &another_bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.slots_not_ordered, another_maybe_error);
+}
+
+test "state.VoteState process new vote state confirmations not ordered" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 1 },
+        Lockout{ .slot = 1, .confirmation_count = 2 },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(
+        VoteError.confirmations_not_ordered,
+        maybe_error,
+    );
+
+    var another_bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 1 },
+        Lockout{ .slot = 1, .confirmation_count = 1 },
+    };
+
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &another_bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(
+        VoteError.confirmations_not_ordered,
+        another_maybe_error,
+    );
+}
+
+test "state.VoteState process new vote state lockout mismatch" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 2 },
+        Lockout{ .slot = 7, .confirmation_count = 1 },
+    };
+
+    // Slot 7 should have expired slot 0
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(
+        VoteError.new_vote_state_lockout_mismatch,
+        maybe_error,
+    );
+}
+
+test "state.VoteState process new vote state confirmation rollback" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 4 },
+        Lockout{ .slot = 1, .confirmation_count = 3 },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(null, maybe_error);
+
+    var another_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 4 },
+        Lockout{ .slot = 1, .confirmation_count = 2 },
+        Lockout{ .slot = 2, .confirmation_count = 1 },
+    };
+    // Should error because newer vote state should not have lower confirmation the same slot
+    // 1
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &another_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(
+        VoteError.confirmation_roll_back,
+        another_maybe_error,
+    );
+}
+
+test "state.VoteState process new vote state root progress" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    for (0..MAX_LOCKOUT_HISTORY) |i| {
+        try processSlotVoteUnchecked(&vote_state1, @as(Slot, i));
+    }
+
+    try std.testing.expectEqual(null, vote_state1.root_slot);
+    var vote_state2 = try cloneVoteState(allocator, &vote_state1);
+    defer vote_state2.deinit();
+
+    // 1) Try to update `vote_state1` with no root,
+    // to `vote_state2`, which has a new root, should succeed.
+    //
+    // 2) Then try to update`vote_state1` with an existing root,
+    // to `vote_state2`, which has a newer root, which
+    // should succeed.
+    for (MAX_LOCKOUT_HISTORY + 1..MAX_LOCKOUT_HISTORY + 3) |new_vote| {
+        try processSlotVoteUnchecked(&vote_state2, new_vote);
+        try std.testing.expect(
+            !std.meta.eql(vote_state1.root_slot, vote_state2.root_slot),
+        );
+
+        var cloned_votes = try vote_state2.votes.clone();
+        defer cloned_votes.deinit();
+        const maybe_error = try vote_state1.processNewVoteState(
+            &cloned_votes,
+            vote_state2.root_slot,
+            null,
+            currentEpoch(&vote_state2),
+            0,
+        );
+        try std.testing.expectEqual(null, maybe_error);
+        // TODO have a better way of comparing all of vote_state1 with vote_state2
+        try std.testing.expect(
+            std.meta.eql(vote_state1.root_slot, vote_state2.root_slot),
+        );
+        try std.testing.expectEqualSlices(
+            LandedVote,
+            vote_state1.votes.items,
+            vote_state2.votes.items,
+        );
+    }
+}
+
+test "state.VoteState process new vote state same slot but not common ancestor" {
+    // It might be possible that during the switch from old vote instructions
+    // to new vote instructions, new_state contains votes for slots LESS
+    // than the current state, for instance:
+    //
+    // Current on-chain state: 1, 5
+    // New state: 1, 2 (lockout: 4), 3, 5, 7
+    //
+    // Imagine the validator made two of these votes:
+    // 1) The first vote {1, 2, 3} didn't land in the old state, but didn't
+    // land on chain
+    // 2) A second vote {1, 2, 5} was then submitted, which landed
+    //
+    //
+    // 2 is not popped off in the local tower because 3 doubled the lockout.
+    // However, 3 did not land in the on-chain state, so the vote {1, 2, 6}
+    // will immediately pop off 2.
+
+    // Construct on-chain vote state
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+    var slots = [_]Slot{ 1, 2, 5 };
+    try processSlotsVoteUnchecked(&vote_state1, slots[0..]);
+
+    const expected_slots = [_]u64{ 1, 5 };
+    var actual_slots: [2]u64 = undefined;
+    for (vote_state1.votes.items[0..2], 0..) |vote, i| {
+        actual_slots[i] = vote.lockout.slot;
+    }
+    try std.testing.expect(std.mem.eql(u64, &expected_slots, &actual_slots));
+
+    // Construct local tower state
+    var vote_state2 = VoteState.default(allocator);
+    defer vote_state2.deinit();
+
+    var another_slots = [_]Slot{ 1, 2, 3, 5, 7 };
+    try processSlotsVoteUnchecked(&vote_state2, another_slots[0..]);
+
+    const another_expected_slots = [_]u64{ 1, 2, 3, 5, 7 };
+    var another_actual_slots: [5]u64 = undefined;
+    for (vote_state2.votes.items[0..5], 0..) |vote, i| {
+        another_actual_slots[i] = vote.lockout.slot;
+    }
+    try std.testing.expect(std.mem.eql(u64, &another_expected_slots, &another_actual_slots));
+
+    // See that on-chain vote state can update properly
+    var cloned_votes = try vote_state2.votes.clone();
+    defer cloned_votes.deinit();
+    const maybe_error = try vote_state1.processNewVoteState(
+        &cloned_votes,
+        vote_state2.root_slot,
+        null,
+        currentEpoch(&vote_state2),
+        0,
+    );
+    try std.testing.expectEqual(null, maybe_error);
+
+    try std.testing.expectEqualDeep(vote_state1, vote_state2);
 }
 
 fn processSlotVoteUnchecked(
@@ -2910,14 +3330,28 @@ fn processSlotVoteUnchecked(
     );
 }
 
+fn processSlotsVoteUnchecked(
+    vote_state: *VoteState,
+    slots: []Slot,
+) !void {
+    if (!builtin.is_test) {
+        @panic("processSlotsVoteUnchecked should only be called in test mode");
+    }
+
+    for (slots) |slot| {
+        try processSlotVoteUnchecked(vote_state, slot);
+    }
+}
+
 fn processNewVoteStateFromLockouts(
+    allocator: std.mem.Allocator,
     vote_state: *VoteState,
     new_state: []Lockout,
     new_root: ?Slot,
     timestamp: ?i64,
     epoch: Epoch,
 ) !?VoteError {
-    var landed_votes = std.ArrayList(LandedVote).init(std.heap.c_allocator);
+    var landed_votes = std.ArrayList(LandedVote).init(allocator);
     defer landed_votes.deinit();
 
     for (new_state) |lockout| {
@@ -2960,10 +3394,44 @@ pub fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout 
 
 pub fn currentEpoch(self: *const VoteState) u64 {
     if (!builtin.is_test) {
-        @panic("current_epoch should only be called in test mode");
+        @panic("currentEpoch should only be called in test mode");
     }
     return if (self.epoch_credits.items.len == 0)
         0
     else
         self.epoch_credits.getLast().epoch;
+}
+
+pub fn cloneVoteState(
+    allocator: std.mem.Allocator,
+    vote_state: *const VoteState,
+) !VoteState {
+    if (!builtin.is_test) {
+        @panic("cloneVoteState should only be called in test mode");
+    }
+    var cloned_votes = try std.ArrayList(LandedVote).initCapacity(
+        allocator,
+        vote_state.votes.items.len,
+    );
+    try cloned_votes.appendSlice(vote_state.votes.items);
+
+    var cloned_epoch_credits = try std.ArrayList(EpochCredit).initCapacity(
+        allocator,
+        vote_state.epoch_credits.items.len,
+    );
+    try cloned_epoch_credits.appendSlice(vote_state.epoch_credits.items);
+
+    const cloned_voters = AuthorizedVoters{ .voters = try vote_state.voters.voters.clone() };
+
+    return VoteState{
+        .node_pubkey = vote_state.node_pubkey,
+        .withdrawer = vote_state.withdrawer,
+        .commission = vote_state.commission,
+        .votes = cloned_votes,
+        .root_slot = vote_state.root_slot,
+        .voters = cloned_voters,
+        .prior_voters = vote_state.prior_voters,
+        .epoch_credits = cloned_epoch_credits,
+        .last_timestamp = vote_state.last_timestamp,
+    };
 }
