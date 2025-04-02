@@ -977,7 +977,7 @@ pub const VoteState = struct {
         epoch: Epoch,
         slot: Slot,
         tower_sync: *TowerSync,
-    ) !?VoteError {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
         if (try self.checkAndFilterProposedVoteState(
             allocator,
             slot_hashes,
@@ -1016,7 +1016,7 @@ pub const VoteState = struct {
         epoch: Epoch,
         slot: Slot,
         vote_state_update: *VoteStateUpdate,
-    ) !?VoteError {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
         if (try self.checkAndFilterProposedVoteState(
             allocator,
             slot_hashes,
@@ -1055,7 +1055,7 @@ pub const VoteState = struct {
         proposed_lockouts: *std.ArrayList(Lockout),
         proposed_root: *?Slot,
         proposed_hash: Hash,
-    ) !?VoteError {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
         if (proposed_lockouts.items.len == 0) {
             return VoteError.empty_slots;
         }
@@ -1334,7 +1334,7 @@ pub const VoteState = struct {
         timestamp: ?i64,
         epoch: Epoch,
         current_slot: Slot,
-    ) !?VoteError {
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
         std.debug.assert(new_state.items.len != 0);
 
         if (new_state.items.len > MAX_LOCKOUT_HISTORY) {

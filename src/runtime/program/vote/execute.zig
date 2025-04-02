@@ -757,7 +757,7 @@ fn executeProcessVoteWithAccount(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote: Vote,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
         ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
     {
@@ -791,7 +791,7 @@ fn processVoteWithAccount(
     vote: Vote,
     slot_hashes: SlotHashes,
     clock: Clock,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
         ic,
@@ -838,7 +838,7 @@ fn executeUpdateVoteState(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote_state_update: *VoteStateUpdate,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
         ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
     {
@@ -871,7 +871,7 @@ fn updateVoteState(
     slot_hashes: SlotHashes,
     clock: Clock,
     vote_state_update: *VoteStateUpdate,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
         ic,
@@ -901,7 +901,7 @@ fn executeTowerSync(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
     tower_sync: *TowerSync,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     if (!ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX)) {
         return InstructionError.InvalidInstructionData;
     }
@@ -932,7 +932,7 @@ fn towerSync(
     slot_hashes: SlotHashes,
     clock: Clock,
     tower_sync: *TowerSync,
-) !void {
+) (error{OutOfMemory} || InstructionError)!void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
         ic,
