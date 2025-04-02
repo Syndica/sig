@@ -11,7 +11,7 @@ pub const system_program = @import("system/lib.zig");
 pub const serialization = @import("serialization.zig");
 pub const testing = @import("testing.zig");
 pub const vote_program = @import("vote/lib.zig");
-pub const cpi = @import("cpi.zig");
+pub const cpi = @import("syscalls/cpi.zig");
 
 pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
