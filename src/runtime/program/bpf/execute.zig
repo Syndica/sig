@@ -30,7 +30,7 @@ pub fn execute(
 
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
         var syscalls = registerSyscalls(allocator, ic.tc) catch |err| {
-            try ic.tc.log("Failed to register syscalls: {}", .{err});
+            try ic.tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
         errdefer syscalls.deinit(allocator);
@@ -46,7 +46,7 @@ pub fn execute(
             &syscalls,
             .{},
         ) catch |err| {
-            try ic.tc.log("{}", .{err});
+            try ic.tc.log("{s}", .{@errorName(err)});
             return InstructionError.InvalidAccountData;
         };
         break :blk .{ executable, syscalls, source };
@@ -91,7 +91,7 @@ pub fn execute(
             regions,
             &syscalls,
         ) catch |err| {
-            try ic.tc.log("Failed to create SBPF VM: {}", .{err});
+            try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
         defer {
@@ -195,9 +195,11 @@ fn initVm(
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
     var mm_regions_array = std.ArrayList(vm.memory.Region).init(allocator);
     errdefer mm_regions_array.deinit();
-    try mm_regions_array.append(executable.getProgramRegion());
-    try mm_regions_array.append(vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START));
-    try mm_regions_array.append(vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START));
+    try mm_regions_array.appendSlice(&.{
+        executable.getProgramRegion(),
+        vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START),
+        vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START),
+    });
     try mm_regions_array.appendSlice(regions);
     const mm_regions = try mm_regions_array.toOwnedSlice();
     const memory_map = try vm.memory.MemoryMap.init(
