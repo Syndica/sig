@@ -62,7 +62,7 @@ fn testAsmWithMemory(
             Region.init(.mutable, mutable, memory.INPUT_START),
         },
         config.maximum_version,
-        &config,
+        config,
     );
 
     var prng = std.Random.DefaultPrng.init(10);
@@ -1984,7 +1984,7 @@ test "pqr" {
         );
         defer executable.deinit(allocator);
 
-        const map = try MemoryMap.init(allocator, &.{}, .v2, &.{});
+        const map = try MemoryMap.init(allocator, &.{}, .v2, .{});
 
         // TODO: I would have defined the `context` struct inside of the loop,
         // but an LLVM 18 miscompilation on ARM64 doesn't let me. Move it back
@@ -2036,7 +2036,7 @@ test "pqr divide by zero" {
         );
         defer executable.deinit(allocator);
 
-        const map = try MemoryMap.init(allocator, &.{}, .v3, &.{});
+        const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
         var prng = std.Random.DefaultPrng.init(10);
         var context = try createTransactionContext(
             allocator,
@@ -2310,7 +2310,7 @@ pub fn testElfWithSyscalls(
             Region.init(.mutable, &.{}, memory.INPUT_START),
         },
         .v0,
-        &config,
+        config,
     );
 
     var prng = std.Random.DefaultPrng.init(10);

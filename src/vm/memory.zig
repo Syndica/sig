@@ -27,7 +27,7 @@ pub const MemoryMap = union(enum) {
         allocator: std.mem.Allocator,
         regions: []const Region,
         version: sbpf.Version,
-        config: *const exe.Config,
+        config: exe.Config,
     ) (error{OutOfMemory} || InitError)!MemoryMap {
         return if (config.aligned_memory_mapping)
             .{ .aligned = try AlignedMemoryMap.init(regions, version, config) }
@@ -42,13 +42,13 @@ pub const MemoryMap = union(enum) {
         }
     }
 
-    fn find_region(
+    fn findRegion(
         self: MemoryMap,
         vm_addr: u64,
-    ) ?Region {
+    ) !Region {
         return switch (self) {
-            .aligned => |aligned| aligned.find_region(vm_addr),
-            .unaligned => |unaligned| unaligned.find_region(vm_addr),
+            .aligned => |aligned| try aligned.findRegion(vm_addr),
+            .unaligned => |unaligned| try unaligned.findRegion(vm_addr),
         };
     }
 
@@ -57,9 +57,8 @@ pub const MemoryMap = union(enum) {
         comptime access_type: MemoryState,
         vm_addr: u64,
     ) RegionError!Region {
-        if (self.find_region(vm_addr)) |found_region| {
-            if (found_region.isValidAccess(access_type, vm_addr)) return found_region;
-        }
+        const found_region = try self.findRegion(vm_addr);
+        if (found_region.isValidAccess(access_type, vm_addr)) return found_region;
 
         const version, const config = switch (self) {
             inline else => |map| .{ map.version, map.config },
@@ -160,10 +159,9 @@ pub const Region = struct {
     fn regionsOverlap(sorted_regions: []const Region) bool {
         var iter = std.mem.window(Region, sorted_regions, 2, 1);
 
-        while (iter.next()) |region_pair|
-            if (region_pair[0].vm_addr_end > region_pair[1].vm_addr_start)
-                return true;
-
+        while (iter.next()) |region_pair| {
+            if (region_pair[0].vm_addr_end > region_pair[1].vm_addr_start) return true;
+        }
         return false;
     }
 
@@ -180,12 +178,12 @@ pub const Region = struct {
 pub const AlignedMemoryMap = struct {
     regions: []const Region,
     version: sbpf.Version,
-    config: *const exe.Config,
+    config: exe.Config,
 
     fn init(
         regions: []const Region,
         version: sbpf.Version,
-        config: *const exe.Config,
+        config: exe.Config,
     ) InitError!AlignedMemoryMap {
         for (regions, 1..) |reg, index| {
             if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
@@ -199,14 +197,16 @@ pub const AlignedMemoryMap = struct {
         };
     }
 
-    fn find_region(self: *const AlignedMemoryMap, vm_addr: u64) ?Region {
+    fn findRegion(self: *const AlignedMemoryMap, vm_addr: u64) !Region {
+        const err = accessViolation(vm_addr, self.version, self.config);
+
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
-        if (index == 0 or index > self.regions.len) return null;
+        if (index == 0 or index > self.regions.len) return err;
         const reg = self.regions[index - 1];
         if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
             return reg;
         }
-        return null;
+        return err;
     }
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L628
@@ -216,9 +216,9 @@ pub const AlignedMemoryMap = struct {
         vm_addr: u64,
         len: u64,
     ) AccessError!state.Slice() {
-        const err = accessViolation(vm_addr, self.version, self.config);
-        const reg = self.find_region(vm_addr) orelse return err;
-        return reg.translate(state, vm_addr, len) orelse return err;
+        const reg = try self.findRegion(vm_addr);
+        return reg.translate(state, vm_addr, len) orelse
+            return accessViolation(vm_addr, self.version, self.config);
     }
 };
 
@@ -226,7 +226,7 @@ pub const AlignedMemoryMap = struct {
 fn accessViolation(
     vm_addr: u64,
     version: sbpf.Version,
-    config: *const exe.Config,
+    config: exe.Config,
 ) AccessError {
     const stack_frame_idx = std.math.divExact(
         u64,
@@ -250,7 +250,7 @@ const UnalignedMemoryMap = struct {
     // Executable sbpf_version
     version: sbpf.Version,
     // VM configuration
-    config: *const exe.Config,
+    config: exe.Config,
 
     // CoW callback
     //cow_cb: ?MemoryCowCallback,
@@ -260,11 +260,12 @@ const UnalignedMemoryMap = struct {
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L241
     fn init(
         allocator: std.mem.Allocator,
-        _regions: []const Region,
+        regions: []const Region,
         version: sbpf.Version,
-        config: *const exe.Config,
+        config: exe.Config,
     ) (error{OutOfMemory} || InitError)!UnalignedMemoryMap {
-        const sorted_regions = try allocator.dupe(Region, _regions);
+        // temporary allocation to keep regions a const slice
+        const sorted_regions = try allocator.dupe(Region, regions);
         defer allocator.free(sorted_regions);
         std.mem.sort(Region, sorted_regions, {}, Region.lessThanFn);
 
@@ -273,11 +274,16 @@ const UnalignedMemoryMap = struct {
         const region_addresses = try allocator.alloc(u64, sorted_regions.len);
         errdefer allocator.free(region_addresses);
 
-        const regions = try allocator.alloc(Region, _regions.len);
-        errdefer allocator.free(regions);
+        const etyzinger_regions = try allocator.alloc(Region, regions.len);
+        errdefer allocator.free(etyzinger_regions);
+        @memset(etyzinger_regions, .{
+            .vm_addr_start = 0,
+            .vm_addr_end = 0,
+            .host_memory = .{ .constant = "" },
+        });
 
         var self: UnalignedMemoryMap = .{
-            .regions = regions,
+            .regions = etyzinger_regions,
             .region_addresses = region_addresses,
             // .cache
             .version = version,
@@ -299,19 +305,19 @@ const UnalignedMemoryMap = struct {
     fn constructEytzingerOrder(
         self: UnalignedMemoryMap,
         ascending_regions: []Region,
-        _in_index: usize,
+        in_index: usize,
         out_index: usize,
     ) usize {
-        if (out_index >= ascending_regions.len) return _in_index;
+        if (out_index >= ascending_regions.len) return in_index;
 
-        const in_index = self.constructEytzingerOrder(
+        const new_in_index = self.constructEytzingerOrder(
             ascending_regions,
-            _in_index,
+            in_index,
             (out_index *| 2) +| 1,
         );
 
         {
-            self.regions[out_index] = ascending_regions[in_index];
+            self.regions[out_index] = ascending_regions[new_in_index];
             // agave mutates ascending_regions like this, but there's no reason for it (mem::take).
             // ascending_regions[in_index] = Region.DEFAULT; // agave
         }
@@ -320,15 +326,14 @@ const UnalignedMemoryMap = struct {
 
         return self.constructEytzingerOrder(
             ascending_regions,
-            in_index +| 1,
+            new_in_index +| 1,
             (out_index *| 2) +| 2,
         );
     }
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L293
-    fn find_region(self: *const UnalignedMemoryMap, vm_addr: u64) ?Region {
-        // NOTE: agave-like cache unimplemented. Does not seem necessary.
-
+    // NOTE: agave-like cache unimplemented. Does not seem necessary.
+    fn findRegion(self: *const UnalignedMemoryMap, vm_addr: u64) !Region {
         var index: usize = 1;
         while (index <= self.region_addresses.len) {
             std.debug.assert(index > 0); // safe: index started at 1 and only increases.
@@ -336,7 +341,10 @@ const UnalignedMemoryMap = struct {
         }
 
         index = std.math.shr(usize, index, @ctz(index) + 1);
-        return if (index == 0) null else self.regions[index - 1];
+        return if (index == 0)
+            accessViolation(vm_addr, self.version, self.config)
+        else
+            self.regions[index - 1];
     }
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L323
@@ -346,9 +354,9 @@ const UnalignedMemoryMap = struct {
         vm_addr: u64,
         len: u64,
     ) AccessError!access_type.Slice() {
-        const err = accessViolation(vm_addr, self.version, self.config);
-        const reg = self.find_region(vm_addr) orelse return err;
-        return reg.translate(access_type, vm_addr, len) orelse return err;
+        const reg = try self.findRegion(vm_addr);
+        return reg.translate(access_type, vm_addr, len) orelse
+            return accessViolation(vm_addr, self.version, self.config);
     }
 };
 const expectError = std.testing.expectError;
@@ -366,7 +374,7 @@ test "aligned vmap" {
             Region.init(.constant, &stack_mem, STACK_START),
         },
         .v3,
-        &exe.Config{},
+        .{},
     );
 
     try expectEqual(
@@ -408,7 +416,7 @@ test "aligned region" {
             Region.init(.constant, &stack_mem, STACK_START),
         },
         .v3,
-        &exe.Config{},
+        .{},
     );
 
     try expectError(error.AccessViolation, m.region(.constant, RODATA_START - 1));
@@ -434,7 +442,7 @@ test "invalid memory region" {
                 Region.init(.mutable, &program_mem, RODATA_START),
             },
             .v0,
-            &exe.Config{},
+            .{},
         ),
     );
 }
@@ -456,7 +464,7 @@ test "unaligned map overlap" {
                 Region.init(.constant, mem2, INPUT_START + mem1.len - 1),
             },
             .v3,
-            &config,
+            config,
         ),
     );
 
@@ -467,7 +475,7 @@ test "unaligned map overlap" {
             Region.init(.constant, mem2, INPUT_START + mem1.len),
         },
         .v3,
-        &config,
+        config,
     );
     defer map.deinit(allocator);
 }
@@ -491,7 +499,7 @@ test "unaligned map" {
             Region.init(.constant, &mem4, INPUT_START + mem1.len + mem2.len + mem3.len),
         },
         .v3,
-        &config,
+        config,
     );
     defer map.deinit(allocator);
 
@@ -528,7 +536,7 @@ test "unaligned region" {
             Region.init(.constant, &mem2, INPUT_START + 4),
         },
         .v3,
-        &config,
+        config,
     );
     defer map.deinit(allocator);
 
