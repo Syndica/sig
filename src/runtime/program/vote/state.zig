@@ -108,7 +108,7 @@ pub const VoteStateUpdate = struct {
 
 pub const TowerSync = struct {
     /// The proposed tower
-    lockouts: []Lockout,
+    lockouts: std.ArrayList(Lockout),
     /// The proposed root
     root: ?Slot,
     /// signature of the bank's state at the last slot
@@ -972,16 +972,41 @@ pub const VoteState = struct {
 
     pub fn doProcessTowerSync(
         self: *VoteState,
+        allocator: std.mem.Allocator,
         slot_hashes: *const SlotHashes,
         epoch: Epoch,
         slot: Slot,
         tower_sync: *TowerSync,
     ) !?VoteError {
-        _ = self;
-        _ = slot_hashes;
-        _ = epoch;
-        _ = slot;
-        _ = tower_sync;
+        if (try self.checkAndFilterProposedVoteState(
+            allocator,
+            slot_hashes,
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+        )) |err| {
+            return err;
+        }
+
+        // TODO BoundedArray?
+        var lockouts = try std.ArrayList(LandedVote).initCapacity(
+            allocator,
+            tower_sync.lockouts.items.len,
+        );
+        defer lockouts.deinit();
+        for (tower_sync.lockouts.items) |lockout| {
+            try lockouts.append(
+                LandedVote{ .latency = 0, .lockout = lockout },
+            );
+        }
+
+        return try self.processNewVoteState(
+            &lockouts,
+            tower_sync.root,
+            tower_sync.timestamp,
+            epoch,
+            slot,
+        );
     }
 
     pub fn doProcessVoteStateUpdate(
