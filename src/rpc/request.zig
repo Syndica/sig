@@ -29,7 +29,8 @@ pub const Request = struct {
         );
         const method = switch (partial.method) {
             inline else => |method| blk: {
-                const Params = std.meta.FieldType(rpc.methods.MethodAndParams, method);
+                // NOTE: using `std.meta.FieldType` here hits eval branch quota, hack until `@FieldType`
+                const Params = @typeInfo(MethodAndParams).Union.fields[@intFromEnum(method)].type;
                 if (Params == noreturn) std.debug.panic("TODO: implement {s}", .{@tagName(method)});
 
                 var params: Params = undefined;
