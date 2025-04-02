@@ -119,7 +119,7 @@ pub fn execute(
         ),
         .update_vote_state => |args| {
             var vote_state_update = args.vote_state_update;
-            try executeUpdateVoteState(
+            return try executeUpdateVoteState(
                 allocator,
                 ic,
                 &vote_account,
@@ -128,7 +128,7 @@ pub fn execute(
         },
         .update_vote_state_switch => |args| {
             var vote_state_update = args.vote_state_update;
-            try executeUpdateVoteState(
+            return try executeUpdateVoteState(
                 allocator,
                 ic,
                 &vote_account,
@@ -137,7 +137,7 @@ pub fn execute(
         },
         .compact_update_vote_state => |args| {
             var vote_state_update = args.vote_state_update;
-            try executeUpdateVoteState(
+            return try executeUpdateVoteState(
                 allocator,
                 ic,
                 &vote_account,
@@ -146,25 +146,31 @@ pub fn execute(
         },
         .compact_update_vote_state_switch => |args| {
             var vote_state_update = args.vote_state_update;
-            try executeUpdateVoteState(
+            return try executeUpdateVoteState(
                 allocator,
                 ic,
                 &vote_account,
                 &vote_state_update,
             );
         },
-        .tower_sync => |args| try executeTowerSync(
-            allocator,
-            ic,
-            &vote_account,
-            args.tower_sync,
-        ),
-        .tower_sync_switch => |args| try executeTowerSync(
-            allocator,
-            ic,
-            &vote_account,
-            args.tower_sync,
-        ),
+        .tower_sync => |args| try {
+            var tower_sync = args.tower_sync;
+            return try executeTowerSync(
+                allocator,
+                ic,
+                &vote_account,
+                &tower_sync,
+            );
+        },
+        .tower_sync_switch => |args| {
+            var tower_sync = args.tower_sync;
+            return try executeTowerSync(
+                allocator,
+                ic,
+                &vote_account,
+                &tower_sync,
+            );
+        },
     };
 }
 
@@ -894,7 +900,7 @@ fn executeTowerSync(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    tower_sync: TowerSync,
+    tower_sync: *TowerSync,
 ) !void {
     if (!ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX)) {
         return InstructionError.InvalidInstructionData;
@@ -925,7 +931,7 @@ fn towerSync(
     vote_account: *BorrowedAccount,
     slot_hashes: SlotHashes,
     clock: Clock,
-    tower_sync: TowerSync,
+    tower_sync: *TowerSync,
 ) !void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
@@ -935,8 +941,20 @@ fn towerSync(
     );
     defer vote_state.deinit();
 
-    _ = slot_hashes;
-    _ = tower_sync;
+    const maybe_err = try vote_state.doProcessTowerSync(
+        allocator,
+        &slot_hashes,
+        clock.epoch,
+        clock.slot,
+        tower_sync,
+    );
+
+    if (maybe_err) |err| {
+        ic.tc.custom_error = @intFromEnum(err);
+        return InstructionError.Custom;
+    }
+
+    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L905
