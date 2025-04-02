@@ -91,10 +91,6 @@ fn RcBox(comptime T: type) type {
         value: T,
 
         const VALUE_OFFSET = @sizeOf(usize) * 2;
-
-        fn asPtr(self: *@This()) *T {
-            return &self.value;
-        }
     };
 }
 
@@ -105,6 +101,10 @@ fn Rc(comptime T: type) type {
 
         fn fromRaw(value_ptr: *T) @This() {
             return .{ .ptr = @fieldParentPtr("value", value_ptr) };
+        }
+
+        fn deref(self: @This()) *T {
+            return &self.ptr.value;
         }
     };
 }
@@ -117,6 +117,10 @@ fn RefCell(comptime T: type) type {
 
         pub fn init(value: T) @This() {
             return .{ .value = std.mem.asBytes(&value)[0..@sizeOf(T)].* };
+        }
+
+        pub fn asPtr(self: *@This()) *T {
+            return @ptrCast(&self.value);
         }
     };
 }
@@ -180,7 +184,7 @@ fn translateType(
     .mutable => *T,
     .constant => *const T,
 }) {
-    const host_addr = try translate(memory_map, state, vm_addr, @sizeOf(u64));
+    const host_addr = try translate(memory_map, state, vm_addr, @sizeOf(T));
     if (!check_aligned) {
         return @ptrFromInt(host_addr);
     } else if (host_addr % @alignOf(T) != 0) {
@@ -294,7 +298,7 @@ const CallerAccount = struct {
         const lamports: *u64 = blk: {
             // NOTE: trying to model the ptr stuff going on here:
             // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L151
-            const lamports_addr: u64 = @intFromPtr(account_info.lamports.ptr.asPtr());
+            const lamports_addr: u64 = @intFromPtr(account_info.lamports.deref().asPtr());
 
             // Double translate lamports out of RefCell
             const ptr: *const u64 = try translateType(
@@ -335,7 +339,7 @@ const CallerAccount = struct {
         const serialized, const vm_data_addr, const ref_to_len = blk: {
             // NOTE: trying to model the ptr stuff going on here:
             // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L183
-            const data_ptr: u64 = @intFromPtr(account_info.data.ptr.asPtr());
+            const data_ptr: u64 = @intFromPtr(account_info.data.deref().asPtr());
 
             if (direct_mapping and data_ptr >= MM_INPUT_START) {
                 return SyscallError.InvalidPointer;
@@ -658,7 +662,7 @@ const MockAccountInfo = struct {
             data,
             memory.Region.init(.mutable, data, vm_addr),
             .{
-                .original_data_len = data.len,
+                .original_data_len = self.data.len,
                 .vm_key_addr = key_addr,
                 .vm_lamports_addr = lamports_addr,
                 .vm_owner_addr = owner_addr,
@@ -709,8 +713,8 @@ test "CallerAccount" {
     const acc_meta = ic.info.account_metas.get(0);
     const acc_shared = ic.tc.accounts[0].account;
 
-    // fromAccountInfo
-    if (false) { // TODO: requires unaligned MemoryMap
+    // test fromAccountInfo
+    {
         const vm_addr = MM_INPUT_START;
         const data, const region, const account_metadata = try (MockAccountInfo{
             .key = acc_meta.pubkey,
