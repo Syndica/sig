@@ -151,7 +151,7 @@ fn processNextInstruction(
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
             program_id.base58String().slice(),
         );
-        ic.tc.return_data.data.clearRetainingCapacity();
+        ic.tc.return_data.data.len = 0;
         break :blk native_program_fn;
     };
 

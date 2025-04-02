@@ -244,9 +244,7 @@ test "set_return_data" {
                 .data = "Hello, world!",
             },
         },
-        .{
-            .print_logs = true,
-        },
+        .{},
     );
 }
 

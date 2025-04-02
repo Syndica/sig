@@ -114,12 +114,11 @@ pub fn execute(
     });
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1653-L1657
-    const return_data = ic.tc.getReturnData();
-    if (return_data.data.items.len != 0) {
+    if (ic.tc.return_data.data.len != 0) {
         try stable_log.programReturn(
             ic.tc,
             ic.info.program_meta.pubkey,
-            return_data.data.items,
+            ic.tc.return_data.data.constSlice(),
         );
     }
 
