@@ -266,9 +266,7 @@ test "program_invalid_account_data" {
         .{
             .accounts = accounts,
         },
-        .{
-            .print_logs = true,
-        },
+        .{},
     );
 
     try std.testing.expectError(error.InvalidAccountData, result);
