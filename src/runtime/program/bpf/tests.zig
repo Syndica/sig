@@ -211,9 +211,10 @@ test "set_return_data" {
     var prng = std.rand.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
-    const program_bytes = try readProgramBytes(
+    const program_bytes = try std.fs.cwd().readFileAlloc(
         allocator,
         sig.ELF_DATA_DIR ++ "set_return_data.so",
+        MAX_FILE_BYTES,
     );
     defer allocator.free(program_bytes);
 
