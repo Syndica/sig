@@ -100,7 +100,6 @@ pub const TransactionContext = struct {
         for (self.accounts) |account| account.deinit(self.allocator);
         self.allocator.free(self.accounts);
         if (self.log_collector) |lc| lc.deinit(self.allocator);
-        self.return_data.deinit(self.allocator);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233
@@ -159,24 +158,6 @@ pub const TransactionContext = struct {
         self.compute_meter -|= compute;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/43e1f62c9fa318daedec80b3f0ea1f9e7da71b11/transaction-context/src/lib.rs#L436
-    pub fn getReturnData(
-        self: *TransactionContext,
-    ) TransactionReturnData {
-        return self.return_data;
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/43e1f62c9fa318daedec80b3f0ea1f9e7da71b11/transaction-context/src/lib.rs#L441
-    pub fn setReturnData(
-        self: *TransactionContext,
-        program_id: Pubkey,
-        data: []const u8,
-    ) error{OutOfMemory}!void {
-        self.return_data.program_id = program_id;
-        self.return_data.data.clearRetainingCapacity();
-        try self.return_data.data.appendSlice(self.allocator, data);
-    }
-
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L94
     pub fn log(
         self: *TransactionContext,
@@ -190,12 +171,10 @@ pub const TransactionContext = struct {
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L493
 pub const TransactionReturnData = struct {
     program_id: Pubkey = Pubkey.ZEROES,
-    data: std.ArrayListUnmanaged(u8) = .{},
+    data: std.BoundedArray(u8, MAX_RETURN_DATA) = .{},
 
-    pub fn deinit(self: TransactionReturnData, allocator: std.mem.Allocator) void {
-        var data_ = self.data;
-        data_.deinit(allocator);
-    }
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
+    pub const MAX_RETURN_DATA: usize = 1024;
 };
 
 /// Represents an account within a transaction and provides single threaded

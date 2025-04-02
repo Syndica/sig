@@ -109,8 +109,9 @@ pub fn createExecutionContexts(
         );
     }
 
-    var return_data_array = std.ArrayListUnmanaged(u8){};
-    try return_data_array.appendSlice(allocator, params.return_data.data);
+    var return_data = TransactionReturnData{};
+    return_data.program_id = params.return_data.program_id;
+    return_data.data.appendSliceAssumeCapacity(params.return_data.data);
 
     const tc = TransactionContext{
         .allocator = allocator,
@@ -118,10 +119,7 @@ pub fn createExecutionContexts(
         .accounts = try accounts.toOwnedSlice(),
         .instruction_stack = .{},
         .instruction_trace = .{},
-        .return_data = .{
-            .program_id = params.return_data.program_id,
-            .data = return_data_array,
-        },
+        .return_data = return_data,
         .accounts_resize_delta = params.accounts_resize_delta,
         .compute_meter = params.compute_meter,
         .compute_budget = params.compute_budget,
@@ -271,10 +269,10 @@ pub fn expectTransactionReturnDataEqual(
     if (!expected.program_id.equals(&actual.program_id))
         return error.ProgramIdMismatch;
 
-    if (expected.data.items.len != actual.data.items.len)
+    if (expected.data.len != actual.data.len)
         return error.DataLenMismatch;
 
-    if (!std.mem.eql(u8, expected.data.items, actual.data.items))
+    if (!std.mem.eql(u8, expected.data.constSlice(), actual.data.constSlice()))
         return error.DataMismatch;
 }
 

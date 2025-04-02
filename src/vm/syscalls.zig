@@ -12,6 +12,7 @@ const Pubkey = sig.core.Pubkey;
 const MemoryMap = lib.memory.MemoryMap;
 const RegisterMap = interpreter.RegisterMap;
 const TransactionContext = transaction_context.TransactionContext;
+const TransactionReturnData = transaction_context.TransactionReturnData;
 const InstructionError = sig.core.instruction.InstructionError;
 
 pub const Error = error{
@@ -174,7 +175,7 @@ pub fn setReturnData(tc: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) E
 
     try tc.consumeCompute(cost);
 
-    if (len > MAX_RETURN_DATA) {
+    if (len > TransactionReturnData.MAX_RETURN_DATA) {
         return error.ReturnDataTooLarge;
     }
 
@@ -188,7 +189,9 @@ pub fn setReturnData(tc: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) E
     const ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
     const program_id = ic.info.program_meta.pubkey;
 
-    try tc.setReturnData(program_id, return_data);
+    tc.return_data.program_id = program_id;
+    tc.return_data.data.len = 0;
+    tc.return_data.data.appendSliceAssumeCapacity(return_data);
 }
 
 // hashing
