@@ -11,7 +11,6 @@ const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 
 const InstructionContext = sig.runtime.InstructionContext;
-const LogCollector = sig.runtime.LogCollector;
 
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
