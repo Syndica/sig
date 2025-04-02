@@ -7,7 +7,7 @@ pub const precompile_programs = @import("precompiles/lib.zig");
 pub const system_program = @import("system/lib.zig");
 pub const testing = @import("testing.zig");
 pub const vote_program = @import("vote/lib.zig");
-pub const cpi = @import("cpi.zig");
+pub const cpi = @import("syscalls/cpi.zig");
 
 pub const bpf = @import("bpf/lib.zig");
 
