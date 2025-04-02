@@ -96,7 +96,7 @@ pub fn main() !void {
             memory.Region.init(.mutable, &.{}, memory.INPUT_START),
         },
         executable.version,
-        &config,
+        config,
     );
 
     var context: TransactionContext = .{
