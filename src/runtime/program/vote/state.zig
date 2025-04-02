@@ -2413,7 +2413,7 @@ test "state.VoteState.getCredits" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1577
-test "state.VoteState duplicate votes" {
+test "state.VoteState duplicate vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2472,7 +2472,7 @@ test "state.VoteState nth recent lockout" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1659
-test "state.VoteState.processVote skips old votes" {
+test "state.VoteState.processVote skips old vote" {
     const allocator = std.testing.allocator;
 
     var vote_state = VoteState.default(allocator);
@@ -2833,6 +2833,49 @@ test "state.VoteState.computeVoteLatency" {
     );
 }
 
+test "state.VoteState.containsSlot" {
+    const allocator = std.testing.allocator;
+
+    var vote_state = VoteState.default(allocator);
+    defer vote_state.deinit();
+
+    try vote_state.votes.append(LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 1, .confirmation_count = 1 } });
+    try vote_state.votes.append(LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 2, .confirmation_count = 2 } });
+
+    try std.testing.expect(vote_state.contains_slot(1));
+    try std.testing.expect(vote_state.contains_slot(2));
+    try std.testing.expect(!vote_state.contains_slot(3));
+    try std.testing.expect(!vote_state.contains_slot(0));
+}
+
+test "state.VoteState process new vote too many votes" {
+    const allocator = std.testing.allocator;
+
+    var vote_state = VoteState.default(allocator);
+    defer vote_state.deinit();
+
+    var bad_votes = std.ArrayList(Lockout).init(allocator);
+    defer bad_votes.deinit();
+
+    var slot: usize = 0;
+    while (slot <= MAX_LOCKOUT_HISTORY) : (slot += 1) {
+        try bad_votes.append(Lockout{
+            .slot = slot,
+            .confirmation_count = @intCast((MAX_LOCKOUT_HISTORY - slot + 1)),
+        });
+    }
+
+    const current_epoch = currentEpoch(&vote_state);
+    const maybe_error = processNewVoteStateFromLockouts(
+        &vote_state,
+        bad_votes.items,
+        null,
+        null,
+        current_epoch,
+    );
+    try std.testing.expectEqual(VoteError.too_many_votes, maybe_error);
+}
+
 fn processSlotVoteUnchecked(
     vote_state: *VoteState,
     slot: Slot,
@@ -2867,6 +2910,29 @@ fn processSlotVoteUnchecked(
     );
 }
 
+fn processNewVoteStateFromLockouts(
+    vote_state: *VoteState,
+    new_state: []Lockout,
+    new_root: ?Slot,
+    timestamp: ?i64,
+    epoch: Epoch,
+) !?VoteError {
+    var landed_votes = std.ArrayList(LandedVote).init(std.heap.c_allocator);
+    defer landed_votes.deinit();
+
+    for (new_state) |lockout| {
+        try landed_votes.append(LandedVote{ .latency = 0, .lockout = lockout });
+    }
+
+    return try vote_state.processNewVoteState(
+        &landed_votes,
+        new_root,
+        timestamp,
+        epoch,
+        0,
+    );
+}
+
 fn checkLockouts(vote_state: *const VoteState) !void {
     if (!builtin.is_test) {
         @panic("checkLockouts should only be called in test mode");
@@ -2890,4 +2956,14 @@ pub fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout 
         return if (pos < vote_state.votes.items.len) vote_state.votes.items[pos].lockout else null;
     }
     return null;
+}
+
+pub fn currentEpoch(self: *const VoteState) u64 {
+    if (!builtin.is_test) {
+        @panic("current_epoch should only be called in test mode");
+    }
+    return if (self.epoch_credits.items.len == 0)
+        0
+    else
+        self.epoch_credits.getLast().epoch;
 }
