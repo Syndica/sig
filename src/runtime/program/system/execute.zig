@@ -882,6 +882,8 @@ test "executeTransfer" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
+    std.debug.print("account_0: {}\n", .{account_0_key});
+    std.debug.print("account_1: {}\n", .{account_1_key});
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
