@@ -49,15 +49,8 @@ pub const Executable = struct {
         loader: *BuiltinProgram,
         config: Config,
     ) !Executable {
-        if (source.len < 4) return error.InvalidLength;
-        const is_elf = std.mem.eql(u8, source[0..4], std.elf.MAGIC);
-        if (is_elf) {
-            var elf = try Elf.parse(allocator, source, loader, config);
-            errdefer elf.deinit(allocator);
-            return fromElf(elf);
-        } else {
-            return fromAsm(allocator, source, config);
-        }
+        const elf = try Elf.parse(allocator, source, loader, config);
+        return fromElf(elf);
     }
 
     pub fn fromAsm(

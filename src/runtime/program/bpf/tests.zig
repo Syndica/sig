@@ -231,49 +231,48 @@ test "program_is_not_executable" {
     try std.testing.expectError(error.IncorrectProgramId, result);
 }
 
-// TODO: Uncomment once panic is removed from https://github.com/Syndica/sig/blob/f56db13502051c74b22cb8d54982d51fc34084ca/src/vm/executable.zig#L506-L507
-// test "program_invalid_account_data" {
-//     const allocator = std.testing.allocator;
-//     var prng = std.rand.DefaultPrng.init(0);
+test "program_invalid_account_data" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
 
-//     const program_id = Pubkey.initRandom(prng.random());
-//     var program_bytes = try readProgramBytes(
-//         allocator,
-//         sig.ELF_DATA_DIR ++ "hello_world.so",
-//     );
-//     program_bytes[3] = 0x00; // corrupt the program
-//     defer allocator.free(program_bytes);
+    const program_id = Pubkey.initRandom(prng.random());
+    var program_bytes = try readProgramBytes(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+    );
+    program_bytes[3] = 0x00; // corrupt the program
+    defer allocator.free(program_bytes);
 
-//     const accounts = &.{
-//         .{
-//             .pubkey = program_id,
-//             .lamports = 1_000_000_000,
-//             .owner = program.bpf_loader_program.v3.ID,
-//             .executable = true,
-//             .rent_epoch = 0,
-//             .data = program_bytes,
-//         },
-//     };
+    const accounts = &.{
+        .{
+            .pubkey = program_id,
+            .lamports = 1_000_000_000,
+            .owner = program.bpf_loader_program.v3.ID,
+            .executable = true,
+            .rent_epoch = 0,
+            .data = program_bytes,
+        },
+    };
 
-//     const result = expectProgramExecuteResult(
-//         allocator,
-//         program_id,
-//         &[_]u8{},
-//         &.{},
-//         .{
-//             .accounts = accounts,
-//             .compute_meter = 137,
-//         },
-//         .{
-//             .accounts = accounts,
-//         },
-//         .{
-//             .print_logs = true,
-//         },
-//     );
+    const result = expectProgramExecuteResult(
+        allocator,
+        program_id,
+        &[_]u8{},
+        &.{},
+        .{
+            .accounts = accounts,
+            .compute_meter = 137,
+        },
+        .{
+            .accounts = accounts,
+        },
+        .{
+            .print_logs = true,
+        },
+    );
 
-//     try std.testing.expectError(error.InvalidAccountData, result);
-// }
+    try std.testing.expectError(error.InvalidAccountData, result);
+}
 
 test "program_init_vm_not_enough_compute" {
     const allocator = std.testing.allocator;

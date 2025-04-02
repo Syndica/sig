@@ -33,6 +33,7 @@ pub fn execute(
             try ic.tc.log("Failed to register syscalls: {}", .{err});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
+        errdefer syscalls.deinit(allocator);
 
         // Clone required to prevent modification of underlying account elf
         const source = try allocator.dupe(u8, program_account.account.data);
