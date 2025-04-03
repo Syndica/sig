@@ -1062,7 +1062,6 @@ pub const VoteState = struct {
 
         // must be nonempty, checked above
         const last_proposed_slot = proposed_lockouts.getLast().slot;
-
         // If the proposed state is not new enough, return
         if (self.votes.getLastOrNull()) |last_vote| {
             if (last_proposed_slot <= last_vote.lockout.slot) {
@@ -1071,7 +1070,7 @@ pub const VoteState = struct {
         }
 
         if (slot_hashes.entries.len == 0) {
-            return VoteError.vote_too_old;
+            return VoteError.slots_mismatch;
         }
 
         const earliest_slot_hash_in_history = slot_hashes
@@ -3515,6 +3514,64 @@ test "state.VoteState process new vote current state contains bigger slots" {
     }
 }
 
+test "state.VoteState check and filter proposed vote state empty" {
+    const allocator = std.testing.allocator;
+    const empty_slot_hashes = try buildSlotHashes(allocator, &[_]Slot{});
+    var empty_vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{},
+        empty_slot_hashes.items,
+    );
+
+    // Test with empty TowerSync, should return EmptySlots error
+    {
+        var tower_sync = TowerSync{
+            .lockouts = std.ArrayList(Lockout).init(allocator),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        };
+
+        const maybe_error = try empty_vote_state.checkAndFilterProposedVoteState(
+            allocator,
+            &SlotHashes{ .entries = empty_slot_hashes.items },
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+        );
+        try std.testing.expectEqual(VoteError.empty_slots, maybe_error);
+    }
+
+    // Test with non-empty TowerSync, should return SlotsMismatch since nothing exists in SlotHashes
+    {
+        var lockouts = std.ArrayList(Lockout).init(allocator);
+        defer lockouts.deinit();
+
+        try lockouts.append(Lockout {
+            .slot = 0, .confirmation_count = 1
+        });
+
+        var tower_sync = TowerSync{
+            .lockouts = lockouts,
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        };
+
+        const maybe_error = try empty_vote_state
+        .checkAndFilterProposedVoteState(
+            allocator,
+            &SlotHashes{ .entries = empty_slot_hashes.items },
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+        );
+        try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
+    }
+}
+
 fn processSlotVoteUnchecked(
     vote_state: *VoteState,
     slot: Slot,
@@ -3599,7 +3656,7 @@ fn checkLockouts(vote_state: *const VoteState) !void {
     }
 }
 
-pub fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout {
+fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout {
     if (!builtin.is_test) {
         @panic("nthRecentLockout should only be called in test mode");
     }
@@ -3611,7 +3668,7 @@ pub fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout 
     return null;
 }
 
-pub fn currentEpoch(self: *const VoteState) u64 {
+fn currentEpoch(self: *const VoteState) u64 {
     if (!builtin.is_test) {
         @panic("currentEpoch should only be called in test mode");
     }
@@ -3621,7 +3678,7 @@ pub fn currentEpoch(self: *const VoteState) u64 {
         self.epoch_credits.getLast().epoch;
 }
 
-pub fn cloneVoteState(
+fn cloneVoteState(
     allocator: std.mem.Allocator,
     vote_state: *const VoteState,
 ) !VoteState {
@@ -3653,4 +3710,70 @@ pub fn cloneVoteState(
         .epoch_credits = cloned_epoch_credits,
         .last_timestamp = vote_state.last_timestamp,
     };
+}
+
+const SlotHash = struct { Slot, Hash };
+
+fn buildSlotHashes(
+    allocator: std.mem.Allocator,
+    slots: []const Slot,
+) !std.ArrayList(SlotHash) {
+    if (!builtin.is_test) {
+        @panic("buildSlotHashes should only be called in test mode");
+    }
+
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var result = try std.ArrayList(SlotHash).initCapacity(
+        allocator,
+        slots.len,
+    );
+    errdefer result.deinit();
+
+    var iter = std.mem.reverseIterator(slots);
+    while (iter.next()) |slot| {
+        try result.append(.{
+            slot,
+            Hash.initRandom(random),
+        });
+    }
+
+    return result;
+}
+
+fn buildVoteState(
+    allocator: std.mem.Allocator,
+    vote_slots: []const Slot,
+    slot_hashes: []const SlotHash,
+) !VoteState {
+    var vote_state = VoteState.default(allocator);
+
+    if (vote_slots.len > 0) {
+        const last_vote_slot = vote_slots[vote_slots.len - 1];
+        var vote_hash: Hash = undefined;
+
+        for (slot_hashes) |slot_hash| {
+            if (slot_hash[0] == last_vote_slot) {
+                vote_hash = slot_hash[1];
+                break;
+            }
+        }
+
+        const vote = Vote{
+            .slots = vote_slots,
+            .hash = vote_hash,
+            .timestamp = null,
+        };
+
+        _ = try vote_state.processVoteUnfiltered(
+            vote.slots,
+            &vote,
+            &SlotHashes{ .entries = slot_hashes },
+            0,
+            0,
+        );
+    }
+
+    return vote_state;
 }
