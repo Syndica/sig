@@ -18,7 +18,7 @@ pub const compute_budget = @import("compute_budget.zig");
 
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;
-pub const Features = features.Features;
+pub const FeatureSet = features.FeatureSet;
 pub const InstructionContext = instruction_context.InstructionContext;
 pub const InstructionInfo = instruction_info.InstructionInfo;
 pub const LogCollector = log_collector.LogCollector;

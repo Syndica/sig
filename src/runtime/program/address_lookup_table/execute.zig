@@ -55,7 +55,7 @@ fn createLookupTable(
     const AccountIndex = instruction.CreateLookupTable.AccountIndex;
 
     const has_relax_authority_signer_check_for_lookup_table_creation =
-        ic.tc.sc.ec.features.active.contains(
+        ic.tc.sc.ec.feature_set.active.contains(
         runtime.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
     );
 

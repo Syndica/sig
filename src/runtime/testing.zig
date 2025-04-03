@@ -8,7 +8,7 @@ const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 
-const Features = sig.runtime.Features;
+const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
@@ -21,7 +21,7 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub const ExecuteContextsParams = struct {
     // Epoch context
-    features: []const FeatureParams = &.{},
+    feature_set: []const FeatureParams = &.{},
 
     // Slot Context
     sysvar_cache: SysvarCache = .{},
@@ -66,10 +66,10 @@ pub fn createExecutionContexts(
         @compileError("createTransactionContext should only be called in test mode");
 
     // Create Epoch Context
-    var features = Features{ .active = .{} };
+    var features = FeatureSet{ .active = .{} };
     errdefer features.deinit(allocator);
 
-    for (params.features) |args| {
+    for (params.feature_set) |args| {
         try features.active.put(
             allocator,
             args.pubkey,
@@ -80,7 +80,7 @@ pub fn createExecutionContexts(
     const ec = try allocator.create(EpochContext);
     ec.* = .{
         .allocator = allocator,
-        .features = features,
+        .feature_set = features,
     };
 
     // Create Slot Context

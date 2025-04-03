@@ -11,7 +11,7 @@ const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const BorrowedAccountContext = sig.runtime.BorrowedAccountContext;
-const Features = sig.runtime.Features;
+const FeatureSet = sig.runtime.FeatureSet;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;
@@ -29,10 +29,10 @@ pub const EpochContext = struct {
     allocator: std.mem.Allocator,
 
     /// Feature Set
-    features: Features,
+    feature_set: FeatureSet,
 
     pub fn deinit(self: EpochContext) void {
-        self.features.deinit(self.allocator);
+        self.feature_set.deinit(self.allocator);
     }
 };
 

@@ -48,7 +48,7 @@ pub const PRECOMPILES = [_]Precompile{
 // https://github.com/anza-xyz/agave/blob/6ea38fce866595908486a01c7d6b7182988f3b2d/sdk/program/src/message/sanitized.rs#L378
 pub fn verifyPrecompilesComputeCost(
     transaction: sig.core.Transaction,
-    feature_set: sig.runtime.Features,
+    feature_set: sig.runtime.FeatureSet,
 ) u64 {
     // TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
     _ = feature_set;
@@ -77,7 +77,7 @@ pub fn verifyPrecompilesComputeCost(
 pub fn verifyPrecompiles(
     allocator: std.mem.Allocator,
     transaction: sig.core.Transaction,
-    feature_set: sig.runtime.Features,
+    feature_set: sig.runtime.FeatureSet,
 ) (PrecompileProgramError || error{OutOfMemory})!void {
     // could remove this alloc by passing in the transaction in directly, but maybe less clean
     var instruction_datas: ?[]const []const u8 = null;
@@ -129,7 +129,7 @@ test "verify ed25519" {
     try verifyPrecompiles(
         std.testing.allocator,
         sig.core.Transaction.EMPTY,
-        sig.runtime.Features.EMPTY,
+        sig.runtime.FeatureSet.EMPTY,
     );
 
     const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
@@ -148,7 +148,7 @@ test "verify ed25519" {
 
     try std.testing.expectError(
         error.InvalidInstructionDataSize,
-        verifyPrecompiles(std.testing.allocator, bad_ed25519_tx, sig.runtime.Features.EMPTY),
+        verifyPrecompiles(std.testing.allocator, bad_ed25519_tx, sig.runtime.FeatureSet.EMPTY),
     );
 
     const keypair = try Ed25519.KeyPair.create(null);
@@ -174,7 +174,7 @@ test "verify ed25519" {
         .signatures = &.{},
     };
 
-    try verifyPrecompiles(std.testing.allocator, ed25519_tx, sig.runtime.Features.EMPTY);
+    try verifyPrecompiles(std.testing.allocator, ed25519_tx, sig.runtime.FeatureSet.EMPTY);
 }
 
 test "verify cost" {
@@ -205,7 +205,7 @@ test "verify cost" {
     // cross-checked with agave (FeatureSet::default())
     try std.testing.expectEqual(3000, expected_cost);
 
-    const compute_units = verifyPrecompilesComputeCost(ed25519_tx, sig.runtime.Features.EMPTY);
+    const compute_units = verifyPrecompilesComputeCost(ed25519_tx, sig.runtime.FeatureSet.EMPTY);
     try std.testing.expectEqual(expected_cost, compute_units);
 }
 
@@ -226,6 +226,6 @@ test "verify secp256k1" {
 
     try std.testing.expectError(
         error.InvalidInstructionDataSize,
-        verifyPrecompiles(std.testing.allocator, bad_secp256k1_tx, sig.runtime.Features.EMPTY),
+        verifyPrecompiles(std.testing.allocator, bad_secp256k1_tx, sig.runtime.FeatureSet.EMPTY),
     );
 }

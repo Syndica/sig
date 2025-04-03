@@ -303,7 +303,7 @@ pub fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const program_index_in_transaction = if (tc.sc.ec.features.active.contains(
+    const program_index_in_transaction = if (tc.sc.ec.feature_set.active.contains(
         feature_set.LIFT_CPI_CALLER_RESTRICTION,
     )) blk: {
         break :blk tc.getAccountIndex(callee.program_id) orelse {
@@ -321,7 +321,7 @@ pub fn prepareCpiInstructionInfo(
             try caller.borrowInstructionAccount(index_in_caller);
         defer borrowed_account.release();
 
-        if (!tc.sc.ec.features.active.contains(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
+        if (!tc.sc.ec.feature_set.active.contains(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
             !borrowed_account.account.executable)
         {
             try tc.log("Account {} is not executable", .{callee.program_id});
@@ -755,12 +755,12 @@ test "prepareCpiInstructionInfo" {
         tc.accounts[2].account.executable = false;
         defer tc.accounts[2].account.executable = true;
 
-        try ec.features.active.put(
+        try ec.feature_set.active.put(
             allocator,
             feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
             0,
         );
-        defer _ = ec.features.active.swapRemove(
+        defer _ = ec.feature_set.active.swapRemove(
             feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         );
 
