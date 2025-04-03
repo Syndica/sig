@@ -3514,7 +3514,7 @@ test "state.VoteState process new vote current state contains bigger slots" {
     }
 }
 
-test "state.VoteState check and filter proposed vote state empty" {
+test "state.VoteState.checkAndFilterProposedVoteState empty" {
     const allocator = std.testing.allocator;
     const empty_slot_hashes = try buildSlotHashes(allocator, &[_]Slot{});
     var empty_vote_state = try buildVoteState(
@@ -3567,6 +3567,47 @@ test "state.VoteState check and filter proposed vote state empty" {
             tower_sync.hash,
         );
         try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
+    }
+}
+
+test "state.VoteState.checkAndFilterProposedVoteState too old" {
+    const allocator = std.testing.allocator;
+    const slot_hashes = try buildSlotHashes(allocator, &[_]Slot{ 1, 2, 3, 4 });
+    defer slot_hashes.deinit();
+
+    const latest_vote = 4;
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{ 1, 2, 3, latest_vote },
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a vote for a slot less than the latest vote in the vote_state,
+    // should return error `VoteTooOld`
+    {
+        var lockouts = std.ArrayList(Lockout).init(allocator);
+        defer lockouts.deinit();
+
+        try lockouts.append(Lockout{ .slot = latest_vote, .confirmation_count = 1 });
+
+        var tower_sync = TowerSync{
+            .lockouts = lockouts,
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        };
+
+        const maybe_error = try vote_state
+            .checkAndFilterProposedVoteState(
+            allocator,
+            &SlotHashes{ .entries = slot_hashes.items },
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+        );
+        try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
     }
 }
 
