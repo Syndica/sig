@@ -3548,9 +3548,7 @@ test "state.VoteState check and filter proposed vote state empty" {
         var lockouts = std.ArrayList(Lockout).init(allocator);
         defer lockouts.deinit();
 
-        try lockouts.append(Lockout {
-            .slot = 0, .confirmation_count = 1
-        });
+        try lockouts.append(Lockout{ .slot = 0, .confirmation_count = 1 });
 
         var tower_sync = TowerSync{
             .lockouts = lockouts,
@@ -3561,7 +3559,7 @@ test "state.VoteState check and filter proposed vote state empty" {
         };
 
         const maybe_error = try empty_vote_state
-        .checkAndFilterProposedVoteState(
+            .checkAndFilterProposedVoteState(
             allocator,
             &SlotHashes{ .entries = empty_slot_hashes.items },
             &tower_sync.lockouts,
