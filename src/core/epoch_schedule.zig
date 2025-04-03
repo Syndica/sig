@@ -36,6 +36,9 @@ pub const EpochSchedule = extern struct {
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
     first_normal_slot: core.Slot,
 
+    pub const ID =
+        core.Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch unreachable;
+
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
     }
