@@ -37,7 +37,8 @@ pub const EpochSchedule = extern struct {
     first_normal_slot: core.Slot,
 
     pub const ID =
-        core.Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch unreachable;
+        core.Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch
+        unreachable;
 
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
