@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const sbpf = sig.vm.sbpf;
 const program = sig.runtime.program;
 
 const Pubkey = sig.core.Pubkey;
