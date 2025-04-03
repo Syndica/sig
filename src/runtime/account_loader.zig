@@ -53,6 +53,7 @@ pub fn loadTransactionAccounts(
     //
     features: sig.runtime.FeatureSet,
 ) !Return {
+    // required for rent logic
     const epoch, const slot_index = schedule.getEpochAndSlotIndex(slot);
     _ = slot_index;
     _ = epoch;
@@ -104,7 +105,7 @@ pub fn loadTransactionAccounts(
             isMaybeInLoadedProgramCache(account_key))
         {
             @setCold(true);
-            @panic("TODO"); // We might not have to implement this? Assuming the feature is enabled for now.
+            @panic("TODO: Assuming the feature is enabled");
         }
 
         // case 3: default case
@@ -123,7 +124,7 @@ pub fn loadTransactionAccounts(
         account_data_size += found_shared_account.data.len;
         if (is_writeable) {
             retval.collected_rent += collectRent(account_key);
-            // acct->starting_lamports = acct->meta->info.lamports; ?
+            // acct->starting_lamports = acct->meta->info.lamports; ? Not sure if we need a field like this
         }
 
         try accumulateAndCheckLoadedAccountDataSize(
@@ -200,12 +201,26 @@ fn accumulateAndCheckLoadedAccountDataSize(
     }
 }
 
-const BorrowedAccountMeta = struct { pubkey: Pubkey, is_signer: bool, is_writeable: bool };
-const BorrowedInstruction = struct { program_id: Pubkey, accounts: []const BorrowedAccountMeta, data: []const u8 };
+const BorrowedAccountMeta = struct {
+    pubkey: Pubkey,
+    is_signer: bool,
+    is_writeable: bool,
+};
+const BorrowedInstruction = struct {
+    program_id: Pubkey,
+    accounts: []const BorrowedAccountMeta,
+    data: []const u8,
+};
 
 // [agave] https://github.com/anza-xyz/agave/blob/cb32984a9b0d5c2c6f7775bed39b66d3a22e3c46/svm/src/account_loader.rs#L639
-fn constructInstructionsAccount(allocator: std.mem.Allocator, tx: *const sig.core.Transaction) !AccountSharedData {
-    var decompiled_instructions = try std.ArrayList(BorrowedInstruction).initCapacity(allocator, tx.msg.instructions.len);
+fn constructInstructionsAccount(
+    allocator: std.mem.Allocator,
+    tx: *const sig.core.Transaction,
+) !AccountSharedData {
+    var decompiled_instructions = try std.ArrayList(BorrowedInstruction).initCapacity(
+        allocator,
+        tx.msg.instructions.len,
+    );
     errdefer {
         for (decompiled_instructions.items) |decompiled| allocator.free(decompiled.data);
         decompiled_instructions.deinit();
@@ -282,7 +297,10 @@ const InstructionsSysvarAccountMeta = packed struct(u8) {
 //   35..67 - program_id
 //   67..69 - data len - u16
 //   69..data_len - data
-pub fn serializeInstructions(allocator: std.mem.Allocator, instructions: []const BorrowedInstruction) !std.ArrayList(u8) {
+pub fn serializeInstructions(
+    allocator: std.mem.Allocator,
+    instructions: []const BorrowedInstruction,
+) !std.ArrayList(u8) {
     if (instructions.len > std.math.maxInt(u16)) unreachable;
 
     const asBytes = std.mem.asBytes;
@@ -298,7 +316,10 @@ pub fn serializeInstructions(allocator: std.mem.Allocator, instructions: []const
     for (instructions, 0..) |instruction, i| {
         const start_instruction_offset: u16 = @intCast(data.items.len);
         const start = 2 + (2 * i);
-        @memcpy(data.items[start .. start + 2], asBytes(&nativeToLittle(u16, start_instruction_offset)));
+        @memcpy(
+            data.items[start .. start + 2],
+            asBytes(&nativeToLittle(u16, start_instruction_offset)),
+        );
         try data.appendSlice(asBytes(&nativeToLittle(u16, @intCast(instruction.accounts.len))));
 
         for (instruction.accounts) |account_meta| {
@@ -322,87 +343,3 @@ fn collectRent(account: Pubkey) u64 {
     _ = account;
     return 0; // TODO: rent collection!
 }
-
-//
-/// -------- agave porting (delete me) --------
-//
-
-/// Runtime callbacks for transaction processing.
-pub fn TransactionProcessingCallback(Context: type) type {
-    return struct {
-        accountMatchesOwners: *const fn (Context, account: *const Pubkey, owners: []const Pubkey) ?usize,
-        getAccountSharedData: *const fn (Context, pubkey: *const Pubkey) ?AccountSharedData,
-        addBuiltinAccount: *const fn (Context, name: []const u8, program_id: *const Pubkey) void,
-        inspectAccount: *const fn (Context, address: *const Pubkey, account_state: AccountState, is_writeable: bool) void,
-    };
-}
-
-const AccountState = union(enum) {
-    Dead,
-    Alive: AccountSharedData,
-};
-
-// should be union(enum)
-const TransactionLoad = enum { Loaded, FeesOnly, NotLoaded };
-
-const NonceInfo = struct {
-    address: Pubkey,
-    account: AccountSharedData,
-};
-
-const RollbackAccounts = union(enum) {
-    const FeePayerOnly = struct {
-        fee_payer_account: AccountSharedData,
-    };
-    const SameNonceAndFeePayer = struct {
-        nonce: NonceInfo,
-    };
-    const SeparateNonceAndFeePayer = struct {
-        nonce: NonceInfo,
-        fee_payer_account: AccountSharedData,
-    };
-
-    FeePayerOnly: FeePayerOnly,
-    SameNonceAndFeePayer: NonceInfo,
-};
-
-const ComputeBudgetLimits = struct {
-    updated_heap_bytes: u32,
-    compute_unit_limit: u32,
-    compute_unit_price: u64,
-    /// non-zero (!)
-    loaded_accounts_bytes: u32,
-
-    const DEFAULT: ComputeBudgetLimits = .{
-        .updated_heap_bytes = MIN_HEAP_FRAME_BYTES,
-        .compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT,
-        .compute_unit_price = 0,
-        .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
-    };
-};
-
-const FeeDetails = struct {
-    transaction_fee: u64,
-    prioritization_fee: u64,
-    remove_rounding_in_fee_calculations: bool,
-};
-
-const LoadedTransactionAccount = struct {
-    account: AccountSharedData,
-    loaded_size: usize,
-    rent_collected: u64,
-};
-
-const ValidatedTransactionDetails = struct {
-    rollback_accounts: RollbackAccounts,
-    compute_budget_limits: ComputeBudgetLimits,
-    fee_details: FeeDetails,
-    loaded_fee_payer_account: LoadedTransactionAccount,
-};
-
-// not a fan of this
-fn Result(Ok: type, Err: type) type {
-    return union(enum) { Ok: Ok, Err: Err };
-}
-
-const TransactionValidationResult = Result(TransactionError, ValidatedTransactionDetails);

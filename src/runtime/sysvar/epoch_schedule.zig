@@ -1,13 +1,6 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
-const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
-const Epoch = sig.core.Epoch;
-
-// inlined to avoid solana_clock dep
-const DEFAULT_SLOTS_PER_EPOCH: u64 = 432_000;
-
 /// The minimum number of slots per epoch during the warmup period.
 ///
 /// Based on `MAX_LOCKOUT_HISTORY` from `vote_program`.
