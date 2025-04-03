@@ -128,7 +128,7 @@ pub fn execute(
     const execute_error: ?InstructionError = blk: {
         switch (result) {
             .ok => |status| if (status != 0) {
-                // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1659-L1663
+                // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
                 std.debug.print(
                     "Program {} failed: {}\n",
                     .{ ic.info.program_meta.pubkey, status },
