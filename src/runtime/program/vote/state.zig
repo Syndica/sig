@@ -3572,10 +3572,10 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
 
 test "state.VoteState.checkAndFilterProposedVoteState too old" {
     const allocator = std.testing.allocator;
+    const latest_vote = 4;
     const slot_hashes = try buildSlotHashes(allocator, &[_]Slot{ 1, 2, 3, 4 });
     defer slot_hashes.deinit();
 
-    const latest_vote = 4;
     var vote_state = try buildVoteState(
         allocator,
         &[_]Slot{ 1, 2, 3, latest_vote },
@@ -3583,9 +3583,9 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
     );
     defer vote_state.deinit();
 
-    // Test with a vote for a slot less than the latest vote in the vote_state,
-    // should return error `VoteTooOld`
     {
+        // Test with a vote for a slot less than the latest vote in the vote_state,
+        // should return error `VoteTooOld`
         var lockouts = std.ArrayList(Lockout).init(allocator);
         defer lockouts.deinit();
 
@@ -3609,6 +3609,40 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
         );
         try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
     }
+
+    // Test with a vote state update where the latest slot `X` in the update is
+    // 1) Less than the earliest slot in slot_hashes history, AND
+    // 2) `X` > latest_vote
+    const earliest_slot_in_history = latest_vote + 2;
+    const another_slot_hashes = try buildSlotHashes(
+        allocator,
+        &[_]Slot{earliest_slot_in_history},
+    );
+    defer another_slot_hashes.deinit();
+
+    var lockouts = std.ArrayList(Lockout).init(allocator);
+    defer lockouts.deinit();
+
+    try lockouts.append(Lockout{ .slot = earliest_slot_in_history - 1, .confirmation_count = 1 });
+
+    var another_tower_sync = TowerSync{
+        .lockouts = lockouts,
+        .root = null,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .block_id = Hash.ZEROES,
+    };
+
+    const maybe_error = try vote_state
+        .checkAndFilterProposedVoteState(
+        allocator,
+        &SlotHashes{ .entries = another_slot_hashes.items },
+        &another_tower_sync.lockouts,
+        &another_tower_sync.root,
+        another_tower_sync.hash,
+    );
+
+    try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
 }
 
 fn processSlotVoteUnchecked(
