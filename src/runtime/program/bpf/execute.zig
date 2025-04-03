@@ -19,7 +19,7 @@ pub fn execute(
         defer program_account.release();
 
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!ic.tc.sc.ec.features.active.contains(
+        if (!ic.tc.sc.ec.feature_set.active.contains(
             feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !program_account.account.executable)
@@ -61,7 +61,7 @@ pub fn execute(
     // TODO: jit
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.tc.sc.ec.features.active.contains(
+    const direct_mapping = ic.tc.sc.ec.feature_set.active.contains(
         feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
@@ -285,12 +285,12 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", vm.syscalls.secp256k1Recover,);
 
     // Blake3
-    // if (tc.sc.ec.features.active.contains(feature_set.BLAKE3_SYSCALL_ENABLED)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.BLAKE3_SYSCALL_ENABLED)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_blake3", vm.syscalls.blake3,);
     // }
 
     // Elliptic Curve
-    // if (tc.sc.ec.features.active.contains(feature_set.CURVE25519_SYSCALL_ENABLED)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.CURVE25519_SYSCALL_ENABLED)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_validate_point", vm.syscalls.curveValidatePoint,);
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_group_op", vm.syscalls.curveGroupOp,);
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_multiscalar_mul", vm.syscalls.curveMultiscalarMul,);
@@ -300,11 +300,11 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_clock_sysvar", vm.syscalls.getClockSysvar,);
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_schedule_sysvar", vm.syscalls.getEpochScheduleSysvar,);
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", vm.syscalls.getFeesSysvar,);
-    // if (!tc.sc.ec.features.active.contains(feature_set.DISABLE_FEES_SYSVAR)) {
+    // if (!tc.sc.ec.feature_set.active.contains(feature_set.DISABLE_FEES_SYSVAR)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", vm.syscalls.getFeesSysvar,);
     // }
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_rent_sysvar", vm.syscalls.getRentSysvar,);
-    // if (tc.sc.ec.features.active.contains(feature_set.LAST_RESTART_SLOT_SYSVAR)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.LAST_RESTART_SLOT_SYSVAR)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_last_restart_slot", vm.syscalls.getLastRestartSlotSysvar,);
     // }
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_rewards_sysvar", vm.syscalls.getEpochRewardsSysvar,);
@@ -346,7 +346,7 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust,);
 
     // Memory Allocator
-    if (!tc.sc.ec.features.active.contains(feature_set.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
+    if (!tc.sc.ec.feature_set.active.contains(feature_set.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_alloc_free_",
@@ -355,17 +355,17 @@ fn registerSyscalls(
     }
 
     // Alt_bn128
-    // if (tc.sc.ec.features.active.contains(feature_set.ENABLE_ALT_BN128_SYSCALL)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_ALT_BN128_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", vm.syscalls.altBn128GroupOp,);
     // }
 
     // Big_mod_exp
-    // if (tc.sc.ec.features.active.contains(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", vm.syscalls.bigModExp,);
     // }
 
     // Poseidon
-    if (tc.sc.ec.features.active.contains(feature_set.ENABLE_POSEIDON_SYSCALL)) {
+    if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_POSEIDON_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_poseidon",
@@ -374,22 +374,22 @@ fn registerSyscalls(
     }
 
     // Remaining Compute Units
-    // if (tc.sc.ec.features.active.contains(feature_set.ENABLE_REMAINING_COMPUTE_UNITS_SYSCALL)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_REMAINING_COMPUTE_UNITS_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_remaining_compute_units", vm.syscalls.remainingComputeUnits,);
     // }
 
     // Alt_bn_128_compression
-    // if (tc.sc.ec.features.active.contains(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", vm.syscalls.altBn128Compression,);
     // }
 
     // Sysvar Getter
-    // if (tc.sc.ec.features.active.contains(feature_set.ENABLE_SYSVAR_SYSCALL)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_SYSVAR_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", vm.syscalls.getSysvar,);
     // }
 
     // Get Epoch Stake
-    // if (tc.sc.ec.features.active.contains(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL)) {
+    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", vm.syscalls.getEpochStake,);
     // }
 

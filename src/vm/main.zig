@@ -12,7 +12,7 @@ const syscalls = sig.vm.syscalls;
 const Config = sig.vm.Config;
 const MemoryMap = memory.MemoryMap;
 const TransactionContext = sig.runtime.TransactionContext;
-const Features = sig.runtime.Features;
+const FeatureSet = sig.runtime.FeatureSet;
 const Hash = sig.core.Hash;
 const ComputeBudget = sig.runtime.ComputeBudget;
 
@@ -104,7 +104,7 @@ pub fn main() !void {
         .log_collector = null,
         .sysvar_cache = .{},
         .compute_meter = std.math.maxInt(u64),
-        .feature_set = Features.EMPTY,
+        .feature_set = FeatureSet.EMPTY,
         .lamports_per_signature = 0,
         .prev_blockhash = Hash.ZEROES,
         .compute_budget = ComputeBudget.default(1_400_000),

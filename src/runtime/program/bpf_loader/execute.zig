@@ -14,7 +14,7 @@ const feature_set = sig.runtime.features;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const Features = sig.runtime.Features;
+const FeatureSet = sig.runtime.FeatureSet;
 const InstructionContext = sig.runtime.InstructionContext;
 const LogCollector = sig.runtime.LogCollector;
 
@@ -389,7 +389,7 @@ pub fn executeV3DeployWithMaxDataLen(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
             buffer_data[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
             clock.slot,
-            ic.tc.sc.ec.features,
+            ic.tc.sc.ec.feature_set,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
         );
     }
@@ -598,7 +598,7 @@ pub fn executeV3Upgrade(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
-            ic.tc.sc.ec.features,
+            ic.tc.sc.ec.feature_set,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
         );
     }
@@ -735,7 +735,7 @@ pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.sc.ec.features.active.contains(
+    if (!ic.tc.sc.ec.feature_set.active.contains(
         feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -1096,7 +1096,7 @@ pub fn executeV3ExtendProgram(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
             data[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
-            ic.tc.sc.ec.features,
+            ic.tc.sc.ec.feature_set,
             if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
         );
     }
@@ -1119,7 +1119,7 @@ pub fn executeV3Migrate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.sc.ec.features.active.contains(
+    if (!ic.tc.sc.ec.feature_set.active.contains(
         feature_set.ENABLE_LOADER_V4,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -1335,7 +1335,7 @@ pub fn deployProgram(
     program_len: usize,
     program_data: []const u8,
     slot: u64,
-    features: Features,
+    features: FeatureSet,
     maybe_log_collector: ?*LogCollector,
 ) (error{OutOfMemory} || InstructionError)!void {
     _ = allocator;
@@ -1895,7 +1895,7 @@ test "executeV3SetAuthorityChecked" {
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
-            .features = &.{
+            .feature_set = &.{
                 .{ .pubkey = feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
             },
         },
@@ -1971,7 +1971,7 @@ test "executeV3SetAuthorityChecked" {
                 },
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
-            .features = &.{
+            .feature_set = &.{
                 .{ .pubkey = feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
             },
         },
@@ -2685,7 +2685,7 @@ test "executeV3Migrate" {
                 },
             },
             .compute_meter = compute_units,
-            .features = &.{
+            .feature_set = &.{
                 .{ .pubkey = feature_set.ENABLE_LOADER_V4, .slot = 0 },
             },
             .sysvar_cache = .{
