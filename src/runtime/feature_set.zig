@@ -7,8 +7,10 @@ const Slot = sig.core.Slot;
 pub const LIFT_CPI_CALLER_RESTRICTION =
     Pubkey.parseBase58String("HcW8ZjBezYYgvcbxNJwqv1t484Y2556qJsfNDWvJGZRH") catch unreachable;
 
+// [agave] github.com/anza-xyz/agave/issues/5464
+// the key of this was changed in march 2025... what?
 pub const REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS =
-    Pubkey.parseBase58String("FfgtauHUWKeXTzjXkua9Px4tNGBFHKZ9WaigM5VbbzFx") catch unreachable;
+    Pubkey.parseBase58String("FXs1zh47QbNnhXcnB6YiAQoJ4sGB91tKF3UFHLcKT7PM") catch unreachable;
 
 pub const ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX =
     Pubkey.parseBase58String("HcW8ZjBezYYgvcbxNJwqv1t484Y2556qJsfNDWvJGZRH") catch unreachable;
@@ -39,6 +41,8 @@ pub const ENABLE_POSEIDON_SYSCALL =
 
 pub const DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL =
     Pubkey.parseBase58String("79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im") catch unreachable;
+pub const DISABLE_ACCOUNT_LOADER_SPECIAL_CASE =
+    Pubkey.parseBase58String("EQUMpNFr7Nacb1sva56xn1aLfBxppEoSBH8RRVdkcD1x") catch unreachable;
 
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
