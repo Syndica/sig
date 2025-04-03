@@ -87,12 +87,17 @@ pub fn main() !void {
     defer gpa.free(stack_memory);
     @memset(stack_memory, 0);
 
-    const m = try MemoryMap.init(&.{
-        executable.getProgramRegion(),
-        memory.Region.init(.mutable, stack_memory, memory.STACK_START),
-        memory.Region.init(.mutable, heap_mem, memory.HEAP_START),
-        memory.Region.init(.mutable, &.{}, memory.INPUT_START),
-    }, executable.version);
+    const m = try MemoryMap.init(
+        gpa,
+        &.{
+            executable.getProgramRegion(),
+            memory.Region.init(.mutable, stack_memory, memory.STACK_START),
+            memory.Region.init(.mutable, heap_mem, memory.HEAP_START),
+            memory.Region.init(.mutable, &.{}, memory.INPUT_START),
+        },
+        executable.version,
+        config,
+    );
 
     var context: TransactionContext = .{
         .accounts = &.{},

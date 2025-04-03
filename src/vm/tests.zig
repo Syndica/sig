@@ -53,12 +53,17 @@ fn testAsmWithMemory(
     const stack_memory = try allocator.alloc(u8, config.stackSize());
     defer allocator.free(stack_memory);
 
-    const m = try MemoryMap.init(&.{
-        Region.init(.constant, &.{}, memory.RODATA_START),
-        Region.init(.mutable, stack_memory, memory.STACK_START),
-        Region.init(.constant, &.{}, memory.HEAP_START),
-        Region.init(.mutable, mutable, memory.INPUT_START),
-    }, config.maximum_version);
+    const m = try MemoryMap.init(
+        allocator,
+        &.{
+            Region.init(.constant, &.{}, memory.RODATA_START),
+            Region.init(.mutable, stack_memory, memory.STACK_START),
+            Region.init(.constant, &.{}, memory.HEAP_START),
+            Region.init(.mutable, mutable, memory.INPUT_START),
+        },
+        config.maximum_version,
+        config,
+    );
 
     var prng = std.Random.DefaultPrng.init(10);
     var context = try createTransactionContext(
@@ -818,7 +823,7 @@ test "ldxdw oob" {
             0xaa, 0xbb, 0x11, 0x22, 0x33, 0x44,
             0x55, 0x66, 0x77, 0x88, 0xcc, 0xdd,
         },
-        .{ error.VirtualAccessTooLong, 1 },
+        .{ error.AccessViolation, 1 },
     );
 }
 
@@ -830,7 +835,7 @@ test "ldxdw oom" {
         \\  return
     ,
         &.{},
-        .{ error.AccessNotMapped, 1 },
+        .{ error.AccessViolation, 1 },
     );
 }
 
@@ -1979,7 +1984,7 @@ test "pqr" {
         );
         defer executable.deinit(allocator);
 
-        const map = try MemoryMap.init(&.{}, .v2);
+        const map = try MemoryMap.init(allocator, &.{}, .v2, .{});
 
         // TODO: I would have defined the `context` struct inside of the loop,
         // but an LLVM 18 miscompilation on ARM64 doesn't let me. Move it back
@@ -2031,7 +2036,7 @@ test "pqr divide by zero" {
         );
         defer executable.deinit(allocator);
 
-        const map = try MemoryMap.init(&.{}, .v3);
+        const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
         var prng = std.Random.DefaultPrng.init(10);
         var context = try createTransactionContext(
             allocator,
@@ -2195,7 +2200,7 @@ test "fixed stack out of bounds" {
         \\entrypoint:
         \\  stb [r10-0x4000], 0
         \\  exit
-    , .{ error.AccessNotMapped, 1 });
+    , .{ error.StackAccessViolation, 1 });
 }
 
 test "decrease frame pointer on v0" {
@@ -2296,12 +2301,17 @@ pub fn testElfWithSyscalls(
     const stack_memory = try allocator.alloc(u8, config.stackSize());
     defer allocator.free(stack_memory);
 
-    const m = try MemoryMap.init(&.{
-        executable.getProgramRegion(),
-        Region.init(.mutable, stack_memory, memory.STACK_START),
-        Region.init(.constant, &.{}, memory.HEAP_START),
-        Region.init(.mutable, &.{}, memory.INPUT_START),
-    }, .v0);
+    const m = try MemoryMap.init(
+        allocator,
+        &.{
+            executable.getProgramRegion(),
+            Region.init(.mutable, stack_memory, memory.STACK_START),
+            Region.init(.constant, &.{}, memory.HEAP_START),
+            Region.init(.mutable, &.{}, memory.INPUT_START),
+        },
+        .v0,
+        config,
+    );
 
     var prng = std.Random.DefaultPrng.init(10);
     var context = try createTransactionContext(
