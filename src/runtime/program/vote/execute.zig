@@ -995,6 +995,163 @@ fn validateIsSigner(
     return InstructionError.MissingRequiredSignature;
 }
 
+test "isCommissionUpdateAllowed epoch half check" {
+    const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
+    const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
+        sig.core.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
+
+    const TestCase = struct {
+        slot: sig.core.Slot,
+        expected_allowed: bool,
+        name: []const u8,
+    };
+
+    const test_cases = [_]TestCase{
+        .{
+            .slot = 0,
+            .expected_allowed = true,
+            .name = "first slot",
+        },
+        .{
+            .slot = DEFAULT_SLOTS_PER_EPOCH / 2,
+            .expected_allowed = true,
+            .name = "halfway through epoch",
+        },
+        .{
+            .slot = (DEFAULT_SLOTS_PER_EPOCH / 2) +| 1,
+            .expected_allowed = false,
+            .name = "halfway through epoch plus one",
+        },
+        .{
+            .slot = DEFAULT_SLOTS_PER_EPOCH -| 1,
+            .expected_allowed = false,
+            .name = "last slot in epoch",
+        },
+        .{
+            .slot = DEFAULT_SLOTS_PER_EPOCH,
+            .expected_allowed = true,
+            .name = "first slot in second epoch",
+        },
+    };
+
+    for (test_cases) |tc| {
+        const epoch_schedule = try testEpochSchedule(
+            DEFAULT_SLOTS_PER_EPOCH,
+            DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
+            false,
+        );
+
+        const actual_allowed = isCommissionUpdateAllowed(tc.slot, &epoch_schedule);
+        try std.testing.expectEqual(tc.expected_allowed, actual_allowed);
+    }
+}
+
+test "isCommissionUpdateAllowed warmup epoch half check with warmup" {
+    const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
+    const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
+        sig.core.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
+
+    const epoch_schedule = try testEpochSchedule(
+        DEFAULT_SLOTS_PER_EPOCH,
+        DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
+        true,
+    );
+
+    const first_normal_slot = epoch_schedule.first_normal_slot;
+    // first slot works
+    try std.testing.expect(isCommissionUpdateAllowed(0, &epoch_schedule));
+    // right before first normal slot works, since all warmup slots allow
+    // commission updates
+    try std.testing.expect(
+        isCommissionUpdateAllowed(first_normal_slot - 1, &epoch_schedule),
+    );
+}
+
+test "isCommissionUpdateAllowed epoch half check with warmup" {
+    const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
+    const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
+        sig.core.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
+
+    const TestCase = struct {
+        slot: sig.core.Slot,
+        expected_allowed: bool,
+        name: []const u8,
+    };
+
+    const test_cases = [_]TestCase{
+        .{
+            .slot = 0,
+            .expected_allowed = true,
+            .name = "first slot",
+        },
+        .{
+            .slot = DEFAULT_SLOTS_PER_EPOCH / 2,
+            .expected_allowed = true,
+            .name = "halfway through epoch",
+        },
+        .{
+            .slot = (DEFAULT_SLOTS_PER_EPOCH / 2) +| 1,
+            .expected_allowed = false,
+            .name = "halfway through epoch plus one",
+        },
+        .{
+            .slot = DEFAULT_SLOTS_PER_EPOCH -| 1,
+            .expected_allowed = false,
+            .name = "last slot in epoch",
+        },
+        .{
+            .slot = DEFAULT_SLOTS_PER_EPOCH,
+            .expected_allowed = true,
+            .name = "first slot in second epoch",
+        },
+    };
+
+    for (test_cases) |tc| {
+        const epoch_schedule = try testEpochSchedule(
+            DEFAULT_SLOTS_PER_EPOCH,
+            DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
+            true,
+        );
+
+        const actual_allowed = isCommissionUpdateAllowed(
+            epoch_schedule.first_normal_slot +| tc.slot,
+            &epoch_schedule,
+        );
+        try std.testing.expectEqual(tc.expected_allowed, actual_allowed);
+    }
+}
+
+fn testEpochSchedule(
+    slots_per_epoch: u64,
+    leader_schedule_slot_offset: u64,
+    warmup: bool,
+) !EpochSchedule {
+    if (!@import("builtin").is_test) {
+        @panic("testEpochSchedule should only in test");
+    }
+
+    const MINIMUM_SLOTS_PER_EPOCH = sig.core.epoch_schedule.MINIMUM_SLOTS_PER_EPOCH;
+    std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
+
+    var first_normal_epoch: u64 = 0;
+    var first_normal_slot: u64 = 0;
+
+    if (warmup) {
+        const next_power_of_two = try std.math.ceilPowerOfTwo(u64, slots_per_epoch);
+        const log2_slots_per_epoch = @ctz(next_power_of_two) -| @ctz(MINIMUM_SLOTS_PER_EPOCH);
+        first_normal_epoch = log2_slots_per_epoch;
+        first_normal_slot = next_power_of_two -| MINIMUM_SLOTS_PER_EPOCH;
+    }
+
+    return EpochSchedule{
+        .slots_per_epoch = slots_per_epoch,
+        .leader_schedule_slot_offset = leader_schedule_slot_offset,
+        .warmup = warmup,
+        .first_normal_epoch = first_normal_epoch,
+        .first_normal_slot = first_normal_slot,
+    };
+}
+
 test "vote_program: executeIntializeAccount" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
