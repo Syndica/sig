@@ -1,3 +1,4 @@
+const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
@@ -20,6 +21,35 @@ pub const Versions = union(enum) {
         switch (self) {
             .legacy => |state| return state,
             .current => |state| return state,
+        }
+    }
+
+    pub fn verify(
+        self: Versions,
+        durable_nonce: Hash,
+    ) ?Data {
+        switch (self) {
+            .legacy => |_| return null,
+            .current => |state| switch (state) {
+                .unintialized => return null,
+                .initialized => |data| {
+                    return if (durable_nonce.eql(data.durable_nonce)) data else null;
+                },
+            },
+        }
+    }
+
+    pub fn upgrade(self: Versions) ?Versions {
+        switch (self) {
+            .legacy => |state| switch (state) {
+                .unintialized => return null,
+                .initialized => |data| {
+                    var new_data = data;
+                    new_data.durable_nonce = initDurableNonceFromHash(data.durable_nonce);
+                    return Versions{ .current = .{ .initialized = new_data } };
+                },
+            },
+            .current => |_| return null,
         }
     }
 };
@@ -54,6 +84,84 @@ pub const Data = struct {
     }
 };
 
-pub fn createDurableNonce(blockhash: Hash) Hash {
+pub fn initDurableNonceFromHash(blockhash: Hash) Hash {
     return sig.runtime.tmp_utils.hashv(&.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data });
+}
+
+test "verify_durable_nonce" {
+    const prng = std.rand.DefaultPrng.init(0);
+
+    const blockhash = Hash{ .data = [32]u8{171} ** 32 };
+
+    {
+        const versions = Versions{ .legacy = .{.unintialized} };
+        try std.testing.expectEqual(null, versions.verify(blockhash));
+        try std.testing.expectEqual(null, versions.verify(Hash.ZEROES));
+    }
+
+    {
+        const versions = Versions{ .current = .{.unintialized} };
+        try std.testing.expectEqual(null, versions.verify(blockhash));
+        try std.testing.expectEqual(null, versions.verify(Hash.ZEROES));
+    }
+
+    {
+        const durable_nonce = initDurableNonceFromHash(blockhash);
+        const data = Data{
+            .authority = Pubkey.initRandom(prng.random()),
+            .durable_nonce = durable_nonce,
+            .fee_calculator = FeeCalculator{ .lamports_per_signature = 2718 },
+        };
+        const versions = Versions{ .legacy = .{ .initialized = data } };
+        try std.testing.expectEqual(null, versions.verify(blockhash));
+        try std.testing.expectEqual(null, versions.verify(Hash.ZEROES));
+        try std.testing.expectEqual(null, versions.verify(data.durable_nonce));
+    }
+
+    {
+        const durable_nonce = initDurableNonceFromHash(blockhash);
+        const data = Data{
+            .authority = Pubkey.initRandom(prng.random()),
+            .durable_nonce = durable_nonce,
+            .fee_calculator = FeeCalculator{ .lamports_per_signature = 2718 },
+        };
+        const versions = Versions{ .current = .{ .initialized = data } };
+        try std.testing.expectEqual(null, versions.verify(blockhash));
+        try std.testing.expectEqual(null, versions.verify(Hash.ZEROES));
+        try std.testing.expectEqual(data, versions.verify(data.durable_nonce));
+    }
+}
+
+test "upgrade_nonce_version" {
+    var prng = std.rand.DefaultPrng.init(0);
+
+    {
+        const versions = Versions{ .legacy = .unintialized };
+        try std.testing.expectEqual(null, versions.upgrade());
+    }
+
+    {
+        const blockhash = Hash{ .data = [_]u8{171} ** 32 };
+
+        const initial_durable_nonce = initDurableNonceFromHash(blockhash);
+        const initial_data = Data{
+            .authority = Pubkey.initRandom(prng.random()),
+            .durable_nonce = initial_durable_nonce,
+            .fee_calculator = FeeCalculator{ .lamports_per_signature = 2718 },
+        };
+
+        const versions = Versions{ .legacy = .{ .initialized = initial_data } };
+        const actual = versions.upgrade() orelse return error.UpgradeFailed;
+
+        const expected_durable_nonce = initDurableNonceFromHash(initial_durable_nonce);
+        const expected_data = Data{
+            .authority = initial_data.authority,
+            .durable_nonce = expected_durable_nonce,
+            .fee_calculator = initial_data.fee_calculator,
+        };
+        const expected = Versions{ .current = .{ .initialized = expected_data } };
+
+        try std.testing.expectEqual(expected, actual);
+        try std.testing.expectEqual(null, actual.upgrade());
+    }
 }
