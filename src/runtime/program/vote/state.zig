@@ -1053,6 +1053,9 @@ pub const VoteState = struct {
         );
     }
 
+    /// Checks the proposed vote state with the current and
+    /// slot hashes, making adjustments to the root / filtering
+    /// votes as needed.
     pub fn checkAndFilterProposedVoteState(
         self: *VoteState,
         allocator: std.mem.Allocator,
@@ -1093,6 +1096,11 @@ pub const VoteState = struct {
             // such that we cannot verify whether the slot was actually was on this fork, set
             // the root to the latest vote in the vote state that's less than R. If no
             // votes from the vote state are less than R, use its root instead.
+            //
+            // This handles cases where a proposed root is too old to be verified
+            // against the SlotHash history. It ensures that the root remains
+            // consistent with the validator's voting history while avoiding
+            // issues like finalizing an incorrect fork.
             if (root < earliest_slot_hash_in_history) {
                 // First overwrite the proposed root with the vote state's root
                 proposed_root.* = self.root_slot;
