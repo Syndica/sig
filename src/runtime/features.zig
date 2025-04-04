@@ -4,6 +4,37 @@ const sig = @import("../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
+/// `FeatureSet` holds the set of currently active and inactive features
+///
+/// TODO: add features
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/feature-set/src/lib.rs#L1188
+pub const FeatureSet = struct {
+    active: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+
+    pub const EMPTY: FeatureSet = .{ .active = .{} };
+
+    pub fn deinit(self: FeatureSet, allocator: std.mem.Allocator) void {
+        var active_ = self.active;
+        active_.deinit(allocator);
+    }
+};
+
+pub const ALL_FEATURES: []const Pubkey = &.{
+    LIFT_CPI_CALLER_RESTRICTION,
+    REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+    ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
+    ENABLE_LOADER_V4,
+    RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
+    ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+    COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+    DEPRECATE_LEGACY_VOTE_IXS,
+    ENABLE_TOWER_SYNC_IX,
+    BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    ENABLE_POSEIDON_SYSCALL,
+    DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL,
+};
+
 pub const LIFT_CPI_CALLER_RESTRICTION =
     Pubkey.parseBase58String("HcW8ZjBezYYgvcbxNJwqv1t484Y2556qJsfNDWvJGZRH") catch unreachable;
 
@@ -39,25 +70,3 @@ pub const ENABLE_POSEIDON_SYSCALL =
 
 pub const DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL =
     Pubkey.parseBase58String("79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im") catch unreachable;
-
-pub const LOOSEN_CPI_SIZE_RESTRICTION =
-    Pubkey.parseBase58String("GDH5TVdbTPUpRnXaRyQqiKUa7uZAbZ28Q2N9bhbKoMLm") catch unreachable;
-
-pub const INCREASE_TX_ACCOUNT_LOCK_LIMIT =
-    Pubkey.parseBase58String("9LZdXeKGeBV6hRLdxS1rHbHoEUsKqesCC2ZAPTPKJAbK") catch unreachable;
-
-/// `FeatureSet` holds the set of currently active and inactive features
-///
-/// TODO: add features
-///
-/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/feature-set/src/lib.rs#L1188
-pub const FeatureSet = struct {
-    active: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
-
-    pub const EMPTY: FeatureSet = .{ .active = .{} };
-
-    pub fn deinit(self: FeatureSet, allocator: std.mem.Allocator) void {
-        var active_ = self.active;
-        active_.deinit(allocator);
-    }
-};
