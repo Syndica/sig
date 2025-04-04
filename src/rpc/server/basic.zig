@@ -227,6 +227,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
                 },
                 std.http.Server.Request.ReadError,
             );
+
             const content_len = head_info.content_len orelse {
                 request.respond("", .{
                     .status = .length_required,
@@ -237,6 +238,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
                 };
                 return;
             };
+
             if (content_len > requests.MAX_REQUEST_BODY_SIZE) {
                 request.respond("", .{
                     .status = .payload_too_large,
@@ -278,208 +280,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
                 else => return error.SystemIoError,
             };
 
-            var json_arena = std.heap.ArenaAllocator.init(server_ctx.allocator);
-            defer json_arena.deinit();
-
-            const rpc_request_dyn = std.json.parseFromSliceLeaky(
-                rpc.request.Request.Dynamic,
-                json_arena.allocator(),
-                content_body,
-                .{},
-            ) catch |err| switch (err) {
-                error.OutOfMemory => |e| return e,
-                error.BufferUnderrun => unreachable,
-                error.MissingField => return writeJsonResponse(&request, .{}, .{
-                    .jsonrpc = "2.0",
-                    .id = null,
-                    .@"error" = rpc.response.Error{
-                        .code = .invalid_request,
-                        .message = "Invalid json",
-                    },
-                }) catch |e| switch (e) {
-                    error.ConnectionResetByPeer => {},
-                    else => return error.SystemIoError,
-                },
-                else => return writeJsonResponse(&request, .{}, .{
-                    .jsonrpc = "2.0",
-                    .id = null,
-                    .@"error" = rpc.response.Error{
-                        .code = .parse_error,
-                        .message = "Invalid json",
-                    },
-                }) catch |e| switch (e) {
-                    error.ConnectionResetByPeer => {},
-                    else => return error.SystemIoError,
-                },
-            };
-
-            const rpc_request = json: {
-                var diag = rpc.request.Request.ParseDynamicDiagnostic.INIT;
-                const result = rpc.request.Request.parseDynamic(
-                    json_arena.allocator(),
-                    rpc_request_dyn,
-                    .{},
-                    &diag,
-                ) catch |err| {
-                    const code: rpc.response.ErrorCode, //
-                    const message: []const u8 //
-                    = switch (err) {
-                        error.OutOfMemory => |e| return e,
-
-                        error.MissingJsonRpcVersion,
-                        error.MissingMethod,
-                        error.MissingParams,
-                        error.InvalidJsonRpcVersion,
-                        => .{ .invalid_request, "Invalid request" },
-                        error.InvalidMethod => .{ .method_not_found, "Method not found" },
-                        error.InvalidParams => .{ .invalid_params, "Invalid method parameters" },
-                    };
-                    const err_obj: rpc.response.Error = .{
-                        .code = code,
-                        .message = message,
-                    };
-                    return writeJsonResponse(&request, .{ .keep_alive = false }, .{
-                        .jsonrpc = "2.0",
-                        .id = diag.err.id orelse .null,
-                        .@"error" = err_obj,
-                    }) catch |e| switch (e) {
-                        error.ConnectionResetByPeer => {},
-                        else => return error.SystemIoError,
-                    };
-                };
-                break :json result;
-            };
-
-            switch (rpc_request.method) {
-                .getAccountInfo => |params| {
-                    const config: rpc.methods.GetAccountInfo.Config = params.config orelse .{};
-                    const encoding = config.encoding orelse .base64;
-                    if (config.commitment) |commitment| {
-                        std.debug.panic("TODO: handle commitment={s}", .{@tagName(commitment)});
-                    }
-
-                    const account: sig.accounts_db.AccountsDB.AccountInCacheOrFile, //
-                    const account_slot: sig.core.Slot, //
-                    var account_lg: sig.accounts_db.AccountsDB.AccountInCacheOrFileLock //
-                    = (server_ctx.accountsdb.getSlotAndAccountInSlotRangeWithReadLock(
-                        &params.pubkey,
-                        // if it's null, it's null, there's no floor to the query.
-                        config.minContextSlot orelse null,
-                        null,
-                    ) catch return error.AccountsDbError) orelse {
-                        request.respond("", .{
-                            .status = .range_not_satisfiable,
-                            .keep_alive = false,
-                        }) catch |err| switch (err) {
-                            error.ConnectionResetByPeer => return,
-                            else => return error.SystemIoError,
-                        };
-                        return;
-                    };
-                    defer account_lg.unlock();
-
-                    const Facts = struct {
-                        executable: bool,
-                        lamports: u64,
-                        owner: sig.core.Pubkey,
-                        rent_epoch: u64,
-                        space: u64,
-                    };
-
-                    const data_handle: AccountDataHandle, //
-                    const facts: Facts //
-                    = blk: {
-                        const data_handle: sig.accounts_db.buffer_pool.AccountDataHandle, //
-                        const facts: Facts //
-                        = switch (account) {
-                            .file => |aif| .{ aif.data, .{
-                                .executable = aif.executable().*,
-                                .lamports = aif.lamports().*,
-                                .owner = aif.owner().*,
-                                .rent_epoch = aif.rent_epoch().*,
-                                .space = aif.data.len(),
-                            } },
-                            .unrooted_map => |um| .{ um.data, .{
-                                .executable = um.executable,
-                                .lamports = um.lamports,
-                                .owner = um.owner,
-                                .rent_epoch = um.rent_epoch,
-                                .space = um.data.len(),
-                            } },
-                        };
-
-                        break :blk .{ data_handle, facts };
-                    };
-
-                    const account_data_base64 = blk: {
-                        var account_data_base64: std.ArrayListUnmanaged(u8) = .{};
-                        defer account_data_base64.deinit(server_ctx.allocator);
-                        const account_data_base64_writer =
-                            account_data_base64.writer(server_ctx.allocator);
-
-                        const acc_data_handle = if (config.dataSlice) |ds|
-                            // TODO: handle potental integer overflow properly here
-                            data_handle.slice(@intCast(ds.offset), @intCast(ds.offset + ds.length))
-                        else
-                            data_handle;
-
-                        var b64_enc_stream = sig.utils.base64.EncodingStream.init(
-                            std.base64.standard.Encoder,
-                        );
-                        const b64_enc_writer_ctx =
-                            b64_enc_stream.writerCtx(account_data_base64_writer);
-
-                        var frame_iter = acc_data_handle.iterator();
-                        while (frame_iter.nextFrame()) |frame_bytes| {
-                            try b64_enc_writer_ctx.writer().writeAll(frame_bytes);
-                        }
-                        try b64_enc_writer_ctx.flush();
-
-                        break :blk try account_data_base64.toOwnedSlice(server_ctx.allocator);
-                    };
-                    defer server_ctx.allocator.free(account_data_base64);
-
-                    const response_result: rpc.methods.GetAccountInfo.Response = .{
-                        .context = .{
-                            .slot = account_slot,
-                            .apiVersion = "2.0.15",
-                        },
-                        .value = .{
-                            .data = .{ .encoded = .{
-                                account_data_base64,
-                                encoding,
-                            } },
-                            .executable = facts.executable,
-                            .lamports = facts.lamports,
-                            .owner = facts.owner,
-                            .rentEpoch = facts.rent_epoch,
-                            .space = facts.space,
-                        },
-                    };
-
-                    writeJsonResponse(&request, .{ .keep_alive = false }, .{
-                        .jsonrpc = "2.0",
-                        .id = rpc_request.id,
-                        .result = response_result,
-                    }) catch |err| switch (err) {
-                        error.ConnectionResetByPeer => return,
-                        else => return error.SystemIoError,
-                    };
-
-                    return;
-                },
-                else => {
-                    request.respond("", .{
-                        .status = .not_implemented,
-                        .keep_alive = false,
-                    }) catch |err| switch (err) {
-                        error.ConnectionResetByPeer => return,
-                        else => return error.SystemIoError,
-                    };
-                    return;
-                },
-            }
-
+            try handleRpcRequest(server_ctx, &request, content_body);
             return;
         },
         else => {},
@@ -498,6 +299,221 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
         error.ConnectionResetByPeer => return,
         else => return error.SystemIoError,
     };
+}
+
+fn handleRpcRequest(
+    server_ctx: *server.Context,
+    request: *std.http.Server.Request,
+    content_body: []const u8,
+) !void {
+    var json_arena = std.heap.ArenaAllocator.init(server_ctx.allocator);
+    defer json_arena.deinit();
+
+    const rpc_request_dyn = std.json.parseFromSliceLeaky(
+        rpc.request.Request.Dynamic,
+        json_arena.allocator(),
+        content_body,
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        error.BufferUnderrun => unreachable,
+        error.MissingField => {
+            writeJsonResponse(request, .{}, .{
+                .jsonrpc = "2.0",
+                .id = null,
+                .@"error" = rpc.response.Error{
+                    .code = .invalid_request,
+                    .message = "Invalid json",
+                },
+            }) catch |e| switch (e) {
+                error.ConnectionResetByPeer => return,
+                else => return error.SystemIoError,
+            };
+            return;
+        },
+        else => {
+            writeJsonResponse(request, .{}, .{
+                .jsonrpc = "2.0",
+                .id = null,
+                .@"error" = rpc.response.Error{
+                    .code = .parse_error,
+                    .message = "Invalid json",
+                },
+            }) catch |e| switch (e) {
+                error.ConnectionResetByPeer => return,
+                else => return error.SystemIoError,
+            };
+            return;
+        },
+    };
+
+    const rpc_request = json: {
+        var diag = rpc.request.Request.ParseDynamicDiagnostic.INIT;
+        const result = rpc.request.Request.parseDynamic(
+            json_arena.allocator(),
+            rpc_request_dyn,
+            .{},
+            &diag,
+        ) catch |err| {
+            const code: rpc.response.ErrorCode, //
+            const message: []const u8 //
+            = switch (err) {
+                error.OutOfMemory => |e| return e,
+
+                error.MissingJsonRpcVersion,
+                error.MissingMethod,
+                error.MissingParams,
+                error.InvalidJsonRpcVersion,
+                => .{ .invalid_request, "Invalid request" },
+                error.InvalidMethod => .{ .method_not_found, "Method not found" },
+                error.InvalidParams => .{ .invalid_params, "Invalid method parameters" },
+            };
+            const err_obj: rpc.response.Error = .{
+                .code = code,
+                .message = message,
+            };
+            writeJsonResponse(request, .{}, .{
+                .jsonrpc = "2.0",
+                .id = diag.err.id orelse .null,
+                .@"error" = err_obj,
+            }) catch |e| switch (e) {
+                error.ConnectionResetByPeer => return,
+                else => return error.SystemIoError,
+            };
+            return;
+        };
+        break :json result;
+    };
+
+    switch (rpc_request.method) {
+        .getAccountInfo => |params| {
+            const config: rpc.methods.GetAccountInfo.Config = params.config orelse .{};
+            const encoding = config.encoding orelse .base64;
+            if (config.commitment) |commitment| {
+                std.debug.panic("TODO: handle commitment={s}", .{@tagName(commitment)});
+            }
+
+            const account: sig.accounts_db.AccountsDB.AccountInCacheOrFile, //
+            const account_slot: sig.core.Slot, //
+            var account_lg: sig.accounts_db.AccountsDB.AccountInCacheOrFileLock //
+            = (server_ctx.accountsdb.getSlotAndAccountInSlotRangeWithReadLock(
+                &params.pubkey,
+                // if it's null, it's null, there's no floor to the query.
+                config.minContextSlot orelse null,
+                null,
+            ) catch return error.AccountsDbError) orelse {
+                request.respond("", .{
+                    .status = .range_not_satisfiable,
+                    .keep_alive = false,
+                }) catch |err| switch (err) {
+                    error.ConnectionResetByPeer => return,
+                    else => return error.SystemIoError,
+                };
+                return;
+            };
+            defer account_lg.unlock();
+
+            const Facts = struct {
+                executable: bool,
+                lamports: u64,
+                owner: sig.core.Pubkey,
+                rent_epoch: u64,
+                space: u64,
+            };
+
+            const data_handle: AccountDataHandle, //
+            const facts: Facts //
+            = blk: {
+                const data_handle: sig.accounts_db.buffer_pool.AccountDataHandle, //
+                const facts: Facts //
+                = switch (account) {
+                    .file => |aif| .{ aif.data, .{
+                        .executable = aif.executable().*,
+                        .lamports = aif.lamports().*,
+                        .owner = aif.owner().*,
+                        .rent_epoch = aif.rent_epoch().*,
+                        .space = aif.data.len(),
+                    } },
+                    .unrooted_map => |um| .{ um.data, .{
+                        .executable = um.executable,
+                        .lamports = um.lamports,
+                        .owner = um.owner,
+                        .rent_epoch = um.rent_epoch,
+                        .space = um.data.len(),
+                    } },
+                };
+
+                break :blk .{ data_handle, facts };
+            };
+
+            const account_data_base64 = blk: {
+                var account_data_base64: std.ArrayListUnmanaged(u8) = .{};
+                defer account_data_base64.deinit(server_ctx.allocator);
+                const account_data_base64_writer =
+                    account_data_base64.writer(server_ctx.allocator);
+
+                const acc_data_handle = if (config.dataSlice) |ds|
+                    // TODO: handle potental integer overflow properly here
+                    data_handle.slice(@intCast(ds.offset), @intCast(ds.offset + ds.length))
+                else
+                    data_handle;
+
+                var b64_enc_stream = sig.utils.base64.EncodingStream.init(
+                    std.base64.standard.Encoder,
+                );
+                const b64_enc_writer_ctx =
+                    b64_enc_stream.writerCtx(account_data_base64_writer);
+
+                var frame_iter = acc_data_handle.iterator();
+                while (frame_iter.nextFrame()) |frame_bytes| {
+                    try b64_enc_writer_ctx.writer().writeAll(frame_bytes);
+                }
+                try b64_enc_writer_ctx.flush();
+
+                break :blk try account_data_base64.toOwnedSlice(server_ctx.allocator);
+            };
+            defer server_ctx.allocator.free(account_data_base64);
+
+            const response_result: rpc.methods.GetAccountInfo.Response = .{
+                .context = .{
+                    .slot = account_slot,
+                    .apiVersion = "2.0.15",
+                },
+                .value = .{
+                    .data = .{ .encoded = .{
+                        account_data_base64,
+                        encoding,
+                    } },
+                    .executable = facts.executable,
+                    .lamports = facts.lamports,
+                    .owner = facts.owner,
+                    .rentEpoch = facts.rent_epoch,
+                    .space = facts.space,
+                },
+            };
+
+            writeJsonResponse(request, .{}, .{
+                .jsonrpc = "2.0",
+                .id = rpc_request.id,
+                .result = response_result,
+            }) catch |err| switch (err) {
+                error.ConnectionResetByPeer => return,
+                else => return error.SystemIoError,
+            };
+
+            return;
+        },
+        else => {
+            request.respond("", .{
+                .status = .not_implemented,
+                .keep_alive = false,
+            }) catch |err| switch (err) {
+                error.ConnectionResetByPeer => return,
+                else => return error.SystemIoError,
+            };
+            return;
+        },
+    }
 }
 
 fn writeJsonResponse(
@@ -527,9 +543,8 @@ fn writeJsonResponse(
     try response.end();
 }
 
-fn httpResponseWriter(
-    response: *std.http.Server.Response,
-) sig.utils.io.NarrowAnyWriter(std.http.Server.Response.WriteError) {
+const HttpResponseWriter = sig.utils.io.NarrowAnyWriter(std.http.Server.Response.WriteError);
+fn httpResponseWriter(response: *std.http.Server.Response) HttpResponseWriter {
     return sig.utils.io.narrowAnyWriter(
         response.writer(),
         std.http.Server.Response.WriteError,
