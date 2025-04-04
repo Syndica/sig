@@ -128,7 +128,7 @@ pub const Elf = struct {
         fn parse(headers: Headers) !Data {
             const strtab = try headers.shdrSlice(headers.header.e_shstrndx);
             for (headers.shdrs) |shdr| {
-                // Check that none of the section names are longer than the sting table containing them.
+                // Check that none of the section names are longer than the string table containing them.
                 if (shdr.sh_name >= strtab.len) return error.InvalidOffset;
             }
 
@@ -247,10 +247,10 @@ pub const Elf = struct {
         /// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf.rs#L827-L1002
         fn parseRoSections(
             self: Data,
+            allocator: std.mem.Allocator,
             headers: Headers,
             config: Config,
             version: sbpf.Version,
-            allocator: std.mem.Allocator,
         ) !Section {
             // List of allowed section names for storing data.
             const ro_names: []const []const u8 = &.{
@@ -917,7 +917,12 @@ pub const Elf = struct {
             entry_pc,
         );
 
-        const ro_section = try data.parseRoSections(headers, config, sbpf_version, allocator);
+        const ro_section = try data.parseRoSections(
+            allocator,
+            headers,
+            config,
+            sbpf_version,
+        );
         errdefer ro_section.deinit(allocator);
 
         var self: Elf = .{
@@ -1289,10 +1294,10 @@ test "owned ro sections with sh offset" {
     };
 
     const result = try data.parseRoSections(
+        allocator,
         headers,
         config,
         .v0,
-        allocator,
     );
     defer result.deinit(allocator);
 
