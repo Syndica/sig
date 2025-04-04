@@ -31,6 +31,15 @@ pub const DEPRECATE_LEGACY_VOTE_IXS =
 pub const ENABLE_TOWER_SYNC_IX =
     Pubkey.parseBase58String("tSynMCspg4xFiCj1v3TDb4c7crMR5tSBhLz4sF7rrNA") catch unreachable;
 
+pub const BPF_ACCOUNT_DATA_DIRECT_MAPPING =
+    Pubkey.parseBase58String("AjX3A4Nv2rzUuATEUWLP4rrBaBropyUnHxEvFDj1dKbx") catch unreachable;
+
+pub const LOOSEN_CPI_SIZE_RESTRICTION =
+    Pubkey.parseBase58String("GDH5TVdbTPUpRnXaRyQqiKUa7uZAbZ28Q2N9bhbKoMLm") catch unreachable;
+
+pub const INCREASE_TX_ACCOUNT_LOCK_LIMIT =
+    Pubkey.parseBase58String("9LZdXeKGeBV6hRLdxS1rHbHoEUsKqesCC2ZAPTPKJAbK") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features

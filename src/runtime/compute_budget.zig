@@ -33,6 +33,8 @@ pub const ComputeBudget = struct {
     poseidon_cost_coefficient_c: u64,
     /// Number of account data bytes per compute unit charged during a cross-program invocation
     cpi_bytes_per_unit: u64,
+    /// Maximum cross-program invocation instruction size
+    max_cpi_instruction_size: usize,
 
     pub fn default(compute_unit_limit: u64) ComputeBudget {
         return .{
@@ -48,6 +50,7 @@ pub const ComputeBudget = struct {
             .mem_op_base_cost = 10,
             .poseidon_cost_coefficient_a = 61,
             .poseidon_cost_coefficient_c = 542,
+            .max_cpi_instruction_size = 1280, // IPv6 Min MTU size
         };
     }
 
