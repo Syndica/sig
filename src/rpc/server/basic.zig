@@ -466,15 +466,6 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
                         else => return error.SystemIoError,
                     };
 
-                    // std.json.stringify(.{
-                    //     .jsonrpc = "2.0",
-                    //     .id = rpc_request.id,
-                    //     .result = response_result,
-                    // }, .{}, resp_writer) catch |err| switch (err) {
-                    //     error.ConnectionResetByPeer => return,
-                    //     else => return error.SystemIoError,
-                    // };
-
                     return;
                 },
                 else => {
