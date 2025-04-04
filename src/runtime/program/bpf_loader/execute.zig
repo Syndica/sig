@@ -736,7 +736,7 @@ pub fn executeV3SetAuthorityChecked(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!ic.tc.sc.ec.feature_set.active.contains(
-        feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
+        feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
     )) {
         return InstructionError.InvalidInstructionData;
     }

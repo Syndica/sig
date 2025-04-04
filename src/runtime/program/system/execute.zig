@@ -327,17 +327,10 @@ fn executeUpgradeNonceAccount(
     if (!account.context.is_writable) return InstructionError.InvalidArgument;
 
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
-    std.debug.print("versioned_nonce: {}\n", .{versioned_nonce});
-    switch (versioned_nonce) {
-        .legacy => |state| {
-            if (state == nonce.State.initialized) {
-                var data = state.initialized;
-                data.durable_nonce = nonce.createDurableNonce(data.durable_nonce);
-                try account.serializeIntoAccountData(nonce.Versions{ .current = state });
-            } else return InstructionError.InvalidArgument;
-        },
-        .current => |_| return InstructionError.InvalidArgument,
-    }
+
+    try account.serializeIntoAccountData(
+        versioned_nonce.upgrade() orelse return InstructionError.InvalidArgument,
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L488-L498
@@ -545,7 +538,7 @@ fn advanceNonceAccount(
                 return InstructionError.MissingRequiredSignature;
             }
 
-            const next_durable_nonce = nonce.createDurableNonce(ic.tc.prev_blockhash);
+            const next_durable_nonce = nonce.initDurableNonceFromHash(ic.tc.prev_blockhash);
 
             if (data.durable_nonce.eql(next_durable_nonce)) {
                 try ic.tc.log("Advance nonce account: nonce can only advance once per slot", .{});
@@ -604,7 +597,7 @@ fn withdrawNonceAccount(
             },
             .initialized => |data| blk: {
                 if (lamports == from_account.account.lamports) {
-                    const durable_nonce = nonce.createDurableNonce(ic.tc.prev_blockhash);
+                    const durable_nonce = nonce.initDurableNonceFromHash(ic.tc.prev_blockhash);
                     if (durable_nonce.eql(data.durable_nonce)) {
                         try ic.tc.log(
                             "Withdraw nonce account: nonce can only advance once per slot",
@@ -679,7 +672,7 @@ fn initializeNonceAccount(
             try account.serializeIntoAccountData(nonce.Versions{
                 .current = nonce.State{ .initialized = nonce.Data.init(
                     authority,
-                    nonce.createDurableNonce(ic.tc.prev_blockhash),
+                    nonce.initDurableNonceFromHash(ic.tc.prev_blockhash),
                     ic.tc.prev_lamports_per_signature,
                 ) },
             });
@@ -983,7 +976,7 @@ test "executeAdvanceNonceAccount" {
 
     // Create Initial Nonce State
     const nonce_authority = Pubkey.initRandom(prng.random());
-    const initial_durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
+    const initial_durable_nonce = nonce.initDurableNonceFromHash(Hash.initRandom(prng.random()));
     const nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
         nonce_authority,
         initial_durable_nonce,
@@ -997,7 +990,7 @@ test "executeAdvanceNonceAccount" {
         .current = nonce.State{
             .initialized = nonce.Data.init(
                 nonce_authority, // Unchanged
-                nonce.createDurableNonce(prev_blockhash), // Updated
+                nonce.initDurableNonceFromHash(prev_blockhash), // Updated
                 lamports_per_signature, // Updated
             ),
         },
@@ -1078,7 +1071,7 @@ test "executeWithdrawNonceAccount" {
 
     // Create Initial Nonce State
     const nonce_authority = Pubkey.initRandom(prng.random());
-    const initial_durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
+    const initial_durable_nonce = nonce.initDurableNonceFromHash(Hash.initRandom(prng.random()));
     const nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
         nonce_authority,
         initial_durable_nonce,
@@ -1168,7 +1161,7 @@ test "executeInitializeNonceAccount" {
     const final_nonce_state = nonce.Versions{
         .current = nonce.State{ .initialized = nonce.Data.init(
             nonce_authority,
-            nonce.createDurableNonce(prev_blockhash),
+            nonce.initDurableNonceFromHash(prev_blockhash),
             lamports_per_signature,
         ) },
     };
@@ -1257,7 +1250,7 @@ test "executeAuthorizeNonceAccount" {
 
     // Create Initial Nonce State
     const initial_nonce_authority = Pubkey.initRandom(prng.random());
-    const durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
+    const durable_nonce = nonce.initDurableNonceFromHash(Hash.initRandom(prng.random()));
     const nonce_state = nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
         initial_nonce_authority,
         durable_nonce,
@@ -1521,7 +1514,7 @@ test "executeUpgradeNonceAccount" {
 
     // Create Initial Nonce State
     const nonce_authority = Pubkey.initRandom(prng.random());
-    const durable_nonce = nonce.createDurableNonce(Hash.initRandom(prng.random()));
+    const durable_nonce = nonce.initDurableNonceFromHash(Hash.initRandom(prng.random()));
     const lamports_per_signature = 5_000;
     const nonce_state = nonce.Versions{
         .legacy = nonce.State{ .initialized = nonce.Data.init(
