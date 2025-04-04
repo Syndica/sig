@@ -39,14 +39,6 @@ pub fn execute(
             args.space,
             args.owner,
         ),
-        .assign => |args| try executeAssign(
-            ic,
-            args.owner,
-        ),
-        .transfer => |args| try executeTransfer(
-            ic,
-            args.lamports,
-        ),
         .create_account_with_seed => |args| try executeCreateAccountWithSeed(
             allocator,
             ic,
@@ -55,6 +47,20 @@ pub fn execute(
             args.lamports,
             args.space,
             args.owner,
+        ),
+        .assign => |args| try executeAssign(
+            ic,
+            args.owner,
+        ),
+        .transfer => |args| try executeTransfer(
+            ic,
+            args.lamports,
+        ),
+        .transfer_with_seed => |args| try executeTransferWithSeed(
+            ic,
+            args.lamports,
+            args.from_seed,
+            args.from_owner,
         ),
         .advance_nonce_account => try executeAdvanceNonceAccount(
             allocator,
@@ -75,6 +81,10 @@ pub fn execute(
             ic,
             arg,
         ),
+        .upgrade_nonce_account => try executeUpgradeNonceAccount(
+            allocator,
+            ic,
+        ),
         .allocate => |args| try executeAllocate(
             allocator,
             ic,
@@ -93,16 +103,6 @@ pub fn execute(
             args.base,
             args.seed,
             args.owner,
-        ),
-        .transfer_with_seed => |args| try executeTransferWithSeed(
-            ic,
-            args.lamports,
-            args.from_seed,
-            args.from_owner,
-        ),
-        .upgrade_nonce_account => try executeUpgradeNonceAccount(
-            allocator,
-            ic,
         ),
     };
 }
@@ -125,6 +125,37 @@ fn executeCreateAccount(
         space,
         owner,
         ic.info.account_metas.buffer[1].pubkey,
+    );
+}
+
+//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L343-L362
+fn executeCreateAccountWithSeed(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    base: Pubkey,
+    seed: []const u8,
+    lamports: u64,
+    space: u64,
+    owner: Pubkey,
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(2);
+    try checkSeedAddress(
+        ic,
+        ic.info.account_metas.buffer[1].pubkey,
+        base,
+        owner,
+        seed,
+        "Create: address {} does not match derived address {}",
+    );
+    try createAccount(
+        allocator,
+        ic,
+        0,
+        1,
+        lamports,
+        space,
+        owner,
+        base,
     );
 }
 
@@ -158,34 +189,41 @@ fn executeTransfer(
     );
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L343-L362
-fn executeCreateAccountWithSeed(
-    allocator: std.mem.Allocator,
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L393-L404
+fn executeTransferWithSeed(
     ic: *InstructionContext,
-    base: Pubkey,
-    seed: []const u8,
     lamports: u64,
-    space: u64,
-    owner: Pubkey,
+    from_seed: []const u8,
+    from_owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.info.checkNumberOfAccounts(3);
+
+    const from_index = 0;
+    const from_base_index = 1;
+    const to_index = 2;
+
+    const from_base_pubkey = ic.info.account_metas.buffer[from_base_index].pubkey;
+    const from_pubkey = ic.info.account_metas.buffer[from_index].pubkey;
+
+    if (!try ic.info.isIndexSigner(from_base_index)) {
+        try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
+        return InstructionError.MissingRequiredSignature;
+    }
+
     try checkSeedAddress(
         ic,
-        ic.info.account_metas.buffer[1].pubkey,
-        base,
-        owner,
-        seed,
-        "Create: address {} does not match derived address {}",
+        from_pubkey,
+        from_base_pubkey,
+        from_owner,
+        from_seed,
+        "Transfer: 'from' address {} does not match derived address {}",
     );
-    try createAccount(
-        allocator,
+
+    try transferVerified(
         ic,
-        0,
-        1,
+        from_index,
+        to_index,
         lamports,
-        space,
-        owner,
-        base,
     );
 }
 
@@ -273,6 +311,35 @@ fn executeAuthorizeNonceAccount(
     );
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L472-L485
+fn executeUpgradeNonceAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
+    try ic.info.checkNumberOfAccounts(1);
+
+    var account = try ic.borrowInstructionAccount(0);
+    defer account.release();
+
+    if (!account.account.owner.equals(&system_program.ID))
+        return InstructionError.InvalidAccountOwner;
+
+    if (!account.context.is_writable) return InstructionError.InvalidArgument;
+
+    const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
+    std.debug.print("versioned_nonce: {}\n", .{versioned_nonce});
+    switch (versioned_nonce) {
+        .legacy => |state| {
+            if (state == nonce.State.initialized) {
+                var data = state.initialized;
+                data.durable_nonce = nonce.createDurableNonce(data.durable_nonce);
+                try account.serializeIntoAccountData(nonce.Versions{ .current = state });
+            } else return InstructionError.InvalidArgument;
+        },
+        .current => |_| return InstructionError.InvalidArgument,
+    }
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L488-L498
 fn executeAllocate(
     allocator: std.mem.Allocator,
@@ -338,120 +405,6 @@ fn executeAssignWithSeed(
     try assign(ic, &account, owner, base);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L393-L404
-fn executeTransferWithSeed(
-    ic: *InstructionContext,
-    lamports: u64,
-    from_seed: []const u8,
-    from_owner: Pubkey,
-) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(3);
-
-    const from_index = 0;
-    const from_base_index = 1;
-    const to_index = 2;
-
-    const from_base_pubkey = ic.info.account_metas.buffer[from_base_index].pubkey;
-    const from_pubkey = ic.info.account_metas.buffer[from_index].pubkey;
-
-    if (!try ic.info.isIndexSigner(from_base_index)) {
-        try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
-        return InstructionError.MissingRequiredSignature;
-    }
-
-    try checkSeedAddress(
-        ic,
-        from_pubkey,
-        from_base_pubkey,
-        from_owner,
-        from_seed,
-        "Transfer: 'from' address {} does not match derived address {}",
-    );
-
-    try transferVerified(
-        ic,
-        from_index,
-        to_index,
-        lamports,
-    );
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L472-L485
-fn executeUpgradeNonceAccount(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
-
-    var account = try ic.borrowInstructionAccount(0);
-    defer account.release();
-
-    if (!account.account.owner.equals(&system_program.ID))
-        return InstructionError.InvalidAccountOwner;
-
-    if (!account.context.is_writable) return InstructionError.InvalidArgument;
-
-    const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
-    switch (versioned_nonce) {
-        .legacy => |state| {
-            if (state == nonce.State.initialized) {
-                var data = state.initialized;
-                data.durable_nonce = nonce.createDurableNonce(data.durable_nonce);
-                try account.serializeIntoAccountData(nonce.Versions{ .current = state });
-            }
-        },
-        .current => |_| return InstructionError.InvalidArgument,
-    }
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#70
-fn allocate(
-    allocator: std.mem.Allocator,
-    ic: *InstructionContext,
-    account: *BorrowedAccount,
-    space: u64,
-    authority: Pubkey,
-) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.info.isPubkeySigner(authority)) {
-        try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
-        return InstructionError.MissingRequiredSignature;
-    }
-
-    if (account.constAccountData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
-        try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
-        ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
-        return InstructionError.Custom;
-    }
-
-    if (space > system_program.MAX_PERMITTED_DATA_LENGTH) {
-        try ic.tc.log(
-            "Allocate: requested {}, max allowed {}",
-            .{ space, system_program.MAX_PERMITTED_DATA_LENGTH },
-        );
-        ic.tc.custom_error = @intFromEnum(SystemProgramError.InvalidAccountDataLength);
-        return InstructionError.Custom;
-    }
-
-    try account.setDataLength(allocator, &ic.tc.accounts_resize_delta, @intCast(space));
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L112
-fn assign(
-    ic: *InstructionContext,
-    account: *BorrowedAccount,
-    owner: Pubkey,
-    authority: Pubkey,
-) (error{OutOfMemory} || InstructionError)!void {
-    if (account.account.owner.equals(&owner)) return;
-
-    if (!ic.info.isPubkeySigner(authority)) {
-        try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
-        return InstructionError.MissingRequiredSignature;
-    }
-
-    try account.setOwner(owner);
-}
-
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L145
 fn createAccount(
     allocator: std.mem.Allocator,
@@ -483,6 +436,23 @@ fn createAccount(
         to_index,
         lamports,
     );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L112
+fn assign(
+    ic: *InstructionContext,
+    account: *BorrowedAccount,
+    owner: Pubkey,
+    authority: Pubkey,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (account.account.owner.equals(&owner)) return;
+
+    if (!ic.info.isPubkeySigner(authority)) {
+        try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    try account.setOwner(owner);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L214
@@ -769,6 +739,37 @@ pub fn authorizeNonceAccount(
     }
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#70
+fn allocate(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    account: *BorrowedAccount,
+    space: u64,
+    authority: Pubkey,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!ic.info.isPubkeySigner(authority)) {
+        try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
+        return InstructionError.MissingRequiredSignature;
+    }
+
+    if (account.constAccountData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
+        try ic.tc.log("Allocate: account {} already in use", .{account.pubkey});
+        ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
+        return InstructionError.Custom;
+    }
+
+    if (space > system_program.MAX_PERMITTED_DATA_LENGTH) {
+        try ic.tc.log(
+            "Allocate: requested {}, max allowed {}",
+            .{ space, system_program.MAX_PERMITTED_DATA_LENGTH },
+        );
+        ic.tc.custom_error = @intFromEnum(SystemProgramError.InvalidAccountDataLength);
+        return InstructionError.Custom;
+    }
+
+    try account.setDataLength(allocator, &ic.tc.accounts_resize_delta, @intCast(space));
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L47-L58
 fn checkSeedAddress(
     ic: *InstructionContext,
@@ -882,6 +883,8 @@ test "executeTransfer" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
+    std.debug.print("account_0: {}\n", .{account_0_key});
+    std.debug.print("account_1: {}\n", .{account_1_key});
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
@@ -1569,6 +1572,51 @@ test "executeUpgradeNonceAccount" {
                     .pubkey = account_0_key,
                     .owner = system_program.ID,
                     .data = final_nonce_state_bytes,
+                },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+        },
+        .{},
+    );
+}
+
+test "executeUpgradeNonceAccount:InvalidArgument" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const account_0_key = Pubkey.initRandom(prng.random());
+
+    try testing.expectProgramExecuteResult(
+        allocator,
+        system_program.ID,
+        SystemProgramInstruction{
+            .upgrade_nonce_account = {},
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = account_0_key,
+                    .lamports = 1_000_000,
+                    .data = &[_]u8{0} ** 8,
+                    .owner = system_program.ID,
+                },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = account_0_key,
+                    .lamports = 1_000_000,
+                    .data = &[_]u8{0} ** 8,
+                    .owner = system_program.ID,
                 },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
