@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 pub const ParseError = std.json.ParseError(std.json.Scanner) || error{MissingResult};
 
@@ -7,7 +8,7 @@ pub const ParseError = std.json.ParseError(std.json.Scanner) || error{MissingRes
 pub fn Response(comptime T: type) type {
     return struct {
         arena: *std.heap.ArenaAllocator,
-        id: u64,
+        id: sig.rpc.request.Id,
         jsonrpc: []const u8,
         payload: Payload,
         const Self = @This();
@@ -27,7 +28,7 @@ pub fn Response(comptime T: type) type {
             errdefer arena.deinit();
             const raw_response = try std.json.parseFromSliceLeaky(
                 struct {
-                    id: u64,
+                    id: sig.rpc.request.Id,
                     jsonrpc: []const u8,
                     result: ?T = null,
                     @"error": ?Error = null,
