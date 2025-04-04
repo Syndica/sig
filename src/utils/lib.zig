@@ -15,3 +15,4 @@ pub const thread = @import("thread.zig");
 pub const types = @import("types.zig");
 pub const fmt = @import("fmt.zig");
 pub const slice = @import("slice.zig");
+pub const base64 = @import("base64.zig");
