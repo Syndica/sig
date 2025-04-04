@@ -3,7 +3,7 @@ const std = @import("std");
 const memory = @import("memory.zig");
 const assert = std.debug.assert;
 
-pub const EF_SBPF_v1: u32 = 0x20;
+pub const EM_SBPF_V1: u32 = 0x20;
 
 /// Solana BPF Elf Machine
 pub const EM_SBPF: std.elf.Elf64_Half = 263;

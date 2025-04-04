@@ -39,6 +39,7 @@ pub const Elf = struct {
         phdrs: []align(1) const elf.Elf64_Phdr,
 
         fn parse(bytes: []const u8) !Headers {
+            // There aren't enough bytes in the ELF file to contain a header.
             if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
             const header: elf.Elf64_Ehdr = @bitCast(bytes[0..@sizeOf(elf.Elf64_Ehdr)].*);
             const ident: ElfIdent = @bitCast(header.e_ident);
@@ -55,20 +56,20 @@ pub const Elf = struct {
                 return error.InvalidFileHeader;
             }
 
-            const shoff = header.e_shoff;
-            const shnum = header.e_shnum;
-            const shsize = try std.math.mul(u64, shnum, @sizeOf(elf.Elf64_Shdr));
+            // Compute the size of the section headers in the ELF in bytes.
+            const shsize = try std.math.mul(u64, header.e_shnum, @sizeOf(elf.Elf64_Shdr));
+            // A slice representing the section headers, re-interpreted into `Elf64_Shdr`.
             const shdrs = std.mem.bytesAsSlice(
                 elf.Elf64_Shdr,
-                try safeSlice(bytes, shoff, shsize),
+                try safeSlice(bytes, header.e_shoff, shsize),
             );
 
-            const phoff = header.e_phoff;
-            const phnum = header.e_phnum;
-            const phsize = try std.math.mul(u64, phnum, @sizeOf(elf.Elf64_Phdr));
+            // Compute the size of the program headers in the ELF in bytes.
+            const phsize = try std.math.mul(u64, header.e_phnum, @sizeOf(elf.Elf64_Phdr));
+            // A slice representing the program headers, re-interpreted into `Elf64_Phdr`.
             const phdrs = std.mem.bytesAsSlice(
                 elf.Elf64_Phdr,
-                try safeSlice(bytes, phoff, phsize),
+                try safeSlice(bytes, header.e_phoff, phsize),
             );
 
             return .{
@@ -79,6 +80,7 @@ pub const Elf = struct {
             };
         }
 
+        /// Returns the byte contents of the `index`nth section.
         pub fn shdrSlice(self: Headers, index: u64) ![]const u8 {
             if (index >= self.shdrs.len) return error.OutOfBounds;
             const shdr = self.shdrs[index];
@@ -88,6 +90,7 @@ pub const Elf = struct {
             return try safeSlice(self.bytes, sh_offset, sh_size);
         }
 
+        /// Returns the byte contents of the `index`nth program section.
         fn phdrSlice(self: Headers, index: u64) ![]const u8 {
             if (index >= self.phdrs.len) return error.OutOfBounds;
             const phdr = self.phdrs[index];
@@ -96,13 +99,19 @@ pub const Elf = struct {
             return try safeSlice(self.bytes, p_offset, p_filesz);
         }
 
-        fn getStringInShdr(self: Headers, shdr: u32, off: u32) ![:0]const u8 {
+        /// Returns a string stored in the `shdr` string table, starting at `offset`.
+        ///
+        /// Note that String table entries are stored null-terminated.
+        fn getStringInShdr(self: Headers, shdr: u32, offset: u32) ![:0]const u8 {
             const strtab = try self.shdrSlice(shdr);
-            assert(off < strtab.len);
-            const ptr: [*:0]const u8 = @ptrCast(strtab.ptr + off);
+            assert(offset < strtab.len);
+            const ptr: [*:0]const u8 = @ptrCast(strtab.ptr + offset);
             return std.mem.sliceTo(ptr, 0);
         }
 
+        /// Finds the first program header to match the `p_type` provided.
+        /// This function is usually used in cases where we're searching for a
+        /// unique `p_type`, such as `PT_DYNAMIC`.
         fn getPhdrIndexByType(self: Headers, p_type: elf.Elf64_Word) ?u32 {
             for (self.phdrs, 0..) |phdr, i| {
                 if (phdr.p_type == p_type) return @intCast(i);
@@ -110,6 +119,8 @@ pub const Elf = struct {
             return null;
         }
 
+        /// Determines whether an address is within the virtual address space of
+        /// a particular section in the file image.
         fn inRangeOfShdr(self: Headers, index: usize, addr: usize) bool {
             const shdr = self.shdrs[index];
             const sh_offset = shdr.sh_offset;
@@ -129,8 +140,8 @@ pub const Elf = struct {
 
         fn parse(headers: Headers) !Data {
             const strtab = try headers.shdrSlice(headers.header.e_shstrndx);
-
             for (headers.shdrs) |shdr| {
+                // Check that none of the section names are longer than the string table containing them.
                 if (shdr.sh_name >= strtab.len) return error.InvalidOffset;
             }
 
@@ -150,6 +161,9 @@ pub const Elf = struct {
             };
         }
 
+        /// Parses and returns the dynamic entry table, if the ELF has one.
+        ///
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf_parser/mod.rs#L358-L404
         fn parseDynamic(headers: Headers) !?DynamicTable {
             var output_table: DynamicTable = .{0} ** elf.DT_NUM;
 
@@ -164,7 +178,7 @@ pub const Elf = struct {
 
             if (dynamic_table == null) {
                 for (headers.shdrs, 0..) |shdr, i| {
-                    // if PT_DYNAMIC doesn't exist or is invalid, fallback to parsing SHT_DYNAMIC
+                    // If PT_DYNAMIC doesn't exist or is invalid, fallback to parsing SHT_DYNAMIC
                     if (shdr.sh_type == elf.SHT_DYNAMIC) {
                         const slice = try headers.shdrSlice(i);
                         if (slice.len % @sizeOf(elf.Elf64_Dyn) != 0) return error.InvalidSize;
@@ -174,12 +188,14 @@ pub const Elf = struct {
                 }
             }
 
-            // if neither PT_DYNAMIC nor SHT_DYNAMIC exist, this is a state file.
+            // If neither PT_DYNAMIC nor SHT_DYNAMIC exist, this is a state file.
             if (dynamic_table == null) return null;
             for (dynamic_table.?) |dyn| {
                 const d_tag: u64 = @bitCast(dyn.d_tag);
+                // The dynamic table is terminated by a `DT_NULL` entry.
                 if (d_tag == elf.DT_NULL) break;
-                if (d_tag >= elf.DT_NUM) continue; // we don't parse any reversed tags
+                // Above `DT_NUM`, the tags are reserved, and we skip over it.
+                if (d_tag >= elf.DT_NUM) continue;
 
                 output_table[d_tag] = dyn.d_val;
             }
@@ -187,20 +203,24 @@ pub const Elf = struct {
             return output_table;
         }
 
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf_parser/mod.rs#L412
         fn parseDynamicRelocations(
             headers: Headers,
             dynamic_table: DynamicTable,
         ) ![]align(1) const elf.Elf64_Rel {
+            // Find the virtual address of the dynamic relocation table.
             const vaddr = dynamic_table[elf.DT_REL];
-            if (vaddr == 0) return &.{};
+            if (vaddr == elf.DT_NULL) return &.{};
 
             if (dynamic_table[elf.DT_RELENT] != @sizeOf(elf.Elf64_Rel)) {
                 return error.InvalidDynamicSectionTable;
             }
 
             const size = dynamic_table[elf.DT_RELSZ];
-            if (size == 0) return error.InvalidDynamicSectionTable;
+            if (size == elf.DT_NULL) return error.InvalidDynamicSectionTable;
 
+            // Determine the offset of relocation table in the ELF.
+            // It could appear both inside of a section and a program section.
             const offset = for (headers.phdrs) |phdr| {
                 if (inRangeOfPhdrVm(phdr, vaddr)) {
                     const offset = try std.math.sub(u64, vaddr, phdr.p_vaddr);
@@ -211,18 +231,23 @@ pub const Elf = struct {
             } else return error.InvalidDynamicSectionTable;
 
             const bytes = try safeSlice(headers.bytes, offset, size);
+            if (bytes.len % @sizeOf(elf.Elf64_Rel) != 0) return error.InvalidDynamicSectionTable;
             return std.mem.bytesAsSlice(elf.Elf64_Rel, bytes);
         }
 
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf_parser/mod.rs#L448-L462
         fn parseDynamicSymbolTable(
             headers: Headers,
             dynamic_table: DynamicTable,
         ) ![]align(1) const elf.Elf64_Sym {
+            // Get the virtual address of the symbol table.
             const vaddr = dynamic_table[elf.DT_SYMTAB];
-            if (vaddr == 0) return &.{};
+            if (vaddr == elf.DT_NULL) return &.{};
 
             for (headers.shdrs, 0..) |shdr, i| {
+                // Filter out section headers that aren't pointing to the symbol table.
                 if (shdr.sh_addr != vaddr) continue;
+                // We need either a SYMTAB or a DYNSYM section.
                 if (shdr.sh_type != elf.SHT_SYMTAB and shdr.sh_type != elf.SHT_DYNSYM) {
                     return error.InvalidSectionHeader;
                 }
@@ -232,13 +257,15 @@ pub const Elf = struct {
             } else return error.InvalidDynamicSectionTable;
         }
 
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf.rs#L827-L1002
         fn parseRoSections(
             self: Data,
+            allocator: std.mem.Allocator,
             headers: Headers,
             config: Config,
             version: sbpf.Version,
-            allocator: std.mem.Allocator,
         ) !Section {
+            // List of allowed section names for storing data.
             const ro_names: []const []const u8 = &.{
                 ".text",
                 ".rodata",
@@ -246,25 +273,34 @@ pub const Elf = struct {
                 ".eh_frame",
             };
 
+            // Lowest virtual address used by a "data section".
             var lowest_addr: usize = std.math.maxInt(usize);
+            // Highest virtual address occupied by a "data section".
+            // This includes the length of that top section.
             var highest_addr: usize = 0;
-
+            // Total length of data we've found.
             var ro_fill_length: usize = 0;
 
-            var ro_slices = try std.ArrayListUnmanaged(struct {
-                usize,
-                []const u8,
-            }).initCapacity(allocator, headers.shdrs.len);
-            defer ro_slices.deinit(allocator);
+            const Entry = struct { usize, []const u8 };
+            var sfba = std.heap.stackFallback(@sizeOf(Entry) * ro_names.len, allocator);
+            const gpa = sfba.get();
+
+            var ro_slices = try std.ArrayListUnmanaged(Entry).initCapacity(gpa, headers.shdrs.len);
+            defer ro_slices.deinit(gpa);
 
             var addr_file_offset: ?u64 = null;
             var invalid_offsets: bool = false;
 
+            // Index of the first read-only section in the section header list.
             var first_ro_section: usize = 0;
+            // Index of the last read-only section in the section header list.
             var last_ro_section: usize = 0;
+            // Number of read-only sections in the ELF.
             var n_ro_sections: usize = 0;
 
             for (headers.shdrs, 0..) |shdr, i| {
+                // If the name of the section isn't in the list of
+                // valid read-only sections, just skip it.
                 const name = self.getString(shdr.sh_name);
                 for (ro_names) |ro_name| {
                     if (std.mem.eql(u8, ro_name, name)) break;
@@ -276,30 +312,31 @@ pub const Elf = struct {
                 last_ro_section = i;
                 n_ro_sections = n_ro_sections +| 1;
 
-                const section_addr = shdr.sh_addr;
-
+                // Determine whether the section header has invalid offset metadata.
+                // [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf.rs#L870-L899
                 if (!invalid_offsets) {
                     if (version.enableElfVaddr()) {
                         assert(config.optimize_rodata);
-                        if (section_addr < shdr.sh_offset) {
+                        if (shdr.sh_addr < shdr.sh_offset) {
                             invalid_offsets = true;
                         } else {
-                            const offset = try std.math.sub(u64, section_addr, shdr.sh_offset);
+                            const offset = try std.math.sub(u64, shdr.sh_addr, shdr.sh_offset);
                             addr_file_offset = addr_file_offset orelse offset;
                             if (addr_file_offset.? != offset) {
                                 invalid_offsets = true;
                             }
                         }
-                    } else if (section_addr != shdr.sh_offset) {
+                    } else if (shdr.sh_addr != shdr.sh_offset) {
                         invalid_offsets = true;
                     }
                 }
 
                 var vaddr_end = if (version.enableElfVaddr() and
-                    section_addr >= memory.RODATA_START)
-                    section_addr
+                    shdr.sh_addr >= memory.RODATA_START)
+                    shdr.sh_addr
                 else
-                    section_addr +| memory.RODATA_START;
+                    shdr.sh_addr +| memory.RODATA_START;
+
                 if (version.rejectRodataStackOverlap()) {
                     vaddr_end +|= shdr.sh_size;
                 }
@@ -310,11 +347,11 @@ pub const Elf = struct {
                 }
 
                 const section_data = try headers.shdrSlice(i);
-                lowest_addr = @min(lowest_addr, section_addr);
-                highest_addr = @max(highest_addr, section_addr +| section_data.len);
+                lowest_addr = @min(lowest_addr, shdr.sh_addr);
+                highest_addr = @max(highest_addr, shdr.sh_addr +| section_data.len);
                 ro_fill_length +|= section_data.len;
 
-                ro_slices.appendAssumeCapacity(.{ section_addr, section_data });
+                ro_slices.appendAssumeCapacity(.{ shdr.sh_addr, section_data });
             }
 
             if (config.reject_broken_elfs and lowest_addr +| ro_fill_length > highest_addr) {
@@ -352,12 +389,12 @@ pub const Elf = struct {
                     lowest_addr = 0;
                 }
 
-                const buf_len = highest_addr;
-                if (buf_len > headers.bytes.len) {
+                if (highest_addr > headers.bytes.len) {
                     return error.ValueOutOfBounds;
                 }
 
-                const ro_section = try allocator.alloc(u8, buf_len);
+                // Concat all of the gathered read-only sections into one contiguous slice.
+                const ro_section = try allocator.alloc(u8, highest_addr);
                 @memset(ro_section, 0);
                 for (ro_slices.items) |ro_slice| {
                     const section_addr, const slice = ro_slice;
@@ -374,11 +411,12 @@ pub const Elf = struct {
             return ro_section;
         }
 
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf.rs#L1194-L1346
         fn relocate(
             self: Data,
+            allocator: std.mem.Allocator,
             headers: Headers,
             bytes: []u8,
-            allocator: std.mem.Allocator,
             loader: *BuiltinProgram,
             function_registry: *Registry(u64),
             version: sbpf.Version,
@@ -394,6 +432,7 @@ pub const Elf = struct {
                 text_section.sh_offset,
                 text_section.sh_size,
             );
+
             const instructions = try self.getInstructions(headers);
             for (instructions, 0..) |inst, i| {
                 const immediate: i64 = @as(i32, @bitCast(inst.imm));
@@ -402,11 +441,17 @@ pub const Elf = struct {
                     if (target_pc < 0 or target_pc >= instructions.len)
                         return error.RelativeJumpOutOfBounds;
 
+                    // Compute at compile-time how large of a buffer we need to store the name.
+                    var buf: [
+                        std.fmt.count(
+                            "function_{d}",
+                            .{std.math.minInt(i64)}, // min to account for the sign character
+                        )
+                    ]u8 = undefined;
                     const name = if (config.enable_symbol_and_section_labels)
-                        try std.fmt.allocPrint(allocator, "function_{d}", .{target_pc})
+                        try std.fmt.bufPrint(&buf, "function_{d}", .{target_pc})
                     else
                         &.{};
-                    defer allocator.free(name);
 
                     const key = try function_registry.registerHashedLegacy(
                         allocator,
@@ -430,6 +475,8 @@ pub const Elf = struct {
                 var r_offset = reloc.r_offset;
 
                 if (version.enableElfVaddr()) {
+                    // "Cache" the `phdr` in order to avoid doing a linear search for each relocation.
+                    // 99% of relocations will be in the same program section.
                     const found = if (phdr) |header| found: {
                         break :found inRangeOfPhdrVm(header, r_offset);
                     } else false;
@@ -446,7 +493,7 @@ pub const Elf = struct {
 
                 switch (@as(elf.R_X86_64, @enumFromInt(reloc.r_type()))) {
                     .@"64" => {
-                        // if the relocation is addressing an instruction inside of the
+                        // If the relocation is addressing an instruction inside of the
                         // text section, we'll need to offset it by the offset of the immediate
                         // field into the instruction.
                         const in_text_section = headers.inRangeOfShdr(
@@ -457,6 +504,7 @@ pub const Elf = struct {
 
                         const addr_slice = try safeSlice(bytes, imm_offset, 4);
                         const ref_addr = std.mem.readInt(u32, addr_slice[0..4], .little);
+                        // Make sure the relocation is referring to a symbol that's in the symbol table.
                         if (reloc.r_sym() >= self.symbol_table.len) return error.UnknownSymbol;
                         const symbol = self.symbol_table[reloc.r_sym()];
                         var addr = symbol.st_value +| ref_addr;
@@ -466,12 +514,14 @@ pub const Elf = struct {
                         }
 
                         if (in_text_section or version == .v0) {
+                            // This is a LDDW instruction, which takes up the space of two regular instructions.
+                            // We need to split up the address into two 32-bit chunks, and write to each of the
+                            // slot's immediate field.
                             {
                                 const imm_low_offset = imm_offset;
                                 const imm_slice = try safeSlice(bytes, imm_low_offset, 4);
                                 std.mem.writeInt(u32, imm_slice[0..4], @truncate(addr), .little);
                             }
-
                             {
                                 const imm_high_offset = imm_offset +| 8;
                                 const imm_slice = try safeSlice(bytes, imm_high_offset, 4);
@@ -483,6 +533,8 @@ pub const Elf = struct {
                                 );
                             }
                         } else {
+                            // This is refering to some constant outside of the .TEXT section,
+                            // so we don't need to worry about fitting the data into an immediate field.
                             const imm_slice = try safeSlice(bytes, imm_offset, 8);
                             std.mem.writeInt(u64, imm_slice[0..8], addr, .little);
                         }
@@ -490,21 +542,21 @@ pub const Elf = struct {
                     .RELATIVE => {
                         const imm_offset = r_offset +| 4;
 
-                        // is the relocation targetting inside of the text section
+                        // If the relocation is targetting an address inside of the text section
+                        // the target is a LDDW instruction which takes up two instruction slots.
                         if (headers.inRangeOfShdr(text_section_index, imm_offset)) {
-                            // the target is a lddw instruction which takes up two instruction slots
-
                             const va_low = val: {
                                 const imm_slice = try safeSlice(bytes, imm_offset, 4);
                                 break :val std.mem.readInt(u32, imm_slice[0..4], .little);
                             };
-
                             const va_high = val: {
-                                const imm_high_offset = r_offset +| 12;
+                                // One instruction slot over.
+                                const imm_high_offset = imm_offset +| 8;
                                 const imm_slice = try safeSlice(bytes, imm_high_offset, 4);
                                 break :val std.mem.readInt(u32, imm_slice[0..4], .little);
                             };
 
+                            // Combine both halfs to get the full 64-bit address.
                             var ref_addr = (@as(u64, va_high) << 32) | va_low;
                             if (ref_addr == 0) return error.InvalidVirtualAddress;
 
@@ -540,11 +592,7 @@ pub const Elf = struct {
                                     break :addr memory.RODATA_START +| address;
                                 },
                                 else => addr: {
-                                    const addr_slice = try safeSlice(
-                                        bytes,
-                                        r_offset,
-                                        @sizeOf(u64),
-                                    );
+                                    const addr_slice = try safeSlice(bytes, r_offset, @sizeOf(u64));
                                     var address = std.mem.readInt(u64, addr_slice[0..8], .little);
                                     if (address < memory.RODATA_START) {
                                         address +|= memory.RODATA_START;
@@ -557,8 +605,8 @@ pub const Elf = struct {
                         }
                     },
                     .@"32" => {
-                        // This relocation handles resolving calls to symbols
-                        // Hash the symbol name with Murmur and relocate the instruction's imm field.
+                        // The "32" relocation handles resolving calls to symbols.
+                        // Hash the symbol name with Murmur and ammend the instruction's imm field.
                         const imm_offset = r_offset +| 4;
                         if (reloc.r_sym() >= self.symbol_table.len) return error.UnknownSymbol;
                         const symbol = self.symbol_table[reloc.r_sym()];
@@ -569,7 +617,7 @@ pub const Elf = struct {
                         if (symbol.st_name >= dynstr.len) return error.UnknownSymbol;
                         const symbol_name = std.mem.sliceTo(dynstr[symbol.st_name..], 0);
 
-                        // If the symbol is defined, this is a bpf-to-bpf call.
+                        // If the symbol is defined and a function, this is a BPF-to-BPF call.
                         if (symbol.st_type() == elf.STT_FUNC and symbol.st_value != 0) {
                             const target_pc = (symbol.st_value -| text_section.sh_addr) / 8;
                             const key = try function_registry.registerHashedLegacy(
@@ -604,6 +652,7 @@ pub const Elf = struct {
             return std.mem.sliceTo(ptr, 0);
         }
 
+        /// Returns the index of the section with the name provided.
         fn getShdrIndexByName(self: Data, headers: Headers, name: []const u8) ?u32 {
             for (headers.shdrs, 0..) |shdr, i| {
                 const shdr_name = self.getString(shdr.sh_name);
@@ -614,6 +663,8 @@ pub const Elf = struct {
             return null;
         }
 
+        /// Returns a slice of the instructions by re-interpreting the bytes.
+        /// Assumes that there is a `.text` section and that the length of it .
         fn getInstructions(self: Data, headers: Headers) ![]align(1) const sbpf.Instruction {
             const text_section_index = self.getShdrIndexByName(headers, ".text").?;
             const text_bytes: []const u8 = try headers.shdrSlice(text_section_index);
@@ -639,8 +690,13 @@ pub const Elf = struct {
         const headers = try Headers.parse(bytes);
         const data = try Data.parse(headers);
 
+        // The behaviour for parsing the version changed in v1. Before it was
+        // either equal `EM_SBPF_V1` or it wasn't. This method didn't allow
+        // for specifying more than 2 possible versions, so now we have
+        // well-defined values for the versions. We will determine which method
+        // to use based on the configuration of the VM.
         const sbpf_version: sbpf.Version = if (config.maximum_version == .v0)
-            if (headers.header.e_flags == sbpf.EF_SBPF_v1)
+            if (headers.header.e_flags == sbpf.EM_SBPF_V1)
                 .v1
             else
                 .v0
@@ -652,6 +708,7 @@ pub const Elf = struct {
             else => |v| @enumFromInt(v),
         };
 
+        // Ensure that the sbpf version we find is within the range that's enabled.
         if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version) or
             @intFromEnum(sbpf_version) > @intFromEnum(config.maximum_version))
         {
@@ -668,6 +725,15 @@ pub const Elf = struct {
                 config,
             );
         } else {
+            if (sbpf_version.enableElfVaddr() and
+                config.optimize_rodata != true)
+            {
+                return error.UnsupportedSBPFVersion;
+            }
+            if (headers.phdrs.len >= 10) {
+                return error.InvalidProgramHeader;
+            }
+
             return try parseLenient(
                 allocator,
                 bytes,
@@ -700,6 +766,8 @@ pub const Elf = struct {
     ) !Elf {
         const header = headers.header;
 
+        // A list of the first 5 expected program headers.
+        // Since this is a stricter parsing scheme, we need them to match exactly.
         const expected_phdrs = .{
             .{ elf.PT_LOAD, elf.PF_X, memory.BYTECODE_START },
             .{ elf.PT_LOAD, elf.PF_R, memory.RODATA_START },
@@ -737,6 +805,8 @@ pub const Elf = struct {
             headers.phdrs[0..expected_phdrs.len],
         ) |entry, phdr| {
             const p_type, const p_flags, const p_vaddr = entry;
+            // For writable sections, (those with the PF_W bit set), we expect their
+            // value for p_filesz to be zero.
             const p_filesz = if (p_flags & elf.PF_W != 0) 0 else phdr.p_memsz;
 
             if (phdr.p_type != p_type or
@@ -836,9 +906,9 @@ pub const Elf = struct {
         errdefer function_registry.deinit(allocator);
 
         try data.relocate(
+            allocator,
             headers,
             bytes,
-            allocator,
             loader,
             &function_registry,
             sbpf_version,
@@ -860,7 +930,12 @@ pub const Elf = struct {
             entry_pc,
         );
 
-        const ro_section = try data.parseRoSections(headers, config, sbpf_version, allocator);
+        const ro_section = try data.parseRoSections(
+            allocator,
+            headers,
+            config,
+            sbpf_version,
+        );
         errdefer ro_section.deinit(allocator);
 
         var self: Elf = .{
@@ -901,28 +976,28 @@ pub const Elf = struct {
     fn validate(self: *Elf) !void {
         const header = self.headers.header;
 
-        // ensure 64-bit class
+        // Ensure 64-bit class
         if (header.e_ident[elf.EI_CLASS] != elf.ELFCLASS64) {
             return error.WrongClass;
         }
-        // ensure little endian
+        // Ensure little endian
         if (header.e_ident[elf.EI_DATA] != elf.ELFDATA2LSB) {
             return error.WrongEndianess;
         }
-        // ensure no OS_ABI was set
+        // Ensure no OS_ABI was set
         if (header.e_ident[sbpf.EI_OSABI] != sbpf.ELFOSABI_NONE) {
             return error.WrongAbi;
         }
-        // ensure the ELF was compiled for BPF or possibly the custom SBPF machine number
+        // Ensure the ELF was compiled for BPF or possibly the custom SBPF machine number
         if (header.e_machine != elf.EM.BPF and @intFromEnum(header.e_machine) != sbpf.EM_SBPF) {
             return error.WrongMachine;
         }
-        // ensure that this is a `.so`, dynamic library file
+        // Ensure that this is a `.so`, dynamic library file
         if (header.e_type != .DYN) {
             return error.NotDynElf;
         }
 
-        // ensure there is only one ".text" section
+        // Ensure there is only one `.text` section
         {
             var count: u32 = 0;
             for (self.headers.shdrs) |shdr| {
@@ -935,9 +1010,9 @@ pub const Elf = struct {
             }
         }
 
-        // writable sections are not supported in our usecase
-        // that will include ".bss", and ".data" sections that are writable
-        // ".data.rel" is allowed though.
+        // Writable sections are not supported in our usecase that will include
+        // ".bss", and ".data" sections that are writable ".data.rel" is
+        // allowed though.
         for (self.headers.shdrs) |shdr| {
             const name = self.data.getString(shdr.sh_name);
             if (std.mem.startsWith(u8, name, ".bss")) {
@@ -953,7 +1028,7 @@ pub const Elf = struct {
             }
         }
 
-        // ensure all of the section headers are within bounds
+        // Ensure all of the section headers are within bounds
         for (self.headers.shdrs) |shdr| {
             const start = shdr.sh_offset;
             const end = try std.math.add(u64, start, shdr.sh_size);
@@ -962,18 +1037,12 @@ pub const Elf = struct {
             if (start > file_size or end > file_size) return error.SectionHeaderOutOfBounds;
         }
 
-        // ensure that the entry point is inside of the ".text" section
+        // Ensure that the entry point is inside of the ".text" section
         const entrypoint = header.e_entry;
         const text_section_index = self.getShdrIndexByName(".text") orelse
             return error.NoTextSection;
         if (!self.inRangeOfShdrVaddr(text_section_index, entrypoint)) {
             return error.EntrypointOutsideTextSection;
-        }
-
-        if (self.version.enableElfVaddr() and
-            self.config.optimize_rodata != true)
-        {
-            return error.UnsupportedSBPFVersion;
         }
     }
 
@@ -1239,10 +1308,10 @@ test "owned ro sections with sh offset" {
     };
 
     const result = try data.parseRoSections(
+        allocator,
         headers,
         config,
         .v0,
-        allocator,
     );
     defer result.deinit(allocator);
 
