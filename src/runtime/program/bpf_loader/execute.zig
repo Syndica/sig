@@ -789,8 +789,8 @@ pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.ec.feature_set.active.contains(
-        features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
+    if (!ic.tc.sc.ec.feature_set.active.contains(
+        features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
     )) {
         return InstructionError.InvalidInstructionData;
     }
