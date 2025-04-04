@@ -845,14 +845,8 @@ fn executeUpdateVoteState(
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try ic.getSysvarWithAccountCheck(
-        SlotHashes,
-        @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
-    );
-    const clock = try ic.getSysvarWithAccountCheck(
-        Clock,
-        @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
-    );
+    const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
+    const clock = try ic.tc.sysvar_cache.get(Clock);
 
     try updateVoteState(
         allocator,
@@ -906,14 +900,8 @@ fn executeTowerSync(
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try ic.getSysvarWithAccountCheck(
-        SlotHashes,
-        @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
-    );
-    const clock = try ic.getSysvarWithAccountCheck(
-        Clock,
-        @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
-    );
+    const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
+    const clock = try ic.tc.sysvar_cache.get(Clock);
 
     try towerSync(
         allocator,
@@ -3740,4 +3728,903 @@ test "vote_program: empty vote" {
         // is stored in ic.tc.custom_error
         try std.testing.expectEqual(InstructionError.Custom, err);
     };
+}
+
+test "vote_program: vote state update" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock.DEFAULT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial state.
+    var vote_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try vote_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 1 } },
+        },
+    );
+
+    const vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit();
+
+    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
+
+    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+
+    // VoteStateUpdate.
+    var lockouts = [_]Lockout{
+        .{ .slot = 2, .confirmation_count = 4 },
+        .{ .slot = 4, .confirmation_count = 3 },
+        .{ .slot = 6, .confirmation_count = 2 },
+        .{ .slot = 8, .confirmation_count = 1 },
+    };
+    const vote_state_update = VoteStateUpdate{
+        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
+            allocator,
+            &lockouts,
+        ),
+        .hash = vote_slot_hash,
+        .root = null,
+        .timestamp = null,
+    };
+
+    var final_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try final_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 8, .confirmation_count = 1 } },
+        },
+    );
+
+    const final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit();
+
+    var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction{
+            .update_vote_state = .{
+                .vote_state_update = vote_state_update,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+    );
+}
+
+test "vote_program: vote state update switch" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock.DEFAULT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial state.
+    var vote_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try vote_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 1 } },
+        },
+    );
+
+    const vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit();
+
+    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
+
+    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+
+    // VoteStateUpdate.
+    var lockouts = [_]Lockout{
+        .{ .slot = 2, .confirmation_count = 4 },
+        .{ .slot = 4, .confirmation_count = 3 },
+        .{ .slot = 6, .confirmation_count = 2 },
+        .{ .slot = 8, .confirmation_count = 1 },
+    };
+    const vote_state_update = VoteStateUpdate{
+        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
+            allocator,
+            &lockouts,
+        ),
+        .hash = vote_slot_hash,
+        .root = null,
+        .timestamp = null,
+    };
+
+    var final_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try final_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 8, .confirmation_count = 1 } },
+        },
+    );
+
+    const final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit();
+
+    var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction{
+            .update_vote_state_switch = .{
+                .vote_state_update = vote_state_update,
+                .hash = sig.core.Hash.ZEROES,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+    );
+}
+
+test "vote_program: compact vote state update" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock.DEFAULT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial state.
+    var vote_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try vote_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 1 } },
+        },
+    );
+
+    const vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit();
+
+    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
+
+    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+
+    // VoteStateUpdate.
+    var lockouts = [_]Lockout{
+        .{ .slot = 2, .confirmation_count = 4 },
+        .{ .slot = 4, .confirmation_count = 3 },
+        .{ .slot = 6, .confirmation_count = 2 },
+        .{ .slot = 8, .confirmation_count = 1 },
+    };
+    const vote_state_update = VoteStateUpdate{
+        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
+            allocator,
+            &lockouts,
+        ),
+        .hash = vote_slot_hash,
+        .root = null,
+        .timestamp = null,
+    };
+
+    var final_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try final_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 8, .confirmation_count = 1 } },
+        },
+    );
+
+    const final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit();
+
+    var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction{
+            .compact_update_vote_state = .{
+                .vote_state_update = vote_state_update,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+    );
+}
+
+test "vote_program: compact vote state update switch" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock.DEFAULT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial state.
+    var vote_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try vote_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 1 } },
+        },
+    );
+
+    const vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit();
+
+    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
+
+    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+
+    // VoteStateUpdate.
+    var lockouts = [_]Lockout{
+        .{ .slot = 2, .confirmation_count = 4 },
+        .{ .slot = 4, .confirmation_count = 3 },
+        .{ .slot = 6, .confirmation_count = 2 },
+        .{ .slot = 8, .confirmation_count = 1 },
+    };
+    const vote_state_update = VoteStateUpdate{
+        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
+            allocator,
+            &lockouts,
+        ),
+        .hash = vote_slot_hash,
+        .root = null,
+        .timestamp = null,
+    };
+
+    var final_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try final_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 8, .confirmation_count = 1 } },
+        },
+    );
+
+    const final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit();
+
+    var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction{
+            .compact_update_vote_state_switch = .{
+                .vote_state_update = vote_state_update,
+                .hash = sig.core.Hash.ZEROES,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+    );
+}
+
+test "vote_program: tower sync" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock.DEFAULT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial state.
+    var vote_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try vote_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 1 } },
+        },
+    );
+
+    const vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit();
+
+    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
+
+    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+
+    // VoteStateUpdate.
+    var lockouts = [_]Lockout{
+        .{ .slot = 2, .confirmation_count = 4 },
+        .{ .slot = 4, .confirmation_count = 3 },
+        .{ .slot = 6, .confirmation_count = 2 },
+        .{ .slot = 8, .confirmation_count = 1 },
+    };
+    const tower_sync = TowerSync{
+        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
+            allocator,
+            &lockouts,
+        ),
+        .hash = vote_slot_hash,
+        .root = null,
+        .timestamp = null,
+        .block_id = sig.core.Hash.ZEROES,
+    };
+
+    var final_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try final_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 8, .confirmation_count = 1 } },
+        },
+    );
+
+    const final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit();
+
+    var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction{
+            .tower_sync = .{
+                .tower_sync = tower_sync,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = feature_set.ENABLE_TOWER_SYNC_IX,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+    );
+}
+
+test "vote_program: tower sync switch" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    const RENT_EXEMPT_THRESHOLD = 27074400;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const clock = Clock.DEFAULT;
+
+    const node_pubkey = Pubkey.initRandom(prng.random());
+    const authorized_voter = Pubkey.initRandom(prng.random());
+    const authorized_withdrawer = Pubkey.initRandom(prng.random());
+    const vote_account = Pubkey.initRandom(prng.random());
+    const commission: u8 = 10;
+
+    // Initial state.
+    var vote_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try vote_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 1 } },
+        },
+    );
+
+    const vote_state = VoteStateVersions{ .current = vote_state_init };
+    defer vote_state.deinit();
+
+    var initial_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
+
+    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+
+    // VoteStateUpdate.
+    var lockouts = [_]Lockout{
+        .{ .slot = 2, .confirmation_count = 4 },
+        .{ .slot = 4, .confirmation_count = 3 },
+        .{ .slot = 6, .confirmation_count = 2 },
+        .{ .slot = 8, .confirmation_count = 1 },
+    };
+    const tower_sync = TowerSync{
+        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
+            allocator,
+            &lockouts,
+        ),
+        .hash = vote_slot_hash,
+        .root = null,
+        .timestamp = null,
+        .block_id = sig.core.Hash.ZEROES,
+    };
+
+    var final_state_init = try VoteState.init(
+        allocator,
+        node_pubkey,
+        authorized_voter,
+        authorized_withdrawer,
+        commission,
+        clock,
+    );
+
+    try final_state_init.votes.appendSlice(
+        &[_]LandedVote{
+            .{ .latency = 0, .lockout = .{ .slot = 2, .confirmation_count = 4 } },
+            .{ .latency = 0, .lockout = .{ .slot = 4, .confirmation_count = 3 } },
+            .{ .latency = 0, .lockout = .{ .slot = 6, .confirmation_count = 2 } },
+            .{ .latency = 0, .lockout = .{ .slot = 8, .confirmation_count = 1 } },
+        },
+    );
+
+    const final_vote_state = VoteStateVersions{ .current = final_state_init };
+    defer final_vote_state.deinit();
+
+    var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
+    _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        {},
+        vote_program,
+        VoteProgramInstruction{
+            .tower_sync_switch = .{
+                .tower_sync = tower_sync,
+                .hash = sig.core.Hash.ZEROES,
+            },
+        },
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = initial_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = vote_program.COMPUTE_UNITS,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+            .feature_set = &.{
+                .{
+                    .pubkey = feature_set.ENABLE_TOWER_SYNC_IX,
+                    .slot = 0,
+                },
+            },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = vote_account,
+                    .lamports = RENT_EXEMPT_THRESHOLD,
+                    .owner = vote_program.ID,
+                    .data = final_vote_state_bytes[0..],
+                },
+                .{ .pubkey = authorized_voter },
+                .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = 0,
+            .sysvar_cache = .{
+                .clock = clock,
+                .slot_hashes = SlotHashes{
+                    .entries = &.{
+                        .{ 8, vote_slot_hash },
+                        .{ 6, sig.core.Hash.ZEROES },
+                        .{ 4, sig.core.Hash.ZEROES },
+                        .{ 2, sig.core.Hash.ZEROES },
+                    },
+                },
+            },
+        },
+    );
 }
