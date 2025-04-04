@@ -243,7 +243,6 @@ fn consumeOurCqe(
                             };
                             const snb = &entry_data.state.send_static_string;
                             try snb.prepSend(entry, &liou.io_uring);
-                            return;
                         } else {
                             connErrLogger(logger, entry_data).log(
                                 "Request contained both content-length and transfer-encoding",
@@ -254,11 +253,11 @@ fn consumeOurCqe(
                             };
                             const snb = &entry_data.state.send_static_string;
                             try snb.prepSend(entry, &liou.io_uring);
-                            return;
                         },
                         else => |e| connErrLogger(logger, entry_data)
                             .logf("Request error: {s}", .{@errorName(e)}),
                     }
+                    return;
                 };
             };
 
