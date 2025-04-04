@@ -203,8 +203,10 @@ fn initVm(
     try mm_regions_array.appendSlice(regions);
     const mm_regions = try mm_regions_array.toOwnedSlice();
     const memory_map = try vm.memory.MemoryMap.init(
+        allocator,
         mm_regions,
         executable.version,
+        executable.config,
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L280-L285
