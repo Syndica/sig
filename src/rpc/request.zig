@@ -78,6 +78,7 @@ pub const Request = struct {
 pub const Id = union(enum) {
     null,
     int: i128,
+    number: []const u8,
     str: []const u8,
 
     pub fn jsonStringify(
@@ -88,6 +89,7 @@ pub const Id = union(enum) {
         switch (self) {
             .null => try jw.write(null),
             .int => |int| try jw.write(int),
+            .number => |number| try jw.print("{s}", .{number}),
             .str => |str| try jw.write(str),
         }
     }
@@ -99,23 +101,19 @@ pub const Id = union(enum) {
         source: anytype,
         options: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!Id {
-        const TokType = enum { null, number, string };
-        const tok_type: TokType = switch (try source.peekNextTokenType()) {
-            .null => .null,
-            .number => .number,
-            .string => .string,
-            else => {
-                try source.skipValue();
-                return error.UnexpectedToken;
-            },
-        };
-
-        return switch (tok_type) {
+        return switch (try source.peekNextTokenType()) {
             .null => id: {
                 std.debug.assert(try source.next() == .null);
                 break :id .null;
             },
-            .number, .string => id: {
+            .string => id: {
+                var id_buf = std.ArrayList(u8).init(allocator);
+                defer id_buf.deinit();
+                const maybe_str = try source.allocNextIntoArrayList(&id_buf, options.allocate.?);
+                const str = maybe_str orelse try id_buf.toOwnedSlice();
+                break :id .{ .str = str };
+            },
+            .number => id: {
                 var id_buf = std.ArrayList(u8).init(allocator);
                 defer id_buf.deinit();
 
@@ -126,7 +124,19 @@ pub const Id = union(enum) {
                     error.Overflow, error.InvalidCharacter => {},
                 }
                 const str = maybe_str orelse try id_buf.toOwnedSlice();
-                break :id .{ .str = str };
+                break :id .{ .number = str };
+            },
+            .object_end => {
+                std.debug.assert(try source.next() == .object_end);
+                return error.UnexpectedToken;
+            },
+            .array_end => {
+                std.debug.assert(try source.next() == .array_end);
+                return error.UnexpectedToken;
+            },
+            else => {
+                try source.skipValue();
+                return error.UnexpectedToken;
             },
         };
     }
