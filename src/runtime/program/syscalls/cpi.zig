@@ -25,12 +25,15 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const LogCollector = sig.runtime.LogCollector;
 
 const Epoch = sig.core.Epoch;
+const InstructionAccount = sig.core.instruction.InstructionAccount;
+const InstructionError = sig.core.instruction.InstructionError;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L86
 const SyscallError = error {
     InvalidPointer,
     InvalidLength,
     UnalignedPointer,
+    MaxInstructionAccountInfosExceeded,
 };
 
 fn StableVec(comptime T: type) type {
@@ -232,6 +235,8 @@ const CallerAccount = struct {
         account_info: *const AccountInfo,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
+        _ = vm_addr;
+
         const direct_mapping = ic.tc.feature_set.active.contains(
             feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
         );
