@@ -40,9 +40,6 @@ pub const Executable = struct {
         };
     }
 
-    /// Checks whether `source` is an ELF file by comparing the header to the
-    /// ELF magic. If it's an ELF, we parse and load the ELF, otherwise we parse
-    /// the bytes as assembly.
     pub fn fromBytes(
         allocator: std.mem.Allocator,
         source: []u8,
