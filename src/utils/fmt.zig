@@ -209,8 +209,12 @@ pub const TryRealPathFmt = struct {
 
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
 
-        if (fmt.dir.realpath(fmt.pathname, &path_buf)) |real_path| {
+        if (fmt.dir.realpath(".", &path_buf)) |real_path| {
             try writer.writeAll(real_path);
+            if (real_path[real_path.len - 1] != '/') {
+                try writer.writeByte('/');
+            }
+            try writer.writeAll(fmt.pathname);
         } else |err| {
             try writer.print("(error.{s})/{s}", .{
                 @errorName(err), fmt.pathname,
