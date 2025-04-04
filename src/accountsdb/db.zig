@@ -2331,6 +2331,22 @@ pub const AccountsDB = struct {
         return try self.getAccountFromRefWithReadLock(max_ref);
     }
 
+    pub fn getSlotAndAccountInSlotRangeWithReadLock(
+        self: *Self,
+        pubkey: *const Pubkey,
+        min_slot: ?Slot,
+        max_slot: ?Slot,
+    ) GetAccountError!?struct { AccountInCacheOrFile, Slot, AccountInCacheOrFileLock } {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, max_slot) orelse
+            return null;
+        const account, const account_lg = try self.getAccountFromRefWithReadLock(max_ref);
+        return .{ account, max_ref.slot, account_lg };
+    }
+
     pub const GetTypeFromAccountError = GetAccountError || error{DeserializationError};
     pub fn getTypeFromAccount(
         self: *Self,
