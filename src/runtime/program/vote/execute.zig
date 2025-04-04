@@ -833,6 +833,7 @@ fn processVoteWithAccount(
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_processor.rs#L156-L169
 fn executeUpdateVoteState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -858,6 +859,7 @@ fn executeUpdateVoteState(
     );
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L944
 fn updateVoteState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -890,6 +892,7 @@ fn updateVoteState(
     try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_processor.rs#L202-L212
 fn executeTowerSync(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -913,6 +916,7 @@ fn executeTowerSync(
     );
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L994
 fn towerSync(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -983,6 +987,7 @@ fn validateIsSigner(
     return InstructionError.MissingRequiredSignature;
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3659
 test "isCommissionUpdateAllowed epoch half check" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
@@ -1034,6 +1039,7 @@ test "isCommissionUpdateAllowed epoch half check" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3668
 test "isCommissionUpdateAllowed warmup epoch half check with warmup" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
@@ -1055,6 +1061,7 @@ test "isCommissionUpdateAllowed warmup epoch half check with warmup" {
     );
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3686
 test "isCommissionUpdateAllowed epoch half check with warmup" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =

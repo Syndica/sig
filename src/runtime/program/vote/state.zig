@@ -41,11 +41,6 @@ pub const Lockout = struct {
     /// slots voted on top of this slot.
     confirmation_count: u32,
 
-    pub fn eql(self: Lockout, other: Lockout) bool {
-        return (self.slot == other.slot and
-            self.confirmation_count == other.confirmation_count);
-    }
-
     pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) !bool {
         return try self.lastLockedOutSlot() >= slot;
     }
@@ -100,6 +95,7 @@ pub const Vote = struct {
     timestamp: ?i64,
 };
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L178
 pub const VoteStateUpdate = struct {
     /// The proposed tower
     lockouts: std.ArrayList(Lockout),
@@ -111,6 +107,7 @@ pub const VoteStateUpdate = struct {
     timestamp: ?i64,
 };
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L232
 pub const TowerSync = struct {
     /// The proposed tower
     lockouts: std.ArrayList(Lockout),
@@ -126,6 +123,7 @@ pub const TowerSync = struct {
     block_id: Hash,
 };
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
 pub const AuthorizedVoters = struct {
     voters: SortedMap(Epoch, Pubkey),
 
@@ -965,7 +963,10 @@ pub const VoteState = struct {
         return std.math.order(key, mid_item.lockout.slot);
     }
 
-    pub fn contains_slot(self: *const VoteState, candidate_slot: Slot) bool {
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L690
+    ///
+    /// Returns if the vote state contains a slot `candidate_slot`
+    pub fn containsSlot(self: *const VoteState, candidate_slot: Slot) bool {
         return std.sort.binarySearch(
             LandedVote,
             candidate_slot,
@@ -975,6 +976,7 @@ pub const VoteState = struct {
         ) != null;
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1014
     pub fn doProcessTowerSync(
         self: *VoteState,
         allocator: std.mem.Allocator,
@@ -1014,6 +1016,7 @@ pub const VoteState = struct {
         );
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L964
     pub fn doProcessVoteStateUpdate(
         self: *VoteState,
         allocator: std.mem.Allocator,
@@ -1053,6 +1056,8 @@ pub const VoteState = struct {
         );
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L63
+    ///
     /// Checks the proposed vote state with the current and
     /// slot hashes, making adjustments to the root / filtering
     /// votes as needed.
@@ -1171,7 +1176,7 @@ pub const VoteState = struct {
                         if (proposed_vote_slot >= earliest_slot_hash_in_history) {
                             return VoteError.assertion_failed;
                         }
-                        if (!self.contains_slot(proposed_vote_slot) and (root_to_check == null)) {
+                        if (!self.containsSlot(proposed_vote_slot) and (root_to_check == null)) {
                             // If the vote slot is both:
                             // 1) Too old
                             // 2) Doesn't already exist in vote state
@@ -1305,43 +1310,42 @@ pub const VoteState = struct {
         return null;
     }
 
-    // Ensure `check_and_filter_proposed_vote_state(&)` runs on the slots in `new_state`
-    // before `process_new_vote_state()` is called
-
-    // This function should guarantee the following about `new_state`:
-    //
-    // 1) It's well ordered, i.e. the slots are sorted from smallest to largest,
-    // and the confirmations sorted from largest to smallest.
-    // 2) Confirmations `c` on any vote slot satisfy `0 < c <= MAX_LOCKOUT_HISTORY`
-    // 3) Lockouts are not expired by consecutive votes, i.e. for every consecutive
-    // `v_i`, `v_{i + 1}` satisfy `v_i.last_locked_out_slot() >= v_{i + 1}`.
-
-    // We also guarantee that compared to the current vote state, `new_state`
-    // introduces no rollback. This means:
-    //
-    // 1) The last slot in `new_state` is always greater than any slot in the
-    // current vote state.
-    //
-    // 2) From 1), this means that for every vote `s` in the current state:
-    //    a) If there exists an `s'` in `new_state` where `s.slot == s'.slot`, then
-    //    we must guarantee `s.confirmations <= s'.confirmations`
-    //
-    //    b) If there does not exist any such `s'` in `new_state`, then there exists
-    //    some `t` that is the smallest vote in `new_state` where `t.slot > s.slot`.
-    //    `t` must have expired/popped off s', so it must be guaranteed that
-    //    `s.last_locked_out_slot() < t`.
-
-    // Note these two above checks do not guarantee that the vote state being submitted
-    // is a vote state that could have been created by iteratively building a tower
-    // by processing one vote at a time. For instance, the tower:
-    //
-    // { slot 0, confirmations: 31 }
-    // { slot 1, confirmations: 30 }
-    //
-    // is a legal tower that could be submitted on top of a previously empty tower. However,
-    // there is no way to create this tower from the iterative process, because slot 1 would
-    // have to have at least one other slot on top of it, even if the first 30 votes were all
-    // popped off.
+    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L426
+    ///
+    /// Ensure `check_and_filter_proposed_vote_state(&)` runs on the slots in `new_state`
+    /// before `process_new_vote_state()` is called
+    /// This function should guarantee the following about `new_state`:
+    ///
+    /// 1) It's well ordered, i.e. the slots are sorted from smallest to largest,
+    /// and the confirmations sorted from largest to smallest.
+    /// 2) Confirmations `c` on any vote slot satisfy `0 < c <= MAX_LOCKOUT_HISTORY`
+    /// 3) Lockouts are not expired by consecutive votes, i.e. for every consecutive
+    /// `v_i`, `v_{i + 1}` satisfy `v_i.last_locked_out_slot() >= v_{i + 1}`.
+    /// We also guarantee that compared to the current vote state, `new_state`
+    /// introduces no rollback. This means:
+    ///
+    /// 1) The last slot in `new_state` is always greater than any slot in the
+    /// current vote state.
+    ///
+    /// 2) From 1), this means that for every vote `s` in the current state:
+    ///    a) If there exists an `s'` in `new_state` where `s.slot == s'.slot`, then
+    ///    we must guarantee `s.confirmations <= s'.confirmations`
+    ///
+    ///    b) If there does not exist any such `s'` in `new_state`, then there exists
+    ///    some `t` that is the smallest vote in `new_state` where `t.slot > s.slot`.
+    ///    `t` must have expired/popped off s', so it must be guaranteed that
+    ///    `s.last_locked_out_slot() < t`.
+    /// Note these two above checks do not guarantee that the vote state being submitted
+    /// is a vote state that could have been created by iteratively building a tower
+    /// by processing one vote at a time. For instance, the tower:
+    ///
+    /// { slot 0, confirmations: 31 }
+    /// { slot 1, confirmations: 30 }
+    ///
+    /// is a legal tower that could be submitted on top of a previously empty tower. However,
+    /// there is no way to create this tower from the iterative process, because slot 1 would
+    /// have to have at least one other slot on top of it, even if the first 30 votes were all
+    /// popped off.
     pub fn processNewVoteState(
         self: *VoteState,
         new_state: *std.ArrayList(LandedVote),
@@ -1626,7 +1630,7 @@ test "Lockout.lockout" {
     }
 }
 
-test "Lockout.lastLockedOutSlot" {
+test "state.Lockout.lastLockedOutSlot" {
     // | vote | vote slot | lockout | lock expiration slot |
     // |------|-----------|---------|----------------------|
     // | 4    | 4         | 2       | 6                    |
@@ -1663,7 +1667,7 @@ test "Lockout.lastLockedOutSlot" {
     }
 }
 
-test "Lockout.isLockedOutAtSlot" {
+test "state.Lockout.isLockedOutAtSlot" {
     // | vote | vote slot | lockout | lock expiration slot |
     // |------|-----------|---------|----------------------|
     // | 4    | 4         | 2       | 6                    |
@@ -1712,7 +1716,7 @@ test "Lockout.isLockedOutAtSlot" {
     }
 }
 
-test "VoteState.convertToCurrent" {
+test "state.VoteState.convertToCurrent" {
     const allocator = std.testing.allocator;
     // VoteState0_23_5 -> Current
     {
@@ -1828,7 +1832,7 @@ test "VoteState.convertToCurrent" {
     }
 }
 
-test "VoteState.setNewAuthorizedVoter: success" {
+test "state.VoteState.setNewAuthorizedVoter: success" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const node_publey = Pubkey.initRandom(prng.random());
@@ -1862,7 +1866,7 @@ test "VoteState.setNewAuthorizedVoter: success" {
     try std.testing.expectEqual(new_voter, retrived_voter);
 }
 
-test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
+test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const node_publey = Pubkey.initRandom(prng.random());
@@ -1898,7 +1902,7 @@ test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     );
 }
 
-test "VoteState.setNewAuthorizedVoter: invalid account data" {
+test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -2059,7 +2063,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
     try std.testing.expect(uninitialized_state.isUninitialized());
 }
 
-test "AuthorizedVoters.init" {
+test "state.AuthorizedVoters.init" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const voter_pubkey = Pubkey.initRandom(prng.random());
@@ -2068,7 +2072,7 @@ test "AuthorizedVoters.init" {
     try std.testing.expectEqual(authorized_voters.count(), 1);
 }
 
-test "AuthorizedVoters.getAuthorizedVoter" {
+test "state.AuthorizedVoters.getAuthorizedVoter" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2083,7 +2087,7 @@ test "AuthorizedVoters.getAuthorizedVoter" {
     try std.testing.expectEqual(new_pubkey, authorized_voters.getAuthorizedVoter(epoch).?);
 }
 
-test "AuthorizedVoters.purgeAuthorizedVoters" {
+test "state.AuthorizedVoters.purgeAuthorizedVoters" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2100,7 +2104,7 @@ test "AuthorizedVoters.purgeAuthorizedVoters" {
     try std.testing.expectEqual(authorized_voters.count(), 1);
 }
 
-test "AuthorizedVoters.first" {
+test "state.AuthorizedVoters.first" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2116,7 +2120,7 @@ test "AuthorizedVoters.first" {
     try std.testing.expectEqual(voter_pubkey, pubkey);
 }
 
-test "AuthorizedVoters.last" {
+test "state.AuthorizedVoters.last" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2136,7 +2140,7 @@ test "AuthorizedVoters.last" {
     try std.testing.expectEqual(voter_pubkey, pubkey);
 }
 
-test "AuthorizedVoters.isEmpty" {
+test "state.AuthorizedVoters.isEmpty" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2149,7 +2153,7 @@ test "AuthorizedVoters.isEmpty" {
     try std.testing.expect(!authorized_voters.isEmpty());
 }
 
-test "AuthorizedVoters.len" {
+test "state.AuthorizedVoters.len" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2165,7 +2169,7 @@ test "AuthorizedVoters.len" {
     try std.testing.expectEqual(authorized_voters.count(), 3);
 }
 
-test "AuthorizedVoters.contains" {
+test "state.AuthorizedVoters.contains" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2488,6 +2492,7 @@ test "state.VoteState nth recent lockout" {
     );
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1632
 test "state.VoteState.processVote process missed votes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -2946,7 +2951,7 @@ test "state.VoteState.computeVoteLatency" {
     );
 }
 
-test "state.VoteState.containsSlot" {
+test "state.VoteState.contains_slot" {
     const allocator = std.testing.allocator;
 
     var vote_state = VoteState.default(allocator);
@@ -2959,12 +2964,13 @@ test "state.VoteState.containsSlot" {
         LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 2, .confirmation_count = 2 } },
     );
 
-    try std.testing.expect(vote_state.contains_slot(1));
-    try std.testing.expect(vote_state.contains_slot(2));
-    try std.testing.expect(!vote_state.contains_slot(3));
-    try std.testing.expect(!vote_state.contains_slot(0));
+    try std.testing.expect(vote_state.containsSlot(1));
+    try std.testing.expect(vote_state.containsSlot(2));
+    try std.testing.expect(!vote_state.containsSlot(3));
+    try std.testing.expect(!vote_state.containsSlot(0));
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2223
 test "state.VoteState process new vote too many votes" {
     const allocator = std.testing.allocator;
 
@@ -2994,6 +3000,7 @@ test "state.VoteState process new vote too many votes" {
     try std.testing.expectEqual(VoteError.too_many_votes, maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2249
 test "state.VoteState process new vote state root rollback" {
     const allocator = std.testing.allocator;
 
@@ -3026,6 +3033,7 @@ test "state.VoteState process new vote state root rollback" {
     try std.testing.expectEqual(VoteError.root_roll_back, maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2295
 test "state.VoteState process new vote state zero confirmations" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3066,6 +3074,7 @@ test "state.VoteState process new vote state zero confirmations" {
     try std.testing.expectEqual(VoteError.zero_confirmations, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2337
 test "state.VoteState process new vote state confirmations too large" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3107,6 +3116,7 @@ test "state.VoteState process new vote state confirmations too large" {
     try std.testing.expectEqual(VoteError.confirmation_too_large, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2379
 test "state.VoteState process new vote state slot smaller than root" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3147,6 +3157,7 @@ test "state.VoteState process new vote state slot smaller than root" {
     try std.testing.expectEqual(VoteError.slot_smaller_than_root, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2422
 test "state.VoteState process new vote state slots not ordered" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3185,6 +3196,7 @@ test "state.VoteState process new vote state slots not ordered" {
     try std.testing.expectEqual(VoteError.slots_not_ordered, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2464
 test "state.VoteState process new vote state confirmations not ordered" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3229,6 +3241,7 @@ test "state.VoteState process new vote state confirmations not ordered" {
     );
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2506
 test "state.VoteState process new vote state lockout mismatch" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3255,6 +3268,7 @@ test "state.VoteState process new vote state lockout mismatch" {
     );
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2532
 test "state.VoteState process new vote state confirmation rollback" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3299,6 +3313,7 @@ test "state.VoteState process new vote state confirmation rollback" {
     );
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2575
 test "state.VoteState process new vote state root progress" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3346,6 +3361,7 @@ test "state.VoteState process new vote state root progress" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2610
 test "state.VoteState process new vote state same slot but not common ancestor" {
     // It might be possible that during the switch from old vote instructions
     // to new vote instructions, new_state contains votes for slots LESS
@@ -3407,6 +3423,7 @@ test "state.VoteState process new vote state same slot but not common ancestor" 
     try std.testing.expectEqualDeep(vote_state1, vote_state2);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2668
 test "state.VoteState process new vote state lockout violation" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
@@ -3452,6 +3469,7 @@ test "state.VoteState process new vote state lockout violation" {
     try std.testing.expectEqual(VoteError.lockout_conflict, maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2710
 test "state.VoteState process new vote state lockout violation2" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
@@ -3500,6 +3518,7 @@ test "state.VoteState process new vote state lockout violation2" {
     try std.testing.expectEqual(VoteError.lockout_conflict, maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2753
 test "state.VoteState process new vote state expired ancestor not removed" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
@@ -3554,6 +3573,7 @@ test "state.VoteState process new vote state expired ancestor not removed" {
     try std.testing.expectEqualDeep(vote_state1.root_slot, vote_state2.root_slot);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2799
 test "state.VoteState process new vote current state contains bigger slots" {
     const allocator = std.testing.allocator;
     var vote_state1 = VoteState.default(allocator);
@@ -3626,6 +3646,7 @@ test "state.VoteState process new vote current state contains bigger slots" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2916
 test "state.VoteState.checkAndFilterProposedVoteState empty" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -3677,6 +3698,7 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2948
 test "state.VoteState.checkAndFilterProposedVoteState too old" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -3745,6 +3767,7 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
     try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3063
 test "state.VoteState.checkAndFilterProposedVoteState older than history root" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -3922,6 +3945,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history root" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3188
 test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -3994,6 +4018,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
     }
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3228
 test "state.VoteState.checkAndFilterProposedVoteState older than history slots filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -4073,6 +4098,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
     try std.testing.expectEqual(null, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3284
 test "state.VoteState.checkAndFilterProposedVoteState older than history slots not filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -4153,6 +4179,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
     try std.testing.expectEqual(null, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3337
 test "state.VoteState.checkAndFilterProposedVoteState older history slots filtered/not filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -4241,6 +4268,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
     try std.testing.expectEqual(null, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3404
 test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -4319,6 +4347,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
     try std.testing.expectEqual(VoteError.slots_mismatch, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3459
 test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -4373,6 +4402,7 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
     try std.testing.expectEqual(VoteError.root_on_different_fork, maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3495
 test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot history" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -4416,6 +4446,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
     try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3521
 test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in update ok" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -4490,6 +4521,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
     try std.testing.expectEqual(null, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3574
 test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update ok" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -4563,6 +4595,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
     try std.testing.expectEqual(VoteError.lockout_conflict, another_maybe_error);
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3630
 test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
