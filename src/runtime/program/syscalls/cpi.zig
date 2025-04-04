@@ -70,13 +70,25 @@ const SerializedAccountMetadata = struct {
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/359d7eb2b68639443d750ffcec0c7e358f138975/bpf_loader/src/syscalls/cpi.rs#L597
-const SolAccountInfo = extern struct {
+const AccountInfoC = extern struct {
     key_addr: u64,
     lamports_addr: u64,
     data_len: u64,
     data_addr: u64,
     owner_addr: u64,
     rent_epoch: u64,
+    is_signer: bool,
+    is_writable: bool,
+    executable: bool,
+};
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
+const AccountInfoRust = extern struct {
+    key: u64,
+    lamports_addr: Rc(RefCell(u64)),
+    data: Rc(RefCell([]u8)),
+    owner: u64,
+    rent_epoch: Epoch,
     is_signer: bool,
     is_writable: bool,
     executable: bool,
@@ -125,18 +137,7 @@ fn RefCell(comptime T: type) type {
     };
 }
 
-/// [???] https://docs.rs/anchor-lang/latest/anchor_lang/prelude/struct.AccountInfo.html
-const AccountInfo = extern struct {
-    key: *const Pubkey,
-    lamports: Rc(RefCell(*u64)),
-    data: Rc(RefCell([]u8)),
-    owner: *const Pubkey,
-    rent_epoch: Epoch,
-    is_signer: bool,
-    is_writable: bool,
-    executable: bool,
-};
-
+/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L57
 fn VmValue(comptime T: type) type {
     return union(enum) {
         const Self = @This();
@@ -268,10 +269,10 @@ const CallerAccount = struct {
     ref_to_len_in_vm: VmValue(u64),
 
     /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L119
-    fn fromAccountInfo(
+    fn fromAccountInfoRust(
         ic: *InstructionContext,
         memory_map: *const MemoryMap,
-        account_info: *const AccountInfo,
+        account_info: *const AccountInfoRust,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
         const direct_mapping = ic.tc.feature_set.active.contains(
@@ -281,13 +282,13 @@ const CallerAccount = struct {
         if (direct_mapping) {
             try checkAccountInfoPtr(
                 ic,
-                @intFromPtr(account_info.key),
+                account_info.key,
                 account_metadata.vm_key_addr,
                 "key",
             );
             try checkAccountInfoPtr(
                 ic,
-                @intFromPtr(account_info.owner),
+                account_info.owner,
                 account_metadata.vm_owner_addr,
                 "owner",
             );
@@ -296,9 +297,9 @@ const CallerAccount = struct {
         // account_info points to host memory. The addresses used internally are
         // in vm space so they need to be translated.
         const lamports: *u64 = blk: {
-            // NOTE: trying to model the ptr stuff going on here:
+            // NOTE: Models the RefCell as_ptr() access here
             // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L151
-            const lamports_addr: u64 = @intFromPtr(account_info.lamports.deref().asPtr());
+            const lamports_addr: u64 = @intFromPtr(account_info.lamports_addr.deref().asPtr());
 
             // Double translate lamports out of RefCell
             const ptr: *const u64 = try translateType(
@@ -332,7 +333,7 @@ const CallerAccount = struct {
             Pubkey,
             .mutable,
             memory_map,
-            @intFromPtr(account_info.owner),
+            account_info.owner,
             ic.getCheckAligned(),
         );
 
@@ -431,11 +432,11 @@ const CallerAccount = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L264
-    fn fromSolAccountInfo(
+    fn fromAccountInfoC(
         ic: *InstructionContext,
         memory_map: *const MemoryMap,
         vm_addr: u64,
-        account_info: *const SolAccountInfo,
+        account_info: *const AccountInfoC,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
         const direct_mapping = ic.tc.feature_set.active.contains(
@@ -593,85 +594,6 @@ const MockInstruction = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2870
-const MockAccountInfo = struct {
-    key: Pubkey,
-    is_signer: bool,
-    is_writable: bool,
-    lamports: u64,
-    data: []const u8,
-    owner: Pubkey,
-    executable: bool,
-    rent_epoch: Epoch,
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
-    fn intoRegion(
-        self: MockAccountInfo,
-        allocator: std.mem.Allocator,
-        vm_addr: u64,
-    ) !struct { []u8, memory.Region, SerializedAccountMetadata } {
-        const size = @sizeOf(AccountInfo) +
-            @sizeOf(Pubkey) * 2 +
-            @sizeOf(RcBox(RefCell(*u64))) +
-            @sizeOf(u64) +
-            @sizeOf(RcBox(RefCell([]u8))) +
-            self.data.len;
-
-        const data = try allocator.alloc(u8, size);
-        errdefer allocator.free(data);
-
-        const key_addr = vm_addr + @sizeOf(AccountInfo);
-        const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
-        const lamports_addr = lamports_cell_addr + @sizeOf(RcBox(RefCell(*u64)));
-        const owner_addr = lamports_addr + @sizeOf(u64);
-        const data_cell_addr = owner_addr + @sizeOf(Pubkey);
-        const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
-
-        const info = AccountInfo{
-            .key = @ptrFromInt(key_addr),
-            .is_signer = self.is_signer,
-            .is_writable = self.is_writable,
-            .lamports = Rc(RefCell(*u64)).fromRaw(
-                @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
-            ),
-            .data = Rc(RefCell([]u8)).fromRaw(
-                @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
-            ),
-            .owner = @ptrFromInt(owner_addr),
-            .executable = self.executable,
-            .rent_epoch = self.rent_epoch,
-        };
-
-        data[0..@sizeOf(AccountInfo)].* = @bitCast(info);
-        data[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.key);
-        data[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
-            RcBox(RefCell(*u64)){
-                .value = RefCell(*u64).init(@ptrFromInt(lamports_addr)),
-            },
-        );
-        data[lamports_addr - vm_addr ..][0..@sizeOf(u64)].* = @bitCast(self.lamports);
-        data[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.owner);
-        data[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
-            RcBox(RefCell([]u8)){
-                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(data_addr))[0..self.data.len]),
-            },
-        );
-        @memcpy(data[data_addr - vm_addr ..][0..self.data.len], self.data);
-
-        return .{
-            data,
-            memory.Region.init(.mutable, data, vm_addr),
-            .{
-                .original_data_len = self.data.len,
-                .vm_key_addr = key_addr,
-                .vm_lamports_addr = lamports_addr,
-                .vm_owner_addr = owner_addr,
-                .vm_data_addr = data_addr,
-            },
-        };
-    }
-};
-
 test "CallerAccount" {
     const testing = sig.runtime.program.testing;
     const allocator = std.testing.allocator;
@@ -715,18 +637,53 @@ test "CallerAccount" {
 
     // test fromAccountInfo
     {
+        // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
         const vm_addr = MM_INPUT_START;
-        const data, const region, const account_metadata = try (MockAccountInfo{
-            .key = acc_meta.pubkey,
+        const size = @sizeOf(AccountInfoRust) +
+            @sizeOf(Pubkey) * 2 +
+            @sizeOf(RcBox(RefCell(*u64))) +
+            @sizeOf(u64) +
+            @sizeOf(RcBox(RefCell([]u8))) +
+            acc_shared.data.len;
+
+        const buffer = try allocator.alloc(u8, size);
+        defer allocator.free(buffer);
+
+        const key_addr = vm_addr + @sizeOf(AccountInfoRust);
+        const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
+        const lamports_addr = lamports_cell_addr + @sizeOf(RcBox(RefCell(*u64)));
+        const owner_addr = lamports_addr + @sizeOf(u64);
+        const data_cell_addr = owner_addr + @sizeOf(Pubkey);
+        const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
+        const data_len = acc_shared.data.len;
+
+        buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
+            .key = key_addr,
             .is_signer = acc_meta.is_signer,
             .is_writable = acc_meta.is_writable,
-            .lamports = acc_shared.lamports,
-            .data = acc_shared.data,
-            .owner = acc_shared.owner,
+            .lamports_addr = Rc(RefCell(u64)).fromRaw(
+                @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
+            ),
+            .data = Rc(RefCell([]u8)).fromRaw(
+                @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
+            ),
+            .owner = owner_addr,
             .executable = acc_shared.executable,
             .rent_epoch = acc_shared.rent_epoch,
-        }).intoRegion(allocator, vm_addr);
-        defer allocator.free(data);
+        });
+
+        buffer[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(acc_meta.pubkey);
+        buffer[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
+            RcBox(RefCell(u64)){ .value = RefCell(u64).init(lamports_addr) },
+        );
+        buffer[lamports_addr - vm_addr ..][0..@sizeOf(u64)].* = @bitCast(acc_shared.lamports);
+        buffer[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(acc_shared.owner);
+        buffer[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
+            RcBox(RefCell([]u8)){
+                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(data_addr))[0..data_len]),
+            },
+        );
+        @memcpy(buffer[data_addr - vm_addr ..][0..data_len], acc_shared.data);
 
         // NOTE: init aligned false
         // https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L1792
@@ -734,16 +691,28 @@ test "CallerAccount" {
             memory.Region.init(.constant, &.{}, memory.RODATA_START), // nothing in .rodata,
             memory.Region.init(.mutable, &.{}, memory.STACK_START), // nothing in the stack,
             memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
-            region, // INPUT_START
+            memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
         }, .v3);
 
-        const account_info = try translateType(AccountInfo, .constant, &memory_map, vm_addr, false);
+        const account_info = try translateType(
+            AccountInfoRust,
+            .constant,
+            &memory_map,
+            vm_addr,
+            false,
+        );
 
-        var caller_account = try CallerAccount.fromAccountInfo(
+        const caller_account = try CallerAccount.fromAccountInfoRust(
             &ic,
             &memory_map,
             account_info,
-            &account_metadata,
+            &SerializedAccountMetadata{
+                .original_data_len = data_len,
+                .vm_key_addr = key_addr,
+                .vm_lamports_addr = lamports_addr,
+                .vm_owner_addr = owner_addr,
+                .vm_data_addr = data_addr,
+            },
         );
 
         try std.testing.expectEqual(caller_account.lamports.*, acc_shared.lamports);
@@ -760,12 +729,12 @@ test "CallerAccount" {
 
     // test fromSolAccountInfo
     {
-        const size = @sizeOf(SolAccountInfo) +
+        const size = @sizeOf(AccountInfoC) +
             @sizeOf(Pubkey) * 2 +
             @sizeOf(u64) +
             acc_shared.data.len;
 
-        const buffer = try allocator.alignedAlloc(u8, @alignOf(SolAccountInfo), size);
+        const buffer = try allocator.alignedAlloc(u8, @alignOf(AccountInfoC), size);
         defer allocator.free(buffer);
 
         const memory_map = try MemoryMap.init(&.{
@@ -776,13 +745,13 @@ test "CallerAccount" {
         }, .v3);
 
         const vm_addr = memory.HEAP_START;
-        const key_addr = vm_addr + @sizeOf(SolAccountInfo);
+        const key_addr = vm_addr + @sizeOf(AccountInfoC);
         const owner_addr = key_addr + @sizeOf(Pubkey);
         const lamports_addr = owner_addr + @sizeOf(Pubkey);
         const data_addr = lamports_addr + @sizeOf(u64);
 
         var buf = std.io.fixedBufferStream(buffer);
-        try buf.writer().writeAll(std.mem.asBytes(&SolAccountInfo{
+        try buf.writer().writeAll(std.mem.asBytes(&AccountInfoC{
             .key_addr = key_addr,
             .lamports_addr = lamports_addr,
             .data_len = acc_shared.data.len,
@@ -800,14 +769,14 @@ test "CallerAccount" {
         try buf.writer().writeAll(acc_shared.data);
 
         const account_info = try translateType(
-            SolAccountInfo,
+            AccountInfoC,
             .constant,
             &memory_map,
             vm_addr,
             false,
         );
 
-        const caller_account = try CallerAccount.fromSolAccountInfo(
+        const caller_account = try CallerAccount.fromAccountInfoC(
             &ic,
             &memory_map,
             vm_addr,
