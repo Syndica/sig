@@ -8,6 +8,94 @@ pub const Request = struct {
     id: Id,
     method: MethodAndParams,
 
+    pub const Dynamic = struct {
+        jsonrpc: ?[]const u8 = null,
+        id: Id,
+        method: ?[]const u8 = null,
+        params: ?[]const std.json.Value = null,
+    };
+
+    pub const ParseDynamicDiagnostic = union {
+        ok: void,
+        err: Err,
+
+        pub const INIT: ParseDynamicDiagnostic = .{ .ok = {} };
+
+        pub const Err = struct {
+            id: ?Id,
+        };
+
+        fn initErr(
+            diag: *ParseDynamicDiagnostic,
+            err: ParseDynamicError,
+            value: Err,
+        ) ParseDynamicError {
+            diag.* = .{ .err = value };
+            return err;
+        }
+    };
+
+    pub const ParseDynamicError = error{
+        MissingJsonRpcVersion,
+        MissingMethod,
+        MissingParams,
+
+        InvalidJsonRpcVersion,
+        InvalidMethod,
+        InvalidParams,
+    };
+
+    pub fn parseDynamic(
+        allocator: std.mem.Allocator,
+        dyn: Dynamic,
+        options: std.json.ParseOptions,
+        /// Populated only if an error is returned.
+        maybe_diag: ?*ParseDynamicDiagnostic,
+    ) (std.mem.Allocator.Error || ParseDynamicError)!Request {
+        var dummy_diag = ParseDynamicDiagnostic.INIT;
+        const diag = maybe_diag orelse &dummy_diag;
+
+        const id = dyn.id;
+        const jsonrpc = dyn.jsonrpc orelse
+            return diag.initErr(error.MissingJsonRpcVersion, .{ .id = id });
+        const method_str = dyn.method orelse
+            return diag.initErr(error.MissingMethod, .{ .id = id });
+        const params_values = dyn.params orelse
+            return diag.initErr(error.MissingParams, .{ .id = id });
+
+        if (!std.mem.eql(u8, jsonrpc, "2.0")) {
+            return diag.initErr(error.InvalidJsonRpcVersion, .{ .id = id });
+        }
+
+        const method = std.meta.stringToEnum(MethodAndParams.Tag, method_str) orelse
+            return diag.initErr(error.InvalidMethod, .{ .id = id });
+
+        const method_and_params = switch (method) {
+            inline else => |tag| @unionInit(MethodAndParams, @tagName(tag), blk: {
+                // NOTE: using `std.meta.FieldType` here hits eval branch quota, hack until `@FieldType`
+                const Params = @typeInfo(MethodAndParams).Union.fields[@intFromEnum(tag)].type;
+                if (Params == noreturn) {
+                    std.debug.panic("TODO: implement {s}", .{@tagName(method)});
+                }
+
+                break :blk jsonParseValuesAsParamsArray(
+                    allocator,
+                    params_values,
+                    Params,
+                    options,
+                ) catch |err| switch (err) {
+                    error.OutOfMemory => |e| return e,
+                    else => return diag.initErr(error.InvalidParams, .{ .id = id }),
+                };
+            }),
+        };
+
+        return .{
+            .id = id,
+            .method = method_and_params,
+        };
+    }
+
     pub fn jsonParse(
         allocator: std.mem.Allocator,
         /// * `std.json.Scanner`
@@ -15,11 +103,20 @@ pub const Request = struct {
         source: anytype,
         options: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!Request {
-        return switch (try std.json.innerParse(JsonParseResult, allocator, source, options)) {
-            .ok => |res| res,
-            .invalid_request => error.UnexpectedToken,
-            .method_not_found => error.UnexpectedToken,
-            .invalid_params => error.UnexpectedToken,
+        const dyn = try std.json.innerParse(Dynamic, allocator, source, options);
+        return parseDynamic(allocator, dyn, options, null) catch |err| switch (err) {
+            error.OutOfMemory,
+            => |e| e,
+
+            error.MissingJsonRpcVersion,
+            error.MissingMethod,
+            error.MissingParams,
+            => return error.MissingField,
+
+            error.InvalidJsonRpcVersion,
+            error.InvalidMethod,
+            error.InvalidParams,
+            => return error.UnexpectedToken,
         };
     }
 
@@ -35,146 +132,6 @@ pub const Request = struct {
             .params = self.method.jsonStringifyAsParamsArray(),
         });
     }
-
-    pub const JsonParseResult = union(enum) {
-        ok: Request,
-        invalid_request: ?Id,
-        method_not_found: ?Id,
-        invalid_params: ?Id,
-
-        pub fn jsonParse(
-            allocator: std.mem.Allocator,
-            /// * `std.json.Scanner`
-            /// * `std.json.Reader(...)`
-            source: anytype,
-            options: std.json.ParseOptions,
-        ) std.json.ParseError(@TypeOf(source.*))!JsonParseResult {
-            var jsonrpc_field_set = false;
-            var maybe_id: ?Id = null;
-            var maybe_method: ?MethodAndParams.Tag = null;
-            var maybe_params: ?[]const std.json.Value = null;
-
-            if (try source.next() != .object_begin) {
-                return error.UnexpectedToken;
-            }
-
-            while (true) {
-                switch (try source.peekNextTokenType()) {
-                    .string => {},
-                    else => break,
-                }
-
-                const FieldName = enum { jsonrpc, id, method, params };
-                const field_name = try jsonParseEnumStr(source, FieldName) orelse {
-                    if (options.ignore_unknown_fields) continue;
-                    return error.UnknownField;
-                };
-
-                switch (field_name) {
-                    .jsonrpc => {
-                        if (jsonrpc_field_set) switch (options.duplicate_field_behavior) {
-                            .use_first => {
-                                try source.skipValue();
-                                continue;
-                            },
-                            .@"error" => return error.DuplicateField,
-                            .use_last => {},
-                        };
-                        jsonrpc_field_set = true;
-                        if (try jsonParseEnumStr(source, enum { @"2.0" }) == null) {
-                            if (!try skipToEndOfCurrentObject(source)) {
-                                return error.UnexpectedToken;
-                            }
-                            return .{ .invalid_request = maybe_id };
-                        }
-                    },
-                    .id => {
-                        if (maybe_id != null) switch (options.duplicate_field_behavior) {
-                            .use_first => {
-                                try source.skipValue();
-                                continue;
-                            },
-                            .@"error" => return error.DuplicateField,
-                            .use_last => {},
-                        };
-                        maybe_id = try std.json.innerParse(Id, allocator, source, options);
-                    },
-                    .method => {
-                        if (maybe_method != null) switch (options.duplicate_field_behavior) {
-                            .use_first => {
-                                try source.skipValue();
-                                continue;
-                            },
-                            .@"error" => return error.DuplicateField,
-                            .use_last => {},
-                        };
-                        maybe_method = try jsonParseEnumStr(source, MethodAndParams.Tag) orelse {
-                            if (!try skipToEndOfCurrentObject(source)) {
-                                return error.UnexpectedToken;
-                            }
-                            return .{ .method_not_found = maybe_id };
-                        };
-                    },
-                    .params => {
-                        if (maybe_params != null) switch (options.duplicate_field_behavior) {
-                            .use_first => {
-                                try source.skipValue();
-                                continue;
-                            },
-                            .@"error" => return error.DuplicateField,
-                            .use_last => {},
-                        };
-                        const value = try std.json.innerParse(
-                            std.json.Value,
-                            allocator,
-                            source,
-                            options,
-                        );
-                        maybe_params = switch (value) {
-                            .array => |array| array.items,
-                            else => {
-                                if (!try skipToEndOfCurrentObject(source)) {
-                                    return error.UnexpectedToken;
-                                }
-                                return .{ .invalid_request = maybe_id };
-                            },
-                        };
-                    },
-                }
-            }
-
-            if (try source.next() != .object_end) {
-                return error.UnexpectedToken;
-            }
-
-            if (!jsonrpc_field_set) return error.MissingField;
-            const id = maybe_id orelse return error.MissingField;
-            const method = maybe_method orelse return error.MissingField;
-            const params = maybe_params orelse return error.MissingField;
-
-            const method_and_params = switch (method) {
-                inline else => |tag| @unionInit(MethodAndParams, @tagName(tag), params: {
-                    // NOTE: using `std.meta.FieldType` here hits eval branch quota, hack until `@FieldType`
-                    const Params =
-                        @typeInfo(MethodAndParams).Union.fields[@intFromEnum(tag)].type;
-                    if (Params == noreturn) {
-                        std.debug.panic("TODO: implement {s}", .{@tagName(method)});
-                    }
-                    break :params jsonParseValuesAsParamsArray(
-                        allocator,
-                        params,
-                        Params,
-                        options,
-                    ) catch return .{ .invalid_params = id };
-                }),
-            };
-
-            return .{ .ok = .{
-                .id = id,
-                .method = method_and_params,
-            } };
-        }
-    };
 };
 
 pub const Id = union(enum) {
@@ -460,7 +417,7 @@ test "Request parse errors" {
         , .{}),
     );
     try std.testing.expectError(
-        error.UnexpectedToken,
+        error.MissingField,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","method":null}
         , .{}),
