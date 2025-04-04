@@ -9,7 +9,10 @@ const feature_set = sig.runtime.feature_set;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
+const InstructionAccount = sig.core.instruction.InstructionAccount;
+const InstructionError = sig.core.instruction.InstructionError;
 
+const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
 
 const MemoryMap = memory.MemoryMap;
@@ -20,6 +23,7 @@ const SyscallError = error{
     InvalidPointer,
     InvalidLength,
     UnalignedPointer,
+    MaxInstructionAccountInfosExceeded,
 };
 
 fn StableVec(comptime T: type) type {
@@ -84,7 +88,7 @@ const AccountInfoC = extern struct {
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
 const AccountInfoRust = extern struct {
-    key: u64,
+    key_addr: u64,
     lamports_addr: Rc(RefCell(u64)),
     data: Rc(RefCell([]u8)),
     owner: u64,
@@ -137,7 +141,18 @@ fn RefCell(comptime T: type) type {
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L57
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
+const AccountInfo = extern struct {
+    key: *const Pubkey,
+    lamports: Rc(RefCell(*u64)),
+    data: Rc(RefCell([]u8)),
+    owner: *const Pubkey,
+    rent_epoch: Epoch,
+    is_signer: bool,
+    is_writable: bool,
+    executable: bool,
+};
+
 fn VmValue(comptime T: type) type {
     return union(enum) {
         const Self = @This();
@@ -272,9 +287,12 @@ const CallerAccount = struct {
     fn fromAccountInfoRust(
         ic: *InstructionContext,
         memory_map: *const MemoryMap,
+        vm_addr: u64, // unused
         account_info: *const AccountInfoRust,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
+        _ = vm_addr;
+
         const direct_mapping = ic.tc.feature_set.active.contains(
             feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
         );
@@ -282,7 +300,7 @@ const CallerAccount = struct {
         if (direct_mapping) {
             try checkAccountInfoPtr(
                 ic,
-                account_info.key,
+                account_info.key_addr,
                 account_metadata.vm_key_addr,
                 "key",
             );
@@ -658,7 +676,7 @@ test "CallerAccount" {
         const data_len = acc_shared.data.len;
 
         buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
-            .key = key_addr,
+            .key_addr = key_addr,
             .is_signer = acc_meta.is_signer,
             .is_writable = acc_meta.is_writable,
             .lamports_addr = Rc(RefCell(u64)).fromRaw(
@@ -802,3 +820,142 @@ test "CallerAccount" {
         );
     }
 }
+
+const TranslatedAccounts = struct {
+    /// Implements SyscallInvokeSigned::translate_accounts for both AccountInfo & SolAccountInfo.
+    /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L498
+    /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L725
+    fn translateAccounts(
+        comptime AccountInfoType: type,
+        instruction_info: *const InstructionInfo,
+        account_infos_addr: u64,
+        account_infos_len: u64,
+        is_loader_deprecated: bool,
+        memory_map: *const MemoryMap,
+        ic: *InstructionContext,
+    ) !TranslatedAccounts {
+        // translate_account_infos():
+        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L805
+
+        const direct_mapping = ic.tc.feature_set.active.contains(
+            feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+        );
+
+        // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
+        // this pointer to a specific address but we don't want it to be inside accounts, or
+        // callees might be able to write to the pointed memory.
+        if (direct_mapping and
+            (account_infos_addr +| (account_infos_len *| @sizeOf(u64))) >= MM_INPUT_START)
+        {
+            return SyscallError.InvalidPointer;
+        }
+
+        const account_infos = try translateSlice(
+            AccountInfoType,
+            .constant,
+            account_infos_addr,
+            account_infos_len,
+            ic.getCheckAligned(),
+        );
+
+        // check_account_infos():
+        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1018
+        if (ic.tc.feature_set.active.contains(feature_set.LOOSEN_CPI_SIZE_RESTRICTION)) {
+            const max_cpi_account_infos = if (ic.tc.feature_set.active.contains(
+                feature_set.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
+            )) 128 else 64;
+
+            if (account_infos.len > max_cpi_account_infos) {
+                // TODO: add {account_infos.len} and {max_cpi_account_infos} as context to error.
+                // [agave] https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/programs/bpf_loader/src/syscalls/mod.rs#L124-L128
+                return SyscallError.MaxInstructionAccountInfosExceeded;
+            }
+        } else {
+            const adjusted_len = @as(u64, account_infos.len) *| @sizeOf(Pubkey);
+            if (adjusted_len > ic.tc.compute_budget.max_cpi_instruction_size) {
+                // Cap the number of account_infos a caller can pass to approximate
+                // maximum that accounts that could be passed in an instruction
+                return SyscallError.TooManyAccounts;
+            }
+        }
+
+        // translate_and_update_accounts():
+        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L853
+
+        var accounts = std.BoundedArray(struct { u16, ?CallerAccount }, MAX_ACCOUNT_METAS){};
+
+        for (instruction_info.account_metas.buffer, 0..) |meta, i| {
+            if (meta.index_in_callee != i) continue; // Skip duplicate account
+
+            const callee_account = try ic.borrowInstructionAccount(meta.index_in_caller);
+            defer callee_account.release();
+
+            if (callee_account.account.executable) {
+                // Use the known account
+                try ic.tc.consumeCompute(std.math.divFloor(
+                    u64,
+                    callee_account.constAccountData().len,
+                    ic.tc.compute_budget.cpi_bytes_per_unit,
+                ) catch std.math.maxInt(u64));
+
+                try accounts.append(.{ meta.index_in_caller, null });
+                continue;
+            }
+
+            const account_key = ic.getAccountKeyByIndexUnchecked(meta.index_in_caller);
+            const caller_account_index = for (account_infos, 0..) |info, idx| {
+                const info_key = try translateType(
+                    Pubkey,
+                    .constant,
+                    memory_map,
+                    info.key_addr,
+                    ic.getCheckAligned(),
+                );
+                if (info_key.equals(&account_key)) break idx;
+            } else {
+                try ic.tc.log("Instruction references an unknown account {}", .{account_key});
+                return InstructionError.MissingAccount;
+            };
+
+            const serialized_metadata = if (meta.index_in_caller < ic.info.account_metas.len) blk: {
+                // TODO
+                break :blk ic.info.account_metas.get(meta.index_in_caller);
+            } else {
+                try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
+                return InstructionError.MissingAccount;
+            };
+
+            // build the CallerAccount corresponding to this account.
+            if (caller_account_index >= account_infos.len) {
+                return SyscallError.InvalidLength;
+            }
+
+            const caller_account = @call(
+                .auto,
+                switch (AccountInfoType) {
+                    AccountInfoC => CallerAccount.fromAccountInfoC,
+                    AccountInfoRust => CallerAccount.fromAccountInfoRust,
+                    else => @compileError("invalid AccountInfo type"),
+                },
+                .{
+                    ic,
+                    memory_map,
+                    account_infos_addr +| (caller_account_index *| @sizeOf(AccountInfoType)),
+                    &account_index[caller_account_index],
+                    serialized_metadata,
+                },
+            );
+
+            // before initiating CPI, the caller may have modified the
+            // account (caller_account). We need to update the corresponding
+            // BorrowedAccount (callee_account) so the callee can see the
+            // changes.
+            const update_caller = update_callee_account();
+
+            try accounts.append(.{
+                meta.index_in_caller,
+                if (meta.is_writable or update_caller) caller_account else null,
+            });
+        }
+    }
+};
