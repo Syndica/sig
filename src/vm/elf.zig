@@ -41,6 +41,19 @@ pub const Elf = struct {
         fn parse(bytes: []const u8) !Headers {
             if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
             const header: elf.Elf64_Ehdr = @bitCast(bytes[0..@sizeOf(elf.Elf64_Ehdr)].*);
+            const ident: ElfIdent = @bitCast(header.e_ident);
+
+            if (!std.mem.eql(u8, &ident.magic, elf.MAGIC) or
+                ident.class != elf.ELFCLASS64 or
+                ident.data != elf.ELFDATA2LSB or
+                ident.version != 1 or
+                header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
+                header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
+                header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
+                header.e_shstrndx >= header.e_shnum)
+            {
+                return error.InvalidFileHeader;
+            }
 
             const shoff = header.e_shoff;
             const shnum = header.e_shnum;
@@ -1090,7 +1103,8 @@ test "strict header corrupt file header" {
         .{error.InvalidFileHeader} ** 4 ++
         .{error.OutOfBounds} ** 2 ++
         .{error.InvalidFileHeader} ** 2 ++
-        .{error.OutOfBounds} ** 4;
+        .{error.OutOfBounds} ** 2 ++
+        .{error.InvalidFileHeader} ** 2;
 
     for (
         0..@sizeOf(elf.Elf64_Ehdr),

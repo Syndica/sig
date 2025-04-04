@@ -40,6 +40,16 @@ pub const Executable = struct {
         };
     }
 
+    pub fn fromBytes(
+        allocator: std.mem.Allocator,
+        source: []u8,
+        loader: *BuiltinProgram,
+        config: Config,
+    ) !Executable {
+        const elf = try Elf.parse(allocator, source, loader, config);
+        return fromElf(elf);
+    }
+
     pub fn fromAsm(
         allocator: std.mem.Allocator,
         source: []const u8,

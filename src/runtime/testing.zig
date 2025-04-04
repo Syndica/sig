@@ -26,7 +26,7 @@ pub const TransactionContextAccountParams = struct {
 };
 
 pub const TransactionContextParams = struct {
-    accounts: []const TransactionContextAccountParams,
+    accounts: []const TransactionContextAccountParams = &.{},
     accounts_resize_delta: i64 = 0,
     compute_meter: u64 = 0,
     custom_error: ?u32 = null,
@@ -55,6 +55,7 @@ pub fn createTransactionContext(
 ) !TransactionContext {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
+
     const accounts = try createTransactionContextAccounts(
         allocator,
         random,
@@ -260,18 +261,29 @@ pub fn expectTransactionAccountEqual(
 
     if (!expected.pubkey.equals(&actual.pubkey))
         return error.PubkeyMismatch;
+
     if (expected.account.lamports != actual.account.lamports)
         return error.LamportsMismatch;
-    if (!std.mem.eql(u8, expected.account.data, actual.account.data))
-        return error.DataMismatch;
+
+    if (!std.mem.eql(u8, expected.account.data, actual.account.data)) {
+        return if (expected.account.data.len != actual.account.data.len)
+            error.DataLengthMismatch
+        else
+            return error.DataMismatch;
+    }
+
     if (!expected.account.owner.equals(&actual.account.owner))
         return error.OwnerMismatch;
+
     if (expected.account.executable != actual.account.executable)
         return error.ExecutableMismatch;
+
     if (expected.account.rent_epoch != actual.account.rent_epoch)
         return error.RentEpochMismatch;
+
     if (expected.read_refs != actual.read_refs)
         return error.ReadRefsMismatch;
+
     if (expected.write_ref != actual.write_ref)
         return error.WriteRefMismatch;
 }

@@ -31,6 +31,15 @@ pub const DEPRECATE_LEGACY_VOTE_IXS =
 pub const ENABLE_TOWER_SYNC_IX =
     Pubkey.parseBase58String("tSynMCspg4xFiCj1v3TDb4c7crMR5tSBhLz4sF7rrNA") catch unreachable;
 
+pub const BPF_ACCOUNT_DATA_DIRECT_MAPPING =
+    Pubkey.parseBase58String("AjX3A4Nv2rzUuATEUWLP4rrBaBropyUnHxEvFDj1dKbx") catch unreachable;
+
+pub const ENABLE_POSEIDON_SYSCALL =
+    Pubkey.parseBase58String("FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr") catch unreachable;
+
+pub const DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL =
+    Pubkey.parseBase58String("79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features

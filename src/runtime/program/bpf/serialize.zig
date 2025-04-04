@@ -1,6 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../sig.zig");
+const sig = @import("../../../sig.zig");
 
 const program = sig.runtime.program;
 const vm = sig.vm;
@@ -368,7 +368,6 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_account| {
                 _, const borrowed_account = index_and_account;
-
                 size += @sizeOf(u8) // is_signer
                 + @sizeOf(u8) // is_writable
                 + @sizeOf(u8) // executable
@@ -419,7 +418,6 @@ fn serializeParametersAligned(
         switch (account) {
             .account => |index_and_borrowed_account| {
                 _, const borrowed_account = index_and_borrowed_account;
-
                 _ = serializer.write(u8, std.math.maxInt(u8));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_signer));
                 _ = serializer.write(u8, @intFromBool(borrowed_account.context.is_writable));
@@ -477,7 +475,7 @@ fn serializeParametersAligned(
     };
 }
 
-/// https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L251
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L251
 pub fn deserializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
