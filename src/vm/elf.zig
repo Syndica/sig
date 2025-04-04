@@ -401,9 +401,9 @@ pub const Elf = struct {
         /// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf.rs#L1194-L1346
         fn relocate(
             self: Data,
+            allocator: std.mem.Allocator,
             headers: Headers,
             bytes: []u8,
-            allocator: std.mem.Allocator,
             loader: *BuiltinProgram,
             function_registry: *Registry(u64),
             version: sbpf.Version,
@@ -893,9 +893,9 @@ pub const Elf = struct {
         errdefer function_registry.deinit(allocator);
 
         try data.relocate(
+            allocator,
             headers,
             bytes,
-            allocator,
             loader,
             &function_registry,
             sbpf_version,
