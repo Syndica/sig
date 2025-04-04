@@ -108,10 +108,8 @@ pub const InstructionContext = struct {
         );
     }
 
-    /// Meant for InvokeContext but our InstructionContext is used as such.
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/invoke_context.rs#L678
     pub fn getCheckAligned(self: *const InstructionContext) bool {
-        // NOTE: try_borrow_last_program_account(tc)
         const program = self.borrowProgramAccount() catch return true;
         defer program.release();
 
