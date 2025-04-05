@@ -142,12 +142,10 @@ pub const Id = union(enum) {
     }
 };
 
-test Request {
-    const test_pubkey1 = comptime sig.core.Pubkey.parseBase58String(
+test "Request encoding" {
+    const test_pubkey = sig.core.Pubkey.parseBase58String(
         "vinesvinesvinesvinesvinesvinesvinesvinesvin",
     ) catch unreachable;
-    const test_pubkey2 = comptime sig.core.Pubkey.ZEROES;
-
     try testParseCall(
         .{},
         \\{
@@ -165,14 +163,17 @@ test Request {
         .{
             .id = .{ .int = 123 },
             .method = .{ .getAccountInfo = .{
-                .pubkey = test_pubkey1,
+                .pubkey = test_pubkey,
                 .config = .{
                     .encoding = .base58,
                 },
             } },
         },
     );
+}
 
+test "Request commitment minContextSlot" {
+    const test_pubkey = sig.core.Pubkey.ZEROES;
     try testParseCall(
         .{},
         \\{
@@ -191,7 +192,7 @@ test Request {
         .{
             .id = .{ .str = "a44" },
             .method = .{ .getBalance = .{
-                .pubkey = test_pubkey2,
+                .pubkey = test_pubkey,
                 .config = .{
                     .commitment = .processed,
                     .minContextSlot = 64,
@@ -199,7 +200,10 @@ test Request {
             } },
         },
     );
+}
 
+test "Request duplicate & ignored fields (non-standard)" {
+    const test_pubkey = comptime sig.core.Pubkey.ZEROES;
     try testParseCall(
         .{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true },
         \\{
@@ -220,7 +224,7 @@ test Request {
         .{
             .id = .{ .str = "a33" },
             .method = .{ .getBalance = .{
-                .pubkey = test_pubkey2,
+                .pubkey = test_pubkey,
                 .config = .{
                     .commitment = .processed,
                     .minContextSlot = 64,
@@ -228,7 +232,9 @@ test Request {
             } },
         },
     );
+}
 
+test "Request parse errors" {
     try std.testing.expectError(
         error.MissingField,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
@@ -251,7 +257,7 @@ test Request {
         error.DuplicateField,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":42,"id":"33"}
-        , .{ .duplicate_field_behavior = .@"error" }),
+        , .{}),
     );
 
     try std.testing.expectError(
