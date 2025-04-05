@@ -241,7 +241,10 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// thread pool should be discarded/reset
         pub fn join(self: *Self) std.mem.Allocator.Error!std.ArrayList(TaskResult) {
             for (self.tasks.items) |*task| task.join();
-            const results = self.results;
+
+            var results = self.results;
+            errdefer results.deinit();
+
             self.results = try std.ArrayList(TaskResult).initCapacity(self.allocator, self.tasks.capacity);
             self.tasks.clearRetainingCapacity();
             return results;
@@ -250,9 +253,9 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// Like join, but it returns an error if any tasks failed, and otherwise discards task output.
         /// NOTE: this will return the first error encountered which may be inconsistent between runs.
         pub fn joinFallible(self: *Self) !void {
-            const results = try self.join();
+            var results = try self.join();
+            defer results.deinit();
             for (results.items) |result| try result;
-            results.deinit();
         }
     };
 }

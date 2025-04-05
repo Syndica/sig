@@ -227,18 +227,52 @@ fn consumeOurCqe(
                 // at the time of writing, this always holds true for the result of `Head.parse`.
                 std.debug.assert(std_head.compression == .none);
                 break :head_info HeadInfo.parseFromStdHead(std_head) catch |err| {
+                    defer entry.deinit(server_ctx.allocator);
                     switch (err) {
                         error.RequestTargetTooLong => connErrLogger(logger, entry_data).logf(
                             "Request target was too long: '{}'",
                             .{std.zig.fmtEscapes(std_head.target)},
                         ),
+                        error.UnexpectedTransferEncoding => if (std_head.content_length == null) {
+                            connErrLogger(logger, entry_data).log(
+                                "Request missing content-length",
+                            );
+                            entry_data.state = .{
+                                .send_static_string = EntryState.SendStaticString
+                                    .initHttpStatusNoBody(.length_required),
+                            };
+                            const snb = &entry_data.state.send_static_string;
+                            try snb.prepSend(entry, &liou.io_uring);
+                        } else {
+                            connErrLogger(logger, entry_data).log(
+                                "Request contained both content-length and transfer-encoding",
+                            );
+                            entry_data.state = .{
+                                .send_static_string = EntryState.SendStaticString
+                                    .initHttpStatusNoBody(.bad_request),
+                            };
+                            const snb = &entry_data.state.send_static_string;
+                            try snb.prepSend(entry, &liou.io_uring);
+                        },
                         else => |e| connErrLogger(logger, entry_data)
                             .logf("Request error: {s}", .{@errorName(e)}),
                     }
-                    entry.deinit(server_ctx.allocator);
                     return;
                 };
             };
+
+            if (head_info.content_len) |content_len| {
+                if (content_len > requests.MAX_REQUEST_BODY_SIZE) {
+                    entry_data.state = .{
+                        .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(
+                            .payload_too_large,
+                        ),
+                    };
+                    const snb = &entry_data.state.send_static_string;
+                    try snb.prepSend(entry, &liou.io_uring);
+                    return;
+                }
+            }
 
             // ^ we just copied the relevant head info, so we're going to move
             // the body content to the start of the buffer.
@@ -431,7 +465,7 @@ fn handleRecvBody(
         inline .HEAD, .GET => |method| switch (requests.getRequestTargetResolve(
             logger.unscoped(),
             body.head_info.target.constSlice(),
-            server_ctx.latest_snapshot_gen_info,
+            &server_ctx.accountsdb.latest_snapshot_gen_info,
         )) {
             inline .full_snapshot, .inc_snapshot => |pair| {
                 const sfh_data: EntryState.SendFileHead.Data = switch (method) {
@@ -442,7 +476,7 @@ fn handleRecvBody(
                         const archive_name_bounded = snap_info.snapshotArchiveName();
                         const archive_name = archive_name_bounded.constSlice();
 
-                        const snapshot_dir = server_ctx.snapshot_dir;
+                        const snapshot_dir = server_ctx.accountsdb.snapshot_dir;
                         const snap_stat = try snapshot_dir.statFile(archive_name);
                         break :blk .{ .file_size = snap_stat.size };
                     },
@@ -453,7 +487,7 @@ fn handleRecvBody(
                         const archive_name_bounded = snap_info.snapshotArchiveName();
                         const archive_name = archive_name_bounded.constSlice();
 
-                        const snapshot_dir = server_ctx.snapshot_dir;
+                        const snapshot_dir = server_ctx.accountsdb.snapshot_dir;
                         const archive_file = try snapshot_dir.openFile(archive_name, .{});
                         errdefer archive_file.close();
 
@@ -514,6 +548,16 @@ fn handleRecvBody(
         },
 
         .POST => {
+            if (body.head_info.content_type != .@"application/json") {
+                entry_data.state = .{
+                    .send_static_string = EntryState.SendStaticString
+                        .initHttpStatusNoBody(.not_acceptable),
+                };
+                const snb = &entry_data.state.send_static_string;
+                try snb.prepSend(entry, &liou.io_uring);
+                return;
+            }
+
             connErrLogger(logger, entry_data).logf("Attempt to invoke our RPC service", .{});
             entry_data.state = .{
                 .send_static_string = EntryState.SendStaticString.initHttpStatusNoBody(

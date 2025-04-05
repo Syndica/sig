@@ -8,6 +8,94 @@ pub const Request = struct {
     id: Id,
     method: MethodAndParams,
 
+    pub const Dynamic = struct {
+        jsonrpc: ?[]const u8 = null,
+        id: Id,
+        method: ?[]const u8 = null,
+        params: ?[]const std.json.Value = null,
+    };
+
+    pub const ParseDynamicDiagnostic = union {
+        ok: void,
+        err: Err,
+
+        pub const INIT: ParseDynamicDiagnostic = .{ .ok = {} };
+
+        pub const Err = struct {
+            id: ?Id,
+        };
+
+        fn initErr(
+            diag: *ParseDynamicDiagnostic,
+            err: ParseDynamicError,
+            value: Err,
+        ) ParseDynamicError {
+            diag.* = .{ .err = value };
+            return err;
+        }
+    };
+
+    pub const ParseDynamicError = error{
+        MissingJsonRpcVersion,
+        MissingMethod,
+        MissingParams,
+
+        InvalidJsonRpcVersion,
+        InvalidMethod,
+        InvalidParams,
+    };
+
+    pub fn parseDynamic(
+        allocator: std.mem.Allocator,
+        dyn: Dynamic,
+        options: std.json.ParseOptions,
+        /// Populated only if an error is returned.
+        maybe_diag: ?*ParseDynamicDiagnostic,
+    ) (std.mem.Allocator.Error || ParseDynamicError)!Request {
+        var dummy_diag = ParseDynamicDiagnostic.INIT;
+        const diag = maybe_diag orelse &dummy_diag;
+
+        const id = dyn.id;
+        const jsonrpc = dyn.jsonrpc orelse
+            return diag.initErr(error.MissingJsonRpcVersion, .{ .id = id });
+        const method_str = dyn.method orelse
+            return diag.initErr(error.MissingMethod, .{ .id = id });
+        const params_values = dyn.params orelse
+            return diag.initErr(error.MissingParams, .{ .id = id });
+
+        if (!std.mem.eql(u8, jsonrpc, "2.0")) {
+            return diag.initErr(error.InvalidJsonRpcVersion, .{ .id = id });
+        }
+
+        const method = std.meta.stringToEnum(MethodAndParams.Tag, method_str) orelse
+            return diag.initErr(error.InvalidMethod, .{ .id = id });
+
+        const method_and_params = switch (method) {
+            inline else => |tag| @unionInit(MethodAndParams, @tagName(tag), blk: {
+                // NOTE: using `std.meta.FieldType` here hits eval branch quota, hack until `@FieldType`
+                const Params = @typeInfo(MethodAndParams).Union.fields[@intFromEnum(tag)].type;
+                if (Params == noreturn) {
+                    std.debug.panic("TODO: implement {s}", .{@tagName(method)});
+                }
+
+                break :blk jsonParseValuesAsParamsArray(
+                    allocator,
+                    params_values,
+                    Params,
+                    options,
+                ) catch |err| switch (err) {
+                    error.OutOfMemory => |e| return e,
+                    else => return diag.initErr(error.InvalidParams, .{ .id = id }),
+                };
+            }),
+        };
+
+        return .{
+            .id = id,
+            .method = method_and_params,
+        };
+    }
+
     pub fn jsonParse(
         allocator: std.mem.Allocator,
         /// * `std.json.Scanner`
@@ -15,49 +103,20 @@ pub const Request = struct {
         source: anytype,
         options: std.json.ParseOptions,
     ) std.json.ParseError(@TypeOf(source.*))!Request {
-        const Partial = struct {
-            jsonrpc: enum { @"2.0" },
-            id: Id,
-            method: MethodAndParams.Tag,
-            params: []const std.json.Value,
-        };
-        const partial = try std.json.innerParse(Partial, allocator, source, options);
+        const dyn = try std.json.innerParse(Dynamic, allocator, source, options);
+        return parseDynamic(allocator, dyn, options, null) catch |err| switch (err) {
+            error.OutOfMemory,
+            => |e| e,
 
-        @setEvalBranchQuota(
-            // <method count> * <param count upper bound> + <generic function call>
-            @typeInfo(MethodAndParams).Union.fields.len * 3 + 1,
-        );
-        const method = switch (partial.method) {
-            inline else => |method| blk: {
-                // NOTE: using `std.meta.FieldType` here hits eval branch quota, hack until `@FieldType`
-                const Params = @typeInfo(MethodAndParams).Union.fields[@intFromEnum(method)].type;
-                if (Params == noreturn) std.debug.panic("TODO: implement {s}", .{@tagName(method)});
+            error.MissingJsonRpcVersion,
+            error.MissingMethod,
+            error.MissingParams,
+            => return error.MissingField,
 
-                var params: Params = undefined;
-
-                inline for (@typeInfo(Params).Struct.fields, 0..) |field, i| {
-                    if (i >= partial.params.len) {
-                        if (@typeInfo(field.type) != .Optional) {
-                            return error.LengthMismatch;
-                        }
-                        @field(params, field.name) = null;
-                    } else {
-                        @field(params, field.name) = try std.json.innerParseFromValue(
-                            field.type,
-                            allocator,
-                            partial.params[i],
-                            options,
-                        );
-                    }
-                }
-
-                break :blk @unionInit(MethodAndParams, @tagName(method), params);
-            },
-        };
-
-        return .{
-            .id = partial.id,
-            .method = method,
+            error.InvalidJsonRpcVersion,
+            error.InvalidMethod,
+            error.InvalidParams,
+            => return error.UnexpectedToken,
         };
     }
 
@@ -141,6 +200,33 @@ pub const Id = union(enum) {
         };
     }
 };
+
+pub fn jsonParseValuesAsParamsArray(
+    allocator: std.mem.Allocator,
+    values: []const std.json.Value,
+    comptime Params: type,
+    options: std.json.ParseOptions,
+) !Params {
+    var params: Params = undefined;
+
+    inline for (@typeInfo(Params).Struct.fields, 0..) |field, i| {
+        if (i >= values.len) {
+            if (@typeInfo(field.type) != .Optional) {
+                return error.LengthMismatch;
+            }
+            @field(params, field.name) = null;
+        } else {
+            @field(params, field.name) = try std.json.innerParseFromValue(
+                field.type,
+                allocator,
+                values[i],
+                options,
+            );
+        }
+    }
+
+    return params;
+}
 
 test "Request encoding" {
     const test_pubkey = sig.core.Pubkey.parseBase58String(
@@ -267,7 +353,7 @@ test "Request parse errors" {
         , .{}),
     );
     try std.testing.expectError(
-        error.UnexpectedToken,
+        error.MissingField,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","method":null}
         , .{}),
