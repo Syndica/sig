@@ -156,6 +156,23 @@ pub fn fillHashmapWithRng(
     }
 }
 
+/// Shuffles the elements in `buf[start_inclusive..end_exclusive]` with any element
+/// in the `buf[0..buf.len]`, i.e. including the specified range.
+/// This means the shuffle will be concentrated within the specified range, which is
+/// useful for randomly rotating values in and out of an active range.
+pub fn shuffleFocusedRange(
+    random: std.rand.Random,
+    comptime T: type,
+    buf: []T,
+    start_inclusive: usize,
+    end_exclusive: usize,
+) void {
+    for (start_inclusive..end_exclusive) |i| {
+        const j = random.intRangeLessThan(usize, 0, buf.len);
+        std.mem.swap(T, &buf[i], &buf[j]);
+    }
+}
+
 /// Downsample a random number generator to a smaller range.
 /// This implementationc is based on the implementation in the rust rand crate
 /// and ensures the same sequence is generated.
