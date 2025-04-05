@@ -6,43 +6,11 @@ const Allocator = std.mem.Allocator;
 
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
+const MethodAndParams = rpc.methods.MethodAndParams;
 const HttpPostFetcher = rpc.http.HttpPostFetcher;
 const Response = rpc.response.Response;
 
-const GetAccountInfo = rpc.methods.GetAccountInfo;
-const GetBalance = rpc.methods.GetBalance;
-const GetBlock = rpc.methods.GetBlock;
-const GetBlockCommitment = rpc.methods.GetBlockCommitment;
-const GetBlockHeight = rpc.methods.GetBlockHeight;
-const GetClusterNodes = rpc.methods.GetClusterNodes;
-const GetEpochInfo = rpc.methods.GetEpochInfo;
-const GetEpochSchedule = rpc.methods.GetEpochSchedule;
-const GetLatestBlockhash = rpc.methods.GetLatestBlockhash;
-const GetLeaderSchedule = rpc.methods.GetLeaderSchedule;
-const GetSignatureStatuses = rpc.methods.GetSignatureStatuses;
-const GetSlot = rpc.methods.GetSlot;
-const GetTransaction = rpc.methods.GetTransaction;
-const GetVersion = rpc.methods.GetVersion;
-const GetVoteAccounts = rpc.methods.GetVoteAccounts;
-const RequestAirdrop = rpc.methods.RequestAirdrop;
-const SendTransaction = rpc.methods.SendTransaction;
-
 pub const FetchRpcError = Allocator.Error || HttpPostFetcher.Error || rpc.response.ParseError;
-
-/// Send a typed RPC request and await a response.
-/// Pass a struct, such as those defined in `rpc.methods`.
-/// Returns data allocated with the passed allocator.
-pub fn fetchRpc(
-    fetcher: *HttpPostFetcher,
-    allocator: Allocator,
-    request: anytype,
-) FetchRpcError!Response(@TypeOf(request)) {
-    const request_json = try rpc.request.serialize(allocator, request);
-    defer allocator.free(request_json);
-    const response_json = try fetcher.fetchWithRetries(allocator, request_json);
-    defer allocator.free(response_json);
-    return try Response(@TypeOf(request)).fromJson(allocator, response_json);
-}
 
 pub const Client = struct {
     fetcher: HttpPostFetcher,
@@ -62,89 +30,165 @@ pub const Client = struct {
         self.fetcher.deinit();
     }
 
-    /// Call fetchRpc using the contained allocator and fetcher.
-    fn fetch(self: *Client, request: anytype) Error!Response(@TypeOf(request)) {
-        return try fetchRpc(&self.fetcher, self.fetcher.http_client.allocator, request);
-    }
-
     /// Call fetchRpc using the contained fetcher and the passed allocator.
     pub fn fetchCustom(
         self: *Client,
         allocator: Allocator,
-        request: anytype,
-    ) Error!Response(@TypeOf(request)) {
-        return try fetchRpc(&self.fetcher, allocator, request);
+        id: rpc.request.Id,
+        comptime method: MethodAndParams.Tag,
+        // TODO: use this instead of `std.meta.FieldType` to avoid eval branch quota until `@FieldType`'s here.
+        params: @typeInfo(MethodAndParams).Union.fields[@intFromEnum(method)].type,
+    ) Error!Response(@TypeOf(params).Response) {
+        const request: rpc.request.Request = .{
+            .id = id,
+            .method = @unionInit(MethodAndParams, @tagName(method), params),
+        };
+
+        const request_json = try std.json.stringifyAlloc(allocator, request, .{});
+        defer allocator.free(request_json);
+
+        const response_json = try self.fetcher.fetchWithRetries(allocator, request_json);
+        defer allocator.free(response_json);
+
+        return try Response(@TypeOf(params).Response).fromJson(allocator, response_json);
+    }
+
+    /// Call fetchRpc using the contained allocator and fetcher.
+    pub fn fetch(
+        self: *Client,
+        id: rpc.request.Id,
+        comptime method: MethodAndParams.Tag,
+        // TODO: use this instead of `std.meta.FieldType` to avoid eval branch quota until `@FieldType`'s here.
+        request: @typeInfo(MethodAndParams).Union.fields[@intFromEnum(method)].type,
+    ) Error!Response(@TypeOf(request).Response) {
+        return try self.fetchCustom(
+            self.fetcher.http_client.allocator,
+            id,
+            method,
+            request,
+        );
     }
 
     ///////////////////////////
     // All remaining functions are helpers for each RPC method, to make call sites less verbose.
 
-    pub fn getAccountInfo(self: *Client, request: GetAccountInfo) Error!Response(GetAccountInfo) {
-        return self.fetch(request);
+    pub fn getAccountInfo(
+        self: *Client,
+        request: rpc.methods.GetAccountInfo,
+    ) Error!Response(rpc.methods.GetAccountInfo.Response) {
+        return self.fetch(.null, .getAccountInfo, request);
     }
 
-    pub fn getBalance(self: *Client, request: GetBalance) Error!Response(GetBalance) {
-        return self.fetch(request);
+    pub fn getBalance(
+        self: *Client,
+        request: rpc.methods.GetBalance,
+    ) Error!Response(rpc.methods.GetBalance.Response) {
+        return self.fetch(.null, .getBalance, request);
     }
 
-    pub fn getBlock(self: *Client, request: GetBlock) Error!Response(GetBlock) {
-        return self.fetch(request);
+    pub fn getBlock(
+        self: *Client,
+        request: rpc.methods.GetBlock,
+    ) Error!Response(rpc.methods.GetBlock.Response) {
+        return self.fetch(.null, .getBlock, request);
     }
 
-    pub fn getBlockCommitment(self: *Client, request: GetBlockCommitment) Error!Response(GetBlockCommitment) {
-        return self.fetch(request);
+    pub fn getBlockCommitment(
+        self: *Client,
+        request: rpc.methods.GetBlockCommitment,
+    ) Error!Response(rpc.methods.GetBlockCommitment.Response) {
+        return self.fetch(.null, .getBlockCommitment, request);
     }
 
-    pub fn getBlockHeight(self: *Client, request: GetBlockHeight) Error!Response(GetBlockHeight) {
-        return self.fetch(request);
+    pub fn getBlockHeight(
+        self: *Client,
+        request: rpc.methods.GetBlockHeight,
+    ) Error!Response(rpc.methods.GetBlockHeight.Response) {
+        return self.fetch(.null, .getBlockHeight, request);
     }
 
-    pub fn getClusterNodes(self: *Client, request: GetClusterNodes) Error!Response(GetClusterNodes) {
-        return self.fetch(request);
+    pub fn getClusterNodes(
+        self: *Client,
+        request: rpc.methods.GetClusterNodes,
+    ) Error!Response(rpc.methods.GetClusterNodes.Response) {
+        return self.fetch(.null, .getClusterNodes, request);
     }
 
-    pub fn getEpochInfo(self: *Client, request: GetEpochInfo) Error!Response(GetEpochInfo) {
-        return self.fetch(request);
+    pub fn getEpochInfo(
+        self: *Client,
+        request: rpc.methods.GetEpochInfo,
+    ) Error!Response(rpc.methods.GetEpochInfo.Response) {
+        return self.fetch(.null, .getEpochInfo, request);
     }
 
-    pub fn getEpochSchedule(self: *Client, request: GetEpochSchedule) Error!Response(GetEpochSchedule) {
-        return self.fetch(request);
+    pub fn getEpochSchedule(
+        self: *Client,
+        request: rpc.methods.GetEpochSchedule,
+    ) Error!Response(rpc.methods.GetEpochSchedule.Response) {
+        return self.fetch(.null, .getEpochSchedule, request);
     }
 
-    pub fn getLatestBlockhash(self: *Client, request: GetLatestBlockhash) Error!Response(GetLatestBlockhash) {
-        return self.fetch(request);
+    pub fn getLatestBlockhash(
+        self: *Client,
+        request: rpc.methods.GetLatestBlockhash,
+    ) Error!Response(rpc.methods.GetLatestBlockhash.Response) {
+        return self.fetch(.null, .getLatestBlockhash, request);
     }
 
-    pub fn getLeaderSchedule(self: *Client, request: GetLeaderSchedule) Error!Response(GetLeaderSchedule) {
-        return self.fetch(request);
+    pub fn getLeaderSchedule(
+        self: *Client,
+        request: rpc.methods.GetLeaderSchedule,
+    ) Error!Response(rpc.methods.GetLeaderSchedule.Response) {
+        return self.fetch(.null, .getLeaderSchedule, request);
     }
 
-    pub fn getSignatureStatuses(self: *Client, request: GetSignatureStatuses) Error!Response(GetSignatureStatuses) {
-        return self.fetch(request);
+    pub fn getSignatureStatuses(
+        self: *Client,
+        request: rpc.methods.GetSignatureStatuses,
+    ) Error!Response(rpc.methods.GetSignatureStatuses.Response) {
+        return self.fetch(.null, .getSignatureStatuses, request);
     }
 
-    pub fn getSlot(self: *Client, request: GetSlot) Error!Response(GetSlot) {
-        return self.fetch(request);
+    pub fn getSlot(
+        self: *Client,
+        request: rpc.methods.GetSlot,
+    ) Error!Response(rpc.methods.GetSlot.Response) {
+        return self.fetch(.null, .getSlot, request);
     }
 
-    pub fn getTransaction(self: *Client, request: GetTransaction) Error!Response(GetTransaction) {
-        return self.fetch(request);
+    pub fn getTransaction(
+        self: *Client,
+        request: rpc.methods.GetTransaction,
+    ) Error!Response(rpc.methods.GetTransaction.Response) {
+        return self.fetch(.null, .getTransaction, request);
     }
 
-    pub fn getVersion(self: *Client, request: GetVersion) Error!Response(GetVersion) {
-        return self.fetch(request);
+    pub fn getVersion(
+        self: *Client,
+        request: rpc.methods.GetVersion,
+    ) Error!Response(rpc.methods.GetVersion.Response) {
+        return self.fetch(.null, .getVersion, request);
     }
 
-    pub fn getVoteAccounts(self: *Client, request: GetVoteAccounts) Error!Response(GetVoteAccounts) {
-        return self.fetch(request);
+    pub fn getVoteAccounts(
+        self: *Client,
+        request: rpc.methods.GetVoteAccounts,
+    ) Error!Response(rpc.methods.GetVoteAccounts.Response) {
+        return self.fetch(.null, .getVoteAccounts, request);
     }
 
-    pub fn requestAirdrop(self: *Client, request: RequestAirdrop) Error!Response(RequestAirdrop) {
-        return self.fetch(request);
+    pub fn requestAirdrop(
+        self: *Client,
+        request: rpc.methods.RequestAirdrop,
+    ) Error!Response(rpc.methods.RequestAirdrop.Response) {
+        return self.fetch(.null, .requestAirdrop, request);
     }
 
-    pub fn sendTransaction(self: *Client, request: SendTransaction) Error!Response(SendTransaction) {
-        return self.fetch(request);
+    pub fn sendTransaction(
+        self: *Client,
+        request: rpc.methods.SendTransaction,
+    ) Error!Response(rpc.methods.SendTransaction.Response) {
+        return self.fetch(.null, .sendTransaction, request);
     }
 };
 

@@ -1,7 +1,12 @@
 //! Every RPC method defined as a struct, where the fields are the parameters
-//! for the rpc method. The order of the fields in the struct definition must
-//! match the order of the parameters for the RPC method. Each method's response
-//! type is defined as a nested struct called Response.
+//! for the rpc method.
+//!
+//! The order of the fields in the struct definition must match the
+//! order of the parameters for the RPC method.
+//!
+//! Each method's response type is defined as a nested struct called `Response`.
+//!
+//! https://solana.com/de/docs/rpc
 
 const std = @import("std");
 const sig = @import("../sig.zig");
@@ -13,6 +18,110 @@ const ParseOptions = std.json.ParseOptions;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
+
+pub const MethodAndParams = union(enum) {
+    getAccountInfo: GetAccountInfo,
+    getBalance: GetBalance,
+    getBlock: GetBlock,
+    getBlockCommitment: GetBlockCommitment,
+    getBlockHeight: GetBlockHeight,
+    getBlockProduction: noreturn,
+    getBlocks: noreturn,
+    getBlocksWithLimit: noreturn,
+    getBlockTime: noreturn,
+    getClusterNodes: GetClusterNodes,
+    getEpochInfo: GetEpochInfo,
+    getEpochSchedule: GetEpochSchedule,
+    getFeeForMessage: noreturn,
+    getFirstAvailableBlock: noreturn,
+    getGenesisHash: noreturn,
+    getHealth: noreturn,
+    getHighestSnapshotSlot: noreturn,
+    getIdentity: noreturn,
+    getInflationGovernor: noreturn,
+    getInflationRate: noreturn,
+    getInflationReward: noreturn,
+    getLargestAccounts: noreturn,
+    getLatestBlockhash: GetLatestBlockhash,
+    getLeaderSchedule: GetLeaderSchedule,
+    getMaxRetransmitSlot: noreturn,
+    getMaxShredInsertSlot: noreturn,
+    getMinimumBalanceForRentExemption: noreturn,
+    getMultipleAccounts: noreturn,
+    getProgramAccounts: noreturn,
+    getRecentPerformanceSamples: noreturn,
+    getRecentPrioritizationFees: noreturn,
+    getSignaturesForAddress: noreturn,
+    getSignatureStatuses: GetSignatureStatuses,
+    getSlot: GetSlot,
+    getSlotLeader: noreturn,
+    getSlotLeaders: noreturn,
+    getStakeMinimumDelegation: noreturn,
+    getSupply: noreturn,
+    getTokenAccountBalance: noreturn,
+    getTokenAccountsByDelegate: noreturn,
+    getTokenAccountsByOwner: noreturn,
+    getTokenLargestAccounts: noreturn,
+    getTokenSupply: noreturn,
+    getTransaction: GetTransaction,
+    getTransactionCount: noreturn,
+    getVersion: GetVersion,
+    getVoteAccounts: GetVoteAccounts,
+    isBlockhashValid: noreturn,
+    minimumLedgerSlot: noreturn,
+    requestAirdrop: RequestAirdrop,
+    sendTransaction: SendTransaction,
+    simulateTransaction: noreturn,
+
+    pub const Tag = @typeInfo(MethodAndParams).Union.tag_type.?;
+
+    /// Returns a wrapper over `self` which will be stringified as an array.
+    pub fn jsonStringifyAsParamsArray(self: MethodAndParams) JsonStringifiedAsParamsArray {
+        return .{ .data = self };
+    }
+
+    pub const JsonStringifiedAsParamsArray = struct {
+        data: MethodAndParams,
+
+        pub fn jsonStringify(
+            self: JsonStringifiedAsParamsArray,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) @TypeOf(jw.*).Error!void {
+            switch (self.data) {
+                inline else => |method| {
+                    const T = @TypeOf(method);
+                    if (@hasDecl(T, "jsonStringify")) {
+                        try jw.write(method);
+                    } else {
+                        var null_count: usize = 0;
+
+                        try jw.beginArray();
+                        inline for (@typeInfo(T).Struct.fields) |field| cont: {
+                            const maybe_value = @field(method, field.name);
+                            const value = blk: {
+                                if (@typeInfo(field.type) != .Optional) break :blk maybe_value;
+                                if (maybe_value) |value| break :blk value;
+                                null_count += 1;
+                                break :cont;
+                            };
+
+                            // we counted `null_count` null element before this
+                            // without writing anything, and instead of writing
+                            // them we just skipped them. but since this element
+                            // isn't null, we have to write out the leading null
+                            // elements so that this one is at the correct index
+                            for (0..null_count) |_| try jw.write(null);
+                            null_count = 0;
+                            try jw.write(value);
+                        }
+                        try jw.endArray();
+                    }
+                },
+            }
+        }
+    };
+};
 
 pub const GetAccountInfo = struct {
     pubkey: Pubkey,
@@ -318,11 +427,15 @@ pub const GetVersion = struct {
             };
         }
 
-        pub fn jsonStringify(self: *Response, out_stream: anytype) !void {
+        pub fn jsonStringify(
+            self: Response,
+            /// `*std.json.WriteStream(...)`
+            jw: anytype,
+        ) @TypeOf(jw.*).Error!void {
             try std.json.stringify(.{
                 .@"solana-core" = self.solana_core,
                 .@"feature-set" = self.feature_set,
-            }, .{}, out_stream);
+            }, .{}, jw);
         }
     };
 };
