@@ -14,7 +14,6 @@ const SignedGossipData = sig.gossip.SignedGossipData;
 const RwMux = sig.sync.RwMux;
 
 const exp = std.math.exp;
-const shuffleFirstN = sig.utils.slice.shuffleFirstN;
 
 pub const MAX_BLOOM_SIZE: usize = 928;
 pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
@@ -176,7 +175,7 @@ pub const GossipPullFilterSet = struct {
 
         if (!can_consume_all) {
             // shuffle the indexs
-            shuffleFirstN(random, usize, indexs.items, n_filters);
+            sig.rand.shuffleFocusedRange(random, usize, indexs.items, 0, n_filters);
 
             // release others
             for (n_filters..set_size) |i| {
