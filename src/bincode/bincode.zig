@@ -118,6 +118,10 @@ pub fn readWithConfig(
             return error.UnknownUnionTag;
         },
         .Struct => |info| {
+            if (info.backing_integer) |BackingInt| {
+                return @bitCast(try read(allocator, BackingInt, reader, params));
+            }
+
             var data: T = undefined;
 
             inline for (info.fields, 0..) |field, i| {
@@ -402,8 +406,18 @@ pub fn writeWithConfig(
             return;
         },
         .Struct => |info| {
+            if (info.backing_integer) |BackingInt| {
+                try write(writer, @as(BackingInt, @bitCast(data)), params);
+                return;
+            }
             inline for (info.fields) |field| {
-                try writeFieldWithConfig(field, getFieldConfig(T, field), writer, @field(data, field.name), params);
+                try writeFieldWithConfig(
+                    field,
+                    getFieldConfig(T, field),
+                    writer,
+                    @field(data, field.name),
+                    params,
+                );
             }
             return;
         },
