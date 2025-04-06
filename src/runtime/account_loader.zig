@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
-const Bank = sig.accounts_db.Bank;
+const Hash = sig.core.Hash;
 
 // [firedancer] https://github.com/firedancer-io/firedancer/blob/ddde57c40c4d4334c25bb32de17f833d4d79a889/src/ballet/txn/fd_txn.h#L116
 const MAX_TX_ACCOUNT_LOCKS = 128;
@@ -309,10 +309,6 @@ pub fn serializeInstructions(
     return data;
 }
 
-test {
-    std.testing.refAllDecls(@This());
-}
-
 test "loadTransactionAccounts empty transaction" {
     const allocator = std.testing.allocator;
 
@@ -351,4 +347,115 @@ test "loadTransactionAccounts empty transaction" {
         bank,
         sig.runtime.FeatureSet.EMPTY,
     );
+}
+
+// (does not test deserialisation - not implemented yet)
+// [agave] https://github.com/anza-xyz/agave/blob/a00f1b5cdea9a7d5a70f8d24b86ea3ae66feff11/sdk/program/src/sysvar/instructions.rs#L520
+test serializeInstructions {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id0 = Pubkey.initRandom(prng.random());
+    const program_id1 = Pubkey.initRandom(prng.random());
+    const id0 = Pubkey.initRandom(prng.random());
+    const id1 = Pubkey.initRandom(prng.random());
+    const id2 = Pubkey.initRandom(prng.random());
+    const id3 = Pubkey.initRandom(prng.random());
+
+    const instructions = [_]BorrowedInstruction{
+        .{
+            .program_id = program_id0,
+            .accounts = &.{
+                .{ .pubkey = id0, .is_signer = false, .is_writeable = false },
+            },
+            .data = &.{0},
+        },
+        .{
+            .program_id = program_id0,
+            .accounts = &.{
+                .{ .pubkey = id1, .is_signer = true, .is_writeable = false },
+            },
+            .data = &.{0},
+        },
+        .{
+            .program_id = program_id1,
+            .accounts = &.{
+                .{ .pubkey = id2, .is_signer = false, .is_writeable = true },
+            },
+            .data = &.{0},
+        },
+        .{
+            .program_id = program_id1,
+            .accounts = &.{
+                .{ .pubkey = id3, .is_signer = true, .is_writeable = true },
+            },
+            .data = &.{0},
+        },
+    };
+
+    const serialized = try serializeInstructions(allocator, &instructions);
+    defer serialized.deinit();
+}
+
+test "loadTransactionAccounts sysvar instruction" {
+    const allocator = std.testing.allocator;
+
+    const tx: sig.core.Transaction = .{
+        .signatures = &.{},
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 0,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID},
+            .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.SIZE },
+            .instructions = &.{},
+            .address_lookups = &.{},
+        },
+    };
+    const max_total_data_size = 100_000;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var accounts_db = try sig.accounts_db.AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .noop,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+    });
+    defer accounts_db.deinit();
+
+    const bank_fields = try sig.accounts_db.snapshots.BankFields.initRandom(
+        allocator,
+        prng.random(),
+        10,
+    );
+    defer bank_fields.deinit(allocator);
+
+    const bank = sig.accounts_db.Bank.init(&accounts_db, &bank_fields);
+
+    const data = try loadTransactionAccounts(
+        allocator,
+        &tx,
+        max_total_data_size,
+        bank,
+        sig.runtime.FeatureSet.EMPTY,
+    );
+    try std.testing.expectEqual(0, data.collected_rent);
+
+    var returned_accounts: usize = 0;
+    for (data.accounts) |maybe_account| {
+        const account = maybe_account orelse continue;
+        try std.testing.expectEqual(sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID, account.owner);
+        try std.testing.expect(account.data.len > 0);
+        allocator.free(account.data);
+        returned_accounts += 1;
+    }
+    try std.testing.expect(returned_accounts == 1);
 }
