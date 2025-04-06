@@ -7,7 +7,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
-const Lazy = sig.utils.lazy.Lazy;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 
@@ -238,24 +237,47 @@ pub fn runService(
 /// 3. Call `deinit` to run all the defers.
 pub const DeferList = struct {
     allocator: Allocator,
-    defers: ArrayListUnmanaged(Lazy(void)) = .{},
+    defers: std.ArrayListUnmanaged(DeferredCall) = .{},
+    params: std.ArrayListUnmanaged(u8) = .{},
 
-    const Self = @This();
+    const DeferredCall = struct {
+        func: *const fn (args: *const anyopaque) void,
+        params_start: usize,
+    };
 
     pub fn deferCall(
-        self: *Self,
+        self: *DeferList,
         comptime function: anytype,
         args: anytype,
-    ) !void {
-        const lazy = try Lazy(void).init(self.allocator, function, args);
-        try self.defers.append(self.allocator, lazy);
+    ) std.mem.Allocator.Error!void {
+        const Args = @TypeOf(args);
+        const S = struct {
+            fn func(args_ptr: *const anyopaque) void {
+                const params_ptr: *align(1) const Args = @ptrCast(args_ptr);
+                @call(.auto, function, params_ptr.*);
+            }
+        };
+        errdefer @call(.auto, function, args);
+        try self.defers.ensureUnusedCapacity(self.allocator, 1);
+        try self.params.ensureUnusedCapacity(self.allocator, @sizeOf(Args));
+
+        const deferred_call = self.defers.addOneAssumeCapacity();
+        deferred_call.* = .{
+            .func = S.func,
+            .params_start = self.params.items.len,
+        };
+        self.params.appendSliceAssumeCapacity(std.mem.asBytes(&args));
     }
 
     /// Runs all the defers, then deinits this struct.
-    pub fn deinit(self: *Self) void {
-        for (1..self.defers.items.len + 1) |i| {
-            self.defers.items[self.defers.items.len - i].call();
+    pub fn deinit(self: *DeferList) void {
+        defer self.params.deinit(self.allocator);
+        defer self.defers.deinit(self.allocator);
+
+        for (1..self.defers.items.len + 1) |fwd_i| {
+            const rev_i = self.defers.items.len - fwd_i;
+            const deferred = self.defers.items[rev_i];
+            deferred.func(self.params.items.ptr + deferred.params_start);
         }
-        self.defers.deinit(self.allocator);
     }
 };
