@@ -52,3 +52,5 @@ pub const BPF_LOADER_UPGRADEABLE_ID =
     Pubkey.parseBase58String("BPFLoaderUpgradeab1e11111111111111111111111") catch unreachable;
 pub const BPF_LOADER_V4_ID =
     Pubkey.parseBase58String("LoaderV411111111111111111111111111111111111") catch unreachable;
+pub const Incinerator =
+    Pubkey.parseBase58String("1nc1nerator11111111111111111111111111111111") catch unreachable;
