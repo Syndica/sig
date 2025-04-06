@@ -44,6 +44,9 @@ pub const DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL =
 pub const DISABLE_ACCOUNT_LOADER_SPECIAL_CASE =
     Pubkey.parseBase58String("EQUMpNFr7Nacb1sva56xn1aLfBxppEoSBH8RRVdkcD1x") catch unreachable;
 
+pub const DISABLE_RENT_FEES_COLLECTION =
+    Pubkey.parseBase58String("CJzY83ggJHqPGDq8VisV3U91jDJLuEaALZooBrXtnnLU") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features

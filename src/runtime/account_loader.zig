@@ -2,62 +2,28 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
-
 const AccountSharedData = sig.runtime.AccountSharedData;
-const TransactionError = sig.ledger.transaction_status.TransactionError; // TODO: let's put this somewhere else
-
-/// Roughly 0.5us/page, where page is 32K; given roughly 15CU/us, the
-/// default heap page cost = 0.5 * 15 ~= 8CU/page
-pub const DEFAULT_HEAP_COST: u64 = 8;
-pub const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT: u32 = 200_000;
-// SIMD-170 defines max CUs to be allocated for any builtin program instructions, that
-// have not been migrated to sBPF programs.
-pub const MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT: u32 = 3_000;
-pub const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
-pub const MAX_HEAP_FRAME_BYTES: u32 = 256 * 1024;
-pub const MIN_HEAP_FRAME_BYTES: u32 = HEAP_LENGTH;
-
-/// Length of the heap memory region used for program heap.
-pub const HEAP_LENGTH = 32 * 1024;
-
-/// The total accounts data a transaction can load is limited to 64MiB to not break
-/// anyone in Mainnet-beta today. It can be set by set_loaded_accounts_data_size_limit instruction
-pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
+const Bank = sig.accounts_db.Bank;
 
 // [firedancer] https://github.com/firedancer-io/firedancer/blob/ddde57c40c4d4334c25bb32de17f833d4d79a889/src/ballet/txn/fd_txn.h#L116
 const MAX_TX_ACCOUNT_LOCKS = 128;
 
-const Return = struct {
+pub const AccountsAndCollectedRent = struct {
     collected_rent: u64 = 0,
     accounts: [MAX_TX_ACCOUNT_LOCKS]?AccountSharedData = .{null} ** MAX_TX_ACCOUNT_LOCKS,
 };
 
-test {
-    std.testing.refAllDecls(@This());
-}
-
 // [firedancer] https://github.com/firedancer-io/firedancer/blob/49056135a4c7ba024cb75a45925439239904238b/src/flamenco/runtime/fd_executor.c#L377
 // firedancer actually already has the accounts data ready at this point, but Agave calls into the
-// bank's callbacks into accountsdb.
+// bank's callbacks into accountsdb. I like the idea of loading them up first, but going with the
+// bank for now.
 pub fn loadTransactionAccounts(
     allocator: std.mem.Allocator,
     tx: *const sig.core.Transaction,
-    // should be inside tx?
-    requested_max_total_data_size: u32,
-
-    // could take in a bank instead?
-    slot: Slot,
-    schedule: sig.core.EpochSchedule,
-    accounts_db: *sig.accounts_db.AccountsDB,
-    //
+    requested_max_total_data_size: u32, // should be inside the tx?
+    bank: sig.accounts_db.Bank,
     features: sig.runtime.FeatureSet,
-) !Return {
-    // required for rent logic
-    const epoch, const slot_index = schedule.getEpochAndSlotIndex(slot);
-    _ = slot_index;
-    _ = epoch;
-
+) !AccountsAndCollectedRent {
     const account_in_instr = blk: {
         var buf_instr = [_]bool{false} ** MAX_TX_ACCOUNT_LOCKS;
         for (tx.msg.instructions) |instruction| {
@@ -68,7 +34,7 @@ pub fn loadTransactionAccounts(
         break :blk buf_instr;
     };
 
-    var retval: Return = .{};
+    var retval: AccountsAndCollectedRent = .{};
     errdefer {
         for (retval.accounts) |maybe_account| {
             if (maybe_account) |account| allocator.free(account.data);
@@ -109,10 +75,10 @@ pub fn loadTransactionAccounts(
         }
 
         // case 3: default case
-        const found_account = try accounts_db.getAccount(&account_key);
-        defer found_account.deinit(accounts_db.allocator);
+        const found_account = try bank.accounts_db.getAccount(&account_key);
+        defer found_account.deinit(bank.accounts_db.allocator);
 
-        const found_shared_account: AccountSharedData = .{
+        var found_shared_account: AccountSharedData = .{
             .data = try found_account.data.readAllAllocate(allocator),
             .executable = found_account.executable,
             .lamports = found_account.lamports,
@@ -120,11 +86,14 @@ pub fn loadTransactionAccounts(
             .rent_epoch = found_account.rent_epoch,
         };
 
-        retval.accounts[account_idx] = found_shared_account;
+        defer retval.accounts[account_idx] = found_shared_account;
         account_data_size += found_shared_account.data.len;
         if (is_writeable) {
-            retval.collected_rent += collectRent(account_key);
-            // acct->starting_lamports = acct->meta->info.lamports; ? Not sure if we need a field like this
+            const collected = bank.bank_fields.rent_collector.collectFromExistingAccount(
+                &account_key,
+                &found_shared_account,
+            );
+            retval.collected_rent += collected.rent_amount;
         }
 
         try accumulateAndCheckLoadedAccountDataSize(
@@ -151,10 +120,9 @@ pub fn loadTransactionAccounts(
 
         if (program_account.owner.equals(&sig.runtime.ids.NATIVE_LOADER_ID)) continue;
 
-        const found_owner = accounts_db.getAccount(&program_account.owner) catch
+        const found_owner = bank.accounts_db.getAccount(&program_account.owner) catch
             return error.ProgramAccountNotFound;
-
-        defer found_owner.deinit(accounts_db.allocator);
+        defer found_owner.deinit(bank.accounts_db.allocator);
 
         const owner: AccountSharedData = .{
             .data = try found_owner.data.readAllAllocate(allocator),
@@ -262,6 +230,7 @@ fn constructInstructionsAccount(
     };
 }
 
+// required for DISABLE_ACCOUNT_LOADER_SPECIAL_CASE=false (not yet supported)
 fn isMaybeInLoadedProgramCache(account: Pubkey) bool {
     // const keys = .{
     //     sig.runtime.ids.BPF_LOADER_DEPRECATED_ID,
@@ -283,6 +252,7 @@ const InstructionsSysvarAccountMeta = packed struct(u8) {
     _: u6 = 0, // padding
 };
 
+// TODO: this should live somewhere else
 // [agave] solana-instructions-sysvar-2.2.1/src/lib.rs:99
 // First encode the number of instructions:
 // [0..2 - num_instructions
@@ -339,7 +309,46 @@ pub fn serializeInstructions(
     return data;
 }
 
-fn collectRent(account: Pubkey) u64 {
-    _ = account;
-    return 0; // TODO: rent collection!
+test {
+    std.testing.refAllDecls(@This());
+}
+
+test "loadTransactionAccounts empty transaction" {
+    const allocator = std.testing.allocator;
+
+    const tx = sig.core.Transaction.EMPTY;
+    const max_total_data_size = 100_000;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var accounts_db = try sig.accounts_db.AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .noop,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 4,
+    });
+    defer accounts_db.deinit();
+
+    const bank_fields = try sig.accounts_db.snapshots.BankFields.initRandom(
+        allocator,
+        prng.random(),
+        10,
+    );
+    defer bank_fields.deinit(allocator);
+
+    const bank = sig.accounts_db.Bank.init(&accounts_db, &bank_fields);
+
+    _ = try loadTransactionAccounts(
+        allocator,
+        &tx,
+        max_total_data_size,
+        bank,
+        sig.runtime.FeatureSet.EMPTY,
+    );
 }
