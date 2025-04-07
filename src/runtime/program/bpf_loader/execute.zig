@@ -1589,6 +1589,7 @@ test "executeDeployWithMaxDataLen" {
                 .{
                     .pubkey = payer_account_key,
                     .lamports = @max(1, rent.minimumBalance(final_program_data_account_size)),
+                    .owner = system_program.ID,
                 },
                 .{
                     .pubkey = program_data_account_key,
@@ -1631,6 +1632,7 @@ test "executeDeployWithMaxDataLen" {
                 .{
                     .pubkey = payer_account_key,
                     .lamports = initial_buffer_account_lamports,
+                    .owner = system_program.ID,
                 },
                 .{
                     .pubkey = program_data_account_key,
@@ -2032,7 +2034,7 @@ test "executeV3Close" {
             },
             &.{
                 .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+                .{ .is_signer = true, .is_writable = true, .index_in_transaction = 1 },
             },
             .{
                 .accounts = &.{
@@ -2100,7 +2102,7 @@ test "executeV3Close" {
             },
             &.{
                 .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
                 .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
             },
             .{
@@ -2190,7 +2192,7 @@ test "executeV3Close" {
             },
             &.{
                 .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
                 .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
                 .{ .is_signer = false, .is_writable = true, .index_in_transaction = 3 },
             },
@@ -2546,6 +2548,7 @@ test "executeV3ExtendProgram" {
                     .{
                         .pubkey = payer_account_key,
                         .lamports = payer_balance,
+                        .owner = system_program.ID,
                     },
                     .{
                         .pubkey = system_program.ID,
@@ -2579,6 +2582,7 @@ test "executeV3ExtendProgram" {
                     .{
                         .pubkey = payer_account_key,
                         .lamports = payer_balance - help_pay,
+                        .owner = system_program.ID,
                     },
                     .{
                         .pubkey = system_program.ID,
