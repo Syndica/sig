@@ -132,3 +132,48 @@ pub const ErrorCode = enum(i64) {
         try jw.write(@intFromEnum(self));
     }
 };
+
+test testErrorCodeParse {
+    try testErrorCodeParse(.{}, .parse_error, "-32700");
+    try testErrorCodeParse(.{}, .invalid_request, "-32600");
+    try testErrorCodeParse(.{}, .method_not_found, "-32601");
+    try testErrorCodeParse(.{}, .invalid_params, "-32602");
+    try testErrorCodeParse(.{}, .internal_error, "-32603");
+    try testErrorCodeParse(.{}, @enumFromInt(-1), "-1");
+    try testErrorCodeParse(.{}, error.Overflow, "999999999999999999999999999999999999999999");
+}
+
+fn testErrorCodeParse(
+    options: std.json.ParseOptions,
+    expected: std.json.ParseError(std.json.Scanner)!ErrorCode,
+    str: []const u8,
+) !void {
+    const allocator = std.testing.allocator;
+    const actual_res = std.json.parseFromSlice(ErrorCode, allocator, str, options) catch |err| {
+        try std.testing.expectEqual(expected, err);
+        return;
+    };
+    defer actual_res.deinit();
+    const actual = actual_res.value;
+    try std.testing.expectEqual(expected, actual);
+}
+
+test testErrorCodeStringify {
+    try testErrorCodeStringify(.{}, .parse_error, "-32700");
+    try testErrorCodeStringify(.{}, .invalid_request, "-32600");
+    try testErrorCodeStringify(.{}, .method_not_found, "-32601");
+    try testErrorCodeStringify(.{}, .invalid_params, "-32602");
+    try testErrorCodeStringify(.{}, .internal_error, "-32603");
+    try testErrorCodeStringify(.{}, @enumFromInt(-1), "-1");
+}
+
+fn testErrorCodeStringify(
+    options: std.json.StringifyOptions,
+    value: ErrorCode,
+    expected: []const u8,
+) !void {
+    const allocator = std.testing.allocator;
+    const actual = try std.json.stringifyAlloc(allocator, value, options);
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualStrings(expected, actual);
+}
