@@ -564,7 +564,9 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.tc.sc.ec.feature_set.active.contains(features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
+        if (ic.tc.sc.ec.feature_set.active.contains(
+            features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+        )) {
             const versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,

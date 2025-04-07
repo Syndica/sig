@@ -321,7 +321,9 @@ pub fn prepareCpiInstructionInfo(
             try caller.borrowInstructionAccount(index_in_caller);
         defer borrowed_account.release();
 
-        if (!tc.sc.ec.feature_set.active.contains(features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
+        if (!tc.sc.ec.feature_set.active.contains(
+            features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+        ) and
             !borrowed_account.account.executable)
         {
             try tc.log("Account {} is not executable", .{callee.program_id});
