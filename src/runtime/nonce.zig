@@ -89,18 +89,18 @@ pub fn initDurableNonceFromHash(blockhash: Hash) Hash {
 }
 
 test "verify_durable_nonce" {
-    const prng = std.rand.DefaultPrng.init(0);
+    var prng = std.rand.DefaultPrng.init(0);
 
-    const blockhash = Hash{ .data = [32]u8{171} ** 32 };
+    const blockhash = Hash{ .data = [_]u8{171} ** 32 };
 
     {
-        const versions = Versions{ .legacy = .{.unintialized} };
+        const versions = Versions{ .legacy = .unintialized };
         try std.testing.expectEqual(null, versions.verify(blockhash));
         try std.testing.expectEqual(null, versions.verify(Hash.ZEROES));
     }
 
     {
-        const versions = Versions{ .current = .{.unintialized} };
+        const versions = Versions{ .current = .unintialized };
         try std.testing.expectEqual(null, versions.verify(blockhash));
         try std.testing.expectEqual(null, versions.verify(Hash.ZEROES));
     }
