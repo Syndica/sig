@@ -235,7 +235,7 @@ const CallerAccount = struct {
         account_info: *const AccountInfo,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
-        _ = vm_addr;
+        _ = _vm_addr;
 
         const direct_mapping = ic.tc.feature_set.active.contains(
             feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
