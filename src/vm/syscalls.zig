@@ -5,6 +5,8 @@ const lib = @import("lib.zig");
 const interpreter = @import("interpreter.zig");
 const transaction_context = @import("../runtime/transaction_context.zig");
 
+pub const cpi = @import("syscalls/cpi.zig"); // pub to trigger tests
+
 const testElfWithSyscalls = @import("tests.zig").testElfWithSyscalls;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = lib.memory.MemoryMap;

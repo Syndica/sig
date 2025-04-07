@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../../../sig.zig");
-const memory = @import("../../../vm/memory.zig");
+const sig = @import("../../sig.zig");
+const memory = @import("../memory.zig");
 
 const ids = sig.runtime.ids;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
@@ -15,13 +15,12 @@ const InstructionContext = sig.runtime.InstructionContext;
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L86
-const SyscallError = error{
-    InvalidPointer,
-    InvalidLength,
+pub const SyscallError = error{
     UnalignedPointer,
-};
+    InvalidPointer,
+} || sig.vm.syscalls.Error;
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/master/stable-layout/src/stable_vec.rs#L30
 fn StableVec(comptime T: type) type {
     return extern struct {
         const Self = @This();
@@ -42,6 +41,7 @@ fn StableVec(comptime T: type) type {
     };
 }
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/0666fa5999750153070e5c43d64813467bfdc38e/stable-layout/src/stable_instruction.rs#L33
 const StableInstruction = extern struct {
     accounts: StableVec(AccountMeta),
     data: StableVec(u8),
@@ -61,6 +61,7 @@ const AccountMeta = extern struct {
     executable: bool,
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/f39fb5af97d46de368779cf5e1b032f0e3e745b7/program-runtime/src/invoke_context.rs#L178
 const SerializedAccountMetadata = struct {
     original_data_len: usize,
     vm_data_addr: u64,
@@ -84,10 +85,10 @@ const AccountInfoC = extern struct {
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
 const AccountInfoRust = extern struct {
-    key: u64,
+    key_addr: u64,
     lamports_addr: Rc(RefCell(u64)),
     data: Rc(RefCell([]u8)),
-    owner: u64,
+    owner_addr: u64,
     rent_epoch: Epoch,
     is_signer: bool,
     is_writable: bool,
@@ -282,13 +283,13 @@ const CallerAccount = struct {
         if (direct_mapping) {
             try checkAccountInfoPtr(
                 ic,
-                account_info.key,
+                account_info.key_addr,
                 account_metadata.vm_key_addr,
                 "key",
             );
             try checkAccountInfoPtr(
                 ic,
-                account_info.owner,
+                account_info.owner_addr,
                 account_metadata.vm_owner_addr,
                 "owner",
             );
@@ -333,7 +334,7 @@ const CallerAccount = struct {
             Pubkey,
             .mutable,
             memory_map,
-            account_info.owner,
+            account_info.owner_addr,
             ic.getCheckAligned(),
         );
 
@@ -658,7 +659,7 @@ test "CallerAccount" {
         const data_len = acc_shared.data.len;
 
         buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
-            .key = key_addr,
+            .key_addr = key_addr,
             .is_signer = acc_meta.is_signer,
             .is_writable = acc_meta.is_writable,
             .lamports_addr = Rc(RefCell(u64)).fromRaw(
@@ -667,7 +668,7 @@ test "CallerAccount" {
             .data = Rc(RefCell([]u8)).fromRaw(
                 @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
             ),
-            .owner = owner_addr,
+            .owner_addr = owner_addr,
             .executable = acc_shared.executable,
             .rent_epoch = acc_shared.rent_epoch,
         });
