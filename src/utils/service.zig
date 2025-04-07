@@ -236,7 +236,7 @@ pub fn runService(
 /// 2. Return this struct to the broader scope.
 /// 3. Call `deinit` to run all the defers.
 pub const DeferList = struct {
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     defers: std.ArrayListUnmanaged(DeferredCall) = .{},
     params: std.ArrayListUnmanaged(u8) = .{},
 
@@ -245,6 +245,7 @@ pub const DeferList = struct {
         params_start: usize,
     };
 
+    /// If this fails to allocate, it will run `function(args...)` before returning the error.
     pub fn deferCall(
         self: *DeferList,
         comptime function: anytype,
@@ -269,15 +270,60 @@ pub const DeferList = struct {
         self.params.appendSliceAssumeCapacity(std.mem.asBytes(&args));
     }
 
-    /// Runs all the defers, then deinits this struct.
-    pub fn deinit(self: *DeferList) void {
-        defer self.params.deinit(self.allocator);
-        defer self.defers.deinit(self.allocator);
-
+    /// Invoke all deferred calls, emptying internal buffers without deinitializing.
+    pub fn invoke(self: *DeferList) void {
         for (1..self.defers.items.len + 1) |fwd_i| {
             const rev_i = self.defers.items.len - fwd_i;
             const deferred = self.defers.items[rev_i];
             deferred.func(self.params.items.ptr + deferred.params_start);
         }
+        self.defers.clearRetainingCapacity();
+        self.params.clearRetainingCapacity();
+    }
+
+    /// Invoke all deferred calls, then deinit this struct.
+    pub fn deinit(self: *DeferList) void {
+        self.invoke();
+        self.params.deinit(self.allocator);
+        self.defers.deinit(self.allocator);
     }
 };
+
+test DeferList {
+    const allocator = std.testing.allocator;
+    var defers: DeferList = .{ .allocator = allocator };
+    defer defers.deinit();
+
+    {
+        // if this leaks, that means something is wrong with
+        // the implementation of `DeferList`.
+        const leaky_allocation = try allocator.alloc(u8, 32);
+
+        const S = struct {
+            fn free(_allocator: std.mem.Allocator, buffer: []u8) void {
+                _allocator.free(buffer);
+            }
+        };
+
+        try defers.deferCall(S.free, .{ allocator, leaky_allocation });
+        // defer outlives this block
+    }
+
+    var output: std.ArrayListUnmanaged(u8) = .{};
+    defer output.deinit(allocator);
+
+    // defers run in reverse order, just as normal defers
+    for ([_][]const u8{ " world!", "Hello," }) |slice| {
+        const S = struct {
+            fn append(out: *std.ArrayListUnmanaged(u8), bytes: []const u8) void {
+                out.appendSliceAssumeCapacity(bytes);
+            }
+        };
+
+        try output.ensureUnusedCapacity(allocator, output.capacity + slice.len);
+        try defers.deferCall(S.append, .{ &output, slice });
+    }
+
+    defers.invoke();
+    try std.testing.expectEqualStrings("Hello, world!", output.items);
+}
