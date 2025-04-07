@@ -995,7 +995,6 @@ pub const VoteState = struct {
             return err;
         }
 
-        // TODO BoundedArray?
         var lockouts = try std.ArrayList(LandedVote).initCapacity(
             allocator,
             tower_sync.lockouts.items.len,
@@ -1035,7 +1034,6 @@ pub const VoteState = struct {
             return err;
         }
 
-        // TODO BoundedArray?
         var lockouts = try std.ArrayList(LandedVote).initCapacity(
             allocator,
             vote_state_update.lockouts.items.len,
