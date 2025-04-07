@@ -471,7 +471,7 @@ test "processNextInstruction" {
         prng.random(),
         .{
             .accounts = &.{
-                .{ .lamports = 2_000 },
+                .{ .lamports = 2_000, .owner = system_program.ID },
                 .{ .lamports = 0 },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },

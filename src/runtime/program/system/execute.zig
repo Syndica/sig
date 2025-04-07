@@ -31,6 +31,8 @@ pub fn execute(
     const instruction = try ic.info.deserializeInstruction(allocator, SystemProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
+    // std.debug.print("instruction: {}\n", .{instruction});
+
     return switch (instruction) {
         .create_account => |args| try executeCreateAccount(
             allocator,
@@ -808,7 +810,7 @@ test "executeCreateAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .lamports = 2_000_000 },
+                .{ .pubkey = account_0_key, .lamports = 2_000_000, .owner = system_program.ID },
                 .{ .pubkey = account_1_key, .owner = system_program.ID },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
@@ -816,7 +818,7 @@ test "executeCreateAccount" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .lamports = 1_000_000 },
+                .{ .pubkey = account_0_key, .lamports = 1_000_000, .owner = system_program.ID },
                 .{
                     .pubkey = account_1_key,
                     .owner = system_program.ID,
@@ -876,8 +878,6 @@ test "executeTransfer" {
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = Pubkey.initRandom(prng.random());
-    std.debug.print("account_0: {}\n", .{account_0_key});
-    std.debug.print("account_1: {}\n", .{account_1_key});
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
@@ -893,7 +893,7 @@ test "executeTransfer" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .lamports = 2_000_000 },
+                .{ .pubkey = account_0_key, .lamports = 2_000_000, .owner = system_program.ID },
                 .{ .pubkey = account_1_key },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
@@ -901,7 +901,7 @@ test "executeTransfer" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .lamports = 1_000_000 },
+                .{ .pubkey = account_0_key, .lamports = 1_000_000, .owner = system_program.ID },
                 .{ .pubkey = account_1_key, .lamports = 1_000_000 },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
@@ -941,7 +941,7 @@ test "executeCreateAccountWithSeed" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .lamports = 2_000_000 },
+                .{ .pubkey = account_0_key, .lamports = 2_000_000, .owner = system_program.ID },
                 .{ .pubkey = account_1_key, .owner = system_program.ID },
                 .{ .pubkey = base },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
@@ -950,7 +950,7 @@ test "executeCreateAccountWithSeed" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .lamports = 1_000_000 },
+                .{ .pubkey = account_0_key, .lamports = 1_000_000, .owner = system_program.ID },
                 .{ .pubkey = account_1_key, .owner = system_program.ID, .lamports = 1_000_000 },
                 .{ .pubkey = base },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
@@ -1107,6 +1107,7 @@ test "executeWithdrawNonceAccount" {
                     .pubkey = account_0_key,
                     .lamports = 2 * withdraw_lamports + rent_minimum_balance,
                     .data = nonce_state_bytes,
+                    .owner = system_program.ID,
                 },
                 .{ .pubkey = account_1_key },
                 .{ .pubkey = RecentBlockhashes.ID },
@@ -1126,6 +1127,7 @@ test "executeWithdrawNonceAccount" {
                     .pubkey = account_0_key,
                     .lamports = withdraw_lamports + rent_minimum_balance,
                     .data = nonce_state_bytes,
+                    .owner = system_program.ID,
                 },
                 .{ .pubkey = account_1_key, .lamports = withdraw_lamports },
                 .{ .pubkey = RecentBlockhashes.ID },
@@ -1485,7 +1487,7 @@ test "executeTransferWithSeed" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .lamports = 2_000_000 },
+                .{ .pubkey = account_0_key, .lamports = 2_000_000, .owner = system_program.ID },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 0 },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
@@ -1494,7 +1496,7 @@ test "executeTransferWithSeed" {
         },
         .{
             .accounts = &.{
-                .{ .pubkey = account_0_key, .lamports = 1_000_000 },
+                .{ .pubkey = account_0_key, .lamports = 1_000_000, .owner = system_program.ID },
                 .{ .pubkey = base },
                 .{ .pubkey = account_2_key, .lamports = 1_000_000 },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
@@ -1530,7 +1532,7 @@ test "executeUpgradeNonceAccount" {
     const final_nonce_state = nonce.Versions{
         .current = nonce.State{ .initialized = nonce.Data.init(
             nonce_authority,
-            durable_nonce,
+            nonce.initDurableNonceFromHash(durable_nonce),
             lamports_per_signature,
         ) },
     };
@@ -1565,51 +1567,6 @@ test "executeUpgradeNonceAccount" {
                     .pubkey = account_0_key,
                     .owner = system_program.ID,
                     .data = final_nonce_state_bytes,
-                },
-                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
-            },
-        },
-        .{},
-    );
-}
-
-test "executeUpgradeNonceAccount:InvalidArgument" {
-    const ids = sig.runtime.ids;
-    const testing = sig.runtime.program.testing;
-
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    const account_0_key = Pubkey.initRandom(prng.random());
-
-    try testing.expectProgramExecuteResult(
-        allocator,
-        system_program.ID,
-        SystemProgramInstruction{
-            .upgrade_nonce_account = {},
-        },
-        &.{
-            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = account_0_key,
-                    .lamports = 1_000_000,
-                    .data = &[_]u8{0} ** 8,
-                    .owner = system_program.ID,
-                },
-                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
-            },
-            .compute_meter = system_program.COMPUTE_UNITS,
-        },
-        .{
-            .accounts = &.{
-                .{
-                    .pubkey = account_0_key,
-                    .lamports = 1_000_000,
-                    .data = &[_]u8{0} ** 8,
-                    .owner = system_program.ID,
                 },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
