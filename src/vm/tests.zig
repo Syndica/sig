@@ -72,6 +72,7 @@ fn testAsmWithMemory(
         .{ .accounts = &.{}, .compute_meter = expected[1] },
     );
     defer {
+        ec.deinit();
         allocator.destroy(ec);
         allocator.destroy(sc);
     }
@@ -1904,6 +1905,7 @@ test "pqr" {
         .{ .accounts = &.{}, .compute_meter = 6 },
     );
     defer {
+        ec.deinit();
         allocator.destroy(ec);
         allocator.destroy(sc);
     }
@@ -2332,6 +2334,7 @@ pub fn testElfWithSyscalls(
         .{ .accounts = &.{}, .compute_meter = expected[1] },
     );
     defer {
+        ec.deinit();
         allocator.destroy(ec);
         allocator.destroy(sc);
     }

@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const vm = sig.vm;
-const feature_set = sig.runtime.features;
+const features = sig.runtime.features;
 const serialize = sig.runtime.program.bpf.serialize;
 const stable_log = sig.runtime.stable_log;
 
@@ -20,7 +20,7 @@ pub fn execute(
 
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
         if (!ic.tc.sc.ec.feature_set.active.contains(
-            feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+            features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !program_account.account.executable)
         {
@@ -62,7 +62,7 @@ pub fn execute(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
     const direct_mapping = ic.tc.sc.ec.feature_set.active.contains(
-        feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
@@ -348,7 +348,7 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust,);
 
     // Memory Allocator
-    if (!tc.sc.ec.feature_set.active.contains(feature_set.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
+    if (!tc.sc.ec.feature_set.active.contains(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_alloc_free_",
@@ -367,7 +367,7 @@ fn registerSyscalls(
     // }
 
     // Poseidon
-    if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_POSEIDON_SYSCALL)) {
+    if (tc.sc.ec.feature_set.active.contains(features.ENABLE_POSEIDON_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_poseidon",

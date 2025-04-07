@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const ids = sig.runtime.ids;
 const program = sig.runtime.program;
 const stable_log = sig.runtime.stable_log;
-const feature_set = sig.runtime.features;
+const features = sig.runtime.features;
 
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -304,7 +304,7 @@ pub fn prepareCpiInstructionInfo(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
     const program_index_in_transaction = if (tc.sc.ec.feature_set.active.contains(
-        feature_set.LIFT_CPI_CALLER_RESTRICTION,
+        features.LIFT_CPI_CALLER_RESTRICTION,
     )) blk: {
         break :blk tc.getAccountIndex(callee.program_id) orelse {
             try tc.log("Unknown program {}", .{callee.program_id});
@@ -321,7 +321,7 @@ pub fn prepareCpiInstructionInfo(
             try caller.borrowInstructionAccount(index_in_caller);
         defer borrowed_account.release();
 
-        if (!tc.sc.ec.feature_set.active.contains(feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
+        if (!tc.sc.ec.feature_set.active.contains(features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS) and
             !borrowed_account.account.executable)
         {
             try tc.log("Account {} is not executable", .{callee.program_id});
@@ -757,11 +757,11 @@ test "prepareCpiInstructionInfo" {
 
         try ec.feature_set.active.put(
             allocator,
-            feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+            features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
             0,
         );
         defer _ = ec.feature_set.active.swapRemove(
-            feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+            features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         );
 
         _ = try prepareCpiInstructionInfo(&tc, callee, &.{});

@@ -23,7 +23,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
-const feature_set = sig.runtime.features;
+const features = sig.runtime.features;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 
@@ -564,7 +564,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.tc.sc.ec.feature_set.active.contains(feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
+        if (ic.tc.sc.ec.feature_set.active.contains(features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
             const versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,
@@ -583,7 +583,7 @@ fn updateCommission(
     };
 
     if (enforce_commission_update_rule and ic.tc.sc.ec.feature_set.active.contains(
-        feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+        features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
             // Clean up before returning, if we have a vote_state already.
@@ -740,8 +740,8 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.sc.ec.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
+    if (ic.tc.sc.ec.feature_set.active.contains(features.DEPRECATE_LEGACY_VOTE_IXS) and
+        ic.tc.sc.ec.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX))
     {
         return InstructionError.InvalidInstructionData;
     }
@@ -2144,11 +2144,11 @@ test "vote_program: update_commission increasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2171,11 +2171,11 @@ test "vote_program: update_commission increasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2269,11 +2269,11 @@ test "vote_program: update_commission decreasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2296,11 +2296,11 @@ test "vote_program: update_commission decreasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2501,11 +2501,11 @@ test "vote_program: update_commission error commission update too late failure" 
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2528,11 +2528,11 @@ test "vote_program: update_commission error commission update too late failure" 
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2631,11 +2631,11 @@ test "vote_program: update_commission missing signature" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2658,11 +2658,11 @@ test "vote_program: update_commission missing signature" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },

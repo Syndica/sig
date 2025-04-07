@@ -9,7 +9,7 @@ const sysvar = sig.runtime.sysvar;
 const bpf_program = sig.runtime.program.bpf;
 const system_program = sig.runtime.program.system_program;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
-const feature_set = sig.runtime.features;
+const features = sig.runtime.features;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -736,7 +736,7 @@ pub fn executeV3SetAuthorityChecked(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!ic.tc.sc.ec.feature_set.active.contains(
-        feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
+        features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
     )) {
         return InstructionError.InvalidInstructionData;
     }
@@ -1120,7 +1120,7 @@ pub fn executeV3Migrate(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!ic.tc.sc.ec.feature_set.active.contains(
-        feature_set.ENABLE_LOADER_V4,
+        features.ENABLE_LOADER_V4,
     )) {
         return InstructionError.InvalidInstructionData;
     }
@@ -1335,7 +1335,7 @@ pub fn deployProgram(
     program_len: usize,
     program_data: []const u8,
     slot: u64,
-    features: FeatureSet,
+    feature_set: FeatureSet,
     maybe_log_collector: ?*LogCollector,
 ) (error{OutOfMemory} || InstructionError)!void {
     _ = allocator;
@@ -1344,7 +1344,7 @@ pub fn deployProgram(
     _ = program_len;
     _ = program_data;
     _ = slot;
-    _ = features;
+    _ = feature_set;
     _ = maybe_log_collector;
 }
 
@@ -1896,7 +1896,7 @@ test "executeV3SetAuthorityChecked" {
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
             .feature_set = &.{
-                .{ .pubkey = feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
+                .{ .pubkey = features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
             },
         },
         .{
@@ -1972,7 +1972,7 @@ test "executeV3SetAuthorityChecked" {
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
             .feature_set = &.{
-                .{ .pubkey = feature_set.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
+                .{ .pubkey = features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
             },
         },
         .{
@@ -2686,7 +2686,7 @@ test "executeV3Migrate" {
             },
             .compute_meter = compute_units,
             .feature_set = &.{
-                .{ .pubkey = feature_set.ENABLE_LOADER_V4, .slot = 0 },
+                .{ .pubkey = features.ENABLE_LOADER_V4, .slot = 0 },
             },
             .sysvar_cache = .{
                 .rent = sysvar.Rent.DEFAULT,
