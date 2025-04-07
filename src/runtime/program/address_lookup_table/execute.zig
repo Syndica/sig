@@ -697,7 +697,7 @@ test "address-lookup-table create" {
             .data = &.{},
         },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = payer, .lamports = before_lamports },
+        .{ .pubkey = payer, .lamports = before_lamports, .owner = system_program.ID },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system_program.ID,
@@ -714,7 +714,7 @@ test "address-lookup-table create" {
             .data = expected_state,
         },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = payer, .lamports = after_lamports },
+        .{ .pubkey = payer, .lamports = after_lamports, .owner = system_program.ID },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system_program.ID,
@@ -1137,7 +1137,11 @@ test "address-lookup-table extend" {
                 .data = before_lookup_table,
             },
             .{ .pubkey = unsigned_authority_address },
-            .{ .pubkey = payer, .lamports = if (payer_required) required_lamports else 0 },
+            .{
+                .pubkey = payer,
+                .lamports = if (payer_required) required_lamports else 0,
+                .owner = system_program.ID,
+            },
             .{
                 .pubkey = program.ID,
                 .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -1158,7 +1162,11 @@ test "address-lookup-table extend" {
                 .data = after_lookup_table,
             },
             .{ .pubkey = unsigned_authority_address },
-            .{ .pubkey = payer, .lamports = 0 },
+            .{
+                .pubkey = payer,
+                .lamports = 0,
+                .owner = system_program.ID,
+            },
             .{
                 .pubkey = program.ID,
                 .owner = runtime.ids.NATIVE_LOADER_ID,
