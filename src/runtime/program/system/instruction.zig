@@ -1,6 +1,8 @@
+const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
+const InstructionError = sig.core.instruction.InstructionError;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
 pub const Instruction = union(enum) {
@@ -175,4 +177,96 @@ pub const Instruction = union(enum) {
     /// # Account references
     ///   0. `[WRITE]` Nonce account
     upgrade_nonce_account,
+
+    pub const @"!bincode-config": sig.bincode.FieldConfig(Instruction) = .{
+        .deserializer = Instruction.deserialize,
+    };
+
+    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !Instruction {
+        const discriminant = try reader.readInt(u32, .little);
+        return switch (discriminant) {
+            0 => .{
+                .create_account = .{
+                    .lamports = try reader.readInt(u64, .little),
+                    .space = try reader.readInt(u64, .little),
+                    .owner = try deserializePubkey(reader),
+                },
+            },
+            1 => .{
+                .assign = .{
+                    .owner = try deserializePubkey(reader),
+                },
+            },
+            2 => .{
+                .transfer = .{
+                    .lamports = try reader.readInt(u64, .little),
+                },
+            },
+            3 => .{
+                .create_account_with_seed = .{
+                    .base = try deserializePubkey(reader),
+                    .seed = try deserializeUtf8String(allocator, reader),
+                    .lamports = try reader.readInt(u64, .little),
+                    .space = try reader.readInt(u64, .little),
+                    .owner = try deserializePubkey(reader),
+                },
+            },
+            4 => .advance_nonce_account,
+            5 => .{
+                .withdraw_nonce_account = try reader.readInt(u64, .little),
+            },
+            6 => .{
+                .initialize_nonce_account = try deserializePubkey(reader),
+            },
+            7 => .{
+                .authorize_nonce_account = try deserializePubkey(reader),
+            },
+            8 => .{
+                .allocate = .{
+                    .space = try reader.readInt(u64, .little),
+                },
+            },
+            9 => .{
+                .allocate_with_seed = .{
+                    .base = try deserializePubkey(reader),
+                    .seed = try deserializeUtf8String(allocator, reader),
+                    .space = try reader.readInt(u64, .little),
+                    .owner = try deserializePubkey(reader),
+                },
+            },
+            10 => .{
+                .assign_with_seed = .{
+                    .base = try deserializePubkey(reader),
+                    .seed = try deserializeUtf8String(allocator, reader),
+                    .owner = try deserializePubkey(reader),
+                },
+            },
+            11 => .{
+                .transfer_with_seed = .{
+                    .lamports = try reader.readInt(u64, .little),
+                    .from_seed = try deserializeUtf8String(allocator, reader),
+                    .from_owner = try deserializePubkey(reader),
+                },
+            },
+            12 => .upgrade_nonce_account,
+            else => return InstructionError.InvalidInstructionData,
+        };
+    }
 };
+
+pub fn deserializeUtf8String(allocator: std.mem.Allocator, reader: anytype) ![]const u8 {
+    const len = try reader.readInt(u64, .little);
+    const str = try allocator.alloc(u8, len);
+    errdefer allocator.free(str);
+    const bytes_read = try reader.readAll(str);
+    if (bytes_read != len) return InstructionError.InvalidInstructionData;
+    if (!std.unicode.utf8ValidateSlice(str)) return InstructionError.InvalidInstructionData;
+    return str;
+}
+
+pub fn deserializePubkey(reader: anytype) !Pubkey {
+    var pubkey = Pubkey.ZEROES;
+    const pubkey_bytes_read = try reader.readAll(&pubkey.data);
+    if (pubkey_bytes_read != Pubkey.SIZE) return InstructionError.InvalidInstructionData;
+    return pubkey;
+}

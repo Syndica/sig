@@ -1992,7 +1992,7 @@ test "executeV3SetAuthorityChecked" {
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
             .feature_set = &.{
-                .{ .pubkey = features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
+                .{ .pubkey = features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX, .slot = 0 },
             },
         },
         .{
@@ -2068,7 +2068,7 @@ test "executeV3SetAuthorityChecked" {
             },
             .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
             .feature_set = &.{
-                .{ .pubkey = features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX, .slot = 0 },
+                .{ .pubkey = features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX, .slot = 0 },
             },
         },
         .{
