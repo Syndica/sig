@@ -34,8 +34,6 @@ pub fn execute(
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // std.debug.print("instruction: {}\n", .{instruction});
-
     return switch (instruction) {
         .create_account => |args| try executeCreateAccount(
             allocator,
