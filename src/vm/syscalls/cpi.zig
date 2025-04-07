@@ -686,14 +686,18 @@ test "CallerAccount" {
         );
         @memcpy(buffer[data_addr - vm_addr ..][0..data_len], acc_shared.data);
 
-        // NOTE: init aligned false
-        // https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L1792
-        const memory_map = try MemoryMap.init(&.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START), // nothing in .rodata,
-            memory.Region.init(.mutable, &.{}, memory.STACK_START), // nothing in the stack,
-            memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
-            memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
-        }, .v3);
+        const memory_map = try MemoryMap.init(
+            allocator,
+            &.{
+                memory.Region.init(.constant, &.{}, memory.RODATA_START), // nothing in .rodata,
+                memory.Region.init(.mutable, &.{}, memory.STACK_START), // nothing in the stack,
+                memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
+                memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
+            },
+            .v3,
+            .{ .aligned_memory_mapping = false },
+        );
+        defer memory_map.deinit(allocator);
 
         const account_info = try translateType(
             AccountInfoRust,
@@ -738,12 +742,18 @@ test "CallerAccount" {
         const buffer = try allocator.alignedAlloc(u8, @alignOf(AccountInfoC), size);
         defer allocator.free(buffer);
 
-        const memory_map = try MemoryMap.init(&.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START),
-            memory.Region.init(.mutable, &.{}, memory.STACK_START),
-            memory.Region.init(.mutable, buffer, memory.HEAP_START),
-            // no INPUT_START
-        }, .v3);
+        const memory_map = try MemoryMap.init(
+            allocator,
+            &.{
+                memory.Region.init(.constant, &.{}, memory.RODATA_START),
+                memory.Region.init(.mutable, &.{}, memory.STACK_START),
+                memory.Region.init(.mutable, buffer, memory.HEAP_START),
+                // no INPUT_START
+            },
+            .v3,
+            .{},
+        );
+        defer memory_map.deinit(allocator);
 
         const vm_addr = memory.HEAP_START;
         const key_addr = vm_addr + @sizeOf(AccountInfoC);
