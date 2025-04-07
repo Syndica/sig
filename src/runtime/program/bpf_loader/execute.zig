@@ -429,7 +429,7 @@ pub fn executeV3DeployWithMaxDataLen(
         try program_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .program = .{
             .programdata_address = program_data_key,
         } });
-        try program_account.setExecutable(true);
+        try program_account.setExecutable(true, try ic.tc.sc.sysvar_cache.get(sysvar.Rent));
     }
 
     try ic.tc.log("Deployed program {}", .{new_program_id});
