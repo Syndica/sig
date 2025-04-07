@@ -109,9 +109,8 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        if (self.instruction_data.len > Transaction.MAX_BYTES)
-            return InstructionError.InvalidInstructionData;
-        return bincode.readFromSlice(allocator, T, self.instruction_data, .{}) catch {
+        const buffer = self.instruction_data[0..@min(self.instruction_data.len, Transaction.MAX_BYTES)];
+        return bincode.readFromSlice(allocator, T, buffer, .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
     }
