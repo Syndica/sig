@@ -485,31 +485,31 @@ fn transferVerified(
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     {
-        var account = try ic.borrowInstructionAccount(from_index);
-        defer account.release();
+        var from_account = try ic.borrowInstructionAccount(from_index);
+        defer from_account.release();
 
-        if (account.constAccountData().len > 0) {
+        if (from_account.constAccountData().len > 0) {
             try ic.tc.log("Transfer: `from` must not carry data", .{});
             return InstructionError.InvalidArgument;
         }
 
-        if (lamports > account.account.lamports) {
+        if (lamports > from_account.account.lamports) {
             try ic.tc.log(
                 "Transfer: insufficient lamports {}, need {}",
-                .{ account.account.lamports, lamports },
+                .{ from_account.account.lamports, lamports },
             );
             ic.tc.custom_error =
                 @intFromEnum(SystemProgramError.ResultWithNegativeLamports);
             return InstructionError.Custom;
         }
 
-        try account.subtractLamports(lamports);
+        try from_account.subtractLamports(lamports);
     }
 
-    var account = try ic.borrowInstructionAccount(to_index);
-    defer account.release();
+    var to_account = try ic.borrowInstructionAccount(to_index);
+    defer to_account.release();
 
-    try account.addLamports(lamports);
+    try to_account.addLamports(lamports);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L20
