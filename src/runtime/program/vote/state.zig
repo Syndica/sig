@@ -1540,10 +1540,9 @@ pub const VoteState = struct {
         }
 
         self.root_slot = new_root;
-        // TODO can this be imprpoved?
         self.votes.clearRetainingCapacity();
-        try self.votes.appendSlice(new_state.*.items);
-
+        try self.votes.appendSlice(new_state.items);
+        // Everything is fine.
         return null;
     }
 };
