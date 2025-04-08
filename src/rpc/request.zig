@@ -30,6 +30,9 @@ pub const Request = struct {
             error.InvalidMethod,
             error.InvalidParams,
             => return error.UnexpectedToken,
+
+            error.ParamsLengthMismatch,
+            => return error.LengthMismatch,
         };
     }
 
@@ -81,6 +84,7 @@ pub const Request = struct {
             InvalidJsonRpcVersion,
             InvalidMethod,
             InvalidParams,
+            ParamsLengthMismatch,
         };
 
         pub fn parse(
@@ -124,7 +128,12 @@ pub const Request = struct {
                         options,
                     ) catch |err| switch (err) {
                         error.OutOfMemory => |e| return e,
-                        else => return diag.initErr(error.InvalidParams, .{ .id = id }),
+                        error.ParamsLengthMismatch => {
+                            return diag.initErr(error.ParamsLengthMismatch, .{ .id = id });
+                        },
+                        else => {
+                            return diag.initErr(error.InvalidParams, .{ .id = id });
+                        },
                     };
                 }),
             };
@@ -209,13 +218,13 @@ pub fn jsonParseValuesAsParamsArray(
     values: []const std.json.Value,
     comptime Params: type,
     options: std.json.ParseOptions,
-) !Params {
+) (std.json.ParseFromValueError || error{ParamsLengthMismatch})!Params {
     var params: Params = undefined;
 
     inline for (@typeInfo(Params).Struct.fields, 0..) |field, i| {
         if (i >= values.len) {
             if (@typeInfo(field.type) != .Optional) {
-                return error.LengthMismatch;
+                return error.ParamsLengthMismatch;
             }
             @field(params, field.name) = null;
         } else {
@@ -255,6 +264,31 @@ fn MaybeUnsetJson(comptime T: type) type {
             return .{ .value = try std.json.innerParse(T, allocator, source, options) };
         }
     };
+}
+
+test "Request simple" {
+    const test_pubkey = sig.core.Pubkey.parseBase58String(
+        "vinesvinesvinesvinesvinesvinesvinesvinesvin",
+    ) catch unreachable;
+    try testParseCall(
+        .{},
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 123,
+        \\  "method": "getAccountInfo",
+        \\  "params": [
+        \\    "vinesvinesvinesvinesvinesvinesvinesvinesvin"
+        \\  ]
+        \\}
+    ,
+        .{
+            .id = .{ .int = 123 },
+            .method = .{ .getAccountInfo = .{
+                .pubkey = test_pubkey,
+                .config = null,
+            } },
+        },
+    );
 }
 
 test "Request encoding" {
@@ -388,7 +422,63 @@ test "Request parse errors" {
     try std.testing.expectError(
         error.UnexpectedToken,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
-            \\{"jsonrpc":"2.0","method":null}
+            \\{"method":null}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.UnexpectedToken,
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"jsonrpc":"1.0","id":null,"method":"foo","params":[]}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.UnexpectedToken,
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":null,"method":"foo","params":[]}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.UnexpectedToken,
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":null,"method":"foo","params":null}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.MissingField,
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"jsonrpc":"2.0","method":"foo","params":[]}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.MissingField,
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"id":null,"method":"foo","params":[]}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.MissingField,
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":null,"params":[]}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.MissingField,
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":null,"method":"foo"}
+        , .{}),
+    );
+
+    try std.testing.expectError(
+        error.LengthMismatch,
+        std.json.parseFromSliceLeaky(Request, std.testing.allocator,
+            \\{"jsonrpc":"2.0","id":null,"method":"getAccountInfo","params":[]}
         , .{}),
     );
 

@@ -354,7 +354,8 @@ fn handleRpcRequest(
             const code: rpc.response.ErrorCode, //
             const message: []const u8 //
             = switch (err) {
-                error.OutOfMemory => |e| return e,
+                error.OutOfMemory,
+                => |e| return e,
 
                 error.MissingId,
                 error.MissingJsonRpcVersion,
@@ -362,8 +363,13 @@ fn handleRpcRequest(
                 error.MissingParams,
                 error.InvalidJsonRpcVersion,
                 => .{ .invalid_request, "Invalid request" },
-                error.InvalidMethod => .{ .method_not_found, "Method not found" },
-                error.InvalidParams => .{ .invalid_params, "Invalid method parameters" },
+
+                error.InvalidMethod,
+                => .{ .method_not_found, "Method not found" },
+
+                error.InvalidParams,
+                error.ParamsLengthMismatch,
+                => .{ .invalid_params, "Invalid method parameters" },
             };
             const err_obj: rpc.response.Error = .{
                 .code = code,
