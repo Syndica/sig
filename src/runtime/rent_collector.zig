@@ -81,20 +81,29 @@ pub const RentCollector = struct {
         address: *const Pubkey,
         account: AccountSharedData,
     ) RentResult {
-        if (account.rent_epoch == RENT_EXEMPT_RENT_EPOCH or account.rent_epoch > self.epoch) {
+        if (account.rent_epoch == RENT_EXEMPT_RENT_EPOCH or account.rent_epoch > self.epoch)
+            // potentially rent paying account (or known and already marked exempt)
+            // Maybe collect rent later, leave account alone for now.
             return .NoRentCollectionNow;
-        }
-        if (!shouldCollectRent(address, account.executable)) return .Exempt;
+        if (!shouldCollectRent(address, account.executable))
+            // easy to determine this account should not consider having rent collected from it
+            return .Exempt;
 
-        const due = self.getRentDue(account.lamports, account.data.len, account.rent_epoch);
-
-        return switch (due) {
+        return switch (self.getRentDue(
+            account.lamports,
+            account.data.len,
+            account.rent_epoch,
+        )) {
+            // account will not have rent collected ever
             .Exempt => .Exempt,
             .Paying => |rent_due| blk: {
                 break :blk if (rent_due == 0)
                     .NoRentCollectionNow
                 else
-                    .{ .CollectRent = .{ .new_rent_epoch = self.epoch + 1, .rent_due = rent_due } };
+                    .{ .CollectRent = .{
+                        .new_rent_epoch = self.epoch +| 1,
+                        .rent_due = rent_due,
+                    } };
             },
         };
     }
@@ -114,8 +123,8 @@ pub const RentCollector = struct {
         if (self.rent.isExempt(lamports, data_len)) return .Exempt;
 
         var slots_elapsed: u64 = 0;
-        for (account_rent_epoch..self.epoch) |epoch| {
-            slots_elapsed +|= self.epoch_schedule.getSlotsInEpoch(epoch);
+        for (account_rent_epoch..self.epoch + 1) |epoch| {
+            slots_elapsed +|= self.epoch_schedule.getSlotsInEpoch(epoch +| 1);
         }
 
         // as firedancer says: "Consensus-critical use of doubles :(""
@@ -130,6 +139,131 @@ pub const RentCollector = struct {
     }
 };
 
-test {
-    std.testing.refAllDecls(@This());
+pub fn defaultCollector(epoch: Epoch) RentCollector {
+    if (!@import("builtin").is_test) @compileError("defaultCollector for test usage only");
+    return .{
+        .epoch = epoch,
+        .epoch_schedule = sig.runtime.sysvar.EpochSchedule.default() catch unreachable,
+        .slots_per_year = 78892314.983999997, // [agave] GenesisConfig::default().slots_per_year()
+        .rent = sig.runtime.sysvar.Rent.DEFAULT,
+    };
+}
+
+test "calculate rent result" {
+    var collector = defaultCollector(0);
+    var account = AccountSharedData.EMPTY;
+
+    try std.testing.expectEqual(
+        .NoRentCollectionNow,
+        collector.calculateRentResult(&Pubkey.ZEROES, account),
+    );
+    {
+        var account_clone = account;
+        try std.testing.expectEqual(
+            CollectedInfo.NoneCollected,
+            collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
+        );
+        try std.testing.expectEqualDeep(account, account_clone);
+    }
+
+    account.executable = true;
+    try std.testing.expectEqual(
+        .Exempt,
+        collector.calculateRentResult(&Pubkey.ZEROES, account),
+    );
+    {
+        var account_clone = account;
+        var account_expected = account;
+        account_expected.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
+
+        try std.testing.expectEqual(
+            CollectedInfo.NoneCollected,
+            collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
+        );
+        try std.testing.expectEqualDeep(account_expected, account_clone);
+    }
+
+    account.executable = false;
+    try std.testing.expectEqual(
+        .Exempt,
+        collector.calculateRentResult(&sig.runtime.ids.Incinerator, account),
+    );
+    {
+        var account_clone = account;
+        var account_expected = account;
+        account_expected.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
+
+        try std.testing.expectEqual(
+            CollectedInfo.NoneCollected,
+            collector.collectFromExistingAccount(&sig.runtime.ids.Incinerator, &account_clone),
+        );
+        try std.testing.expectEqualDeep(account_expected, account_clone);
+    }
+
+    // try a few combinations of rent collector rent epoch and collecting rent
+    inline for (&.{ .{ 2, 2 }, .{ 3, 5 } }) |rent| {
+        const rent_epoch = rent[0];
+        const rent_due_expected = rent[1];
+        collector.epoch = rent_epoch;
+
+        account.lamports = 10;
+        account.rent_epoch = 1;
+        const new_rent_epoch_expected = collector.epoch + 1;
+
+        try std.testing.expectEqual(
+            RentResult{
+                .CollectRent = .{
+                    .rent_due = rent_due_expected,
+                    .new_rent_epoch = new_rent_epoch_expected,
+                },
+            },
+            collector.calculateRentResult(&Pubkey.ZEROES, account),
+        );
+
+        {
+            var account_clone = account;
+            try std.testing.expectEqual(
+                CollectedInfo{ .rent_amount = rent_due_expected, .account_data_len_reclaimed = 0 },
+                collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
+            );
+            var account_expected = account;
+            account_expected.lamports = account.lamports - rent_due_expected;
+            account_expected.rent_epoch = new_rent_epoch_expected;
+            try std.testing.expectEqual(account_clone, account_expected);
+        }
+    }
+
+    // enough lamports to make us exempt
+    account.lamports = 1_000_000;
+    try std.testing.expectEqual(
+        RentResult.Exempt,
+        collector.calculateRentResult(&Pubkey.ZEROES, account),
+    );
+    {
+        var account_clone = account;
+        var account_expected = account;
+        account_expected.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
+        try std.testing.expectEqual(
+            CollectedInfo.NoneCollected,
+            collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
+        );
+        try std.testing.expectEqual(account_expected, account_clone);
+    }
+
+    // enough lamports to make us exempt
+    // but, our rent_epoch is set in the future, so we can't know if we are exempt yet or not.
+    // We don't calculate rent amount vs data if the rent_epoch is already in the future.
+    account.rent_epoch = 1_000_000;
+    try std.testing.expectEqual(
+        RentResult.NoRentCollectionNow,
+        collector.calculateRentResult(&Pubkey.ZEROES, account),
+    );
+    {
+        var account_clone = account;
+        try std.testing.expectEqual(
+            CollectedInfo.NoneCollected,
+            collector.collectFromExistingAccount(&Pubkey.ZEROES, &account_clone),
+        );
+        try std.testing.expectEqual(account, account_clone);
+    }
 }
