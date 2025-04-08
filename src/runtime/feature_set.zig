@@ -34,9 +34,6 @@ pub const ENABLE_TOWER_SYNC_IX =
 pub const BPF_ACCOUNT_DATA_DIRECT_MAPPING =
     Pubkey.parseBase58String("AjX3A4Nv2rzUuATEUWLP4rrBaBropyUnHxEvFDj1dKbx") catch unreachable;
 
-pub const BPF_ACCOUNT_DATA_DIRECT_MAPPING =
-    Pubkey.parseBase58String("AjX3A4Nv2rzUuATEUWLP4rrBaBropyUnHxEvFDj1dKbx") catch unreachable;
-
 pub const ENABLE_POSEIDON_SYSCALL =
     Pubkey.parseBase58String("FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr") catch unreachable;
 
