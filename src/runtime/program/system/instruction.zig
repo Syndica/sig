@@ -182,7 +182,11 @@ pub const Instruction = union(enum) {
         .deserializer = Instruction.deserialize,
     };
 
-    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !Instruction {
+    pub fn deserialize(
+        allocator: std.mem.Allocator,
+        reader: anytype,
+        _: sig.bincode.Params,
+    ) !Instruction {
         const discriminant = try reader.readInt(u32, .little);
         return switch (discriminant) {
             0 => .{
