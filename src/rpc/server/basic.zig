@@ -306,12 +306,13 @@ fn handleRpcRequest(
     request: *std.http.Server.Request,
     content_body: []const u8,
 ) !void {
-    var json_arena = std.heap.ArenaAllocator.init(server_ctx.allocator);
-    defer json_arena.deinit();
+    var json_arena_state = std.heap.ArenaAllocator.init(server_ctx.allocator);
+    defer json_arena_state.deinit();
+    const json_arena = json_arena_state.allocator();
 
     const rpc_request_dyn = std.json.parseFromSliceLeaky(
         rpc.request.Request.Dynamic,
-        json_arena.allocator(),
+        json_arena,
         content_body,
         .{},
     ) catch |err| switch (err) {
@@ -348,18 +349,14 @@ fn handleRpcRequest(
     };
 
     const rpc_request = json: {
-        var diag = rpc.request.Request.ParseDynamicDiagnostic.INIT;
-        const result = rpc.request.Request.parseDynamic(
-            json_arena.allocator(),
-            rpc_request_dyn,
-            .{},
-            &diag,
-        ) catch |err| {
+        var diag = rpc.Request.Dynamic.ParseDiagnostic.INIT;
+        const result = rpc_request_dyn.parse(json_arena, .{}, &diag) catch |err| {
             const code: rpc.response.ErrorCode, //
             const message: []const u8 //
             = switch (err) {
                 error.OutOfMemory => |e| return e,
 
+                error.MissingId,
                 error.MissingJsonRpcVersion,
                 error.MissingMethod,
                 error.MissingParams,

@@ -8,4 +8,5 @@ pub const test_serialize = @import("test_serialize.zig");
 
 pub const Client = client.Client;
 
+pub const Request = request.Request;
 pub const Response = response.Response;
