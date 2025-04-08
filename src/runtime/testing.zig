@@ -65,7 +65,7 @@ pub fn createExecutionContexts(
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
-    // Create Epoch Context
+    // Create Feature Set
     var features = FeatureSet{ .active = .{} };
     errdefer features.deinit(allocator);
 
@@ -77,6 +77,7 @@ pub fn createExecutionContexts(
         );
     }
 
+    // Create Epoch Context
     const ec = try allocator.create(EpochContext);
     ec.* = .{
         .allocator = allocator,
@@ -90,7 +91,7 @@ pub fn createExecutionContexts(
         .sysvar_cache = params.sysvar_cache,
     };
 
-    // Create Transaction Context
+    // Create Accounts
     var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
     errdefer accounts.deinit();
 
@@ -109,10 +110,12 @@ pub fn createExecutionContexts(
         );
     }
 
+    // Create Return Data
     var return_data = TransactionReturnData{};
     return_data.program_id = params.return_data.program_id;
     return_data.data.appendSliceAssumeCapacity(params.return_data.data);
 
+    // Create Transaction Context
     const tc = TransactionContext{
         .allocator = allocator,
         .sc = sc,
