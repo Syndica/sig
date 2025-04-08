@@ -41,13 +41,15 @@ pub const Lockout = struct {
     /// slots voted on top of this slot.
     confirmation_count: u32,
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L117
     pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) bool {
         return self.lastLockedOutSlot() >= slot;
     }
 
-    // The last slot at which a vote is still locked out. Validators should not
-    // vote on a slot in another fork which is less than or equal to this slot
-    // to avoid having their stake slashed.
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L113
+    /// The last slot at which a vote is still locked out. Validators should not
+    /// vote on a slot in another fork which is less than or equal to this slot
+    /// to avoid having their stake slashed.
     pub fn lastLockedOutSlot(self: *const Lockout) Slot {
         return (self.slot +| (self.lockout()));
     }
