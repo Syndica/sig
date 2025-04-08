@@ -523,6 +523,9 @@ test "load accounts rent paid" {
     var prng = std.rand.DefaultPrng.init(0);
 
     const fee_payer_address = Pubkey.initRandom(prng.random());
+    const instruction_address = Pubkey.initRandom(prng.random());
+
+    const instruction_data = "dummy instruction";
 
     const tx: sig.core.Transaction = .{
         .signatures = &.{},
@@ -531,9 +534,13 @@ test "load accounts rent paid" {
             .signature_count = 1, // fee payer is signer + writeable
             .readonly_signed_count = 0,
             .readonly_unsigned_count = 0,
-            .account_keys = &.{fee_payer_address},
+            .account_keys = &.{ fee_payer_address, instruction_address },
             .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.SIZE },
-            .instructions = &.{},
+            .instructions = &.{.{
+                .program_index = 1,
+                .data = instruction_data,
+                .account_indexes = &.{},
+            }},
             .address_lookups = &.{},
         },
     };
@@ -555,6 +562,20 @@ test "load accounts rent paid" {
         .owner = Pubkey.ZEROES,
         .rent_epoch = 0,
     });
+    try bank.accounts.put(allocator, instruction_address, sig.core.Account{
+        .data = .{ .unowned_allocation = instruction_data },
+        .lamports = 0,
+        .executable = true,
+        .owner = sig.runtime.ids.BPF_LOADER_ID,
+        .rent_epoch = 0,
+    });
+    try bank.accounts.put(allocator, sig.runtime.ids.BPF_LOADER_ID, sig.core.Account{
+        .data = .{ .empty = .{ .len = 0 } },
+        .lamports = 0,
+        .executable = true,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    });
 
     const loaded = try loadTransactionAccountsInner(
         .Mocked,
@@ -573,13 +594,13 @@ test "load accounts rent paid" {
         }
     }
 
-    // slots elapsed   slots per year      lamports per year
-    //  |               |                   |      data len
-    //  |               |                   |       |     overhead
-    //  v               v                   v       v      v
-    // (64) / (7.8892314983999997e7)   * (3480 * (1024 + 128))
+    // slots elapsed   slots per year    lamports per year
+    //  |               |                 |      data len
+    //  |               |                 |       |     overhead
+    //  v               v                 v       v      v
+    // ((64) / (7.8892314983999997e7)) * (3480 * (1024 + 128))
     const expected_rent = 3;
 
     try std.testing.expectEqual(expected_rent, loaded.collected_rent);
-    try std.testing.expectEqual(1, found);
+    try std.testing.expectEqual(2, found);
 }
