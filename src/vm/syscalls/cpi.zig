@@ -1493,6 +1493,13 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
         try std.testing.expectEqual(a.is_signer, b.is_signer);
         try std.testing.expectEqual(a.is_writable, b.is_writable);
     }
+
+    // Change the owner at the end so that we are allowed to change the lamports and data before
+    if (!callee_account.account.owner.equals(caller_account.owner)) {
+        try callee_account.setOwner(caller_account.owner.*);
+    }
+
+    return must_update_caller;
 }
 
 test "vm.syscalls.cpi: translateInstructionRust" {
