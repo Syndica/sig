@@ -691,7 +691,6 @@ pub const VoteState = struct {
             try self.epoch_credits.append(
                 .{ .epoch = epoch, .credits = 0, .prev_credits = 0 },
             );
-            // TODO Revisit and compare panic with Agave
         } else if (epoch != self.epoch_credits.getLast().epoch) {
             const last = self.epoch_credits.getLast();
             const last_credits = last.credits;
@@ -1368,6 +1367,7 @@ pub const VoteState = struct {
             return VoteError.too_many_votes;
         }
 
+        // New root cannot be older than current root (proposed_new_root < current_root -> reject)
         if (new_root) |proposed_new_root| {
             if (self.root_slot) |current_root| {
                 if (proposed_new_root < current_root) {
@@ -1375,6 +1375,7 @@ pub const VoteState = struct {
                 }
             }
         } else {
+            // Cannot remove an existing root -> reject
             if (self.root_slot != null) {
                 return VoteError.root_roll_back;
             }
@@ -1386,7 +1387,6 @@ pub const VoteState = struct {
         // 1) Strictly sorted from oldest to newest vote
         // 2) The confirmations are strictly decreasing
         // 3) Not zero confirmation votes
-
         for (new_state.items) |*vote| {
             if (vote.lockout.confirmation_count == 0) {
                 return VoteError.zero_confirmations;
@@ -1428,8 +1428,7 @@ pub const VoteState = struct {
 
         if (new_root) |proposed_new_root| {
             for (self.votes.items) |current_vote| {
-                // Find the first vote in the current vote state for a slot greater
-                // than the new proposed root
+                // Sum credits for all votes in current state that are now rooted. (ie <= proposed_new_root).
                 if (current_vote.lockout.slot <= proposed_new_root) {
                     earned_credits = std.math.add(u64, earned_credits, self.creditsForVoteAtIndex(
                         current_vote_state_index,
