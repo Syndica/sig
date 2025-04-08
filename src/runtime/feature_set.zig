@@ -34,14 +34,17 @@ pub const ENABLE_TOWER_SYNC_IX =
 pub const BPF_ACCOUNT_DATA_DIRECT_MAPPING =
     Pubkey.parseBase58String("AjX3A4Nv2rzUuATEUWLP4rrBaBropyUnHxEvFDj1dKbx") catch unreachable;
 
-pub const BPF_ACCOUNT_DATA_DIRECT_MAPPING =
-    Pubkey.parseBase58String("AjX3A4Nv2rzUuATEUWLP4rrBaBropyUnHxEvFDj1dKbx") catch unreachable;
-
 pub const ENABLE_POSEIDON_SYSCALL =
     Pubkey.parseBase58String("FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr") catch unreachable;
 
 pub const DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL =
     Pubkey.parseBase58String("79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im") catch unreachable;
+
+pub const LOOSEN_CPI_SIZE_RESTRICTION =
+    Pubkey.parseBase58String("GDH5TVdbTPUpRnXaRyQqiKUa7uZAbZ28Q2N9bhbKoMLm") catch unreachable;
+
+pub const INCREASE_TX_ACCOUNT_LOCK_LIMIT =
+    Pubkey.parseBase58String("9LZdXeKGeBV6hRLdxS1rHbHoEUsKqesCC2ZAPTPKJAbK") catch unreachable;
 
 /// `FeatureSet` holds the set of currently active and inactive features
 ///

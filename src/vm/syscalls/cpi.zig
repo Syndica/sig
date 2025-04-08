@@ -9,7 +9,11 @@ const feature_set = sig.runtime.feature_set;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
+const InstructionAccount = sig.core.instruction.InstructionAccount;
+const InstructionError = sig.core.instruction.InstructionError;
 
+const BorrowedAccount = sig.runtime.BorrowedAccount;
+const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
 
 const MemoryMap = memory.MemoryMap;
@@ -800,4 +804,236 @@ test "CallerAccount" {
             std.mem.eql(u8, caller_account.serialized_data, acc_shared.data),
         );
     }
+}
+
+/// Update the given account before executing CPI.
+///
+/// caller_account and callee_account describe the same account. At CPI entry
+/// caller_account might include changes the caller has made to the account
+/// before executing CPI.
+///
+/// This method updates callee_account so the CPI callee can see the caller's
+/// changes.
+///
+/// When true is returned, the caller account must be updated after CPI. This
+/// is only set for direct mapping when the pointer may have changed.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1201
+fn updateCalleeAccount(
+    allocator: std.mem.Allocator,
+    callee_account: *BorrowedAccount,
+    caller_account: *const CallerAccount,
+    direct_mapping: bool,
+    is_loader_deprecated: bool,
+    memory_map: *const MemoryMap,
+    ic: *InstructionContext,
+) !bool {
+    var must_update_caller = false;
+
+    if (callee_account.account.lamports != caller_account.lamports.*) {
+        callee_account.setLamports(caller_account.lamports.*);
+    }
+
+    if (direct_mapping) {
+        const prev_len = callee_account.constAccountData().len;
+        const post_len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
+
+        if (callee_account.checkCanSetDataLength(
+            ic.tc.accounts_resize_delta,
+            post_len,
+        ) orelse callee_account.checkDataIsMutable()) |err| {
+            if (prev_len != post_len) return err;
+        }
+
+        // bpf_loader_deprecated programs don't have a realloc region
+        const realloc_bytes_used = post_len -| caller_account.original_data_len;
+        if (is_loader_deprecated and realloc_bytes_used > 0) {
+            return InstructionError.InvalidRealloc;
+        }
+
+        if (prev_len != post_len) {
+            try callee_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, post_len);
+            must_update_caller = true;
+        }
+
+        if (realloc_bytes_used > 0) {
+            const serialized_data = try translateSlice(
+                u8,
+                .constant,
+                memory_map,
+                caller_account.vm_data_addr +| caller_account.original_data_len,
+                realloc_bytes_used,
+                ic.getCheckAligned(),
+            );
+            @memcpy(
+                try callee_account.mutableAccountData(),
+                serialized_data,
+            );
+        }
+    } else {
+        // The redundant check helps to avoid the expensive data comparison if we can
+        const serialized_data: []const u8 = caller_account.serialized_data;
+        if (callee_account.checkCanSetDataLength(
+            ic.tc.accounts_resize_delta,
+            serialized_data,
+        ) orelse callee_account.checkDataIsMutable()) |err| {
+            if (!std.mem.eql(u8, callee_account.constAccountData(), serialized_data)) return err;
+        } else {
+            try callee_account.setDataFromSlice(
+                allocator,
+                &ic.tc.accounts_resize_delta,
+                serialized_data,
+            );
+        }
+    }
+}
+
+const TranslatedAccount = struct { index_in_caller: u64, caller_account: ?CallerAccount };
+const TranslatedAccounts = std.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
+
+/// Implements SyscallInvokeSigned::translate_accounts for both AccountInfo & SolAccountInfo.
+/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L498
+/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L725
+fn translateAccounts(
+    comptime AccountInfoType: type,
+    allocator: std.mem.Allocator,
+    instruction_info: *const InstructionInfo,
+    account_infos_addr: u64,
+    account_infos_len: u64,
+    is_loader_deprecated: bool,
+    memory_map: *const MemoryMap,
+    ic: *InstructionContext,
+) !TranslatedAccounts {
+    // translate_account_infos():
+    // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L805
+
+    const direct_mapping = ic.tc.feature_set.active.contains(
+        feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    );
+
+    // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
+    // this pointer to a specific address but we don't want it to be inside accounts, or
+    // callees might be able to write to the pointed memory.
+    if (direct_mapping and
+        (account_infos_addr +| (account_infos_len *| @sizeOf(u64))) >= MM_INPUT_START)
+    {
+        return SyscallError.InvalidPointer;
+    }
+
+    const account_infos = try translateSlice(
+        AccountInfoType,
+        .constant,
+        account_infos_addr,
+        account_infos_len,
+        ic.getCheckAligned(),
+    );
+
+    // check_account_infos():
+    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1018
+    if (ic.tc.feature_set.active.contains(feature_set.LOOSEN_CPI_SIZE_RESTRICTION)) {
+        const max_cpi_account_infos = if (ic.tc.feature_set.active.contains(
+            feature_set.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
+        )) 128 else 64;
+
+        if (account_infos.len > max_cpi_account_infos) {
+            // TODO: add {account_infos.len} and {max_cpi_account_infos} as context to error.
+            // [agave] https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/programs/bpf_loader/src/syscalls/mod.rs#L124-L128
+            return SyscallError.MaxInstructionAccountInfosExceeded;
+        }
+    } else {
+        const adjusted_len = @as(u64, account_infos.len) *| @sizeOf(Pubkey);
+        if (adjusted_len > ic.tc.compute_budget.max_cpi_instruction_size) {
+            // Cap the number of account_infos a caller can pass to approximate
+            // maximum that accounts that could be passed in an instruction
+            return SyscallError.TooManyAccounts;
+        }
+    }
+
+    // translate_and_update_accounts():
+    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L853
+
+    var accounts: TranslatedAccounts = .{};
+    for (instruction_info.account_metas.buffer, 0..) |meta, i| {
+        if (meta.index_in_callee != i) continue; // Skip duplicate account
+
+        var callee_account = try ic.borrowInstructionAccount(meta.index_in_caller);
+        defer callee_account.release();
+
+        if (callee_account.account.executable) {
+            // Use the known account
+            try ic.tc.consumeCompute(std.math.divFloor(
+                u64,
+                callee_account.constAccountData().len,
+                ic.tc.compute_budget.cpi_bytes_per_unit,
+            ) catch std.math.maxInt(u64));
+
+            try accounts.append(.{ meta.index_in_caller, null });
+            continue;
+        }
+
+        const account_key = ic.getAccountKeyByIndexUnchecked(meta.index_in_caller);
+        const caller_account_index = for (account_infos, 0..) |info, idx| {
+            const info_key = try translateType(
+                Pubkey,
+                .constant,
+                memory_map,
+                info.key_addr,
+                ic.getCheckAligned(),
+            );
+            if (info_key.equals(&account_key)) break idx;
+        } else {
+            try ic.tc.log("Instruction references an unknown account {}", .{account_key});
+            return InstructionError.MissingAccount;
+        };
+
+        const serialized_metadata = if (meta.index_in_caller < ic.info.account_metas.len) blk: {
+            // TODO
+            break :blk ic.info.account_metas.get(meta.index_in_caller);
+        } else {
+            try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
+            return InstructionError.MissingAccount;
+        };
+
+        // build the CallerAccount corresponding to this account.
+        if (caller_account_index >= account_infos.len) {
+            return SyscallError.InvalidLength;
+        }
+
+        const caller_account = @call(
+            .auto,
+            switch (AccountInfoType) {
+                AccountInfoC => CallerAccount.fromAccountInfoC,
+                AccountInfoRust => CallerAccount.fromAccountInfoRust,
+                else => @compileError("invalid AccountInfo type"),
+            },
+            .{
+                ic,
+                memory_map,
+                account_infos_addr +| (caller_account_index *| @sizeOf(AccountInfoType)),
+                &account_infos[caller_account_index],
+                serialized_metadata,
+            },
+        );
+
+        // before initiating CPI, the caller may have modified the
+        // account (caller_account). We need to update the corresponding
+        // BorrowedAccount (callee_account) so the callee can see the
+        // changes.
+        const update_caller = updateCalleeAccount(
+            allocator,
+            &callee_account,
+            &caller_account,
+            direct_mapping,
+            is_loader_deprecated,
+            memory_map,
+            ic,
+        );
+
+        try accounts.append(.{
+            meta.index_in_caller,
+            if (meta.is_writable or update_caller) caller_account else null,
+        });
+    }
+
+    return accounts;
 }
