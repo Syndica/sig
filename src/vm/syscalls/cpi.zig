@@ -15,6 +15,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
+const SerializedAccountMetadata = sig.runtime.instruction_context.SerializedAccountMetadata;
 
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
@@ -22,6 +23,8 @@ const MM_INPUT_START = memory.INPUT_START;
 pub const SyscallError = error{
     UnalignedPointer,
     InvalidPointer,
+    TooManyAccounts,
+    MaxInstructionAccountInfosExceeded,
 } || sig.vm.syscalls.Error;
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/master/stable-layout/src/stable_vec.rs#L30
@@ -49,15 +52,6 @@ const AccountMeta = extern struct {
     owner: Pubkey,
     /// this account's data contains a loaded program (and is now read-only)
     executable: bool,
-};
-
-/// [agave] https://github.com/anza-xyz/agave/blob/f39fb5af97d46de368779cf5e1b032f0e3e745b7/program-runtime/src/invoke_context.rs#L178
-const SerializedAccountMetadata = struct {
-    original_data_len: usize,
-    vm_data_addr: u64,
-    vm_key_addr: u64,
-    vm_lamports_addr: u64,
-    vm_owner_addr: u64,
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/359d7eb2b68639443d750ffcec0c7e358f138975/bpf_loader/src/syscalls/cpi.rs#L597
@@ -263,9 +257,12 @@ const CallerAccount = struct {
     fn fromAccountInfoRust(
         ic: *InstructionContext,
         memory_map: *const MemoryMap,
+        _vm_addr: u64,
         account_info: *const AccountInfoRust,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
+        _ = _vm_addr; // unused
+
         const direct_mapping = ic.tc.feature_set.active.contains(
             feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
         );
@@ -831,17 +828,19 @@ fn updateCalleeAccount(
     var must_update_caller = false;
 
     if (callee_account.account.lamports != caller_account.lamports.*) {
-        callee_account.setLamports(caller_account.lamports.*);
+        try callee_account.setLamports(caller_account.lamports.*);
     }
 
     if (direct_mapping) {
         const prev_len = callee_account.constAccountData().len;
         const post_len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
 
-        if (callee_account.checkCanSetDataLength(
+        const maybe_err: ?InstructionError = callee_account.checkCanSetDataLength(
             ic.tc.accounts_resize_delta,
             post_len,
-        ) orelse callee_account.checkDataIsMutable()) |err| {
+        ) orelse callee_account.checkDataIsMutable();
+
+        if (maybe_err) |err| {
             if (prev_len != post_len) return err;
         }
 
@@ -873,10 +872,12 @@ fn updateCalleeAccount(
     } else {
         // The redundant check helps to avoid the expensive data comparison if we can
         const serialized_data: []const u8 = caller_account.serialized_data;
-        if (callee_account.checkCanSetDataLength(
+        const maybe_err: ?InstructionError = callee_account.checkCanSetDataLength(
             ic.tc.accounts_resize_delta,
-            serialized_data,
-        ) orelse callee_account.checkDataIsMutable()) |err| {
+            serialized_data.len,
+        ) orelse callee_account.checkDataIsMutable();
+
+        if (maybe_err) |err| {
             if (!std.mem.eql(u8, callee_account.constAccountData(), serialized_data)) return err;
         } else {
             try callee_account.setDataFromSlice(
@@ -886,6 +887,13 @@ fn updateCalleeAccount(
             );
         }
     }
+
+    // Change the owner at the end so that we are allowed to change the lamports and data before
+    if (!callee_account.account.owner.equals(caller_account.owner)) {
+        try callee_account.setOwner(caller_account.owner.*);
+    }
+
+    return must_update_caller;
 }
 
 const TranslatedAccount = struct { index_in_caller: u64, caller_account: ?CallerAccount };
@@ -923,6 +931,7 @@ fn translateAccounts(
     const account_infos = try translateSlice(
         AccountInfoType,
         .constant,
+        memory_map,
         account_infos_addr,
         account_infos_len,
         ic.getCheckAligned(),
@@ -931,7 +940,7 @@ fn translateAccounts(
     // check_account_infos():
     // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1018
     if (ic.tc.feature_set.active.contains(feature_set.LOOSEN_CPI_SIZE_RESTRICTION)) {
-        const max_cpi_account_infos = if (ic.tc.feature_set.active.contains(
+        const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active.contains(
             feature_set.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
         )) 128 else 64;
 
@@ -967,7 +976,10 @@ fn translateAccounts(
                 ic.tc.compute_budget.cpi_bytes_per_unit,
             ) catch std.math.maxInt(u64));
 
-            try accounts.append(.{ meta.index_in_caller, null });
+            try accounts.append(.{
+                .index_in_caller = meta.index_in_caller,
+                .caller_account = null,
+            });
             continue;
         }
 
@@ -987,8 +999,7 @@ fn translateAccounts(
         };
 
         const serialized_metadata = if (meta.index_in_caller < ic.info.account_metas.len) blk: {
-            // TODO
-            break :blk ic.info.account_metas.get(meta.index_in_caller);
+            break :blk &ic.vm_accounts.slice()[meta.index_in_caller];
         } else {
             try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
             return InstructionError.MissingAccount;
@@ -999,7 +1010,7 @@ fn translateAccounts(
             return SyscallError.InvalidLength;
         }
 
-        const caller_account = @call(
+        const caller_account = try @call(
             .auto,
             switch (AccountInfoType) {
                 AccountInfoC => CallerAccount.fromAccountInfoC,
@@ -1019,7 +1030,7 @@ fn translateAccounts(
         // account (caller_account). We need to update the corresponding
         // BorrowedAccount (callee_account) so the callee can see the
         // changes.
-        const update_caller = updateCalleeAccount(
+        const update_caller = try updateCalleeAccount(
             allocator,
             &callee_account,
             &caller_account,
@@ -1030,10 +1041,158 @@ fn translateAccounts(
         );
 
         try accounts.append(.{
-            meta.index_in_caller,
-            if (meta.is_writable or update_caller) caller_account else null,
+            .index_in_caller = meta.index_in_caller,
+            .caller_account = if (meta.is_writable or update_caller) caller_account else null,
         });
     }
 
     return accounts;
+}
+
+test "translateAccounts" {
+    const testing = sig.runtime.program.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const account_key = Pubkey.initRandom(prng.random());
+
+    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = account_key,
+                .owner = bpf_loader_program.v3.ID,
+                .lamports = 100,
+            },
+            .{
+                .pubkey = system_program.ID,
+                .owner = ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer tc.deinit(allocator);
+
+    var ic = InstructionContext{
+        .depth = 0,
+        .tc = &tc,
+        .info = try testing.createInstructionInfo(
+            allocator,
+            &tc,
+            system_program.ID,
+            system_program.Instruction{ .assign = .{ .owner = account_key } }, // can be whatever.
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+            },
+        ),
+    };
+    defer ic.deinit(allocator);
+
+    const acc_meta = ic.info.account_metas.get(0);
+    const acc_shared = ic.tc.accounts[0].account;
+
+    // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
+    const vm_addr = MM_INPUT_START;
+    const size = @sizeOf(AccountInfoRust) +
+        @sizeOf(Pubkey) * 2 +
+        @sizeOf(RcBox(RefCell(*u64))) +
+        @sizeOf(u64) +
+        @sizeOf(RcBox(RefCell([]u8))) +
+        acc_shared.data.len;
+
+    const buffer = try allocator.alloc(u8, size);
+    defer allocator.free(buffer);
+
+    const key_addr = vm_addr + @sizeOf(AccountInfoRust);
+    const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
+    const lamports_addr = lamports_cell_addr + @sizeOf(RcBox(RefCell(*u64)));
+    const owner_addr = lamports_addr + @sizeOf(u64);
+    const data_cell_addr = owner_addr + @sizeOf(Pubkey);
+    const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
+    const data_len = acc_shared.data.len;
+
+    try ic.vm_accounts.append(SerializedAccountMetadata{
+        .original_data_len = data_len,
+        .vm_key_addr = key_addr,
+        .vm_lamports_addr = lamports_addr,
+        .vm_owner_addr = owner_addr,
+        .vm_data_addr = data_addr,
+    });
+
+    buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
+        .key_addr = key_addr,
+        .is_signer = acc_meta.is_signer,
+        .is_writable = acc_meta.is_writable,
+        .lamports_addr = Rc(RefCell(u64)).fromRaw(
+            @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
+        ),
+        .data = Rc(RefCell([]u8)).fromRaw(
+            @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
+        ),
+        .owner_addr = owner_addr,
+        .executable = acc_shared.executable,
+        .rent_epoch = acc_shared.rent_epoch,
+    });
+
+    buffer[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(acc_meta.pubkey);
+    buffer[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
+        RcBox(RefCell(u64)){ .value = RefCell(u64).init(lamports_addr) },
+    );
+    buffer[lamports_addr - vm_addr ..][0..@sizeOf(u64)].* = @bitCast(acc_shared.lamports);
+    buffer[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(acc_shared.owner);
+    buffer[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
+        RcBox(RefCell([]u8)){
+            .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(data_addr))[0..data_len]),
+        },
+    );
+    @memcpy(buffer[data_addr - vm_addr ..][0..data_len], acc_shared.data);
+
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START), // nothing in .rodata,
+            memory.Region.init(.mutable, &.{}, memory.STACK_START), // nothing in the stack,
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
+            memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
+        },
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    
+
+    // const account_info = try translateType(
+    //     AccountInfoRust,
+    //     .constant,
+    //     &memory_map,
+    //     vm_addr,
+    //     false,
+    // );
+
+    const instruction_info = try sig.runtime.executor.prepareCpiInstructionInfo(
+        &tc,
+        .{
+            .program_id = system_program.ID,
+            .accounts = &.{
+                .{ .pubkey = tc.accounts[0].pubkey, .is_signer = false, .is_writable = true },
+                .{ .pubkey = tc.accounts[1].pubkey, .is_signer = false, .is_writable = false },
+            },
+            .data = &.{},
+        },
+        &.{ }, // signers
+    );
+
+    const accounts = try translateAccounts(
+        AccountInfoRust,
+        allocator,
+        &instruction_info,
+        vm_addr,
+        1,
+        false,
+        &memory_map,
+        &ic,
+    );
+
+    try std.testing.expectEqual(accounts.len, 2);
+    try std.testing.expect(accounts.get(1).caller_account == null);
 }

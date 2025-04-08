@@ -15,6 +15,15 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 
+/// [agave] https://github.com/anza-xyz/agave/blob/f39fb5af97d46de368779cf5e1b032f0e3e745b7/program-runtime/src/invoke_context.rs#L178
+pub const SerializedAccountMetadata = struct {
+    original_data_len: usize,
+    vm_data_addr: u64,
+    vm_key_addr: u64,
+    vm_lamports_addr: u64,
+    vm_owner_addr: u64,
+};
+
 /// `InstructionContext` holds all information required to execute a program instruction; excluding an allocator
 /// it is the only argument passed to the program entrypoint function
 ///
@@ -32,6 +41,12 @@ pub const InstructionContext = struct {
 
     /// The depth of the instruction on the stack
     depth: u8,
+
+    /// SyscallContext SerializedAccountMetas in the vm
+    vm_accounts: std.BoundedArray(
+        SerializedAccountMetadata,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ) = .{},
 
     pub fn deinit(self: *InstructionContext, allocator: std.mem.Allocator) void {
         self.info.deinit(allocator);
