@@ -41,21 +41,29 @@ pub const Lockout = struct {
     /// slots voted on top of this slot.
     confirmation_count: u32,
 
-    pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) !bool {
-        return try self.lastLockedOutSlot() >= slot;
+    pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) bool {
+        return self.lastLockedOutSlot() >= slot;
     }
 
     // The last slot at which a vote is still locked out. Validators should not
     // vote on a slot in another fork which is less than or equal to this slot
     // to avoid having their stake slashed.
-    pub fn lastLockedOutSlot(self: *const Lockout) !Slot {
-        return (self.slot +| (try self.lockout()));
+    pub fn lastLockedOutSlot(self: *const Lockout) Slot {
+        return (self.slot +| (self.lockout()));
     }
 
-    // The number of slots for which this vote is locked
-    pub fn lockout(self: *const Lockout) !u64 {
-        return std.math.powi(u64, INITIAL_LOCKOUT, self.confirmation_count) catch
-            return error.ArithmeticOverflow;
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L103
+    ///
+    /// The number of slots for which this vote is locked
+    pub fn lockout(self: *const Lockout) u64 {
+        return std.math.pow(
+            u64,
+            INITIAL_LOCKOUT,
+            @min(
+                self.confirmation_count,
+                MAX_LOCKOUT_HISTORY,
+            ),
+        );
     }
 };
 
@@ -813,7 +821,7 @@ pub const VoteState = struct {
             }
         }
 
-        try self.popExpiredVotes(next_vote_slot);
+        self.popExpiredVotes(next_vote_slot);
 
         const landed_vote: LandedVote = .{
             .latency = VoteState.computeVoteLatency(next_vote_slot, current_slot),
@@ -841,9 +849,9 @@ pub const VoteState = struct {
     pub fn popExpiredVotes(
         self: *VoteState,
         next_vote_slot: Slot,
-    ) !void {
+    ) void {
         while (self.lastLockout()) |vote| {
-            if (!try vote.isLockedOutAtSlot(next_vote_slot)) {
+            if (!vote.isLockedOutAtSlot(next_vote_slot)) {
                 _ = self.votes.popOrNull();
             } else {
                 break;
@@ -1401,7 +1409,7 @@ pub const VoteState = struct {
                     vote.lockout.confirmation_count)
                 {
                     return VoteError.confirmations_not_ordered;
-                } else if (vote.lockout.slot > try previous_vote.lockout.lastLockedOutSlot()) {
+                } else if (vote.lockout.slot > previous_vote.lockout.lastLockedOutSlot()) {
                     return VoteError.new_vote_state_lockout_mismatch;
                 }
             }
@@ -1465,7 +1473,7 @@ pub const VoteState = struct {
             // lockouts are correct
             switch (std.math.order(current_vote.lockout.slot, new_vote.lockout.slot)) {
                 .lt => {
-                    if ((try current_vote.lockout.lastLockedOutSlot()) >= new_vote.lockout.slot) {
+                    if ((current_vote.lockout.lastLockedOutSlot()) >= new_vote.lockout.slot) {
                         return VoteError.lockout_conflict;
                     }
                     current_vote_state_index = std.math.add(
@@ -1677,40 +1685,40 @@ test "state.Lockout.isLockedOutAtSlot" {
             .slot = 1,
             .confirmation_count = 4,
         };
-        try std.testing.expect(try lockout.isLockedOutAtSlot(16));
-        try std.testing.expect(try lockout.isLockedOutAtSlot(17));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(18));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(19));
+        try std.testing.expect(lockout.isLockedOutAtSlot(16));
+        try std.testing.expect(lockout.isLockedOutAtSlot(17));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(18));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(19));
     }
     {
         const lockout = Lockout{
             .slot = 2,
             .confirmation_count = 3,
         };
-        try std.testing.expect(try lockout.isLockedOutAtSlot(9));
-        try std.testing.expect(try lockout.isLockedOutAtSlot(10));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(11));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(12));
+        try std.testing.expect(lockout.isLockedOutAtSlot(9));
+        try std.testing.expect(lockout.isLockedOutAtSlot(10));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(11));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(12));
     }
     {
         const lockout = Lockout{
             .slot = 3,
             .confirmation_count = 2,
         };
-        try std.testing.expect(try lockout.isLockedOutAtSlot(6));
-        try std.testing.expect(try lockout.isLockedOutAtSlot(7));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(8));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(9));
+        try std.testing.expect(lockout.isLockedOutAtSlot(6));
+        try std.testing.expect(lockout.isLockedOutAtSlot(7));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(8));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(9));
     }
     {
         const lockout = Lockout{
             .slot = 4,
             .confirmation_count = 1,
         };
-        try std.testing.expect(try lockout.isLockedOutAtSlot(5));
-        try std.testing.expect(try lockout.isLockedOutAtSlot(6));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(7));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(8));
+        try std.testing.expect(lockout.isLockedOutAtSlot(5));
+        try std.testing.expect(lockout.isLockedOutAtSlot(6));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(7));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(8));
     }
 }
 
@@ -2309,7 +2317,7 @@ test "state.VoteState.lastLockout extended" {
     // the root_slot should change to the
     // second vote
     const top_vote = vote_state.votes.items[0].lockout.slot;
-    const slot = try vote_state.lastLockout().?.lastLockedOutSlot();
+    const slot = vote_state.lastLockout().?.lastLockedOutSlot();
 
     try processSlotVoteUnchecked(&vote_state, slot);
     try std.testing.expectEqual(top_vote, vote_state.root_slot);
@@ -2380,7 +2388,7 @@ test "state.VoteState.lockout expire multiple votes" {
     // Expire the second and third votes
     const expire_slot =
         vote_state.votes.items[1].lockout.slot +
-        (try vote_state.votes.items[1].lockout.lockout()) +
+        (vote_state.votes.items[1].lockout.lockout()) +
         1;
     try processSlotVoteUnchecked(&vote_state, expire_slot);
     try std.testing.expectEqual(2, vote_state.votes.items.len);
@@ -3545,7 +3553,7 @@ test "state.VoteState process new vote state expired ancestor not removed" {
     // Slot 1 has been expired by 10, but is kept alive by its descendant
     // 9 which has not been expired yet.
     try std.testing.expectEqual(1, vote_state2.votes.items[0].lockout.slot);
-    try std.testing.expectEqual(9, try vote_state2.votes.items[0].lockout.lastLockedOutSlot());
+    try std.testing.expectEqual(9, vote_state2.votes.items[0].lockout.lastLockedOutSlot());
     {
         var expected_slots = [_]Slot{ 1, 9, 10 };
         var actual_slots: [3]u64 = undefined;
@@ -4717,7 +4725,7 @@ fn checkLockouts(vote_state: *const VoteState) !void {
     for (vote_state.votes.items, 0..) |*vote, i| {
         const num_votes = vote_state.votes.items.len - i;
         try std.testing.expect(
-            try vote.lockout.lockout() == try std.math.powi(u64, INITIAL_LOCKOUT, num_votes),
+            vote.lockout.lockout() == try std.math.powi(u64, INITIAL_LOCKOUT, num_votes),
         );
     }
 }
