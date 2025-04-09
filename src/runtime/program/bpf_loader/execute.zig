@@ -6,6 +6,7 @@ const bincode = sig.bincode;
 const program = sig.runtime.program;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
+const vm = sig.vm;
 const bpf_program = sig.runtime.program.bpf;
 const system_program = sig.runtime.program.system_program;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
@@ -14,9 +15,9 @@ const features = sig.runtime.features;
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
-const FeatureSet = sig.runtime.FeatureSet;
 const InstructionContext = sig.runtime.InstructionContext;
-const LogCollector = sig.runtime.LogCollector;
+const TransactionContext = sig.runtime.TransactionContext;
+const V3State = sig.runtime.program.bpf_loader_program.v3.State;
 
 // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
 const migration_authority =
@@ -142,18 +143,16 @@ pub fn executeV3InitializeBuffer(
     defer buffer_account.release();
     const buffer_account_state = try buffer_account.deserializeFromAccountData(
         allocator,
-        bpf_loader_program.v3.State,
+        V3State,
     );
 
-    if (buffer_account_state != bpf_loader_program.v3.State.uninitialized) {
+    if (buffer_account_state != V3State.uninitialized) {
         try ic.tc.log("Buffer account already initialized", .{});
         return InstructionError.AccountAlreadyInitialized;
     }
 
-    const authority_key = ic.getAccountKeyByIndexUnchecked(
-        @intFromEnum(AccountIndex.authority),
-    );
-    try buffer_account.serializeIntoAccountData(bpf_loader_program.v3.State{
+    const authority_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
+    try buffer_account.serializeIntoAccountData(V3State{
         .buffer = .{
             .authority_address = authority_key,
         },
@@ -173,7 +172,7 @@ pub fn executeV3Write(
     var buffer_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer buffer_account.release();
 
-    switch (try buffer_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+    switch (try buffer_account.deserializeFromAccountData(allocator, V3State)) {
         .buffer => |state| {
             if (state.authority_address) |buffer_authority| {
                 if (!buffer_authority.equals(
@@ -200,7 +199,7 @@ pub fn executeV3Write(
 
     if (buffer_account.checkDataIsMutable()) |err| return err;
 
-    const start = bpf_loader_program.v3.State.BUFFER_METADATA_SIZE + @as(usize, offset);
+    const start = V3State.BUFFER_METADATA_SIZE + @as(usize, offset);
     const end = start +| bytes.len;
 
     if (end > buffer_account.constAccountData().len) {
@@ -253,14 +252,14 @@ pub fn executeV3DeployWithMaxDataLen(
         defer program_account.release();
 
         const program_state =
-            try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State);
+            try program_account.deserializeFromAccountData(allocator, V3State);
 
-        if (program_state != bpf_loader_program.v3.State.uninitialized) {
+        if (program_state != V3State.uninitialized) {
             try ic.tc.log("Program account already initialized", .{});
             return InstructionError.AccountAlreadyInitialized;
         }
 
-        if (program_account.constAccountData().len < bpf_loader_program.v3.State.PROGRAM_SIZE) {
+        if (program_account.constAccountData().len < V3State.PROGRAM_SIZE) {
             try ic.tc.log("Program account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
@@ -277,7 +276,7 @@ pub fn executeV3DeployWithMaxDataLen(
 
     // Verify buffer account
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L601-L638
-    const program_data_len = bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE +| max_data_len;
+    const program_data_len = V3State.PROGRAM_DATA_METADATA_SIZE +| max_data_len;
     {
         const buffer_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.buffer),
@@ -286,7 +285,7 @@ pub fn executeV3DeployWithMaxDataLen(
 
         switch (try buffer_account.deserializeFromAccountData(
             allocator,
-            bpf_loader_program.v3.State,
+            V3State,
         )) {
             .buffer => |state| {
                 if (state.authority_address == null or
@@ -309,12 +308,12 @@ pub fn executeV3DeployWithMaxDataLen(
         }
 
         const buffer_data = buffer_account.constAccountData();
-        if (buffer_data.len <= bpf_loader_program.v3.State.BUFFER_METADATA_SIZE) {
+        if (buffer_data.len <= V3State.BUFFER_METADATA_SIZE) {
             try ic.tc.log("Buffer account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
-        const buffer_data_len = buffer_data.len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE;
+        const buffer_data_len = buffer_data.len -| V3State.BUFFER_METADATA_SIZE;
 
         if (max_data_len < buffer_data_len) {
             try ic.tc.log("Max data length is too small to hold Buffer data", .{});
@@ -404,21 +403,16 @@ pub fn executeV3DeployWithMaxDataLen(
         defer buffer_account.release();
 
         const buffer_data = buffer_account.constAccountData();
-        if (buffer_data.len < bpf_loader_program.v3.State.BUFFER_METADATA_SIZE)
+        if (buffer_data.len < V3State.BUFFER_METADATA_SIZE)
             return InstructionError.AccountDataTooSmall;
 
         try deployProgram(
             allocator,
+            ic.tc,
             new_program_id,
-            ic.ixn_info.program_meta.pubkey,
-            bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
-            buffer_data[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
+            ic.info.program_meta.pubkey,
+            buffer_data[V3State.BUFFER_METADATA_SIZE..],
             clock.slot,
-            ic.ec.feature_set,
-            if (ic.tc.log_collector != null)
-                &ic.tc.log_collector.?
-            else
-                null,
         );
     }
 
@@ -429,7 +423,7 @@ pub fn executeV3DeployWithMaxDataLen(
             @intFromEnum(AccountIndex.program_data),
         );
         defer program_data_account.release();
-        try program_data_account.serializeIntoAccountData(bpf_loader_program.v3.State{
+        try program_data_account.serializeIntoAccountData(V3State{
             .program_data = .{
                 .slot = clock.slot,
                 .upgrade_authority_address = authority_key,
@@ -442,12 +436,17 @@ pub fn executeV3DeployWithMaxDataLen(
         );
         defer buffer_account.release();
 
-        @memcpy(program_data.ptr, buffer_account.constAccountData());
+        const bytes_to_copy = buffer_account.constAccountData().len - V3State.BUFFER_METADATA_SIZE;
+
+        @memcpy(
+            program_data[V3State.PROGRAM_DATA_METADATA_SIZE..][0..bytes_to_copy],
+            buffer_account.constAccountData()[V3State.BUFFER_METADATA_SIZE..][0..bytes_to_copy],
+        );
 
         try buffer_account.setDataLength(
             allocator,
             &ic.tc.accounts_resize_delta,
-            bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
+            V3State.BUFFER_METADATA_SIZE,
         );
     }
 
@@ -458,7 +457,7 @@ pub fn executeV3DeployWithMaxDataLen(
             @intFromEnum(AccountIndex.program),
         );
         defer program_account.release();
-        try program_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .program = .{
+        try program_account.serializeIntoAccountData(V3State{ .program = .{
             .programdata_address = program_data_key,
         } });
         try program_account.setExecutable(
@@ -517,7 +516,7 @@ pub fn executeV3Upgrade(
         }
         switch (try program_account.deserializeFromAccountData(
             allocator,
-            bpf_loader_program.v3.State,
+            V3State,
         )) {
             .program => |data| {
                 if (!data.programdata_address.equals(&programdata_key)) {
@@ -539,7 +538,7 @@ pub fn executeV3Upgrade(
         const buffer = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.buffer));
         defer buffer.release();
 
-        switch (try buffer.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+        switch (try buffer.deserializeFromAccountData(allocator, V3State)) {
             .buffer => |data| {
                 if (data.authority_address == null or
                     !data.authority_address.?.equals(&authority_key))
@@ -560,9 +559,9 @@ pub fn executeV3Upgrade(
 
         const buf = .{
             .lamports = buffer.account.lamports,
-            .data_offset = bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
+            .data_offset = V3State.BUFFER_METADATA_SIZE,
             .data_len = buffer.constAccountData().len -|
-                bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
+                V3State.BUFFER_METADATA_SIZE,
         };
         if (buffer.constAccountData().len < buf.data_offset or buf.data_len == 0) {
             try ic.tc.log("Buffer account too small", .{});
@@ -578,9 +577,9 @@ pub fn executeV3Upgrade(
             try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
         defer programdata.release();
 
-        const offset = bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE;
+        const offset = V3State.PROGRAM_DATA_METADATA_SIZE;
         const balance_required = @max(1, rent.minimumBalance(programdata.constAccountData().len));
-        const progdata_size = bpf_loader_program.v3.State.sizeOfProgramData(buf.data_len);
+        const progdata_size = V3State.sizeOfProgramData(buf.data_len);
 
         if (programdata.constAccountData().len < progdata_size) {
             try ic.tc.log("ProgramData account not large enough", .{});
@@ -593,7 +592,7 @@ pub fn executeV3Upgrade(
 
         switch (try programdata.deserializeFromAccountData(
             allocator,
-            bpf_loader_program.v3.State,
+            V3State,
         )) {
             .program_data => |data| {
                 if (clock.slot == data.slot) {
@@ -638,16 +637,11 @@ pub fn executeV3Upgrade(
 
         try deployProgram(
             allocator,
+            ic.tc,
             new_program_id,
-            ic.ixn_info.program_meta.pubkey,
-            bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
+            ic.info.program_meta.pubkey,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
-            ic.ec.feature_set,
-            if (ic.tc.log_collector != null)
-                &ic.tc.log_collector.?
-            else
-                null,
         );
     }
 
@@ -659,7 +653,7 @@ pub fn executeV3Upgrade(
     defer programdata.release();
 
     {
-        try programdata.serializeIntoAccountData(bpf_loader_program.v3.State{ .program_data = .{
+        try programdata.serializeIntoAccountData(V3State{ .program_data = .{
             .slot = clock.slot,
             .upgrade_authority_address = authority_key,
         } });
@@ -705,7 +699,7 @@ pub fn executeV3Upgrade(
     try buffer.setDataLength(
         allocator,
         &ic.tc.accounts_resize_delta,
-        bpf_loader_program.v3.State.sizeOfBuffer(0),
+        V3State.sizeOfBuffer(0),
     );
 
     try ic.tc.log("Upgraded program {any}", .{new_program_id});
@@ -729,7 +723,7 @@ pub fn executeV3SetAuthority(
         @intFromEnum(AccountIndex.new_authority),
     )) |meta| meta.pubkey else null;
 
-    switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+    switch (try account.deserializeFromAccountData(allocator, V3State)) {
         .buffer => |buffer| {
             if (new_authority == null) {
                 try ic.tc.log("Buffer authority is not optional", .{});
@@ -747,7 +741,7 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+            try account.serializeIntoAccountData(V3State{
                 .buffer = .{
                     .authority_address = new_authority,
                 },
@@ -768,7 +762,7 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+            try account.serializeIntoAccountData(V3State{
                 .program_data = .{
                     .slot = data.slot,
                     .upgrade_authority_address = new_authority,
@@ -808,7 +802,7 @@ pub fn executeV3SetAuthorityChecked(
         @intFromEnum(AccountIndex.new_authority),
     );
 
-    switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
+    switch (try account.deserializeFromAccountData(allocator, V3State)) {
         .buffer => |buffer| {
             if (buffer.authority_address == null) {
                 try ic.tc.log("Buffer is immutable", .{});
@@ -830,7 +824,7 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+            try account.serializeIntoAccountData(V3State{
                 .buffer = .{
                     .authority_address = new_authority,
                 },
@@ -857,7 +851,7 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            try account.serializeIntoAccountData(bpf_loader_program.v3.State{
+            try account.serializeIntoAccountData(V3State{
                 .program_data = .{
                     .slot = data.slot,
                     .upgrade_authority_address = new_authority,
@@ -900,12 +894,12 @@ pub fn executeV3Close(
     const close_key = close_account.pubkey;
     const close_account_state = try close_account.deserializeFromAccountData(
         allocator,
-        bpf_loader_program.v3.State,
+        V3State,
     );
     try close_account.setDataLength(
         allocator,
         &ic.tc.accounts_resize_delta,
-        bpf_loader_program.v3.State.UNINITIALIZED_SIZE,
+        V3State.UNINITIALIZED_SIZE,
     );
     switch (close_account_state) {
         .uninitialized => {
@@ -957,7 +951,7 @@ pub fn executeV3Close(
 
             switch (try program_account.deserializeFromAccountData(
                 allocator,
-                bpf_loader_program.v3.State,
+                V3State,
             )) {
                 .program => |program_data| {
                     if (!program_data.programdata_address.equals(&close_key)) {
@@ -1026,7 +1020,7 @@ fn commonCloseAccount(
 
     try recipient_account.addLamports(close_account.account.lamports);
     try close_account.setLamports(0);
-    try close_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .uninitialized = {} });
+    try close_account.serializeIntoAccountData(V3State{ .uninitialized = {} });
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1139-L1296
@@ -1075,7 +1069,7 @@ pub fn executeV3ExtendProgram(
 
         switch (try program_account.deserializeFromAccountData(
             allocator,
-            bpf_loader_program.v3.State,
+            V3State,
         )) {
             .program => |data| {
                 if (!data.programdata_address.equals(&programdata_key)) {
@@ -1109,7 +1103,7 @@ pub fn executeV3ExtendProgram(
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
-        bpf_loader_program.v3.State,
+        V3State,
     )) {
         .program_data => |data| blk: {
             if (clock.slot == data.slot) {
@@ -1176,23 +1170,18 @@ pub fn executeV3ExtendProgram(
 
         try deployProgram(
             allocator,
+            ic.tc,
             program_key,
-            ic.ixn_info.program_meta.pubkey,
-            bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
-            data[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
+            ic.info.program_meta.pubkey,
+            data[V3State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
-            ic.ec.feature_set,
-            if (ic.tc.log_collector != null)
-                &ic.tc.log_collector.?
-            else
-                null,
         );
     }
 
     programdata = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
     defer programdata.release();
 
-    try programdata.serializeIntoAccountData(bpf_loader_program.v3.State{
+    try programdata.serializeIntoAccountData(V3State{
         .program_data = .{
             .slot = clock.slot,
             .upgrade_authority_address = upgrade_authority_address,
@@ -1240,7 +1229,7 @@ pub fn executeV3Migrate(
 
         const program_len, const upgrade_key = switch (try programdata.deserializeFromAccountData(
             allocator,
-            bpf_loader_program.v3.State,
+            V3State,
         )) {
             .program_data => |data| blk: {
                 if (clock.slot == data.slot) {
@@ -1249,7 +1238,7 @@ pub fn executeV3Migrate(
                 }
 
                 const program_len: u32 = @intCast(programdata.constAccountData().len -|
-                    bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE);
+                    V3State.PROGRAM_DATA_METADATA_SIZE);
 
                 break :blk .{ program_len, data.upgrade_authority_address };
             },
@@ -1293,7 +1282,7 @@ pub fn executeV3Migrate(
 
         switch (try program_account.deserializeFromAccountData(
             allocator,
-            bpf_loader_program.v3.State,
+            V3State,
         )) {
             .program => |data| {
                 if (!programdata_key.equals(&data.programdata_address)) {
@@ -1426,22 +1415,43 @@ pub fn executeV3Migrate(
 /// [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/program/fd_bpf_loader_program.c#L238
 pub fn deployProgram(
     allocator: std.mem.Allocator,
+    tc: *TransactionContext,
     program_id: Pubkey,
     owner_id: Pubkey,
-    program_len: usize,
-    program_data: []const u8,
+    data: []const u8,
     slot: u64,
-    feature_set: FeatureSet,
-    maybe_log_collector: ?*LogCollector,
 ) (error{OutOfMemory} || InstructionError)!void {
-    _ = allocator;
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
+    var syscalls = vm.syscalls.register(
+        allocator,
+        &tc.sc.ec.feature_set,
+        0,
+        false,
+    ) catch |err| {
+        try tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
+        return InstructionError.ProgramEnvironmentSetupFailure;
+    };
+    defer syscalls.deinit(allocator);
+
+    // Copy the program data to a new buffer
+    const source = try allocator.dupe(u8, data);
+    defer allocator.free(source);
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L133-L143
+    var executable = vm.Executable.fromBytes(
+        allocator,
+        source,
+        &syscalls,
+        .{},
+    ) catch |err| {
+        try tc.log("{s}", .{@errorName(err)});
+        return InstructionError.InvalidAccountData;
+    };
+    defer executable.deinit(allocator);
+
     _ = program_id;
     _ = owner_id;
-    _ = program_len;
-    _ = program_data;
     _ = slot;
-    _ = feature_set;
-    _ = maybe_log_collector;
 }
 
 test "executeV3InitializeBuffer" {
@@ -1454,17 +1464,17 @@ test "executeV3InitializeBuffer" {
     const buffer_account_key = Pubkey.initRandom(prng.random());
     const buffer_authority_key = Pubkey.initRandom(prng.random());
 
-    const initial_buffer_account_state = bpf_loader_program.v3.State.uninitialized;
+    const initial_buffer_account_state = V3State.uninitialized;
     const initial_buffer_account_data =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+        try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(initial_buffer_account_data);
     @memset(initial_buffer_account_data, 0);
     _ = try bincode.writeToSlice(initial_buffer_account_data, initial_buffer_account_state, .{});
 
-    const final_buffer_account_state = bpf_loader_program.v3.State{ .buffer = .{
+    const final_buffer_account_state = V3State{ .buffer = .{
         .authority_address = buffer_authority_key,
     } };
-    const final_buffer_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    const final_buffer_account_data = try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(final_buffer_account_data);
     @memset(final_buffer_account_data, 0);
     _ = try bincode.writeToSlice(final_buffer_account_data, final_buffer_account_state, .{});
@@ -1527,18 +1537,18 @@ test "executeV3Write" {
     const offset = 10;
     const source = [_]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
 
-    const initial_buffer_account_state = bpf_loader_program.v3.State{ .buffer = .{
+    const initial_buffer_account_state = V3State{ .buffer = .{
         .authority_address = buffer_authority_key,
     } };
     const initial_buffer_account_data =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State) + offset + source.len);
+        try allocator.alloc(u8, @sizeOf(V3State) + offset + source.len);
     defer allocator.free(initial_buffer_account_data);
     @memset(initial_buffer_account_data, 0);
     _ = try bincode.writeToSlice(initial_buffer_account_data, initial_buffer_account_state, .{});
 
     const final_buffer_account_data = try allocator.dupe(u8, initial_buffer_account_data);
     defer allocator.free(final_buffer_account_data);
-    const start = bpf_loader_program.v3.State.BUFFER_METADATA_SIZE + offset;
+    const start = V3State.BUFFER_METADATA_SIZE + offset;
     const end = start +| source.len;
     @memcpy(final_buffer_account_data[start..end], &source);
 
@@ -1610,27 +1620,27 @@ test "executeDeployWithMaxDataLen" {
 
     const rent = sysvar.Rent.DEFAULT;
 
-    const max_data_len = 1024;
+    const additional_bytes = 1024;
 
     const initial_program_account_data =
-        try allocator.alloc(u8, bpf_loader_program.v3.State.PROGRAM_SIZE);
+        try allocator.alloc(u8, V3State.PROGRAM_SIZE);
     defer allocator.free(initial_program_account_data);
     @memset(initial_program_account_data, 0);
     _ = try bincode.writeToSlice(
         initial_program_account_data,
-        bpf_loader_program.v3.State.uninitialized,
+        V3State.uninitialized,
         .{},
     );
 
     const initial_program_account_lamports = rent.minimumBalance(initial_program_account_data.len);
 
     const final_program_account_data =
-        try allocator.alloc(u8, bpf_loader_program.v3.State.PROGRAM_SIZE);
+        try allocator.alloc(u8, V3State.PROGRAM_SIZE);
     defer allocator.free(final_program_account_data);
     @memset(final_program_account_data, 0);
     _ = try bincode.writeToSlice(
         final_program_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .program = .{
                 .programdata_address = program_data_account_key,
             },
@@ -1638,31 +1648,43 @@ test "executeDeployWithMaxDataLen" {
         .{},
     );
 
-    const initial_buffer_account_data = try allocator.alloc(u8, max_data_len);
-    defer allocator.free(initial_buffer_account_data);
-    @memset(initial_buffer_account_data, 0);
-    _ = try bincode.writeToSlice(
-        initial_buffer_account_data,
-        bpf_loader_program.v3.State{ .buffer = .{ .authority_address = buffer_authority_key } },
-        .{},
+    const initial_buffer_account_data = try createValidProgramData(
+        allocator,
+        V3State{
+            .buffer = .{
+                .authority_address = buffer_authority_key,
+            },
+        },
+        V3State.BUFFER_METADATA_SIZE,
+        additional_bytes,
     );
-
+    defer allocator.free(initial_buffer_account_data);
     const initial_buffer_account_lamports = 1_000;
     const final_buffer_account_data =
-        initial_buffer_account_data[0..bpf_loader_program.v3.State.BUFFER_METADATA_SIZE];
+        initial_buffer_account_data[0..V3State.BUFFER_METADATA_SIZE];
 
-    const final_program_data_account_size =
-        bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE +| max_data_len;
-    const final_program_data_account_data =
-        try allocator.alloc(u8, final_program_data_account_size);
-    defer allocator.free(final_program_data_account_data);
-    @memset(final_program_data_account_data, 0);
-    _ = try bincode.writeToSlice(
-        final_program_data_account_data,
-        bpf_loader_program.v3.State{ .buffer = .{ .authority_address = buffer_authority_key } },
-        .{},
+    const final_program_data_account_data = try createValidProgramData(
+        allocator,
+        V3State{
+            .program_data = .{
+                .slot = 0,
+                .upgrade_authority_address = buffer_authority_key,
+            },
+        },
+        V3State.PROGRAM_DATA_METADATA_SIZE,
+        additional_bytes,
     );
-    // TODO: set buffer account data to random bytes and set as final program account data
+    defer allocator.free(final_program_data_account_data);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        initial_buffer_account_data[V3State.BUFFER_METADATA_SIZE..],
+        final_program_data_account_data[V3State.PROGRAM_DATA_METADATA_SIZE..],
+    );
+
+    const max_data_len =
+        final_program_data_account_data.len -|
+        V3State.PROGRAM_DATA_METADATA_SIZE;
 
     try testing.expectProgramExecuteResult(
         allocator,
@@ -1684,7 +1706,7 @@ test "executeDeployWithMaxDataLen" {
             .accounts = &.{
                 .{
                     .pubkey = payer_account_key,
-                    .lamports = @max(1, rent.minimumBalance(final_program_data_account_size)),
+                    .lamports = @max(1, rent.minimumBalance(final_program_data_account_data.len)),
                     .owner = system_program.ID,
                 },
                 .{
@@ -1732,7 +1754,7 @@ test "executeDeployWithMaxDataLen" {
                 },
                 .{
                     .pubkey = program_data_account_key,
-                    .lamports = @max(1, rent.minimumBalance(final_program_data_account_size)),
+                    .lamports = @max(1, rent.minimumBalance(final_program_data_account_data.len)),
                     .owner = bpf_loader_program.v3.ID,
                     .data = final_program_data_account_data,
                 },
@@ -1763,7 +1785,7 @@ test "executeDeployWithMaxDataLen" {
             },
             .accounts_resize_delta = @intCast(
                 final_buffer_account_data.len +
-                    bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE +|
+                    V3State.PROGRAM_DATA_METADATA_SIZE +|
                     max_data_len -|
                     initial_buffer_account_data.len,
             ),
@@ -1787,11 +1809,11 @@ test "executeV3SetAuthority" {
     const new_authority_key = Pubkey.initRandom(prng.random());
 
     const initial_buffer_account_data =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+        try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(initial_buffer_account_data);
     _ = try bincode.writeToSlice(
         initial_buffer_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .buffer = .{ .authority_address = buffer_authority_key },
         },
         .{},
@@ -1801,7 +1823,7 @@ test "executeV3SetAuthority" {
     defer allocator.free(final_buffer_account_data);
     _ = try bincode.writeToSlice(
         final_buffer_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .buffer = .{ .authority_address = new_authority_key },
         },
         .{},
@@ -1860,11 +1882,11 @@ test "executeV3SetAuthority" {
     );
 
     const initial_program_account_data =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+        try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(initial_program_account_data);
     _ = try bincode.writeToSlice(
         initial_program_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .program_data = .{ .slot = 0, .upgrade_authority_address = buffer_authority_key },
         },
         .{},
@@ -1874,7 +1896,7 @@ test "executeV3SetAuthority" {
     defer allocator.free(final_program_account_data);
     _ = try bincode.writeToSlice(
         final_program_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .program_data = .{ .slot = 0, .upgrade_authority_address = new_authority_key },
         },
         .{},
@@ -1944,11 +1966,11 @@ test "executeV3SetAuthorityChecked" {
     const new_authority_key = Pubkey.initRandom(prng.random());
 
     const initial_buffer_account_data =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+        try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(initial_buffer_account_data);
     _ = try bincode.writeToSlice(
         initial_buffer_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .buffer = .{ .authority_address = buffer_authority_key },
         },
         .{},
@@ -1958,7 +1980,7 @@ test "executeV3SetAuthorityChecked" {
     defer allocator.free(final_buffer_account_data);
     _ = try bincode.writeToSlice(
         final_buffer_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .buffer = .{ .authority_address = new_authority_key },
         },
         .{},
@@ -2020,11 +2042,11 @@ test "executeV3SetAuthorityChecked" {
     );
 
     const initial_program_account_data =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+        try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(initial_program_account_data);
     _ = try bincode.writeToSlice(
         initial_program_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .program_data = .{ .slot = 0, .upgrade_authority_address = buffer_authority_key },
         },
         .{},
@@ -2034,7 +2056,7 @@ test "executeV3SetAuthorityChecked" {
     defer allocator.free(final_program_account_data);
     _ = try bincode.writeToSlice(
         final_program_account_data,
-        bpf_loader_program.v3.State{
+        V3State{
             .program_data = .{ .slot = 0, .upgrade_authority_address = new_authority_key },
         },
         .{},
@@ -2107,9 +2129,9 @@ test "executeV3Close" {
     const authority_key = Pubkey.initRandom(prng.random());
     const program_key = Pubkey.initRandom(prng.random());
 
-    const initial_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    const initial_account_data = try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(initial_account_data);
-    const final_account_data = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    const final_account_data = try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(final_account_data);
 
     const num_lamports = 42 + prng.random().uintAtMost(u64, 1337);
@@ -2118,7 +2140,7 @@ test "executeV3Close" {
     {
         const uninitialized_data = try bincode.writeToSlice(
             initial_account_data,
-            bpf_loader_program.v3.State{ .uninitialized = {} },
+            V3State{ .uninitialized = {} },
             .{},
         );
 
@@ -2176,7 +2198,7 @@ test "executeV3Close" {
     {
         const initial_data = try bincode.writeToSlice(
             initial_account_data,
-            bpf_loader_program.v3.State{
+            V3State{
                 .buffer = .{
                     .authority_address = authority_key,
                 },
@@ -2186,7 +2208,7 @@ test "executeV3Close" {
 
         const final_data = try bincode.writeToSlice(
             final_account_data,
-            bpf_loader_program.v3.State{ .uninitialized = {} },
+            V3State{ .uninitialized = {} },
             .{},
         );
 
@@ -2255,7 +2277,7 @@ test "executeV3Close" {
 
         const initial_data = try bincode.writeToSlice(
             initial_account_data,
-            bpf_loader_program.v3.State{
+            V3State{
                 .program_data = .{
                     .slot = clock.slot - 1,
                     .upgrade_authority_address = authority_key,
@@ -2266,15 +2288,15 @@ test "executeV3Close" {
 
         const final_data = try bincode.writeToSlice(
             final_account_data,
-            bpf_loader_program.v3.State{ .uninitialized = {} },
+            V3State{ .uninitialized = {} },
             .{},
         );
 
-        const program_data_buffer = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+        const program_data_buffer = try allocator.alloc(u8, @sizeOf(V3State));
         defer allocator.free(program_data_buffer);
         const program_data = try bincode.writeToSlice(
             program_data_buffer,
-            bpf_loader_program.v3.State{
+            V3State{
                 .program = .{ .programdata_address = close_account_key },
             },
             .{},
@@ -2373,56 +2395,60 @@ test "executeV3Upgrade" {
     var clock = sysvar.Clock.DEFAULT;
     clock.slot += 1337;
 
-    const buf_size = 512;
+    // const buf_size = 512;
 
-    const program_data_buffer =
-        try allocator.alloc(u8, bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE + buf_size);
-    defer allocator.free(program_data_buffer);
-    _ = try bincode.writeToSlice(
-        program_data_buffer,
-        bpf_loader_program.v3.State{
+    const initial_program_data = try createValidProgramData(
+        allocator,
+        V3State{
             .program_data = .{
-                .slot = clock.slot - 1, // must be before the current clock's slot.
+                .slot = clock.slot - 1,
                 .upgrade_authority_address = upgrade_authority_key,
             },
         },
-        .{},
+        V3State.PROGRAM_DATA_METADATA_SIZE,
+        0,
     );
+    defer allocator.free(initial_program_data);
 
-    const updated_program_data_buffer = try allocator.alloc(u8, program_data_buffer.len);
-    defer allocator.free(updated_program_data_buffer);
-    _ = try bincode.writeToSlice(
-        updated_program_data_buffer,
-        bpf_loader_program.v3.State{ .program_data = .{
-            .slot = clock.slot,
-            .upgrade_authority_address = upgrade_authority_key,
-        } },
-        .{},
+    const updated_program_data = try createValidProgramData(
+        allocator,
+        V3State{
+            .program_data = .{
+                .slot = clock.slot,
+                .upgrade_authority_address = upgrade_authority_key,
+            },
+        },
+        V3State.PROGRAM_DATA_METADATA_SIZE,
+        0,
     );
+    defer allocator.free(updated_program_data);
 
-    const program_account_buffer = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    const program_account_buffer = try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(program_account_buffer);
     _ = try bincode.writeToSlice(
         program_account_buffer,
-        bpf_loader_program.v3.State{
+        V3State{
             .program = .{ .programdata_address = program_data_account_key },
         },
         .{},
     );
 
-    const buffer_account =
-        try allocator.alloc(u8, bpf_loader_program.v3.State.BUFFER_METADATA_SIZE + buf_size);
-    defer allocator.free(buffer_account);
-    _ = try bincode.writeToSlice(
-        buffer_account,
-        bpf_loader_program.v3.State{ .buffer = .{ .authority_address = upgrade_authority_key } },
-        .{},
+    const buffer_account_data = try createValidProgramData(
+        allocator,
+        V3State{
+            .buffer = .{ .authority_address = upgrade_authority_key },
+        },
+        V3State.BUFFER_METADATA_SIZE,
+        0,
     );
+    defer allocator.free(buffer_account_data);
 
     const buffer_aid_balance = 42;
     const spill_balance = 100;
-    const buffer_balance = rent.minimumBalance(buffer_account.len) + buffer_aid_balance;
-    const program_data_balance = rent.minimumBalance(program_data_buffer.len) - buffer_aid_balance;
+    const buffer_balance = rent.minimumBalance(buffer_account_data.len) + buffer_aid_balance;
+    const program_data_balance = rent.minimumBalance(initial_program_data.len) - buffer_aid_balance;
+    const expected_account_resize_delta: i64 =
+        @intCast(buffer_account_data.len - V3State.BUFFER_METADATA_SIZE);
 
     try testing.expectProgramExecuteResult(
         allocator,
@@ -2443,7 +2469,7 @@ test "executeV3Upgrade" {
             .accounts = &.{
                 .{
                     .pubkey = program_data_account_key,
-                    .data = program_data_buffer,
+                    .data = initial_program_data,
                     .owner = bpf_loader_program.v3.ID,
                     .lamports = program_data_balance,
                 },
@@ -2455,7 +2481,7 @@ test "executeV3Upgrade" {
                 },
                 .{
                     .pubkey = buffer_account_key,
-                    .data = buffer_account,
+                    .data = buffer_account_data,
                     .owner = bpf_loader_program.v3.ID,
                     .lamports = buffer_balance,
                 },
@@ -2491,9 +2517,9 @@ test "executeV3Upgrade" {
             .accounts = &.{
                 .{
                     .pubkey = program_data_account_key,
-                    .data = updated_program_data_buffer,
+                    .data = updated_program_data,
                     .owner = bpf_loader_program.v3.ID,
-                    .lamports = rent.minimumBalance(program_data_buffer.len),
+                    .lamports = rent.minimumBalance(updated_program_data.len),
                 },
                 .{
                     .pubkey = program_account_key,
@@ -2503,7 +2529,7 @@ test "executeV3Upgrade" {
                 },
                 .{
                     .pubkey = buffer_account_key,
-                    .data = buffer_account[0..bpf_loader_program.v3.State.BUFFER_METADATA_SIZE],
+                    .data = buffer_account_data[0..V3State.BUFFER_METADATA_SIZE],
                     .owner = bpf_loader_program.v3.ID,
                     .lamports = 0,
                 },
@@ -2513,7 +2539,7 @@ test "executeV3Upgrade" {
                     .lamports = spill_balance +
                         buffer_balance +
                         program_data_balance -
-                        rent.minimumBalance(program_data_buffer.len),
+                        rent.minimumBalance(initial_program_data.len),
                 },
                 .{
                     .pubkey = sysvar.Rent.ID,
@@ -2532,7 +2558,7 @@ test "executeV3Upgrade" {
                     .owner = ids.NATIVE_LOADER_ID,
                 },
             },
-            .accounts_resize_delta = -buf_size,
+            .accounts_resize_delta = -expected_account_resize_delta,
         },
         .{},
     );
@@ -2556,42 +2582,38 @@ test "executeV3ExtendProgram" {
     var clock = sysvar.Clock.DEFAULT;
     clock.slot += 1337;
 
-    const program_data_account_buffer =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
-    defer allocator.free(program_data_account_buffer);
-    const program_data = try bincode.writeToSlice(
-        program_data_account_buffer,
-        bpf_loader_program.v3.State{
+    const initial_program_data = try createValidProgramData(
+        allocator,
+        V3State{
             .program_data = .{
-                .slot = clock.slot - 1, // must be before the current clock's slot.
+                .slot = clock.slot - 1,
                 .upgrade_authority_address = upgrade_authority_key,
             },
         },
-        .{},
+        V3State.PROGRAM_DATA_METADATA_SIZE,
+        0,
     );
+    defer allocator.free(initial_program_data);
 
     const additional_bytes = 512;
-
-    const extended_program_data_buffer =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State) + additional_bytes);
-    defer allocator.free(extended_program_data_buffer);
-    @memset(extended_program_data_buffer, 0); // important
-    const extended_program_data = try bincode.writeToSlice(
-        extended_program_data_buffer,
-        bpf_loader_program.v3.State{ .program_data = .{
-            .slot = clock.slot,
-            .upgrade_authority_address = upgrade_authority_key,
-        } },
-        .{},
+    const final_program_data = try createValidProgramData(
+        allocator,
+        V3State{
+            .program_data = .{
+                .slot = clock.slot,
+                .upgrade_authority_address = upgrade_authority_key,
+            },
+        },
+        V3State.PROGRAM_DATA_METADATA_SIZE,
+        additional_bytes,
     );
+    defer allocator.free(final_program_data);
 
-    const extended_size = extended_program_data.len + additional_bytes;
-
-    const program_account_buffer = try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+    const program_account_buffer = try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(program_account_buffer);
     const program_account = try bincode.writeToSlice(
         program_account_buffer,
-        bpf_loader_program.v3.State{
+        V3State{
             .program = .{ .programdata_address = program_data_account_key },
         },
         .{},
@@ -2603,7 +2625,7 @@ test "executeV3ExtendProgram" {
 
         const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
         const program_data_lamports =
-            sysvar.Rent.DEFAULT.minimumBalance(program_data.len + additional_bytes) -
+            sysvar.Rent.DEFAULT.minimumBalance(initial_program_data.len + additional_bytes) -
             help_pay;
 
         var compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS;
@@ -2628,7 +2650,7 @@ test "executeV3ExtendProgram" {
                 .accounts = &.{
                     .{
                         .pubkey = program_data_account_key,
-                        .data = program_data,
+                        .data = initial_program_data,
                         .owner = bpf_loader_program.v3.ID,
                         .lamports = program_data_lamports,
                     },
@@ -2662,7 +2684,7 @@ test "executeV3ExtendProgram" {
                 .accounts = &.{
                     .{
                         .pubkey = program_data_account_key,
-                        .data = extended_program_data_buffer[0..extended_size],
+                        .data = final_program_data,
                         .owner = bpf_loader_program.v3.ID,
                         .lamports = program_data_lamports + help_pay,
                     },
@@ -2711,11 +2733,11 @@ test "executeV3Migrate" {
 
     const data_size = 42;
     const program_data_buffer =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State) + data_size);
+        try allocator.alloc(u8, @sizeOf(V3State) + data_size);
     defer allocator.free(program_data_buffer);
     _ = try bincode.writeToSlice(
         program_data_buffer,
-        bpf_loader_program.v3.State{
+        V3State{
             .program_data = .{
                 .slot = clock.slot - 1, // must be before the current clock's slot.
                 .upgrade_authority_address = upgrade_authority_key,
@@ -2725,11 +2747,11 @@ test "executeV3Migrate" {
     );
 
     const program_account_buffer =
-        try allocator.alloc(u8, @sizeOf(bpf_loader_program.v3.State));
+        try allocator.alloc(u8, @sizeOf(V3State));
     defer allocator.free(program_account_buffer);
     const program_account = try bincode.writeToSlice(
         program_account_buffer,
-        bpf_loader_program.v3.State{
+        V3State{
             .program = .{
                 .programdata_address = program_data_key,
             },
@@ -2825,4 +2847,42 @@ test "executeV3Migrate" {
         },
         .{},
     );
+}
+
+fn createValidProgramData(
+    allocator: std.mem.Allocator,
+    state: anytype,
+    state_size: usize,
+    additional_bytes: usize,
+) ![]u8 {
+    if (!@import("builtin").is_test)
+        @compileError("createValidProgramData should only be used in tests");
+
+    const elf_bytes = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+        1024 * 1024,
+    );
+    defer allocator.free(elf_bytes);
+
+    const program_data =
+        try allocator.alloc(
+        u8,
+        state_size + elf_bytes.len + additional_bytes,
+    );
+    errdefer allocator.free(program_data);
+    @memset(program_data, 0);
+
+    _ = try bincode.writeToSlice(
+        program_data[0..state_size],
+        state,
+        .{},
+    );
+
+    @memcpy(
+        program_data[state_size .. program_data.len - additional_bytes],
+        elf_bytes,
+    );
+
+    return program_data;
 }
