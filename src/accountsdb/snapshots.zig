@@ -2622,7 +2622,7 @@ pub fn parallelUnpackZstdTarBall(
         null,
         file_size,
         std.posix.PROT.READ,
-        std.posix.MAP{ .TYPE = .SHARED },
+        std.posix.MAP{ .TYPE = .PRIVATE },
         file.handle,
         0,
     );
