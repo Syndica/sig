@@ -21,30 +21,16 @@ pub const SyscallError = error{
 } || sig.vm.syscalls.Error;
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/master/stable-layout/src/stable_vec.rs#L30
-fn StableVec(comptime T: type) type {
-    return extern struct {
-        const Self = @This();
-
-        addr: u64,
-        cap: u64,
-        len: u64,
-
-        fn slice(self: Self, comptime state: memory.MemoryState) switch (state) {
-            .constant => []const T,
-            .mutable => []T,
-        } {
-            return switch (state) {
-                .constant => @as([*]const T, @ptrFromInt(self.addr))[0..self.len],
-                .mtuable => @as([*]T, @ptrFromInt(self.addr))[0..self.len],
-            };
-        }
-    };
-}
+const StableVec = extern struct {
+    addr: u64,
+    cap: u64,
+    len: u64,
+};
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0666fa5999750153070e5c43d64813467bfdc38e/stable-layout/src/stable_instruction.rs#L33
 const StableInstruction = extern struct {
-    accounts: StableVec(AccountMeta),
-    data: StableVec(u8),
+    accounts: StableVec, // StableVec(AccountMeta)
+    data: StableVec, // StableVec(u8)
     program_id: Pubkey,
 };
 
@@ -538,6 +524,7 @@ const CallerAccount = struct {
         };
     }
 
+    // TODO: used in `cpi_common`
     // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L372C8-L372C22
     // fn reallocRegion(
     //     self: *const CallerAccount,
@@ -546,6 +533,7 @@ const CallerAccount = struct {
     //     is_loader_deprecated: bool,
     // ) !?*const memory.Region {
     //     return accountReallocRegion(
+    //         allocator,
     //         memory_map,
     //         self.vm_data_addr,
     //         self.original_data_len,
