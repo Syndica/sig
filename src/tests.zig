@@ -6,6 +6,7 @@ comptime {
     refAllDeclsRecursive(sig, 2);
     refAllDeclsRecursive(sig.ledger, 2);
     refAllDeclsRecursive(sig.runtime.program, 3);
+    refAllDeclsRecursive(sig.vm, 3);
 }
 
 /// Like std.testing.refAllDeclsRecursive, except:
