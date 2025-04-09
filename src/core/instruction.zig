@@ -259,7 +259,7 @@ pub fn intFromInstructionError(err: InstructionError) i32 {
         error.ExecutableDataModified => return 28,
         error.ExecutableLamportChange => return 29,
         error.ExecutableAccountNotRentExempt => return 30,
-        error.UnsupportedProgramId => return 301,
+        error.UnsupportedProgramId => return 31,
         error.CallDepth => return 32,
         error.MissingAccount => return 33,
         error.ReentrancyNotAllowed => return 34,
