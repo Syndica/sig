@@ -109,7 +109,7 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        const max_len = @max(@sizeOf(T), Transaction.MAX_BYTES);
+        const max_len = @min(self.instruction_data.len, Transaction.MAX_BYTES);
         const buffer = self.instruction_data[0..max_len];
         return bincode.readFromSlice(allocator, T, buffer, .{}) catch {
             return InstructionError.InvalidInstructionData;
