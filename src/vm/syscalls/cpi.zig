@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 const memory = @import("../memory.zig");
 
@@ -15,7 +16,7 @@ const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
-const SerializedAccountMetadata = sig.runtime.instruction_context.SerializedAccountMetadata;
+const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
@@ -212,7 +213,7 @@ fn translateSlice(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L38
 fn checkAccountInfoPtr(
-    ic: *InstructionContext,
+    ic: *const InstructionContext,
     vm_addr: u64,
     expected_vm_addr: u64,
     field: []const u8,
@@ -255,7 +256,7 @@ const CallerAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L119
     fn fromAccountInfoRust(
-        ic: *InstructionContext,
+        ic: *const InstructionContext,
         memory_map: *const MemoryMap,
         _vm_addr: u64,
         account_info: *const AccountInfoRust,
@@ -421,7 +422,7 @@ const CallerAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L264
     fn fromAccountInfoC(
-        ic: *InstructionContext,
+        ic: *const InstructionContext,
         memory_map: *const MemoryMap,
         vm_addr: u64,
         account_info: *const AccountInfoC,
@@ -543,335 +544,6 @@ const CallerAccount = struct {
     // }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2770
-const MockInstruction = struct {
-    program_id: Pubkey,
-    accounts: []const AccountMeta,
-    data: []const u8,
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2777
-    fn intoRegion(
-        self: MockInstruction,
-        allocator: std.mem.Allocator,
-        vm_addr: u64,
-    ) !struct { []u8, memory.Region } {
-        const accounts_len = @sizeOf(AccountMeta) * self.accounts.len;
-        const size = @sizeOf(StableInstruction) + accounts_len + self.data.len;
-
-        const data = try allocator.alloc(u8, size);
-        errdefer allocator.free(data);
-
-        const ins = StableInstruction{
-            .program_id = self.program_id,
-            .accounts = StableVec(AccountMeta){
-                .addr = vm_addr + @sizeOf(StableInstruction),
-                .cap = self.accounts.len,
-                .len = self.accounts.len,
-            },
-            .data = StableVec(u8){
-                .addr = vm_addr + @sizeOf(StableInstruction) + accounts_len,
-                .cap = self.data.len,
-                .len = self.data.len,
-            },
-        };
-
-        var buf = std.io.fixedBufferStream(data);
-        try buf.writer().writeAll(std.mem.asBytes(&ins));
-        try buf.writer().writeAll(std.mem.sliceAsBytes(self.accounts));
-        try buf.writer().writeAll(self.data);
-
-        return .{ data, memory.Region.init(.mutable, data, vm_addr) };
-    }
-};
-
-const MockContext = struct {
-    tc: *TransactionContext,
-    ic: InstructionContext,
-
-    fn init(allocator: std.mem.Allocator, prng: std.Random, account_data: []const u8) !MockContext {
-        const tc = try allocator.create(TransactionContext);
-        errdefer allocator.destroy(tc);
-
-        const account_key = Pubkey.initRandom(prng);
-        const testing = sig.runtime.program.testing;
-
-        tc.* = try testing.createTransactionContext(allocator, prng, .{
-            .accounts = &.{
-                .{
-                    .pubkey = account_key,
-                    .data = account_data,
-                    .owner = bpf_loader_program.v3.ID,
-                    .lamports = prng.uintAtMost(u64, 1000),
-                },
-                .{
-                    .pubkey = system_program.ID,
-                    .owner = ids.NATIVE_LOADER_ID,
-                },
-            },
-        });
-        errdefer tc.deinit(allocator);
-
-        const ic = InstructionContext{
-            .depth = 0,
-            .tc = tc,
-            .info = try testing.createInstructionInfo(
-                allocator,
-                tc,
-                system_program.ID,
-                system_program.Instruction{ .assign = .{ .owner = account_key } }, // whatever.
-                &.{
-                    .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                    .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
-                },
-            ),
-        };
-        errdefer ic.deinit(allocator);
-
-        return .{
-            .tc = tc,
-            .ic = ic,
-        };
-    }
-
-    fn deinit(self: *MockContext, allocator: std.mem.Allocator) void {
-        self.ic.deinit(allocator);
-        self.tc.deinit(allocator);
-        allocator.destroy(self.tc);
-    }
-
-    fn getAccount(self: *const MockContext) MockAccount {
-        const index = 0;
-        const account_meta = self.ic.info.account_metas.get(index);
-        const account_shared = self.ic.tc.accounts[index].account;
-
-        return .{
-            .index = index,
-            .key = account_meta.pubkey,
-            .owner = account_shared.owner,
-            .lamports = account_shared.lamports,
-            .data = account_shared.data,
-            .rent_epoch = account_shared.rent_epoch,
-            .is_signer = account_meta.is_signer,
-            .is_writable = account_meta.is_writable,
-            .executable = account_shared.executable,
-        };
-    }
-};
-
-const MockAccount = struct {
-    index: u16,
-    key: Pubkey,
-    owner: Pubkey,
-    lamports: u64,
-    data: []u8,
-    rent_epoch: Epoch,
-    is_signer: bool,
-    is_writable: bool,
-    executable: bool,
-
-    // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
-    fn intoAccountInfoRust(
-        self: *const MockAccount,
-        allocator: std.mem.Allocator,
-        vm_addr: u64,
-    ) !struct { []u8, SerializedAccountMetadata } {
-        const size = @sizeOf(AccountInfoRust) +
-            @sizeOf(Pubkey) * 2 +
-            @sizeOf(RcBox(RefCell(*u64))) +
-            @sizeOf(u64) +
-            @sizeOf(RcBox(RefCell([]u8))) +
-            self.data.len;
-
-        const buffer = try allocator.alloc(u8, size);
-        errdefer allocator.free(buffer);
-
-        const key_addr = vm_addr + @sizeOf(AccountInfoRust);
-        const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
-        const lamports_addr = lamports_cell_addr + @sizeOf(RcBox(RefCell(*u64)));
-        const owner_addr = lamports_addr + @sizeOf(u64);
-        const data_cell_addr = owner_addr + @sizeOf(Pubkey);
-        const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
-        const data_len = self.data.len;
-
-        buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
-            .key_addr = key_addr,
-            .is_signer = self.is_signer,
-            .is_writable = self.is_writable,
-            .lamports_addr = Rc(RefCell(u64)).fromRaw(
-                @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
-            ),
-            .data = Rc(RefCell([]u8)).fromRaw(
-                @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
-            ),
-            .owner_addr = owner_addr,
-            .executable = self.executable,
-            .rent_epoch = self.rent_epoch,
-        });
-
-        buffer[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.key);
-        buffer[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
-            RcBox(RefCell(u64)){ .value = RefCell(u64).init(lamports_addr) },
-        );
-        buffer[lamports_addr - vm_addr ..][0..@sizeOf(u64)].* = @bitCast(self.lamports);
-        buffer[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.owner);
-        buffer[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
-            RcBox(RefCell([]u8)){
-                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(data_addr))[0..data_len]),
-            },
-        );
-        @memcpy(buffer[data_addr - vm_addr ..][0..data_len], self.data);
-
-        return .{ buffer, SerializedAccountMetadata{
-            .original_data_len = data_len,
-            .vm_data_addr = data_addr,
-            .vm_key_addr = key_addr,
-            .vm_lamports_addr = lamports_addr,
-            .vm_owner_addr = owner_addr,
-        } };
-    }
-};
-
-test "CallerAccount.fromAccountInfoRust" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try MockContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-
-    const account = ctx.getAccount();
-    const vm_addr = MM_INPUT_START;
-
-    const buffer, const serialized_metadata = try account.intoAccountInfoRust(allocator, vm_addr);
-    defer allocator.free(buffer);
-
-    const memory_map = try MemoryMap.init(
-        allocator,
-        &.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START), // nothing in .rodata,
-            memory.Region.init(.mutable, &.{}, memory.STACK_START), // nothing in the stack,
-            memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
-            memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
-        },
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
-
-    const account_info = try translateType(
-        AccountInfoRust,
-        .constant,
-        &memory_map,
-        vm_addr,
-        false,
-    );
-
-    const caller_account = try CallerAccount.fromAccountInfoRust(
-        &ctx.ic,
-        &memory_map,
-        vm_addr,
-        account_info,
-        &serialized_metadata,
-    );
-
-    try std.testing.expectEqual(caller_account.lamports.*, account.lamports);
-    try std.testing.expect(caller_account.owner.*.equals(&account.owner));
-    try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
-    try std.testing.expectEqual(
-        (try caller_account.ref_to_len_in_vm.get(.constant)).*,
-        account.data.len,
-    );
-    try std.testing.expect(
-        std.mem.eql(u8, caller_account.serialized_data, account.data),
-    );
-}
-
-test "CallerAccount.fromAccountInfoC" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try MockContext.init(allocator, prng.random(), "foobar");
-    defer ctx.deinit(allocator);
-
-    const account = ctx.getAccount();
-    const size = @sizeOf(AccountInfoC) +
-        @sizeOf(Pubkey) * 2 +
-        @sizeOf(u64) +
-        account.data.len;
-
-    const buffer = try allocator.alignedAlloc(u8, @alignOf(AccountInfoC), size);
-    defer allocator.free(buffer);
-
-    const memory_map = try MemoryMap.init(
-        allocator,
-        &.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START),
-            memory.Region.init(.mutable, &.{}, memory.STACK_START),
-            memory.Region.init(.mutable, buffer, memory.HEAP_START),
-            // no INPUT_START
-        },
-        .v3,
-        .{},
-    );
-    defer memory_map.deinit(allocator);
-
-    const vm_addr = memory.HEAP_START;
-    const key_addr = vm_addr + @sizeOf(AccountInfoC);
-    const owner_addr = key_addr + @sizeOf(Pubkey);
-    const lamports_addr = owner_addr + @sizeOf(Pubkey);
-    const data_addr = lamports_addr + @sizeOf(u64);
-
-    var buf = std.io.fixedBufferStream(buffer);
-    try buf.writer().writeAll(std.mem.asBytes(&AccountInfoC{
-        .key_addr = key_addr,
-        .lamports_addr = lamports_addr,
-        .data_len = account.data.len,
-        .data_addr = data_addr,
-        .owner_addr = owner_addr,
-        .rent_epoch = account.rent_epoch,
-        .is_signer = account.is_signer,
-        .is_writable = account.is_writable,
-        .executable = account.executable,
-    }));
-
-    try buf.writer().writeAll(std.mem.asBytes(&account.key));
-    try buf.writer().writeAll(std.mem.asBytes(&account.owner));
-    try buf.writer().writeAll(std.mem.asBytes(&account.lamports));
-    try buf.writer().writeAll(account.data);
-
-    const account_info = try translateType(
-        AccountInfoC,
-        .constant,
-        &memory_map,
-        vm_addr,
-        false,
-    );
-
-    const caller_account = try CallerAccount.fromAccountInfoC(
-        &ctx.ic,
-        &memory_map,
-        vm_addr,
-        account_info,
-        &SerializedAccountMetadata{
-            .original_data_len = account.data.len,
-            .vm_data_addr = data_addr,
-            .vm_key_addr = key_addr,
-            .vm_lamports_addr = lamports_addr,
-            .vm_owner_addr = owner_addr,
-        },
-    );
-
-    try std.testing.expectEqual(caller_account.lamports.*, account.lamports);
-    try std.testing.expect(caller_account.owner.*.equals(&account.owner));
-    try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
-    try std.testing.expectEqual(
-        (try caller_account.ref_to_len_in_vm.get(.constant)).*,
-        account.data.len,
-    );
-    try std.testing.expect(
-        std.mem.eql(u8, caller_account.serialized_data, account.data),
-    );
-}
-
 /// Update the given account before executing CPI.
 ///
 /// caller_account and callee_account describe the same account. At CPI entry
@@ -887,12 +559,12 @@ test "CallerAccount.fromAccountInfoC" {
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1201
 fn updateCalleeAccount(
     allocator: std.mem.Allocator,
+    ic: *const InstructionContext,
+    memory_map: *const MemoryMap,
+    is_loader_deprecated: bool,
+    direct_mapping: bool,
     callee_account: *BorrowedAccount,
     caller_account: *const CallerAccount,
-    direct_mapping: bool,
-    is_loader_deprecated: bool,
-    memory_map: *const MemoryMap,
-    ic: *InstructionContext,
 ) !bool {
     var must_update_caller = false;
 
@@ -972,14 +644,14 @@ const TranslatedAccounts = std.BoundedArray(TranslatedAccount, InstructionInfo.M
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L498
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L725
 fn translateAccounts(
-    comptime AccountInfoType: type,
     allocator: std.mem.Allocator,
-    account_metas: []const InstructionInfo.AccountMeta,
+    ic: *const InstructionContext,
+    memory_map: *const MemoryMap,
+    is_loader_deprecated: bool,
+    comptime AccountInfoType: type,
     account_infos_addr: u64,
     account_infos_len: u64,
-    is_loader_deprecated: bool,
-    memory_map: *const MemoryMap,
-    ic: *InstructionContext,
+    account_metas: []const InstructionInfo.AccountMeta,
 ) !TranslatedAccounts {
     // translate_account_infos():
     // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L805
@@ -1106,12 +778,12 @@ fn translateAccounts(
         // changes.
         const update_caller = try updateCalleeAccount(
             allocator,
+            ic,
+            memory_map,
+            is_loader_deprecated,
+            direct_mapping,
             &callee_account,
             &caller_account,
-            direct_mapping,
-            is_loader_deprecated,
-            memory_map,
-            ic,
         );
 
         try accounts.append(.{
@@ -1123,11 +795,301 @@ fn translateAccounts(
     return accounts;
 }
 
-test "translateAccounts" {
+const TestContext = struct {
+    tc: *TransactionContext,
+    ic: InstructionContext,
+
+    fn init(allocator: std.mem.Allocator, prng: std.Random, account_data: []const u8) !TestContext {
+        comptime std.debug.assert(builtin.is_test);
+
+        const tc = try allocator.create(TransactionContext);
+        errdefer allocator.destroy(tc);
+
+        const account_key = Pubkey.initRandom(prng);
+        const testing = sig.runtime.program.testing;
+
+        tc.* = try testing.createTransactionContext(allocator, prng, .{
+            .accounts = &.{
+                .{
+                    .pubkey = account_key,
+                    .data = account_data,
+                    .owner = bpf_loader_program.v3.ID,
+                    .lamports = prng.uintAtMost(u64, 1000),
+                },
+                .{
+                    .pubkey = system_program.ID,
+                    .owner = ids.NATIVE_LOADER_ID,
+                },
+            },
+        });
+        errdefer tc.deinit(allocator);
+
+        const ic = InstructionContext{
+            .depth = 0,
+            .tc = tc,
+            .info = try testing.createInstructionInfo(
+                allocator,
+                tc,
+                system_program.ID,
+                system_program.Instruction{ .assign = .{ .owner = account_key } }, // whatever.
+                &.{
+                    .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                    .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+                },
+            ),
+        };
+        errdefer ic.deinit(allocator);
+
+        return .{
+            .tc = tc,
+            .ic = ic,
+        };
+    }
+
+    fn deinit(self: *TestContext, allocator: std.mem.Allocator) void {
+        self.ic.deinit(allocator);
+        self.tc.deinit(allocator);
+        allocator.destroy(self.tc);
+    }
+
+    fn getAccount(self: *const TestContext) TestAccount {
+        const index = 0;
+        const account_meta = self.ic.info.account_metas.get(index);
+        const account_shared = self.ic.tc.accounts[index].account;
+
+        return .{
+            .index = index,
+            .key = account_meta.pubkey,
+            .owner = account_shared.owner,
+            .lamports = account_shared.lamports,
+            .data = account_shared.data,
+            .rent_epoch = account_shared.rent_epoch,
+            .is_signer = account_meta.is_signer,
+            .is_writable = account_meta.is_writable,
+            .executable = account_shared.executable,
+        };
+    }
+};
+
+const TestAccount = struct {
+    index: u16,
+    key: Pubkey,
+    owner: Pubkey,
+    lamports: u64,
+    data: []u8,
+    rent_epoch: Epoch,
+    is_signer: bool,
+    is_writable: bool,
+    executable: bool,
+
+    // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
+    fn intoAccountInfoRust(
+        self: *const TestAccount,
+        allocator: std.mem.Allocator,
+        vm_addr: u64,
+    ) !struct { []u8, SerializedAccountMetadata } {
+        const size = @sizeOf(AccountInfoRust) +
+            @sizeOf(Pubkey) * 2 +
+            @sizeOf(RcBox(RefCell(*u64))) +
+            @sizeOf(u64) +
+            @sizeOf(RcBox(RefCell([]u8))) +
+            self.data.len;
+
+        const buffer = try allocator.alloc(u8, size);
+        errdefer allocator.free(buffer);
+
+        const key_addr = vm_addr + @sizeOf(AccountInfoRust);
+        const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
+        const lamports_addr = lamports_cell_addr + @sizeOf(RcBox(RefCell(*u64)));
+        const owner_addr = lamports_addr + @sizeOf(u64);
+        const data_cell_addr = owner_addr + @sizeOf(Pubkey);
+        const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
+        const data_len = self.data.len;
+
+        buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
+            .key_addr = key_addr,
+            .is_signer = self.is_signer,
+            .is_writable = self.is_writable,
+            .lamports_addr = Rc(RefCell(u64)).fromRaw(
+                @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
+            ),
+            .data = Rc(RefCell([]u8)).fromRaw(
+                @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
+            ),
+            .owner_addr = owner_addr,
+            .executable = self.executable,
+            .rent_epoch = self.rent_epoch,
+        });
+
+        buffer[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.key);
+        buffer[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
+            RcBox(RefCell(u64)){ .value = RefCell(u64).init(lamports_addr) },
+        );
+        buffer[lamports_addr - vm_addr ..][0..@sizeOf(u64)].* = @bitCast(self.lamports);
+        buffer[owner_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.owner);
+        buffer[data_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell([]u8)))].* = @bitCast(
+            RcBox(RefCell([]u8)){
+                .value = RefCell([]u8).init(@as([*]u8, @ptrFromInt(data_addr))[0..data_len]),
+            },
+        );
+        @memcpy(buffer[data_addr - vm_addr ..][0..data_len], self.data);
+
+        return .{ buffer, SerializedAccountMetadata{
+            .original_data_len = data_len,
+            .vm_data_addr = data_addr,
+            .vm_key_addr = key_addr,
+            .vm_lamports_addr = lamports_addr,
+            .vm_owner_addr = owner_addr,
+        } };
+    }
+};
+
+test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try MockContext.init(allocator, prng.random(), "foobar");
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
+    defer ctx.deinit(allocator);
+
+    const account = ctx.getAccount();
+    const vm_addr = MM_INPUT_START;
+
+    const buffer, const serialized_metadata = try account.intoAccountInfoRust(allocator, vm_addr);
+    defer allocator.free(buffer);
+
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START), // nothing in .rodata,
+            memory.Region.init(.mutable, &.{}, memory.STACK_START), // nothing in the stack,
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START), // nothing in the heap,
+            memory.Region.init(.mutable, buffer, vm_addr), // INPUT_START
+        },
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    const account_info = try translateType(
+        AccountInfoRust,
+        .constant,
+        &memory_map,
+        vm_addr,
+        false,
+    );
+
+    const caller_account = try CallerAccount.fromAccountInfoRust(
+        &ctx.ic,
+        &memory_map,
+        vm_addr,
+        account_info,
+        &serialized_metadata,
+    );
+
+    try std.testing.expectEqual(caller_account.lamports.*, account.lamports);
+    try std.testing.expect(caller_account.owner.*.equals(&account.owner));
+    try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
+    try std.testing.expectEqual(
+        (try caller_account.ref_to_len_in_vm.get(.constant)).*,
+        account.data.len,
+    );
+    try std.testing.expect(
+        std.mem.eql(u8, caller_account.serialized_data, account.data),
+    );
+}
+
+test "vm.syscalls.cpi: CallerAccount.fromAccountInfoC" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
+    defer ctx.deinit(allocator);
+
+    const account = ctx.getAccount();
+    const size = @sizeOf(AccountInfoC) +
+        @sizeOf(Pubkey) * 2 +
+        @sizeOf(u64) +
+        account.data.len;
+
+    const buffer = try allocator.alignedAlloc(u8, @alignOf(AccountInfoC), size);
+    defer allocator.free(buffer);
+
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, buffer, memory.HEAP_START),
+            // no INPUT_START
+        },
+        .v3,
+        .{},
+    );
+    defer memory_map.deinit(allocator);
+
+    const vm_addr = memory.HEAP_START;
+    const key_addr = vm_addr + @sizeOf(AccountInfoC);
+    const owner_addr = key_addr + @sizeOf(Pubkey);
+    const lamports_addr = owner_addr + @sizeOf(Pubkey);
+    const data_addr = lamports_addr + @sizeOf(u64);
+
+    var buf = std.io.fixedBufferStream(buffer);
+    try buf.writer().writeAll(std.mem.asBytes(&AccountInfoC{
+        .key_addr = key_addr,
+        .lamports_addr = lamports_addr,
+        .data_len = account.data.len,
+        .data_addr = data_addr,
+        .owner_addr = owner_addr,
+        .rent_epoch = account.rent_epoch,
+        .is_signer = account.is_signer,
+        .is_writable = account.is_writable,
+        .executable = account.executable,
+    }));
+
+    try buf.writer().writeAll(std.mem.asBytes(&account.key));
+    try buf.writer().writeAll(std.mem.asBytes(&account.owner));
+    try buf.writer().writeAll(std.mem.asBytes(&account.lamports));
+    try buf.writer().writeAll(account.data);
+
+    const account_info = try translateType(
+        AccountInfoC,
+        .constant,
+        &memory_map,
+        vm_addr,
+        false,
+    );
+
+    const caller_account = try CallerAccount.fromAccountInfoC(
+        &ctx.ic,
+        &memory_map,
+        vm_addr,
+        account_info,
+        &SerializedAccountMetadata{
+            .original_data_len = account.data.len,
+            .vm_data_addr = data_addr,
+            .vm_key_addr = key_addr,
+            .vm_lamports_addr = lamports_addr,
+            .vm_owner_addr = owner_addr,
+        },
+    );
+
+    try std.testing.expectEqual(caller_account.lamports.*, account.lamports);
+    try std.testing.expect(caller_account.owner.*.equals(&account.owner));
+    try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
+    try std.testing.expectEqual(
+        (try caller_account.ref_to_len_in_vm.get(.constant)).*,
+        account.data.len,
+    );
+    try std.testing.expect(
+        std.mem.eql(u8, caller_account.serialized_data, account.data),
+    );
+}
+
+test "vm.syscalls.cpi: translateAccounts" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
 
     const account = ctx.getAccount();
@@ -1153,8 +1115,13 @@ test "translateAccounts" {
 
     // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2554
     const accounts = try translateAccounts(
-        AccountInfoRust,
         allocator,
+        &ctx.ic,
+        &memory_map,
+        false, // is_loader_deprecated
+        AccountInfoRust,
+        vm_addr, // account_infos_addr
+        1, // account_infos_len
         &.{
             .{
                 .pubkey = account.key,
@@ -1173,11 +1140,6 @@ test "translateAccounts" {
                 .is_writable = account.is_writable,
             },
         },
-        vm_addr,
-        1,
-        false,
-        &memory_map,
-        &ctx.ic,
     );
 
     try std.testing.expectEqual(accounts.len, 2);
