@@ -1531,18 +1531,16 @@ test "translateAccounts" {
     //     false,
     // );
 
-    const instruction_info = try sig.runtime.executor.prepareCpiInstructionInfo(
+    const instruction_info = try testing.createInstructionInfo(
+        allocator,
         &tc,
-        .{
-            .program_id = system_program.ID,
-            .accounts = &.{
-                .{ .pubkey = tc.accounts[0].pubkey, .is_signer = false, .is_writable = true },
-                .{ .pubkey = tc.accounts[1].pubkey, .is_signer = false, .is_writable = false },
-            },
-            .data = &.{},
+        system_program.ID,
+        system_program.Instruction{ .assign = .{ .owner = account_key } }, // can be whatever.
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
         },
-        &.{ }, // signers
     );
+    defer instruction_info.deinit(allocator);
 
     const accounts = try translateAccounts(
         AccountInfoRust,
