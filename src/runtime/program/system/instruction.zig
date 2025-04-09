@@ -1,10 +1,8 @@
-const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const bincode = sig.bincode;
 
 const Pubkey = sig.core.Pubkey;
-const InstructionError = sig.core.instruction.InstructionError;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
 pub const Instruction = union(enum) {
