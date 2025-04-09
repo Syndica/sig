@@ -9,7 +9,6 @@ const feature_set = sig.runtime.feature_set;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
-const InstructionAccount = sig.core.instruction.InstructionAccount;
 const InstructionError = sig.core.instruction.InstructionError;
 
 const BorrowedAccount = sig.runtime.BorrowedAccount;
