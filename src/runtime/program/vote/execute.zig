@@ -3822,8 +3822,7 @@ test "vote_program: vote state update" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .update_vote_state = .{
                 .vote_state_update = vote_state_update,
@@ -3881,6 +3880,7 @@ test "vote_program: vote state update" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -3969,8 +3969,7 @@ test "vote_program: vote state update switch" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .update_vote_state_switch = .{
                 .vote_state_update = vote_state_update,
@@ -4029,6 +4028,7 @@ test "vote_program: vote state update switch" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -4117,8 +4117,7 @@ test "vote_program: compact vote state update" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .compact_update_vote_state = .{
                 .vote_state_update = vote_state_update,
@@ -4176,6 +4175,7 @@ test "vote_program: compact vote state update" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -4264,8 +4264,7 @@ test "vote_program: compact vote state update switch" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .compact_update_vote_state_switch = .{
                 .vote_state_update = vote_state_update,
@@ -4324,6 +4323,7 @@ test "vote_program: compact vote state update switch" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -4413,8 +4413,7 @@ test "vote_program: tower sync" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .tower_sync = .{
                 .tower_sync = tower_sync,
@@ -4478,6 +4477,7 @@ test "vote_program: tower sync" {
                 },
             },
         },
+        .{},
     );
 }
 
@@ -4567,8 +4567,7 @@ test "vote_program: tower sync switch" {
 
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
-        {},
-        vote_program,
+        vote_program.ID,
         VoteProgramInstruction{
             .tower_sync_switch = .{
                 .tower_sync = tower_sync,
@@ -4633,5 +4632,6 @@ test "vote_program: tower sync switch" {
                 },
             },
         },
+        .{},
     );
 }
