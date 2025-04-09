@@ -995,7 +995,6 @@ pub const VoteState = struct {
         tower_sync: *TowerSync,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         if (try self.checkAndFilterProposedVoteState(
-            allocator,
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
@@ -1034,7 +1033,6 @@ pub const VoteState = struct {
         vote_state_update: *VoteStateUpdate,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
         if (try self.checkAndFilterProposedVoteState(
-            allocator,
             &vote_state_update.lockouts,
             &vote_state_update.root,
             vote_state_update.hash,
@@ -1070,7 +1068,6 @@ pub const VoteState = struct {
     /// votes as needed.
     pub fn checkAndFilterProposedVoteState(
         self: *VoteState,
-        allocator: std.mem.Allocator,
         proposed_lockouts: *std.ArrayListUnmanaged(Lockout),
         proposed_root: *?Slot,
         proposed_hash: Hash,
@@ -1135,8 +1132,12 @@ pub const VoteState = struct {
         // index into the slot_hashes, starting at the oldest known
         // slot hash
         var slot_hashes_index = slot_hashes.entries.len;
-        var proposed_lockouts_indices_to_filter = std.ArrayList(usize).init(allocator);
-        defer proposed_lockouts_indices_to_filter.deinit();
+        var proposed_lockouts_indices_to_filter = std.BoundedArray(
+            usize,
+            MAX_LOCKOUT_HISTORY,
+        ).init(
+            0,
+        ) catch return InstructionError.ArithmeticOverflow;
         // Note:
         //
         // 1) `proposed_lockouts` is sorted from oldest/smallest vote to newest/largest
@@ -1189,9 +1190,9 @@ pub const VoteState = struct {
                             // 2) Doesn't already exist in vote state
                             //
                             // Then filter it out
-                            try proposed_lockouts_indices_to_filter.append(
+                            proposed_lockouts_indices_to_filter.append(
                                 @as(usize, proposed_lockouts_index),
-                            );
+                            ) catch return InstructionError.ArithmeticOverflow;
                         }
                         if (root_to_check) |new_proposed_root| {
                             // 1. Because `root_to_check.is_some()`, then we know that
@@ -1289,10 +1290,10 @@ pub const VoteState = struct {
         var i: usize = 0;
         while (i < proposed_lockouts.*.items.len) {
             const should_retain = blk: {
-                if (filter_votes_index == proposed_lockouts_indices_to_filter.items.len) {
+                if (filter_votes_index == proposed_lockouts_indices_to_filter.len) {
                     break :blk true;
                 } else if (proposed_lockouts_index ==
-                    proposed_lockouts_indices_to_filter.items[filter_votes_index])
+                    proposed_lockouts_indices_to_filter.get(filter_votes_index))
                 {
                     filter_votes_index = std.math.add(usize, filter_votes_index, 1) catch
                         return InstructionError.ArithmeticOverflow;
@@ -3670,7 +3671,6 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
         defer tower_sync.lockouts.deinit(allocator);
 
         const maybe_error = try empty_vote_state.checkAndFilterProposedVoteState(
-            allocator,
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
@@ -3691,7 +3691,6 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
 
         const maybe_error = try empty_vote_state
             .checkAndFilterProposedVoteState(
-            allocator,
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
@@ -3730,7 +3729,6 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
 
         const maybe_error = try vote_state
             .checkAndFilterProposedVoteState(
-            allocator,
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
@@ -3760,7 +3758,6 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
 
     const maybe_error = try vote_state
         .checkAndFilterProposedVoteState(
-        allocator,
         &another_tower_sync.lockouts,
         &another_tower_sync.root,
         another_tower_sync.hash,
@@ -3986,7 +3983,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
         defer tower_sync.lockouts.deinit(allocator);
         tower_sync.hash = vote_slot_hash;
         const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-            allocator,
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
@@ -4011,7 +4007,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
 
         const maybe_error = try vote_state
             .checkAndFilterProposedVoteState(
-            allocator,
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
@@ -4071,7 +4066,6 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
     tower_sync.hash = vote_slot_hash;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4150,7 +4144,6 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
     tower_sync.hash = vote_slot_hash;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4240,7 +4233,6 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
     tower_sync.hash = vote_slot_hash;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4316,7 +4308,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
     tower_sync.hash = vote_slot_hash;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4341,7 +4332,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
     another_tower_sync.hash = vote_slot_hash;
 
     const another_maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &another_tower_sync.lockouts,
         &another_tower_sync.root,
         another_tower_sync.hash,
@@ -4396,7 +4386,6 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
     tower_sync.root = new_root;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4440,7 +4429,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
     tower_sync.hash = vote_slot_hash;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4493,7 +4481,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
     tower_sync.hash = vote_slot_hash;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4566,7 +4553,6 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
     tower_sync.hash = vote_slot_hash;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4634,7 +4620,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
     tower_sync.hash = vote_slot_hash;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
@@ -4962,7 +4947,6 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     tower_sync.root = proposed_root;
 
     const maybe_error = try vote_state.checkAndFilterProposedVoteState(
-        allocator,
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
