@@ -775,7 +775,7 @@ pub const VoteState = struct {
                 slot_hashes.entries[
                 std.math.sub(usize, j, 1) catch
                     return error.ArithmeticOverflow
-            ].@"0") {
+            ][0]) {
                 // Decrement `j` to find newer slots
                 j = std.math.sub(usize, j, 1) catch return error.ArithmeticOverflow;
                 continue;
@@ -799,7 +799,7 @@ pub const VoteState = struct {
             // a matching slot hash in step 2)
             return VoteError.slots_mismatch;
         }
-        if (!vote_hash.eql(slot_hashes.entries[j].@"1")) {
+        if (!vote_hash.eql(slot_hashes.entries[j][1])) {
             // This means the newest slot in the `vote_slots` has a match that
             // doesn't match the expected hash for that slot on this
             // fork
@@ -910,7 +910,7 @@ pub const VoteState = struct {
         }
 
         const earliest_slot_in_history = if (slot_hashes.entries.len != 0)
-            slot_hashes.entries[slot_hashes.entries.len - 1].@"0"
+            slot_hashes.entries[slot_hashes.entries.len - 1][0]
         else
             0;
 
@@ -986,7 +986,7 @@ pub const VoteState = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1014
-    pub fn doProcessTowerSync(
+    pub fn processTowerSync(
         self: *VoteState,
         allocator: std.mem.Allocator,
         slot_hashes: *const SlotHashes,
@@ -1025,7 +1025,7 @@ pub const VoteState = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L964
-    pub fn doProcessVoteStateUpdate(
+    pub fn processVoteStateUpdate(
         self: *VoteState,
         allocator: std.mem.Allocator,
         slot_hashes: *const SlotHashes,
@@ -1094,7 +1094,7 @@ pub const VoteState = struct {
         }
 
         const earliest_slot_hash_in_history = slot_hashes
-            .entries[slot_hashes.entries.len - 1].@"0";
+            .entries[slot_hashes.entries.len - 1][0];
 
         // Check if the proposed vote state is too old to be in the SlotHash history
         if (last_proposed_slot < earliest_slot_hash_in_history) {
@@ -1170,7 +1170,7 @@ pub const VoteState = struct {
             const ancestor_slot = slot_hashes.entries[
                 std.math.sub(usize, slot_hashes_index, 1) catch
                     return error.ArithmeticOverflow
-            ].@"0";
+            ][0];
 
             // Find if this slot in the proposed vote state exists in the SlotHashes history
             // to confirm if it was a valid ancestor on this fork
@@ -1210,8 +1210,7 @@ pub const VoteState = struct {
                                 usize,
                                 proposed_lockouts_index,
                                 1,
-                            ) catch
-                                return InstructionError.ArithmeticOverflow;
+                            ) catch return InstructionError.ArithmeticOverflow;
                         }
                         continue;
                     } else {
@@ -1242,8 +1241,7 @@ pub const VoteState = struct {
                             usize,
                             proposed_lockouts_index,
                             1,
-                        ) catch
-                            return InstructionError.ArithmeticOverflow;
+                        ) catch return InstructionError.ArithmeticOverflow;
                         slot_hashes_index = std.math.sub(usize, slot_hashes_index, 1) catch
                             return InstructionError.ArithmeticOverflow;
                     }
@@ -1278,9 +1276,9 @@ pub const VoteState = struct {
         // `proposed_vote_slot < earliest_slot_hash_in_history` ran, which is equivalent to
         // `last_proposed_slot < earliest_slot_hash_in_history`, but this is impossible
         // due to assumption 3) above.
-        std.debug.assert(last_proposed_slot == slot_hashes.entries[slot_hashes_index].@"0");
+        std.debug.assert(last_proposed_slot == slot_hashes.entries[slot_hashes_index][0]);
 
-        if (!slot_hashes.entries[slot_hashes_index].@"1".eql(proposed_hash)) {
+        if (!slot_hashes.entries[slot_hashes_index][1].eql(proposed_hash)) {
             return VoteError.slot_hash_mismatch;
         }
 
@@ -1481,8 +1479,7 @@ pub const VoteState = struct {
                         usize,
                         current_vote_state_index,
                         1,
-                    ) catch
-                        return InstructionError.ArithmeticOverflow;
+                    ) catch return InstructionError.ArithmeticOverflow;
                 },
                 .eq => {
                     // The new vote state should never have less lockout than
@@ -2657,8 +2654,8 @@ test "state.VoteState filter old votes" {
     // filter out those older slots
     const vote_slot = 2;
     const vote_slot_hash = for (slot_hashes.entries) |entry| {
-        if (entry.@"0" == vote_slot) {
-            break entry.@"1";
+        if (entry[0] == vote_slot) {
+            break entry[1];
         }
     } else unreachable;
 
@@ -4094,7 +4091,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
 
     try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
 
-    const another_maybe_error = try vote_state.doProcessTowerSync(
+    const another_maybe_error = try vote_state.processTowerSync(
         allocator,
         &SlotHashes{ .entries = slot_hashes.items },
         0,
@@ -4175,7 +4172,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
 
     try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
 
-    const another_maybe_error = try vote_state.doProcessTowerSync(
+    const another_maybe_error = try vote_state.processTowerSync(
         allocator,
         &SlotHashes{ .entries = slot_hashes.items },
         0,
@@ -4264,7 +4261,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
     }
     try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
 
-    const another_maybe_error = try vote_state.doProcessTowerSync(
+    const another_maybe_error = try vote_state.processTowerSync(
         allocator,
         &SlotHashes{ .entries = slot_hashes.items },
         0,
@@ -4517,7 +4514,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
     }
     try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
 
-    const another_maybe_error = try vote_state.doProcessTowerSync(
+    const another_maybe_error = try vote_state.processTowerSync(
         allocator,
         &SlotHashes{ .entries = slot_hashes.items },
         0,
@@ -4591,7 +4588,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
     // Because 6 from the original VoteState
     // should not have been popped off in the proposed state,
     // we should get a lockout conflict
-    const another_maybe_error = try vote_state.doProcessTowerSync(
+    const another_maybe_error = try vote_state.processTowerSync(
         allocator,
         &SlotHashes{ .entries = slot_hashes.items },
         0,
@@ -4970,7 +4967,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     // The proposed root slot should become the biggest slot in the current vote state less than
     // `earliest_slot_in_history`.
 
-    const another_maybe_error = try vote_state.doProcessTowerSync(
+    const another_maybe_error = try vote_state.processTowerSync(
         allocator,
         &SlotHashes{ .entries = slot_hashes.items },
         0,

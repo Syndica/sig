@@ -117,60 +117,42 @@ pub fn execute(
             &vote_account,
             args.vote,
         ),
-        .update_vote_state => |args| {
-            var vote_state_update = args.vote_state_update;
-            return try executeUpdateVoteState(
-                allocator,
-                ic,
-                &vote_account,
-                &vote_state_update,
-            );
-        },
-        .update_vote_state_switch => |args| {
-            var vote_state_update = args.vote_state_update;
-            return try executeUpdateVoteState(
-                allocator,
-                ic,
-                &vote_account,
-                &vote_state_update,
-            );
-        },
-        .compact_update_vote_state => |args| {
-            var vote_state_update = args.vote_state_update;
-            return try executeUpdateVoteState(
-                allocator,
-                ic,
-                &vote_account,
-                &vote_state_update,
-            );
-        },
-        .compact_update_vote_state_switch => |args| {
-            var vote_state_update = args.vote_state_update;
-            return try executeUpdateVoteState(
-                allocator,
-                ic,
-                &vote_account,
-                &vote_state_update,
-            );
-        },
-        .tower_sync => |args| try {
-            var tower_sync = args.tower_sync;
-            return try executeTowerSync(
-                allocator,
-                ic,
-                &vote_account,
-                &tower_sync,
-            );
-        },
-        .tower_sync_switch => |args| {
-            var tower_sync = args.tower_sync;
-            return try executeTowerSync(
-                allocator,
-                ic,
-                &vote_account,
-                &tower_sync,
-            );
-        },
+        .update_vote_state => |args| return try executeUpdateVoteState(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote_state_update,
+        ),
+        .update_vote_state_switch => |args| return try executeUpdateVoteState(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote_state_update,
+        ),
+        .compact_update_vote_state => |args| return try executeUpdateVoteState(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote_state_update,
+        ),
+        .compact_update_vote_state_switch => |args| return try executeUpdateVoteState(
+            allocator,
+            ic,
+            &vote_account,
+            args.vote_state_update,
+        ),
+        .tower_sync => |args| return try executeTowerSync(
+            allocator,
+            ic,
+            &vote_account,
+            args.tower_sync,
+        ),
+        .tower_sync_switch => |args| return try executeTowerSync(
+            allocator,
+            ic,
+            &vote_account,
+            args.tower_sync,
+        ),
     };
 }
 
@@ -838,8 +820,9 @@ fn executeUpdateVoteState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    vote_state_update: *VoteStateUpdate,
+    vote_state_update: VoteStateUpdate,
 ) (error{OutOfMemory} || InstructionError)!void {
+    var vote_state_update_mut = vote_state_update;
     if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
         ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
     {
@@ -855,7 +838,7 @@ fn executeUpdateVoteState(
         vote_account,
         slot_hashes,
         clock,
-        vote_state_update,
+        &vote_state_update_mut,
     );
 }
 
@@ -876,7 +859,7 @@ fn updateVoteState(
     );
     defer vote_state.deinit();
 
-    const maybe_err = try vote_state.doProcessVoteStateUpdate(
+    const maybe_err = try vote_state.processVoteStateUpdate(
         allocator,
         &slot_hashes,
         clock.epoch,
@@ -897,8 +880,9 @@ fn executeTowerSync(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
-    tower_sync: *TowerSync,
+    tower_sync: TowerSync,
 ) (error{OutOfMemory} || InstructionError)!void {
+    var tower_sync_mut = tower_sync;
     if (!ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX)) {
         return InstructionError.InvalidInstructionData;
     }
@@ -912,7 +896,7 @@ fn executeTowerSync(
         vote_account,
         slot_hashes,
         clock,
-        tower_sync,
+        &tower_sync_mut,
     );
 }
 
@@ -933,7 +917,7 @@ fn towerSync(
     );
     defer vote_state.deinit();
 
-    const maybe_err = try vote_state.doProcessTowerSync(
+    const maybe_err = try vote_state.processTowerSync(
         allocator,
         &slot_hashes,
         clock.epoch,
