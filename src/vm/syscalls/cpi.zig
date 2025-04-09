@@ -1266,7 +1266,7 @@ const TranslatedAccounts = std.BoundedArray(TranslatedAccount, InstructionInfo.M
 fn translateAccounts(
     comptime AccountInfoType: type,
     allocator: std.mem.Allocator,
-    account_metas: []const AccountMeta,
+    account_metas: []const InstructionInfo.AccountMeta,
     account_infos_addr: u64,
     account_infos_len: u64,
     is_loader_deprecated: bool,
@@ -1323,6 +1323,11 @@ fn translateAccounts(
     // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L853
 
     var accounts: TranslatedAccounts = .{};
+    try accounts.append(.{
+        .index_in_caller = ic.info.program_meta.index_in_transaction,
+        .caller_account = null,
+    });
+
     for (account_metas, 0..) |meta, i| {
         if (meta.index_in_callee != i) continue; // Skip duplicate account
 
@@ -1438,11 +1443,27 @@ test "translateAccounts" {
 
     ctx.ic.vm_accounts.appendAssumeCapacity(serialized_metadata);
 
+    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2554
     const accounts = try translateAccounts(
         AccountInfoRust,
         allocator,
         &.{
-            .{ .is_signer = false, .is_writable = true, .index_in_transaction = account.index },
+            .{
+                .pubkey = account.key,
+                .index_in_transaction = account.index,
+                .index_in_caller = 0,
+                .index_in_callee = 0,
+                .is_signer = account.is_signer,
+                .is_writable = account.is_writable,
+            },
+            .{ // intentional duplicate to test skipping it
+                .pubkey = account.key,
+                .index_in_transaction = account.index,
+                .index_in_caller = 0,
+                .index_in_callee = 0,
+                .is_signer = account.is_signer,
+                .is_writable = account.is_writable,
+            },
         },
         vm_addr,
         1,
@@ -1452,5 +1473,9 @@ test "translateAccounts" {
     );
 
     try std.testing.expectEqual(accounts.len, 2);
-    try std.testing.expect(accounts.get(1).caller_account == null);
+    try std.testing.expect(accounts.get(0).caller_account == null);
+
+    const caller_account = accounts.get(1).caller_account.?;
+    try std.testing.expect(std.mem.eql(u8, caller_account.serialized_data, account.data));
+    try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
 }
