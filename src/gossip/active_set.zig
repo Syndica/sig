@@ -13,7 +13,6 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipTable = sig.gossip.table.GossipTable;
 
 const getWallclockMs = sig.time.getWallclockMs;
-const shuffleFirstN = sig.utils.slice.shuffleFirstN;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 pub const GOSSIP_PUSH_FANOUT: usize = 6;
@@ -65,7 +64,7 @@ pub const ActiveSet = struct {
             return;
         }
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
-        shuffleFirstN(random, ThreadSafeContactInfo, peers, size);
+        sig.rand.shuffleFocusedRange(random, ThreadSafeContactInfo, peers, 0, size);
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
