@@ -3771,8 +3771,7 @@ test "vote_program: vote state update" {
         .{ .slot = 8, .confirmation_count = 1 },
     };
     const vote_state_update = VoteStateUpdate{
-        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
-            allocator,
+        .lockouts = std.ArrayListUnmanaged(Lockout).fromOwnedSlice(
             &lockouts,
         ),
         .hash = vote_slot_hash,
@@ -3918,8 +3917,7 @@ test "vote_program: vote state update switch" {
         .{ .slot = 8, .confirmation_count = 1 },
     };
     const vote_state_update = VoteStateUpdate{
-        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
-            allocator,
+        .lockouts = std.ArrayListUnmanaged(Lockout).fromOwnedSlice(
             &lockouts,
         ),
         .hash = vote_slot_hash,
@@ -4066,8 +4064,7 @@ test "vote_program: compact vote state update" {
         .{ .slot = 8, .confirmation_count = 1 },
     };
     const vote_state_update = VoteStateUpdate{
-        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
-            allocator,
+        .lockouts = std.ArrayListUnmanaged(Lockout).fromOwnedSlice(
             &lockouts,
         ),
         .hash = vote_slot_hash,
@@ -4213,8 +4210,7 @@ test "vote_program: compact vote state update switch" {
         .{ .slot = 8, .confirmation_count = 1 },
     };
     const vote_state_update = VoteStateUpdate{
-        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
-            allocator,
+        .lockouts = std.ArrayListUnmanaged(Lockout).fromOwnedSlice(
             &lockouts,
         ),
         .hash = vote_slot_hash,
@@ -4361,8 +4357,7 @@ test "vote_program: tower sync" {
         .{ .slot = 8, .confirmation_count = 1 },
     };
     const tower_sync = TowerSync{
-        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
-            allocator,
+        .lockouts = std.ArrayListUnmanaged(Lockout).fromOwnedSlice(
             &lockouts,
         ),
         .hash = vote_slot_hash,
@@ -4515,8 +4510,7 @@ test "vote_program: tower sync switch" {
         .{ .slot = 8, .confirmation_count = 1 },
     };
     const tower_sync = TowerSync{
-        .lockouts = std.ArrayList(Lockout).fromOwnedSlice(
-            allocator,
+        .lockouts = std.ArrayListUnmanaged(Lockout).fromOwnedSlice(
             &lockouts,
         ),
         .hash = vote_slot_hash,
