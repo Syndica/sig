@@ -832,7 +832,7 @@ fn executeUpdateVoteState(
     const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
     const clock = try ic.tc.sysvar_cache.get(Clock);
 
-    try updateVoteState(
+    try voteStateUpdate(
         allocator,
         ic,
         vote_account,
@@ -843,7 +843,7 @@ fn executeUpdateVoteState(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L944
-fn updateVoteState(
+fn voteStateUpdate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
