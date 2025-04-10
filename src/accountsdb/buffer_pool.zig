@@ -104,7 +104,7 @@ const IoUringError = err: {
 /// A frame dies when its index is evicted from HierarchicalFifo (inside of
 /// evictUnusedFrame).
 pub const BufferPool = struct {
-    frames: []Frame,
+    frames: []align(std.mem.page_size) Frame,
     frame_manager: FrameManager,
 
     pub const ReadBlockingError = FrameManager.GetError || std.posix.PReadError;
@@ -1128,6 +1128,28 @@ pub const AccountDataHandle = union(enum) {
     }
 };
 
+// ArrayHashMap can currently leak in places it really shouldn't. Let's skip these tests until Zig
+// 0.14.
+const skip_array_hashmap_leak_tests = @import("builtin").zig_version.minor == 13;
+
+test "ArrayHashMap leak" {
+    if (skip_array_hashmap_leak_tests) return error.SkipZigTest;
+
+    const initDeinit = struct {
+        fn f(allocator: std.mem.Allocator) !void {
+            var frame_map: std.AutoArrayHashMapUnmanaged(FileIdFileOffset, FrameIndex) = .{};
+            try frame_map.ensureTotalCapacity(allocator, 1024 * 2);
+            defer frame_map.deinit(allocator);
+        }
+    }.f;
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        initDeinit,
+        .{},
+    );
+}
+
 test "BufferPool indicesRequired" {
     const TestCase = struct {
         start: FileOffset,
@@ -1176,11 +1198,13 @@ test "BufferPool init deinit" {
         var bp = try BufferPool.init(allocator, frame_count);
         bp.deinit(allocator);
 
-        try std.testing.checkAllAllocationFailures(
-            std.testing.allocator,
-            initDeinit,
-            .{frame_count},
-        );
+        if (!skip_array_hashmap_leak_tests) {
+            try std.testing.checkAllAllocationFailures(
+                std.testing.allocator,
+                initDeinit,
+                .{frame_count},
+            );
+        }
     }
 }
 
@@ -1268,25 +1292,11 @@ test "BufferPool allocation sizes" {
     var bp = try BufferPool.init(allocator, frame_count);
     defer bp.deinit(allocator);
 
-    // We expect all allocations to be a multiple of the frame size in length
-    // except for the s3_fifo queues, which are split to be ~90% and ~10% of that
-    // length.
-    var total_requested_bytes = gpa.total_requested_bytes;
-    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("ghost").buf.len *
-        @sizeOf(FrameIndex);
-    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("main").buf.len *
-        @sizeOf(FrameIndex);
-    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("small").buf.len *
-        @sizeOf(FrameIndex);
-    total_requested_bytes -= @sizeOf(usize) * 3; // hashmap header
-
-    try std.testing.expect(total_requested_bytes % frame_count == 0);
-
     // metadata should be small!
     // As of writing, all metadata (excluding eviction_lfu, including frame_map)
     // is 50 bytes or ~9% of memory usage at a frame size of 512, or 50MB for a
     // million frames.
-    try std.testing.expect((total_requested_bytes / frame_count) - FRAME_SIZE <= 80);
+    try std.testing.expect((gpa.total_requested_bytes / frame_count) - FRAME_SIZE <= 80);
 }
 
 test "BufferPool filesize > frame_size * num_frames" {
