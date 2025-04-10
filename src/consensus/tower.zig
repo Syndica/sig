@@ -17,9 +17,15 @@ const Bank = sig.accounts_db.Bank;
 const SortedMap = sig.utils.collections.SortedMap;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
+const UnixTimestamp = i64;
+
 const VOTE_THRESHOLD_DEPTH_SHALLOW: usize = 4;
 pub const VOTE_THRESHOLD_DEPTH: usize = 8;
 pub const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+pub const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
+
+// TODO DUPLICATE_THRESHOLD is defined in replay stage in Agave
+pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
 // TODO this is defined in a different crate in Agave
 pub const VoteTransaction = union(enum) {
@@ -31,6 +37,74 @@ pub const VoteTransaction = union(enum) {
 
     pub fn default(allocator: std.mem.Allocator) VoteTransaction {
         return VoteTransaction{ .tower_sync = TowerSync.default(allocator) };
+    }
+
+    pub fn timestamp(self: *const VoteTransaction) ?UnixTimestamp {
+        switch (self) {
+            .vote => |args| args.timestamp,
+            .vote_state_update => |args| args.timestamp,
+            .compact_vote_state_update => |args| args.timestamp,
+            .tower_sync => |args| args.timestamp,
+        }
+    }
+
+    pub fn lastVotedSlot(self: *const VoteTransaction) ?i64 {
+        switch (self) {
+            .vote => |args| args.slots[args.slots.len - 1],
+            .vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1],
+            .compact_vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1],
+            .tower_sync => |args| args.lockouts.items[args.lockouts.items.len - 1],
+        }
+    }
+
+    pub fn setTimestamp(self: *VoteTransaction, ts: ?UnixTimestamp) void {
+        switch (self.*) {
+            .Vote => |*vote| vote.timestamp = ts,
+            .VoteStateUpdate, .CompactVoteStateUpdate => |*vote_state_update| {
+                vote_state_update.timestamp = ts;
+            },
+            .TowerSync => |*tower_sync| tower_sync.timestamp = ts,
+        }
+    }
+
+    pub fn isEmpty(self: *const VoteTransaction) void {
+        switch (self) {
+            .Vote => |vote| vote.slots.len == 0,
+            .VoteStateUpdate, .CompactVoteStateUpdate => |vote_state_update| {
+                vote_state_update.lockouts.items.len == 0;
+            },
+            .TowerSync => |tower_sync| tower_sync.lockouts.items.len == 0,
+        }
+    }
+
+    pub fn slot(self: *const VoteTransaction, i: usize) void {
+        switch (self) {
+            .Vote => |vote| vote.slots[i],
+            .VoteStateUpdate, .CompactVoteStateUpdate => |vote_state_update| {
+                vote_state_update.lockouts.items[i];
+            },
+            .TowerSync => |tower_sync| tower_sync.lockouts.items[i],
+        }
+    }
+
+    pub fn len(self: *const VoteTransaction) usize {
+        switch (self) {
+            .Vote => |vote| vote.slots.len,
+            .VoteStateUpdate, .CompactVoteStateUpdate => |vote_state_update| {
+                vote_state_update.lockouts.items.len;
+            },
+            .TowerSync => |tower_sync| tower_sync.lockouts.items.len,
+        }
+    }
+
+    pub fn hash(self: *const VoteTransaction) usize {
+        switch (self) {
+            .Vote => |vote| vote.hash,
+            .VoteStateUpdate, .CompactVoteStateUpdate => |vote_state_update| {
+                vote_state_update.hash;
+            },
+            .TowerSync => |tower_sync| tower_sync.hash,
+        }
     }
 };
 
@@ -45,7 +119,7 @@ pub const LatestValidatorVotesForFrozenBanks = struct {};
 pub const VoteAccount = struct {};
 pub const ProgressMap = struct {};
 
-pub const VoteAccountsHashMap = std.ArrayHashMap(Pubkey, struct { u64, VoteAccount });
+pub const VoteAccountsHashMap = std.AutoArrayHashMap(Pubkey, struct { u64, VoteAccount });
 
 const SwitchForkDecision = union(enum) {
     switch_proof: Hash,
@@ -86,6 +160,7 @@ pub const ThresholdDecision = union(enum) {
 };
 
 const TowerVoteState = struct {
+    // TODO confirm if this can be a slice
     votes: std.ArrayList(Lockout),
     root_slot: ?Slot,
 
@@ -94,6 +169,20 @@ const TowerVoteState = struct {
             .votes = std.ArrayList(Lockout).init(allocator),
             .root_slot = null,
         };
+    }
+
+    pub fn lastLockout(self: *const TowerVoteState) ?*const Lockout {
+        if (self.votes.items.len == 0) return null;
+        return &self.votes.items[self.votes.items.len - 1];
+    }
+
+    pub fn lastVotedSlot(self: *const TowerVoteState) ?Slot {
+        if (self.lastLockout()) return null;
+        return self.lastLockout().?.slot;
+    }
+
+    pub fn clone(self: TowerVoteState) error{OutOfMemory}!TowerVoteState {
+        return .{ .votes = try self.votes.clone(), .root_slot = self.root_slot };
     }
 };
 
@@ -110,7 +199,7 @@ const BlockhashStatus = union(enum) {
     pub const DEFAULT = BlockhashStatus{.uninitialized};
 };
 
-const Tower = struct {
+pub const Tower = struct {
     node_pubkey: Pubkey,
     threshold_depth: usize,
     threshold_size: f64,
@@ -161,7 +250,7 @@ const Tower = struct {
         @panic("unimplimented");
     }
 
-    pub fn newFromFankforks(
+    pub fn newFromBankforks(
         allocator: std.mem.Allocator,
         // bank_forks: *const BankForks,
         node_pubkey: *const Pubkey,
@@ -173,55 +262,54 @@ const Tower = struct {
         @panic("unimplimented");
     }
 
-    pub fn isSlotDuplicateConfirmed(
-        self: *const Tower,
-        slot: Slot,
-        voted_stakes: *const VotedStakes,
-        total_stake: Stake,
-    ) bool {
-        _ = self;
-        _ = slot;
-        _ = voted_stakes;
-        _ = total_stake;
-        @panic("unimplimented");
-    }
-
-    pub fn towerSlots(self: *const Tower) []Slot {
-        _ = self;
-        @panic("unimplimented");
-    }
-
-    pub fn lastVoteTxBlockhash(self: *const Tower) BlockhashStatus {
-        _ = self;
-        @panic("unimplimented");
+    pub fn towerSlots(self: *const Tower, allocator: std.mem.Allocator) []Slot {
+        // TODO avoid this array list?
+        var slots = std.ArrayList(Slot).init(allocator);
+        for (self.vote_state.votes) |vote| {
+            try slots.append(vote);
+        }
+        return slots.toOwnedSlice();
     }
 
     pub fn refreshLastVoteTimestamp(
         self: *Tower,
         heaviest_slot_on_same_fork: Slot,
     ) void {
-        _ = self;
-        _ = heaviest_slot_on_same_fork;
-        @panic("unimplimented");
+        const timestamp = if (self.last_vote.timestamp()) |last_vote_timestamp|
+            // To avoid a refreshed vote tx getting caught in deduplication filters,
+            // we need to update timestamp. Increment by smallest amount to avoid skewing
+            // the Timestamp Oracle.
+            last_vote_timestamp +| 1
+        else
+            self.last_timestamp.timestamp +| 1;
+
+        if (self.last_vote.lastVotedSlot()) |last_voted_slot| {
+            if (heaviest_slot_on_same_fork <= last_voted_slot) {
+                return;
+            }
+            self.last_timestamp = BlockTimestamp{
+                .slot = last_voted_slot,
+                .timestamp = timestamp,
+            };
+            self.last_vote.setTimestamp(timestamp);
+        } else {
+            // TODO Agave logs here
+        }
     }
 
     pub fn refreshLastVoteTxBlockhash(
         self: *Tower,
         new_vote_tx_blockhash: Hash,
     ) void {
-        _ = self;
-        _ = new_vote_tx_blockhash;
-        @panic("unimplimented");
+        self.last_switch_threshold_check = BlockhashStatus{ .blockhash = new_vote_tx_blockhash };
     }
 
     pub fn markLastVoteTxBlockhashNonVoting(self: *Tower) void {
-        _ = self;
-        @panic("unimplimented");
+        self.last_switch_threshold_check = BlockhashStatus{.non_voting};
     }
 
-    pub fn mark_last_vote_tx_blockhash_hot_spare(self: *Tower) void {
-        _ = self;
-        @panic("unimplimented");
+    pub fn markLastVoteTxBlockhashHotSpare(self: *Tower) void {
+        self.last_switch_threshold_check = BlockhashStatus{.hot_spare};
     }
 
     pub fn recordBankVote(self: *Tower, bank: *const Bank) ?Slot {
@@ -259,52 +347,77 @@ const Tower = struct {
     }
 
     pub fn lastVotedSlot(self: *const Tower) ?Slot {
-        _ = self;
-        @panic("unimplimented");
+        return if (self.last_vote.isEmpty())
+            null
+        else
+            self.last_vote.slot(self.last_vote.len() - 1);
     }
 
     pub fn lastVotedSlotHash(self: *const Tower) ?struct { Slot, Hash } {
-        _ = self;
-        @panic("unimplimented");
+        if (self.lastVotedSlot()) |last_voted_slot|
+            struct { last_voted_slot, self.last_vote.hash() }
+        else
+            null;
     }
 
-    pub fn strayRestoredSlot(self: *const Tower) ?Slot {
-        _ = self;
-        @panic("unimplimented");
+    fn maybeTimestamp(self: *Tower, current_slot: Slot) ?UnixTimestamp {
+        if (current_slot > self.last_timestamp.slot or
+            (self.last_timestamp.slot == 0 and current_slot == self.last_timestamp.slot))
+        {
+            const timestamp = std.time.timestamp();
+            if (timestamp >= self.last_timestamp.timestamp) {
+                self.last_timestamp = BlockTimestamp{
+                    .slot = current_slot,
+                    .timestamp = timestamp,
+                };
+                return timestamp;
+            } else {
+                // Agave just logs here
+            }
+        }
+        return null;
     }
 
-    pub fn lastVote(self: *const Tower) VoteTransaction {
-        _ = self;
-        @panic("unimplimented");
-    }
-
-    fn maybeTimestamp(self: *Tower, current_slot: Slot) ?i64 {
-        _ = self;
-        _ = current_slot;
-        @panic("unimplimented");
-    }
-
+    // root may be forcibly set by arbitrary replay root slot, for example from a root
+    // after replaying a snapshot.
+    // Also, tower.root() couldn't be None; initialize_lockouts() ensures that.
+    // Conceptually, every tower must have been constructed from a concrete starting point,
+    // which establishes the origin of trust (i.e. root) whether booting from genesis (slot 0) or
+    // snapshot (slot N). In other words, there should be no possibility a Tower doesn't have
+    // root, unlike young vote accounts.
     pub fn root(self: *const Tower) Slot {
-        _ = self;
-        @panic("unimplimented");
+        // TODO this is an unwrap in agave. Guess this is fine?
+        return self.vote_state.root_slot.?;
     }
 
+    // a slot is recent if it's newer than the last vote we have. If we haven't voted yet
+    // but have a root (hard forks situation) then compare it to the root
     pub fn isRecent(self: *const Tower, slot: Slot) bool {
-        _ = self;
-        _ = slot;
-        @panic("unimplimented");
+        if (self.vote_state.lastVotedSlot()) |last_voted_slot| {
+            if (slot <= last_voted_slot) {
+                return false;
+            } else if (self.vote_state.root_slot) |root_slot| {
+                if (slot <= root_slot) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     pub fn hasVoted(self: *const Tower, slot: Slot) bool {
-        _ = self;
-        _ = slot;
-        @panic("unimplimented");
+        for (self.vote_state.votes) |vote| {
+            if (slot == vote.slot) {
+                return true;
+            }
+        }
+        return false;
     }
 
     pub fn isLockedOut(
         self: *const Tower,
         slot: Slot,
-        ancestors: *const std.ArrayHashMap(Slot, void),
+        ancestors: *const std.AutoArrayHashMap(Slot, void),
     ) bool {
         _ = self;
         _ = slot;
@@ -317,8 +430,8 @@ const Tower = struct {
         candidate_slot: Slot,
         last_voted_slot: Slot,
         switch_slot: Slot,
-        ancestors: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
-        last_vote_ancestors: *const std.ArrayHashMap(Slot, void),
+        ancestors: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
+        last_vote_ancestors: *const std.AutoArrayHashMap(Slot, void),
     ) ?bool {
         _ = self;
         _ = candidate_slot;
@@ -332,8 +445,8 @@ const Tower = struct {
     fn make_check_switch_threshold_decision(
         self: *const Tower,
         switch_slot: Slot,
-        ancestors: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
-        descendants: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
+        ancestors: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
+        descendants: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const VoteAccountsHashMap,
@@ -355,8 +468,8 @@ const Tower = struct {
     pub fn checkSwitchThreshold(
         self: *Tower,
         switch_slot: Slot,
-        ancestors: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
-        descendants: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
+        ancestors: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
+        descendants: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const VoteAccountsHashMap,
@@ -462,6 +575,20 @@ const Tower = struct {
         @panic("unimplimented");
     }
 
+    // Static methods
+
+    pub fn isSlotDuplicateConfirmed(
+        slot: Slot,
+        voted_stakes: *const VotedStakes,
+        total_stake: Stake,
+    ) bool {
+        if (voted_stakes.get(slot)) |stake| {
+            (@as(f64, stake) / @as(f64, total_stake)) > DUPLICATE_THRESHOLD;
+        } else {
+            return false;
+        }
+    }
+
     pub fn restore(
         tower_storage: *const TowerStorage,
         node_pubkey: *const Pubkey,
@@ -475,7 +602,7 @@ const Tower = struct {
         vote_account_pubkey: *const Pubkey,
         bank_slot: Slot,
         vote_accounts: *const VoteAccountsHashMap,
-        ancestors: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
+        ancestors: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
         get_frozen_hash: fn (Slot) ?Hash,
         latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
     ) ComputedBankState {
@@ -500,7 +627,7 @@ const Tower = struct {
     fn isDescendantSlot(
         maybe_descendant: Slot,
         slot: Slot,
-        ancestors: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
+        ancestors: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
     ) ?bool {
         _ = maybe_descendant;
         _ = slot;
@@ -509,7 +636,7 @@ const Tower = struct {
     }
 
     fn greatestCommonAncestor(
-        ancestors: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
+        ancestors: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
         slot_a: Slot,
         slot_b: Slot,
     ) ?Slot {
@@ -534,7 +661,7 @@ const Tower = struct {
         threshold_depth: usize,
         threshold_size: f64,
         slot: Slot,
-        voted_stakes: *const std.ArrayHashMap(Slot, u64),
+        voted_stakes: *const std.AutoArrayHashMap(Slot, u64),
         total_stake: u64,
     ) ThresholdDecision {
         _ = threshold_vote;
@@ -550,7 +677,7 @@ const Tower = struct {
     pub fn populateAncestorVotedStakes(
         voted_stakes: *VotedStakes,
         vote_slots: anytype,
-        ancestors: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
+        ancestors: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
     ) void {
         _ = voted_stakes;
         _ = vote_slots;
@@ -562,7 +689,7 @@ const Tower = struct {
         voted_stakes: *VotedStakes,
         voted_slot: Slot,
         voted_stake: u64,
-        ancestors: *const std.ArrayHashMap(Slot, std.ArrayHashMap(Slot, void)),
+        ancestors: *const std.AutoArrayHashMap(Slot, std.AutoArrayHashMap(Slot, void)),
     ) void {
         _ = voted_stakes;
         _ = voted_slot;
