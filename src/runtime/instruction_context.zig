@@ -26,7 +26,7 @@ const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAc
 /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L502
 pub const InstructionContext = struct {
     /// The transaction context associated with this instruction execution
-    tc: *TransactionContext,
+    txn_ctx: *TransactionContext,
 
     /// The instruction information which is constant accross execution
     info: InstructionInfo,
@@ -48,7 +48,7 @@ pub const InstructionContext = struct {
     pub fn borrowProgramAccount(
         self: *const InstructionContext,
     ) InstructionError!BorrowedAccount {
-        return self.tc.borrowAccountAtIndex(self.info.program_meta.index_in_transaction, .{
+        return self.txn_ctx.borrowAccountAtIndex(self.info.program_meta.index_in_transaction, .{
             .program_id = self.info.program_meta.pubkey,
         });
     }
@@ -61,7 +61,7 @@ pub const InstructionContext = struct {
         const account_meta = self.info.getAccountMetaAtIndex(index_in_instruction) orelse
             return InstructionError.NotEnoughAccountKeys;
 
-        return try self.tc.borrowAccountAtIndex(account_meta.index_in_transaction, .{
+        return try self.txn_ctx.borrowAccountAtIndex(account_meta.index_in_transaction, .{
             .program_id = self.info.program_meta.pubkey,
             .is_signer = account_meta.is_signer,
             .is_writable = account_meta.is_writable,
@@ -80,7 +80,7 @@ pub const InstructionContext = struct {
         if (!T.ID.equals(&account_meta.pubkey))
             return InstructionError.InvalidArgument;
 
-        return self.tc.sc.sysvar_cache.get(T);
+        return self.txn_ctx.sc.sysvar_cache.get(T);
     }
 
     pub fn getAccountKeyByIndexUnchecked(self: *const InstructionContext, index: u16) Pubkey {
@@ -103,7 +103,7 @@ pub const InstructionContext = struct {
 
         try executor.executeNativeCpiInstruction(
             allocator,
-            self.tc,
+            self.txn_ctx,
             Instruction{
                 .program_id = program_id,
                 .accounts = account_metas,

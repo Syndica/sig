@@ -34,7 +34,7 @@ pub fn execute(
 ) (error{OutOfMemory} || InstructionError)!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
-    try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
+    try ic.txn_ctx.consumeCompute(vote_program.COMPUTE_UNITS);
 
     var vote_account = try ic.borrowInstructionAccount(
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.account),
@@ -224,7 +224,7 @@ fn intializeAccount(
 
     // node must agree to accept this vote account
     if (!ic.info.isPubkeySigner(node_pubkey)) {
-        try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
+        try ic.txn_ctx.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -322,7 +322,7 @@ fn authorize(
                 target_epoch,
             );
             if (maybe_err) |err| {
-                ic.tc.custom_error = @intFromEnum(err);
+                ic.txn_ctx.custom_error = @intFromEnum(err);
                 return InstructionError.Custom;
             }
         },
@@ -392,7 +392,7 @@ fn authorizeWithSeed(
             seed,
             owner,
         ) catch |err| {
-            ic.tc.custom_error = pubkey_utils.mapError(err);
+            ic.txn_ctx.custom_error = pubkey_utils.mapError(err);
             return InstructionError.Custom;
         }}
     else
@@ -544,8 +544,8 @@ fn executeUpdateCommission(
         ic,
         vote_account,
         commission,
-        try ic.tc.sc.sysvar_cache.get(EpochSchedule),
-        try ic.tc.sc.sysvar_cache.get(Clock),
+        try ic.txn_ctx.sc.sysvar_cache.get(EpochSchedule),
+        try ic.txn_ctx.sc.sysvar_cache.get(Clock),
     );
 }
 
@@ -564,7 +564,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.tc.sc.ec.feature_set.active.contains(
+        if (ic.txn_ctx.sc.ec.feature_set.active.contains(
             features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
         )) {
             const versioned_state = vote_account.deserializeFromAccountData(
@@ -584,7 +584,7 @@ fn updateCommission(
         }
     };
 
-    if (enforce_commission_update_rule and ic.tc.sc.ec.feature_set.active.contains(
+    if (enforce_commission_update_rule and ic.txn_ctx.sc.ec.feature_set.active.contains(
         features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
@@ -592,7 +592,7 @@ fn updateCommission(
             if (maybe_vote_state) |*vote_state| {
                 vote_state.deinit();
             }
-            ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
+            ic.txn_ctx.custom_error = @intFromEnum(VoteError.commission_update_too_late);
             return InstructionError.Custom;
         }
     }
@@ -649,8 +649,8 @@ fn executeWithdraw(
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.info.checkNumberOfAccounts(2);
-    const rent = try ic.tc.sc.sysvar_cache.get(Rent);
-    const clock = try ic.tc.sc.sysvar_cache.get(Clock);
+    const rent = try ic.txn_ctx.sc.sysvar_cache.get(Rent);
+    const clock = try ic.txn_ctx.sc.sysvar_cache.get(Clock);
 
     vote_account.release();
 
@@ -709,7 +709,7 @@ fn widthraw(
         };
 
         if (reject_active_vote_account_close) {
-            ic.tc.custom_error = @intFromEnum(VoteError.active_vote_account_close);
+            ic.txn_ctx.custom_error = @intFromEnum(VoteError.active_vote_account_close);
             return InstructionError.Custom;
         } else {
             // Deinitialize upon zero-balance
@@ -742,8 +742,8 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.sc.ec.feature_set.active.contains(features.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.sc.ec.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX))
+    if (ic.txn_ctx.sc.ec.feature_set.active.contains(features.DEPRECATE_LEGACY_VOTE_IXS) and
+        ic.txn_ctx.sc.ec.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX))
     {
         return InstructionError.InvalidInstructionData;
     }
@@ -793,13 +793,13 @@ fn processVoteWithAccount(
     );
 
     if (maybe_err) |err| {
-        ic.tc.custom_error = @intFromEnum(err);
+        ic.txn_ctx.custom_error = @intFromEnum(err);
         return InstructionError.Custom;
     }
 
     if (vote.timestamp) |timestamp| {
         if (vote.slots.len == 0) {
-            ic.tc.custom_error = @intFromEnum(VoteError.empty_slots);
+            ic.txn_ctx.custom_error = @intFromEnum(VoteError.empty_slots);
             return InstructionError.Custom;
         }
 
@@ -809,7 +809,7 @@ fn processVoteWithAccount(
             0;
 
         if (vote_state.processTimestamp(max_slot, timestamp)) |err| {
-            ic.tc.custom_error = @intFromEnum(err);
+            ic.txn_ctx.custom_error = @intFromEnum(err);
             return InstructionError.Custom;
         }
     }
@@ -2542,7 +2542,7 @@ test "vote_program: update_commission error commission update too late failure" 
         .{},
     ) catch |err| {
         // TODO is there a way to assert VoteError.CommissionUpdateTooLate
-        // is stored in ic.tc.custom_error
+        // is stored in ic.txn_ctx.custom_error
         try std.testing.expectEqual(InstructionError.Custom, err);
     };
 }
@@ -2959,7 +2959,7 @@ test "vote_program: widthdraw all and close account with active vote account" {
         .{},
     ) catch |err| {
         // TODO is there a way to assert VoteError.ActiveVoteAccountClose
-        // is stored in ic.tc.custom_error
+        // is stored in ic.txn_ctx.custom_error
         try std.testing.expectEqual(InstructionError.Custom, err);
     };
 }
@@ -3718,7 +3718,7 @@ test "vote_program: empty vote" {
         .{},
     ) catch |err| {
         // TODO is there a way to assert VoteError.empty_slots
-        // is stored in ic.tc.custom_error
+        // is stored in ic.txn_ctx.custom_error
         try std.testing.expectEqual(InstructionError.Custom, err);
     };
 }

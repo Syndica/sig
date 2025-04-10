@@ -103,7 +103,7 @@ fn pushInstruction(
     }
 
     tc.instruction_stack.appendAssumeCapacity(.{
-        .tc = tc,
+        .txn_ctx = tc,
         .info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
     });
@@ -151,7 +151,7 @@ fn processNextInstruction(
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
             program_id.base58String().slice(),
         );
-        ic.tc.return_data.data.len = 0;
+        ic.txn_ctx.return_data.data.len = 0;
         break :blk native_program_fn;
     };
 
@@ -161,12 +161,12 @@ fn processNextInstruction(
     // Invoke the program and log the result
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
-    try stable_log.programInvoke(ic.tc, program_id, ic.tc.instruction_stack.len);
+    try stable_log.programInvoke(ic.txn_ctx, program_id, ic.txn_ctx.instruction_stack.len);
     native_program_fn(allocator, ic) catch |execute_error| {
-        try stable_log.programFailure(ic.tc, program_id, execute_error);
+        try stable_log.programFailure(ic.txn_ctx, program_id, execute_error);
         return execute_error;
     };
-    try stable_log.programSuccess(ic.tc, program_id);
+    try stable_log.programSuccess(ic.txn_ctx, program_id);
 }
 
 /// Pop an instruction from the instruction stack\

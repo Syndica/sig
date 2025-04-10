@@ -38,18 +38,18 @@ pub fn execute(
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
     if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
         if (bpf_loader_program.v1.ID.equals(&ic.info.program_meta.pubkey)) {
-            try ic.tc.consumeCompute(bpf_loader_program.v1.COMPUTE_UNITS);
-            try ic.tc.log("Deprecated loader is no longer supported", .{});
+            try ic.txn_ctx.consumeCompute(bpf_loader_program.v1.COMPUTE_UNITS);
+            try ic.txn_ctx.log("Deprecated loader is no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
         } else if (bpf_loader_program.v2.ID.equals(&ic.info.program_meta.pubkey)) {
-            try ic.tc.consumeCompute(bpf_loader_program.v2.COMPUTE_UNITS);
-            try ic.tc.log("BPF loader management instructions are no longer supported", .{});
+            try ic.txn_ctx.consumeCompute(bpf_loader_program.v2.COMPUTE_UNITS);
+            try ic.txn_ctx.log("BPF loader management instructions are no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
         } else if (bpf_loader_program.v3.ID.equals(&ic.info.program_meta.pubkey)) {
-            try ic.tc.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
+            try ic.txn_ctx.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
             return executeBpfLoaderV3ProgramInstruction(allocator, ic);
         } else if (bpf_loader_program.v4.ID.equals(&ic.info.program_meta.pubkey)) {
-            try ic.tc.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
+            try ic.txn_ctx.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
             return executeBpfLoaderV4ProgramInstruction(allocator, ic);
         } else {
             return InstructionError.IncorrectProgramId;
@@ -143,7 +143,7 @@ pub fn executeV3InitializeBuffer(
     );
 
     if (buffer_account_state != bpf_loader_program.v3.State.uninitialized) {
-        try ic.tc.log("Buffer account already initialized", .{});
+        try ic.txn_ctx.log("Buffer account already initialized", .{});
         return InstructionError.AccountAlreadyInitialized;
     }
 
@@ -174,21 +174,21 @@ pub fn executeV3Write(
                 if (!buffer_authority.equals(
                     &ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority)),
                 )) {
-                    try ic.tc.log("Incorrect buffer authority provided", .{});
+                    try ic.txn_ctx.log("Incorrect buffer authority provided", .{});
                     return InstructionError.IncorrectAuthority;
                 }
 
                 if (!try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority))) {
-                    try ic.tc.log("Buffer authority did not sign", .{});
+                    try ic.txn_ctx.log("Buffer authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
             } else {
-                try ic.tc.log("Buffer is immutable", .{});
+                try ic.txn_ctx.log("Buffer is immutable", .{});
                 return InstructionError.Immutable;
             }
         },
         else => {
-            try ic.tc.log("Invalid Buffer account", .{});
+            try ic.txn_ctx.log("Invalid Buffer account", .{});
             return InstructionError.InvalidAccountData;
         },
     }
@@ -199,7 +199,7 @@ pub fn executeV3Write(
     const end = start +| bytes.len;
 
     if (end > buffer_account.constAccountData().len) {
-        try ic.tc.log("Write overflow: {} < {}", .{ bytes.len, end });
+        try ic.txn_ctx.log("Write overflow: {} < {}", .{ bytes.len, end });
         return InstructionError.AccountDataTooSmall;
     }
 
@@ -241,19 +241,19 @@ pub fn executeV3DeployWithMaxDataLen(
             try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State);
 
         if (program_state != bpf_loader_program.v3.State.uninitialized) {
-            try ic.tc.log("Program account already initialized", .{});
+            try ic.txn_ctx.log("Program account already initialized", .{});
             return InstructionError.AccountAlreadyInitialized;
         }
 
         if (program_account.constAccountData().len < bpf_loader_program.v3.State.PROGRAM_SIZE) {
-            try ic.tc.log("Program account too small", .{});
+            try ic.txn_ctx.log("Program account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
         if (program_account.account.lamports <
             rent.minimumBalance(program_account.constAccountData().len))
         {
-            try ic.tc.log("Program account not rent-exempt", .{});
+            try ic.txn_ctx.log("Program account not rent-exempt", .{});
             return InstructionError.ExecutableAccountNotRentExempt;
         }
 
@@ -275,37 +275,37 @@ pub fn executeV3DeployWithMaxDataLen(
                 if (state.authority_address == null or
                     !state.authority_address.?.equals(&authority_key))
                 {
-                    try ic.tc.log("Buffer and upgrade authority don't match", .{});
+                    try ic.txn_ctx.log("Buffer and upgrade authority don't match", .{});
                     return InstructionError.IncorrectAuthority;
                 }
 
                 // Safety: at least 8 accounts are present
                 if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
-                    try ic.tc.log("Upgrade authority did not sign", .{});
+                    try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
             },
             else => {
-                try ic.tc.log("Invalid Buffer account", .{});
+                try ic.txn_ctx.log("Invalid Buffer account", .{});
                 return InstructionError.InvalidArgument;
             },
         }
 
         const buffer_data = buffer_account.constAccountData();
         if (buffer_data.len <= bpf_loader_program.v3.State.BUFFER_METADATA_SIZE) {
-            try ic.tc.log("Buffer account too small", .{});
+            try ic.txn_ctx.log("Buffer account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
         const buffer_data_len = buffer_data.len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE;
 
         if (max_data_len < buffer_data_len) {
-            try ic.tc.log("Max data length is too small to hold Buffer data", .{});
+            try ic.txn_ctx.log("Max data length is too small to hold Buffer data", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
         if (program_data_len > system_program.MAX_PERMITTED_DATA_LENGTH) {
-            try ic.tc.log("Max data length is too large", .{});
+            try ic.txn_ctx.log("Max data length is too large", .{});
             return InstructionError.InvalidArgument;
         }
     }
@@ -321,7 +321,7 @@ pub fn executeV3DeployWithMaxDataLen(
     };
 
     if (!derived_key.equals(&program_data_key)) {
-        try ic.tc.log("ProgramData address is not derived", .{});
+        try ic.txn_ctx.log("ProgramData address is not derived", .{});
         return InstructionError.InvalidArgument;
     }
 
@@ -344,7 +344,7 @@ pub fn executeV3DeployWithMaxDataLen(
         &.{bump_seed},
         ic.info.program_meta.pubkey,
     ) catch |err| {
-        ic.tc.custom_error = @intFromError(err);
+        ic.txn_ctx.custom_error = @intFromError(err);
         return InstructionError.Custom;
     };
 
@@ -389,8 +389,8 @@ pub fn executeV3DeployWithMaxDataLen(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
             buffer_data[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
             clock.slot,
-            ic.tc.sc.ec.feature_set,
-            if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
+            ic.txn_ctx.sc.ec.feature_set,
+            if (ic.txn_ctx.log_collector != null) &ic.txn_ctx.log_collector.? else null,
         );
     }
 
@@ -416,7 +416,7 @@ pub fn executeV3DeployWithMaxDataLen(
 
         try buffer_account.setDataLength(
             allocator,
-            &ic.tc.accounts_resize_delta,
+            &ic.txn_ctx.accounts_resize_delta,
             bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
         );
     }
@@ -429,10 +429,10 @@ pub fn executeV3DeployWithMaxDataLen(
         try program_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .program = .{
             .programdata_address = program_data_key,
         } });
-        try program_account.setExecutable(true, try ic.tc.sc.sysvar_cache.get(sysvar.Rent));
+        try program_account.setExecutable(true, try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Rent));
     }
 
-    try ic.tc.log("Deployed program {}", .{new_program_id});
+    try ic.txn_ctx.log("Deployed program {}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L705-L894
@@ -459,15 +459,15 @@ pub fn executeV3Upgrade(
         defer program_account.release();
 
         if (!program_account.account.executable) {
-            try ic.tc.log("Program account not executable", .{});
+            try ic.txn_ctx.log("Program account not executable", .{});
             return InstructionError.AccountNotExecutable;
         }
         if (!program_account.context.is_writable) {
-            try ic.tc.log("Program account not writeable", .{});
+            try ic.txn_ctx.log("Program account not writeable", .{});
             return InstructionError.InvalidArgument;
         }
         if (!program_account.isOwnedByCurrentProgram()) {
-            try ic.tc.log("Program account not owned by loader", .{});
+            try ic.txn_ctx.log("Program account not owned by loader", .{});
             return InstructionError.IncorrectProgramId;
         }
         switch (try program_account.deserializeFromAccountData(
@@ -476,12 +476,12 @@ pub fn executeV3Upgrade(
         )) {
             .program => |data| {
                 if (!data.programdata_address.equals(&programdata_key)) {
-                    try ic.tc.log("Program and ProgramData account mismatch", .{});
+                    try ic.txn_ctx.log("Program and ProgramData account mismatch", .{});
                     return InstructionError.InvalidArgument;
                 }
             },
             else => {
-                try ic.tc.log("Invalid Program account", .{});
+                try ic.txn_ctx.log("Invalid Program account", .{});
                 return InstructionError.InvalidAccountData;
             },
         }
@@ -499,16 +499,16 @@ pub fn executeV3Upgrade(
                 if (data.authority_address == null or
                     !data.authority_address.?.equals(&authority_key))
                 {
-                    try ic.tc.log("Buffer and upgrade authority don't match", .{});
+                    try ic.txn_ctx.log("Buffer and upgrade authority don't match", .{});
                     return InstructionError.IncorrectAuthority;
                 }
                 if (!(try ic.info.isIndexSigner(6))) {
-                    try ic.tc.log("Upgrade authority did not sign", .{});
+                    try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
             },
             else => {
-                try ic.tc.log("Invalid Buffer account", .{});
+                try ic.txn_ctx.log("Invalid Buffer account", .{});
                 return InstructionError.InvalidArgument;
             },
         }
@@ -520,7 +520,7 @@ pub fn executeV3Upgrade(
                 bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
         };
         if (buffer.constAccountData().len < buf.data_offset or buf.data_len == 0) {
-            try ic.tc.log("Buffer account too small", .{});
+            try ic.txn_ctx.log("Buffer account too small", .{});
             return InstructionError.InvalidAccountData;
         }
         break :blk buf;
@@ -538,11 +538,11 @@ pub fn executeV3Upgrade(
         const progdata_size = bpf_loader_program.v3.State.sizeOfProgramData(buf.data_len);
 
         if (programdata.constAccountData().len < progdata_size) {
-            try ic.tc.log("ProgramData account not large enough", .{});
+            try ic.txn_ctx.log("ProgramData account not large enough", .{});
             return InstructionError.AccountDataTooSmall;
         }
         if (programdata.account.lamports +| buf.lamports < balance_required) {
-            try ic.tc.log("Buffer account balance too low to fund upgrade", .{});
+            try ic.txn_ctx.log("Buffer account balance too low to fund upgrade", .{});
             return InstructionError.InsufficientFunds;
         }
 
@@ -552,24 +552,24 @@ pub fn executeV3Upgrade(
         )) {
             .program_data => |data| {
                 if (clock.slot == data.slot) {
-                    try ic.tc.log("Program was deployed in this block already", .{});
+                    try ic.txn_ctx.log("Program was deployed in this block already", .{});
                     return InstructionError.InvalidArgument;
                 }
                 if (data.upgrade_authority_address == null) {
-                    try ic.tc.log("Program not upgradeable", .{});
+                    try ic.txn_ctx.log("Program not upgradeable", .{});
                     return InstructionError.Immutable;
                 }
                 if (!data.upgrade_authority_address.?.equals(&authority_key)) {
-                    try ic.tc.log("Incorrect upgrade authority provided", .{});
+                    try ic.txn_ctx.log("Incorrect upgrade authority provided", .{});
                     return InstructionError.IncorrectAuthority;
                 }
                 if (!(try ic.info.isIndexSigner(6))) {
-                    try ic.tc.log("Upgrade authority did not sign", .{});
+                    try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
             },
             else => {
-                try ic.tc.log("Invalid ProgramData account", .{});
+                try ic.txn_ctx.log("Invalid ProgramData account", .{});
                 return InstructionError.InvalidAccountData;
             },
         }
@@ -598,8 +598,8 @@ pub fn executeV3Upgrade(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
-            ic.tc.sc.ec.feature_set,
-            if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
+            ic.txn_ctx.sc.ec.feature_set,
+            if (ic.txn_ctx.log_collector != null) &ic.txn_ctx.log_collector.? else null,
         );
     }
 
@@ -652,11 +652,11 @@ pub fn executeV3Upgrade(
     try programdata.setLamports(progdata.balance_required);
     try buffer.setDataLength(
         allocator,
-        &ic.tc.accounts_resize_delta,
+        &ic.txn_ctx.accounts_resize_delta,
         bpf_loader_program.v3.State.sizeOfBuffer(0),
     );
 
-    try ic.tc.log("Upgraded program {any}", .{new_program_id});
+    try ic.txn_ctx.log("Upgraded program {any}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010
@@ -680,19 +680,19 @@ pub fn executeV3SetAuthority(
     switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |buffer| {
             if (new_authority == null) {
-                try ic.tc.log("Buffer authority is not optional", .{});
+                try ic.txn_ctx.log("Buffer authority is not optional", .{});
                 return InstructionError.IncorrectAuthority;
             }
             if (buffer.authority_address == null) {
-                try ic.tc.log("Buffer is immutable", .{});
+                try ic.txn_ctx.log("Buffer is immutable", .{});
                 return InstructionError.Immutable;
             }
             if (!buffer.authority_address.?.equals(&present_authority_key)) {
-                try ic.tc.log("Incorrect buffer authority provided", .{});
+                try ic.txn_ctx.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
             if (!(try ic.info.isIndexSigner(1))) {
-                try ic.tc.log("Buffer authority did not sign", .{});
+                try ic.txn_ctx.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             try account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -703,15 +703,15 @@ pub fn executeV3SetAuthority(
         },
         .program_data => |data| {
             if (data.upgrade_authority_address == null) {
-                try ic.tc.log("Program not upgradeable", .{});
+                try ic.txn_ctx.log("Program not upgradeable", .{});
                 return InstructionError.Immutable;
             }
             if (!data.upgrade_authority_address.?.equals(&present_authority_key)) {
-                try ic.tc.log("Incorrect upgrade authority provided", .{});
+                try ic.txn_ctx.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
             if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
-                try ic.tc.log("Upgrade authority did not sign", .{});
+                try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             try account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -722,12 +722,12 @@ pub fn executeV3SetAuthority(
             });
         },
         else => {
-            try ic.tc.log("Account does not support authorities", .{});
+            try ic.txn_ctx.log("Account does not support authorities", .{});
             return InstructionError.InvalidArgument;
         },
     }
 
-    try ic.tc.log("New authority {?}", .{new_authority});
+    try ic.txn_ctx.log("New authority {?}", .{new_authority});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L1011-L1083
@@ -735,7 +735,7 @@ pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.sc.ec.feature_set.active.contains(
+    if (!ic.txn_ctx.sc.ec.feature_set.active.contains(
         features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -757,19 +757,19 @@ pub fn executeV3SetAuthorityChecked(
     switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |buffer| {
             if (buffer.authority_address == null) {
-                try ic.tc.log("Buffer is immutable", .{});
+                try ic.txn_ctx.log("Buffer is immutable", .{});
                 return InstructionError.Immutable;
             }
             if (!buffer.authority_address.?.equals(&present_authority_key)) {
-                try ic.tc.log("Incorrect buffer authority provided", .{});
+                try ic.txn_ctx.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
             if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
-                try ic.tc.log("Buffer authority did not sign", .{});
+                try ic.txn_ctx.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.new_authority)))) {
-                try ic.tc.log("New authority did not sign", .{});
+                try ic.txn_ctx.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             try account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -780,19 +780,19 @@ pub fn executeV3SetAuthorityChecked(
         },
         .program_data => |data| {
             if (data.upgrade_authority_address == null) {
-                try ic.tc.log("Program not upgradeable", .{});
+                try ic.txn_ctx.log("Program not upgradeable", .{});
                 return InstructionError.Immutable;
             }
             if (!data.upgrade_authority_address.?.equals(&present_authority_key)) {
-                try ic.tc.log("Incorrect upgrade authority provided", .{});
+                try ic.txn_ctx.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
             if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
-                try ic.tc.log("Upgrade authority did not sign", .{});
+                try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.new_authority)))) {
-                try ic.tc.log("New authority did not sign", .{});
+                try ic.txn_ctx.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             try account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -803,12 +803,12 @@ pub fn executeV3SetAuthorityChecked(
             });
         },
         else => {
-            try ic.tc.log("Account does not support authorities", .{});
+            try ic.txn_ctx.log("Account does not support authorities", .{});
             return InstructionError.InvalidArgument;
         },
     }
 
-    try ic.tc.log("New authority {?}", .{new_authority});
+    try ic.txn_ctx.log("New authority {?}", .{new_authority});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1033-L1138
@@ -822,7 +822,7 @@ pub fn executeV3Close(
     if (ic.info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.account)).?.index_in_transaction ==
         ic.info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.recipient)).?.index_in_transaction)
     {
-        try ic.tc.log("Recipient is the same as the account being closed", .{});
+        try ic.txn_ctx.log("Recipient is the same as the account being closed", .{});
         return InstructionError.InvalidArgument;
     }
 
@@ -837,7 +837,7 @@ pub fn executeV3Close(
     );
     try close_account.setDataLength(
         allocator,
-        &ic.tc.accounts_resize_delta,
+        &ic.txn_ctx.accounts_resize_delta,
         bpf_loader_program.v3.State.UNINITIALIZED_SIZE,
     );
     switch (close_account_state) {
@@ -849,7 +849,7 @@ pub fn executeV3Close(
 
             try recipient_account.addLamports(close_account.account.lamports);
             try close_account.setLamports(0);
-            try ic.tc.log("Closed Uninitialized {any}", .{close_key});
+            try ic.txn_ctx.log("Closed Uninitialized {any}", .{close_key});
         },
         .buffer => |data| {
             try ic.info.checkNumberOfAccounts(3);
@@ -857,7 +857,7 @@ pub fn executeV3Close(
             close_account_released = true;
 
             try commonCloseAccount(ic, data.authority_address);
-            try ic.tc.log("Closed Buffer {any}", .{close_key});
+            try ic.txn_ctx.log("Closed Buffer {any}", .{close_key});
         },
         .program_data => |data| {
             try ic.info.checkNumberOfAccounts(4);
@@ -874,17 +874,17 @@ pub fn executeV3Close(
             const authority_address = data.upgrade_authority_address;
 
             if (!program_account.context.is_writable) {
-                try ic.tc.log("Program account is not writable", .{});
+                try ic.txn_ctx.log("Program account is not writable", .{});
                 return InstructionError.InvalidArgument;
             }
             if (!program_account.isOwnedByCurrentProgram()) {
-                try ic.tc.log("Program account is not owned by the loader", .{});
+                try ic.txn_ctx.log("Program account is not owned by the loader", .{});
                 return InstructionError.IncorrectProgramId;
             }
 
-            var clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
+            var clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
             if (clock.slot == data.slot) {
-                try ic.tc.log("Program was deployed in this block already", .{});
+                try ic.txn_ctx.log("Program was deployed in this block already", .{});
                 return InstructionError.InvalidArgument;
             }
 
@@ -894,7 +894,7 @@ pub fn executeV3Close(
             )) {
                 .program => |program_data| {
                     if (!program_data.programdata_address.equals(&close_key)) {
-                        try ic.tc.log(
+                        try ic.txn_ctx.log(
                             "ProgramData account does not match ProgramData account",
                             .{},
                         );
@@ -905,20 +905,20 @@ pub fn executeV3Close(
                     program_account_released = true;
                     try commonCloseAccount(ic, authority_address);
 
-                    clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
+                    clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
                     // TODO: This depends on program cache which isn't implemented yet.
                     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
                 },
                 else => {
-                    try ic.tc.log("Invalid Program Account", .{});
+                    try ic.txn_ctx.log("Invalid Program Account", .{});
                     return InstructionError.InvalidArgument;
                 },
             }
 
-            try ic.tc.log("Closed Program {any}", .{program_key});
+            try ic.txn_ctx.log("Closed Program {any}", .{program_key});
         },
         else => {
-            try ic.tc.log("Account does not support closing", .{});
+            try ic.txn_ctx.log("Account does not support closing", .{});
             return InstructionError.InvalidArgument;
         },
     }
@@ -929,7 +929,7 @@ fn commonCloseAccount(
     authority_address: ?Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (authority_address == null) {
-        try ic.tc.log("Account is immutable", .{});
+        try ic.txn_ctx.log("Account is immutable", .{});
         return InstructionError.Immutable;
     }
 
@@ -939,11 +939,11 @@ fn commonCloseAccount(
     ) orelse return InstructionError.MissingAccount;
 
     if (!authority_address.?.equals(&auth_account.pubkey)) {
-        try ic.tc.log("Incorrect authority provided", .{});
+        try ic.txn_ctx.log("Incorrect authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
     if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
-        try ic.tc.log("Authority did not sign", .{});
+        try ic.txn_ctx.log("Authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -965,7 +965,7 @@ pub fn executeV3ExtendProgram(
     additional_bytes: u32,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (additional_bytes == 0) {
-        try ic.tc.log("Additional bytes must be greater than 0", .{});
+        try ic.txn_ctx.log("Additional bytes must be greater than 0", .{});
         return InstructionError.InvalidInstructionData;
     }
 
@@ -977,11 +977,11 @@ pub fn executeV3ExtendProgram(
 
     const programdata_key = programdata.pubkey;
     if (!programdata.isOwnedByCurrentProgram()) {
-        try ic.tc.log("ProgramData owner is invalid", .{});
+        try ic.txn_ctx.log("ProgramData owner is invalid", .{});
         return InstructionError.InvalidAccountOwner;
     }
     if (!programdata.context.is_writable) {
-        try ic.tc.log("ProgramData owner is invalid", .{});
+        try ic.txn_ctx.log("ProgramData owner is invalid", .{});
         return InstructionError.InvalidArgument;
     }
 
@@ -990,11 +990,11 @@ pub fn executeV3ExtendProgram(
         defer program_account.release();
 
         if (!program_account.context.is_writable) {
-            try ic.tc.log("Program account is not writeable", .{});
+            try ic.txn_ctx.log("Program account is not writeable", .{});
             return InstructionError.InvalidArgument;
         }
         if (!program_account.isOwnedByCurrentProgram()) {
-            try ic.tc.log("Program account not owned by loader", .{});
+            try ic.txn_ctx.log("Program account not owned by loader", .{});
             return InstructionError.InvalidAccountOwner;
         }
 
@@ -1004,12 +1004,12 @@ pub fn executeV3ExtendProgram(
         )) {
             .program => |data| {
                 if (!data.programdata_address.equals(&programdata_key)) {
-                    try ic.tc.log("Program account does not match ProgramData account", .{});
+                    try ic.txn_ctx.log("Program account does not match ProgramData account", .{});
                     return InstructionError.InvalidArgument;
                 }
             },
             else => {
-                try ic.tc.log("Invalid Program account", .{});
+                try ic.txn_ctx.log("Invalid Program account", .{});
                 return InstructionError.InvalidAccountData;
             },
         }
@@ -1019,7 +1019,7 @@ pub fn executeV3ExtendProgram(
 
     const new_len = programdata.constAccountData().len +| additional_bytes;
     if (new_len > system_program.MAX_PERMITTED_DATA_LENGTH) {
-        try ic.tc.log(
+        try ic.txn_ctx.log(
             "Extended ProgramData length of {} bytes exceeds max account data length of {}",
             .{ new_len, system_program.MAX_PERMITTED_DATA_LENGTH },
         );
@@ -1027,7 +1027,7 @@ pub fn executeV3ExtendProgram(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
@@ -1035,17 +1035,17 @@ pub fn executeV3ExtendProgram(
     )) {
         .program_data => |data| blk: {
             if (clock.slot == data.slot) {
-                try ic.tc.log("Program was extended in this block already", .{});
+                try ic.txn_ctx.log("Program was extended in this block already", .{});
                 return InstructionError.InvalidArgument;
             }
             if (data.upgrade_authority_address == null) {
-                try ic.tc.log("Cannot extend ProgramData accounts that are not upgradeable", .{});
+                try ic.txn_ctx.log("Cannot extend ProgramData accounts that are not upgradeable", .{});
                 return InstructionError.Immutable;
             }
             break :blk data.upgrade_authority_address;
         },
         else => {
-            try ic.tc.log("ProgramData state is invalid", .{});
+            try ic.txn_ctx.log("ProgramData state is invalid", .{});
             return InstructionError.InvalidAccountData;
         },
     };
@@ -1053,7 +1053,7 @@ pub fn executeV3ExtendProgram(
     const required_payment = blk: {
         const balance = programdata.account.lamports;
         // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-        const rent = try ic.tc.sc.sysvar_cache.get(sysvar.Rent);
+        const rent = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
     };
@@ -1086,7 +1086,7 @@ pub fn executeV3ExtendProgram(
         programdata = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
         defer programdata.release();
 
-        try programdata.setDataLength(allocator, &ic.tc.accounts_resize_delta, new_len);
+        try programdata.setDataLength(allocator, &ic.txn_ctx.accounts_resize_delta, new_len);
         const data = programdata.constAccountData();
 
         try deployProgram(
@@ -1096,8 +1096,8 @@ pub fn executeV3ExtendProgram(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
             data[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
-            ic.tc.sc.ec.feature_set,
-            if (ic.tc.log_collector != null) &ic.tc.log_collector.? else null,
+            ic.txn_ctx.sc.ec.feature_set,
+            if (ic.txn_ctx.log_collector != null) &ic.txn_ctx.log_collector.? else null,
         );
     }
 
@@ -1111,7 +1111,7 @@ pub fn executeV3ExtendProgram(
         },
     });
 
-    try ic.tc.log("Extended ProgramData account by {} bytes", .{additional_bytes});
+    try ic.txn_ctx.log("Extended ProgramData account by {} bytes", .{additional_bytes});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1346-L1515
@@ -1119,7 +1119,7 @@ pub fn executeV3Migrate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.tc.sc.ec.feature_set.active.contains(
+    if (!ic.txn_ctx.sc.ec.feature_set.active.contains(
         features.ENABLE_LOADER_V4,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -1136,7 +1136,7 @@ pub fn executeV3Migrate(
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
 
     // Verify ProgramData account.
     const progdata_info = info: {
@@ -1144,7 +1144,7 @@ pub fn executeV3Migrate(
         defer programdata.release();
 
         if (!programdata.context.is_writable) {
-            try ic.tc.log("ProgramData account not writeable", .{});
+            try ic.txn_ctx.log("ProgramData account not writeable", .{});
             return InstructionError.InvalidArgument;
         }
 
@@ -1154,7 +1154,7 @@ pub fn executeV3Migrate(
         )) {
             .program_data => |data| blk: {
                 if (clock.slot == data.slot) {
-                    try ic.tc.log("Program was deployed in this block already", .{});
+                    try ic.txn_ctx.log("Program was deployed in this block already", .{});
                     return InstructionError.InvalidArgument;
                 }
 
@@ -1177,11 +1177,11 @@ pub fn executeV3Migrate(
     if (!migration_authority.equals(&provided_authority_key) and
         !provided_authority_key.equals(&(progdata_info.upgrade_key orelse program_key)))
     {
-        try ic.tc.log("Incorrect migration authority provided", .{});
+        try ic.txn_ctx.log("Incorrect migration authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
     if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
-        try ic.tc.log("Migration authority did not sign", .{});
+        try ic.txn_ctx.log("Migration authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -1191,11 +1191,11 @@ pub fn executeV3Migrate(
         defer program_account.release();
 
         if (!program_account.context.is_writable) {
-            try ic.tc.log("Program account not writeable", .{});
+            try ic.txn_ctx.log("Program account not writeable", .{});
             return InstructionError.InvalidArgument;
         }
         if (!program_account.isOwnedByCurrentProgram()) {
-            try ic.tc.log("Program account not owned by loader", .{});
+            try ic.txn_ctx.log("Program account not owned by loader", .{});
             return InstructionError.IncorrectProgramId;
         }
 
@@ -1205,12 +1205,12 @@ pub fn executeV3Migrate(
         )) {
             .program => |data| {
                 if (!programdata_key.equals(&data.programdata_address)) {
-                    try ic.tc.log("Program and ProgramData account mismatch", .{});
+                    try ic.txn_ctx.log("Program and ProgramData account mismatch", .{});
                     return InstructionError.InvalidArgument;
                 }
             },
             else => {
-                try ic.tc.log("Invalid Program account", .{});
+                try ic.txn_ctx.log("Invalid Program account", .{});
                 return InstructionError.InvalidAccountData;
             },
         }
@@ -1320,7 +1320,7 @@ pub fn executeV3Migrate(
         try programdata.setOwner(system_program.ID);
     }
 
-    try ic.tc.log("Migrated program {any}", .{program_key});
+    try ic.txn_ctx.log("Migrated program {any}", .{program_key});
 }
 
 /// TODO: This function depends on syscalls and program cache implementations

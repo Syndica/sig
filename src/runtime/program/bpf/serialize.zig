@@ -556,12 +556,12 @@ fn deserializeParametersUnaligned(
                 if (start + pre_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + pre_len];
                 const can_data_be_resized =
-                    borrowed_account.checkCanSetDataLength(ic.tc.accounts_resize_delta, pre_len);
+                    borrowed_account.checkCanSetDataLength(ic.txn_ctx.accounts_resize_delta, pre_len);
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataFromSlice(
                         allocator,
-                        &ic.tc.accounts_resize_delta,
+                        &ic.txn_ctx.accounts_resize_delta,
                         data,
                     );
                 } else {
@@ -647,12 +647,12 @@ fn deserializeParametersAligned(
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
-                    borrowed_account.checkCanSetDataLength(ic.tc.accounts_resize_delta, post_len);
+                    borrowed_account.checkCanSetDataLength(ic.txn_ctx.accounts_resize_delta, post_len);
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataFromSlice(
                         allocator,
-                        &ic.tc.accounts_resize_delta,
+                        &ic.txn_ctx.accounts_resize_delta,
                         data,
                     );
                 } else {
@@ -666,12 +666,12 @@ fn deserializeParametersAligned(
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
-                    borrowed_account.checkCanSetDataLength(ic.tc.accounts_resize_delta, post_len);
+                    borrowed_account.checkCanSetDataLength(ic.txn_ctx.accounts_resize_delta, post_len);
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataLength(
                         allocator,
-                        &ic.tc.accounts_resize_delta,
+                        &ic.txn_ctx.accounts_resize_delta,
                         post_len,
                     );
                     const allocated_bytes = post_len -| pre_len;
@@ -865,7 +865,7 @@ test "serializeParameters" {
             defer instruction_info.deinit(allocator);
 
             var ic = InstructionContext{
-                .tc = &tc,
+                .txn_ctx = &tc,
                 .info = instruction_info,
                 .depth = 0,
             };

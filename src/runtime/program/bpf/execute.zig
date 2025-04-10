@@ -19,18 +19,18 @@ pub fn execute(
         defer program_account.release();
 
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!ic.tc.sc.ec.feature_set.active.contains(
+        if (!ic.txn_ctx.sc.ec.feature_set.active.contains(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !program_account.account.executable)
         {
-            try ic.tc.log("Program is not executable", .{});
+            try ic.txn_ctx.log("Program is not executable", .{});
             return InstructionError.IncorrectProgramId;
         }
 
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
-        var syscalls = registerSyscalls(allocator, ic.tc) catch |err| {
-            try ic.tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
+        var syscalls = registerSyscalls(allocator, ic.txn_ctx) catch |err| {
+            try ic.txn_ctx.log("Failed to register syscalls: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
         errdefer syscalls.deinit(allocator);
@@ -46,7 +46,7 @@ pub fn execute(
             &syscalls,
             .{},
         ) catch |err| {
-            try ic.tc.log("{s}", .{@errorName(err)});
+            try ic.txn_ctx.log("{s}", .{@errorName(err)});
             return InstructionError.InvalidAccountData;
         };
         break :blk .{ executable, syscalls, source };
@@ -61,7 +61,7 @@ pub fn execute(
     // TODO: jit
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.tc.sc.ec.feature_set.active.contains(
+    const direct_mapping = ic.txn_ctx.sc.ec.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
@@ -82,16 +82,16 @@ pub fn execute(
     // TODO: save account addresses for access violation errors resolution
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1621-L1640
-    const compute_available = ic.tc.compute_meter;
+    const compute_available = ic.txn_ctx.compute_meter;
     const result, const compute_consumed = blk: {
         var sbpf_vm, const stack, const heap, const mm_regions = initVm(
             allocator,
-            ic.tc,
+            ic.txn_ctx,
             &executable,
             regions,
             &syscalls,
         ) catch |err| {
-            try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
+            try ic.txn_ctx.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
         defer {
@@ -107,18 +107,18 @@ pub fn execute(
     // TODO: timings
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1646-L1653
-    try ic.tc.log("Program {} consumed {} of {} compute units", .{
+    try ic.txn_ctx.log("Program {} consumed {} of {} compute units", .{
         ic.info.program_meta.pubkey,
         compute_consumed,
         compute_available,
     });
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1653-L1657
-    if (ic.tc.return_data.data.len != 0) {
+    if (ic.txn_ctx.return_data.data.len != 0) {
         try stable_log.programReturn(
-            ic.tc,
+            ic.txn_ctx,
             ic.info.program_meta.pubkey,
-            ic.tc.return_data.data.constSlice(),
+            ic.txn_ctx.return_data.data.constSlice(),
         );
     }
 

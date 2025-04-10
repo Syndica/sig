@@ -26,7 +26,7 @@ pub fn execute(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     // agave: consumed in declare_process_instruction
-    try ic.tc.consumeCompute(program.COMPUTE_UNITS);
+    try ic.txn_ctx.consumeCompute(program.COMPUTE_UNITS);
 
     const lookuptable_instruction = try ic.info.deserializeInstruction(allocator, Instruction);
     defer sig.bincode.free(allocator, lookuptable_instruction);
@@ -55,7 +55,7 @@ fn createLookupTable(
     const AccountIndex = instruction.CreateLookupTable.AccountIndex;
 
     const has_relax_authority_signer_check_for_lookup_table_creation =
-        ic.tc.sc.ec.feature_set.active.contains(
+        ic.txn_ctx.sc.ec.feature_set.active.contains(
         runtime.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
     );
 
@@ -69,7 +69,7 @@ fn createLookupTable(
         if (!has_relax_authority_signer_check_for_lookup_table_creation and
             lookup_table_account.account.data.len > 0)
         {
-            try ic.tc.log("Table account must not be allocated", .{});
+            try ic.txn_ctx.log("Table account must not be allocated", .{});
             return error.AccountAlreadyInitialized;
         }
 
@@ -90,7 +90,7 @@ fn createLookupTable(
         if (!has_relax_authority_signer_check_for_lookup_table_creation and
             !authority_account.context.is_signer)
         {
-            try ic.tc.log("Authority account must be a signer", .{});
+            try ic.txn_ctx.log("Authority account must be a signer", .{});
             return error.MissingRequiredSignature;
         }
 
@@ -105,7 +105,7 @@ fn createLookupTable(
         defer payer_account.release();
 
         if (!payer_account.context.is_signer) {
-            try ic.tc.log("Payer account must be a signer", .{});
+            try ic.txn_ctx.log("Payer account must be a signer", .{});
             return error.MissingRequiredSignature;
         }
 
@@ -113,12 +113,12 @@ fn createLookupTable(
     };
 
     const derivation_slot = blk: {
-        const slot_hashes = try ic.tc.sc.sysvar_cache.get(sysvar.SlotHashes);
+        const slot_hashes = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.SlotHashes);
 
         if (slot_hashes.get(untrusted_recent_slot)) |_| {
             break :blk untrusted_recent_slot;
         } else {
-            try ic.tc.log("{} is not a recent slot", .{untrusted_recent_slot});
+            try ic.txn_ctx.log("{} is not a recent slot", .{untrusted_recent_slot});
             return error.InvalidInstructionData;
         }
     };
@@ -131,11 +131,11 @@ fn createLookupTable(
         &.{bump_seed},
         program.ID,
     ) catch |err| {
-        ic.tc.custom_error = runtime.pubkey_utils.mapError(err);
+        ic.txn_ctx.custom_error = runtime.pubkey_utils.mapError(err);
         return error.Custom;
     };
     if (!table_key.equals(&derived_table_key)) {
-        try ic.tc.log("Table address must mach derived address: {}", .{derived_table_key});
+        try ic.txn_ctx.log("Table address must mach derived address: {}", .{derived_table_key});
         return error.InvalidArgument;
     }
 
@@ -145,7 +145,7 @@ fn createLookupTable(
         return; // success
     }
 
-    const rent = try ic.tc.sc.sysvar_cache.get(sysvar.Rent);
+    const rent = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Rent);
     const required_lamports = @max(
         rent.minimumBalance(LOOKUP_TABLE_META_SIZE),
         1,
@@ -162,7 +162,7 @@ fn createLookupTable(
         defer allocator.free(transfer_instruction.data);
         try runtime.executor.executeNativeCpiInstruction(
             allocator,
-            ic.tc,
+            ic.txn_ctx,
             transfer_instruction,
             &.{payer_key},
         );
@@ -178,7 +178,7 @@ fn createLookupTable(
         defer allocator.free(allocate_instruction.data);
         try runtime.executor.executeNativeCpiInstruction(
             allocator,
-            ic.tc,
+            ic.txn_ctx,
             allocate_instruction,
             &.{table_key},
         );
@@ -190,7 +190,7 @@ fn createLookupTable(
         defer allocator.free(assign_instruction.data);
         try runtime.executor.executeNativeCpiInstruction(
             allocator,
-            ic.tc,
+            ic.txn_ctx,
             assign_instruction,
             &.{table_key},
         );
@@ -237,7 +237,7 @@ fn freezeLookupTable(
         defer authority_account.release();
 
         if (!authority_account.context.is_signer) {
-            try ic.tc.log("Authority account must be a signer", .{});
+            try ic.txn_ctx.log("Authority account must be a signer", .{});
             return error.MissingRequiredSignature;
         }
 
@@ -260,17 +260,17 @@ fn freezeLookupTable(
             return error.IncorrectAuthority;
         }
     } else {
-        try ic.tc.log("Lookup table is already frozen", .{});
+        try ic.txn_ctx.log("Lookup table is already frozen", .{});
         return error.Immutable;
     }
 
     if (lookup_table.meta.deactivation_slot != std.math.maxInt(Slot)) {
-        try ic.tc.log("Deactivated tables cannnot be frozen", .{});
+        try ic.txn_ctx.log("Deactivated tables cannnot be frozen", .{});
         return error.InvalidArgument;
     }
 
     if (lookup_table.addresses.len == 0) {
-        try ic.tc.log("Empty lookup tables cannot be frozen", .{});
+        try ic.txn_ctx.log("Empty lookup tables cannot be frozen", .{});
         return error.InvalidInstructionData;
     }
 
@@ -307,7 +307,7 @@ fn extendLookupTable(
         defer authority_account.release();
 
         if (!authority_account.context.is_signer) {
-            try ic.tc.log("Authority account must be a signer", .{});
+            try ic.txn_ctx.log("Authority account must be a signer", .{});
             return error.MissingRequiredSignature;
         }
 
@@ -333,30 +333,30 @@ fn extendLookupTable(
         }
 
         if (lookup_table.meta.deactivation_slot != std.math.maxInt(Slot)) {
-            try ic.tc.log("Deactivated tables cannot be extended", .{});
+            try ic.txn_ctx.log("Deactivated tables cannot be extended", .{});
             return error.InvalidArgument;
         }
 
         if (lookup_table.addresses.len >= state.LOOKUP_TABLE_MAX_ADDRESSES) {
-            try ic.tc.log("Lookup table is full and cannot contain more addresses", .{});
+            try ic.txn_ctx.log("Lookup table is full and cannot contain more addresses", .{});
             return error.InvalidArgument;
         }
 
         if (new_addresses.len == 0) {
-            try ic.tc.log("Must extend with at least one address", .{});
+            try ic.txn_ctx.log("Must extend with at least one address", .{});
             return error.InvalidInstructionData;
         }
 
         const new_table_addresses_len = lookup_table.addresses.len +| new_addresses.len;
         if (new_table_addresses_len >= state.LOOKUP_TABLE_MAX_ADDRESSES) {
-            try ic.tc.log(
+            try ic.txn_ctx.log(
                 "Extended lookup table length {} would exceed max capacity of {}",
                 .{ new_table_addresses_len, state.LOOKUP_TABLE_MAX_ADDRESSES },
             );
             return error.InvalidInstructionData;
         }
 
-        const clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
+        const clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
         if (clock.slot != lookup_table.meta.last_extended_slot) {
             lookup_table.meta.last_extended_slot = clock.slot;
             lookup_table.meta.last_extended_slot_start_index = std.math.cast(
@@ -383,7 +383,7 @@ fn extendLookupTable(
 
         try lookup_table_account.setDataLength(
             allocator,
-            &ic.tc.accounts_resize_delta,
+            &ic.txn_ctx.accounts_resize_delta,
             new_table_data_len,
         );
 
@@ -398,7 +398,7 @@ fn extendLookupTable(
         break :blk .{ lookup_table_account.account.lamports, new_table_data_len };
     };
 
-    const rent = try ic.tc.sc.sysvar_cache.get(sysvar.Rent);
+    const rent = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Rent);
     const required_lamports = @max(rent.minimumBalance(new_table_data_len), 1) -|
         lookup_table_lamports;
 
@@ -410,7 +410,7 @@ fn extendLookupTable(
             defer payer_account.release();
 
             if (!payer_account.context.is_signer) {
-                try ic.tc.log("Payer account must be a signer", .{});
+                try ic.txn_ctx.log("Payer account must be a signer", .{});
                 return error.MissingRequiredSignature;
             }
             break :blk payer_account.pubkey;
@@ -425,7 +425,7 @@ fn extendLookupTable(
         defer allocator.free(transfer_instruction.data);
         try runtime.executor.executeNativeCpiInstruction(
             allocator,
-            ic.tc,
+            ic.txn_ctx,
             transfer_instruction,
             &.{payer_key},
         );
@@ -457,7 +457,7 @@ fn deactivateLookupTable(
         defer authority_account.release();
 
         if (!authority_account.context.is_signer) {
-            try ic.tc.log("Authority account must be a signer", .{});
+            try ic.txn_ctx.log("Authority account must be a signer", .{});
             return error.MissingRequiredSignature;
         }
 
@@ -480,16 +480,16 @@ fn deactivateLookupTable(
             return error.IncorrectAuthority;
         }
     } else {
-        try ic.tc.log("Lookup table is frozen", .{});
+        try ic.txn_ctx.log("Lookup table is frozen", .{});
         return error.Immutable;
     }
 
     if (lookup_table.meta.deactivation_slot != std.math.maxInt(Slot)) {
-        try ic.tc.log("Lookup tble is already deactivated", .{});
+        try ic.txn_ctx.log("Lookup tble is already deactivated", .{});
         return error.InvalidArgument;
     }
 
-    const clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
 
     var lookup_table_meta = lookup_table.meta;
     lookup_table_meta.deactivation_slot = clock.slot;
@@ -522,7 +522,7 @@ fn closeLookupTable(
         defer authority_account.release();
 
         if (!authority_account.context.is_signer) {
-            try ic.tc.log("Authority account must be a signer", .{});
+            try ic.txn_ctx.log("Authority account must be a signer", .{});
             return error.MissingRequiredSignature;
         }
 
@@ -534,7 +534,7 @@ fn closeLookupTable(
     if ((ic.info.getAccountMetaAtIndex(0) orelse return error.NotEnoughAccountKeys).pubkey.equals(
         &(ic.info.getAccountMetaAtIndex(2) orelse return error.NotEnoughAccountKeys).pubkey,
     )) {
-        try ic.tc.log("Lookup table cannot be the recipient of reclaimed lamports", .{});
+        try ic.txn_ctx.log("Lookup table cannot be the recipient of reclaimed lamports", .{});
         return error.InvalidArgument;
     }
 
@@ -555,20 +555,20 @@ fn closeLookupTable(
                 return error.IncorrectAuthority;
             }
         } else {
-            try ic.tc.log("Lookup table is frozen", .{});
+            try ic.txn_ctx.log("Lookup table is frozen", .{});
             return error.Immutable;
         }
 
-        const clock = try ic.tc.sc.sysvar_cache.get(sysvar.Clock);
-        const slot_hashes = try ic.tc.sc.sysvar_cache.get(sysvar.SlotHashes);
+        const clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
+        const slot_hashes = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.SlotHashes);
 
         switch (lookup_table.meta.status(clock.slot, slot_hashes)) {
             .Activated => {
-                try ic.tc.log("Lookup table is not deactivated", .{});
+                try ic.txn_ctx.log("Lookup table is not deactivated", .{});
                 return error.InvalidArgument;
             },
             .Deactivating => |args| {
-                try ic.tc.log(
+                try ic.txn_ctx.log(
                     "Table cannot be closed until it's fully deactivated in {} blocks",
                     .{args.remaining_blocks},
                 );
@@ -589,7 +589,7 @@ fn closeLookupTable(
     var lookup_table_account = try ic.borrowInstructionAccount(0);
     defer lookup_table_account.release();
 
-    try lookup_table_account.setDataLength(allocator, &ic.tc.accounts_resize_delta, 0);
+    try lookup_table_account.setDataLength(allocator, &ic.txn_ctx.accounts_resize_delta, 0);
     try lookup_table_account.setLamports(0);
 }
 
