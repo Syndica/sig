@@ -40,6 +40,12 @@ pub const ENABLE_POSEIDON_SYSCALL =
 pub const DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL =
     Pubkey.parseBase58String("79HWsX9rpnnJBPcdNURVqygpMAfxdrAirzAGAVmf92im") catch unreachable;
 
+pub const LOOSEN_CPI_SIZE_RESTRICTION =
+    Pubkey.parseBase58String("GDH5TVdbTPUpRnXaRyQqiKUa7uZAbZ28Q2N9bhbKoMLm") catch unreachable;
+
+pub const INCREASE_TX_ACCOUNT_LOCK_LIMIT =
+    Pubkey.parseBase58String("9LZdXeKGeBV6hRLdxS1rHbHoEUsKqesCC2ZAPTPKJAbK") catch unreachable;
+
 /// `FeatureSet` holds the set of currently active and inactive features
 ///
 /// TODO: add features

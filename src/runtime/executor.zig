@@ -203,7 +203,7 @@ fn popInstruction(
 
 /// Prepare the InstructionInfo for an instruction invoked via CPI\
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L325
-fn prepareCpiInstructionInfo(
+pub fn prepareCpiInstructionInfo(
     tc: *TransactionContext,
     callee: Instruction,
     signers: []const Pubkey,
