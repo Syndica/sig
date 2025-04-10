@@ -282,6 +282,8 @@ fn httpRespondError(
 }
 
 test "net.echo: Server works" {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+
     const port: u16 = 34333;
 
     var server = try Server.init(std.testing.allocator, port, .noop);
