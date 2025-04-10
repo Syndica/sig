@@ -12,7 +12,6 @@ const AutoHashMap = std.AutoHashMap;
 const Atomic = std.atomic.Value;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Mutex = std.Thread.Mutex;
-const PointerClosure = sig.utils.closure.PointerClosure;
 
 const Counter = sig.prometheus.Counter;
 const ErasureSetId = ledger.shred.ErasureSetId;
@@ -86,9 +85,33 @@ pub const ShredInserter = struct {
         /// Necessary for shred recovery.
         slot_leaders: ?SlotLeaders = null,
         /// Send recovered shreds here if provided.
-        retransmit_sender: ?PointerClosure([]const []const u8, void) = null,
+        retransmit_sender: ?RetransmitSender = null,
         /// Records all shreds.
         shred_tracker: ?*sig.shred_network.shred_tracker.BasicShredTracker = null,
+    };
+
+    pub const RetransmitSender = struct {
+        ptr: *anyopaque,
+        sendFn: *const fn (*anyopaque, []const []const u8) void,
+
+        pub fn init(
+            state: anytype,
+            comptime sendFn: fn (@TypeOf(state), []const []const u8) void,
+        ) RetransmitSender {
+            const S = struct {
+                fn send(generic_state: *anyopaque, slot: []const []const u8) void {
+                    return sendFn(@alignCast(@ptrCast(generic_state)), slot);
+                }
+            };
+            return .{
+                .state = @alignCast(@ptrCast(state)),
+                .genericFn = S.send,
+            };
+        }
+
+        pub fn send(self: RetransmitSender, slot: []const []const u8) void {
+            return self.sendFn(self.ptr, slot);
+        }
     };
 
     pub const Result = struct {
@@ -346,7 +369,7 @@ pub const ShredInserter = struct {
             if (valid_recovered_shreds.items.len > 0) if (options.retransmit_sender) |_| {
                 // TODO: This needs to be implemented differently, probably with
                 // a channel, and with proper consideration for lifetimes.
-                // sender.call(valid_recovered_shreds.items);
+                // sender.send(valid_recovered_shreds.items);
             };
         }
         self.metrics.shred_recovery_elapsed_us.add(shred_recovery_timer.read().asMicros());
