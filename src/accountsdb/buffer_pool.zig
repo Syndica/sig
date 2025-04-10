@@ -345,7 +345,7 @@ pub const FrameManager = struct {
 
     contains_valid_data: []std.atomic.Value(bool),
 
-    pub const Map = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
+    pub const Map = std.AutoArrayHashMapUnmanaged(FileIdFileOffset, FrameIndex);
 
     const GetError = error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory };
 
@@ -514,7 +514,7 @@ pub const FrameManager = struct {
 
                 std.debug.assert(!std.meta.eql(evicted_key, key)); // inserted key we just evicted
 
-                const removed = frame_map.remove(evicted_key);
+                const removed = frame_map.swapRemove(evicted_key);
                 std.debug.assert(removed); // evicted key was not in map
             }
         }
