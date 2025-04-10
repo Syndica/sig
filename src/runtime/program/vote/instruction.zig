@@ -155,6 +155,52 @@ pub const VoteSwitch = struct {
     };
 };
 
+pub const VoteStateUpdate = struct {
+    vote_state_update: vote_program.state.VoteStateUpdate,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to vote with
+        account = 0,
+        /// `[]` Vote authority
+        vote_authority = 1,
+    };
+};
+
+pub const VoteStateUpdateSwitch = struct {
+    vote_state_update: vote_program.state.VoteStateUpdate,
+    hash: Hash,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to vote with
+        account = 0,
+        /// `[]` Vote authority
+        vote_authority = 1,
+    };
+};
+
+pub const TowerSync = struct {
+    tower_sync: vote_program.state.TowerSync,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to vote with
+        account = 0,
+        /// `[]` Vote authority
+        vote_authority = 1,
+    };
+};
+
+pub const TowerSyncSwitch = struct {
+    tower_sync: vote_program.state.TowerSync,
+    hash: Hash,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to vote with
+        account = 0,
+        /// `[]` Vote authority
+        vote_authority = 1,
+    };
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum) {
     /// Initialize a vote account
@@ -247,4 +293,40 @@ pub const Instruction = union(enum) {
     ///   2. `[]` Clock sysvar
     ///   3. `[SIGNER]` Vote authority
     vote_switch: VoteSwitch,
+    /// Update the onchain vote state for the signer.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    update_vote_state: VoteStateUpdate,
+    /// Update the onchain vote state for the signer along with a switching proof.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    update_vote_state_switch: VoteStateUpdateSwitch,
+    /// Update the onchain vote state for the signer.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    compact_update_vote_state: VoteStateUpdate,
+    /// Update the onchain vote state for the signer along with a switching proof.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    compact_update_vote_state_switch: VoteStateUpdateSwitch,
+    /// Sync the onchain vote state with local tower
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    tower_sync: TowerSync,
+    /// Sync the onchain vote state with local tower along with a switching proof
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    tower_sync_switch: TowerSyncSwitch,
 };

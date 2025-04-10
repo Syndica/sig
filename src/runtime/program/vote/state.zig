@@ -41,21 +41,31 @@ pub const Lockout = struct {
     /// slots voted on top of this slot.
     confirmation_count: u32,
 
-    pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) !bool {
-        return try self.lastLockedOutSlot() >= slot;
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L117
+    pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) bool {
+        return self.lastLockedOutSlot() >= slot;
     }
 
-    // The last slot at which a vote is still locked out. Validators should not
-    // vote on a slot in another fork which is less than or equal to this slot
-    // to avoid having their stake slashed.
-    pub fn lastLockedOutSlot(self: *const Lockout) !Slot {
-        return (self.slot +| (try self.lockout()));
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L113
+    /// The last slot at which a vote is still locked out. Validators should not
+    /// vote on a slot in another fork which is less than or equal to this slot
+    /// to avoid having their stake slashed.
+    pub fn lastLockedOutSlot(self: *const Lockout) Slot {
+        return (self.slot +| (self.lockout()));
     }
 
-    // The number of slots for which this vote is locked
-    pub fn lockout(self: *const Lockout) !u64 {
-        return std.math.powi(u64, INITIAL_LOCKOUT, self.confirmation_count) catch
-            return error.ArithmeticOverflow;
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L103
+    ///
+    /// The number of slots for which this vote is locked
+    pub fn lockout(self: *const Lockout) u64 {
+        return std.math.pow(
+            u64,
+            INITIAL_LOCKOUT,
+            @min(
+                self.confirmation_count,
+                MAX_LOCKOUT_HISTORY,
+            ),
+        );
     }
 };
 
@@ -95,6 +105,35 @@ pub const Vote = struct {
     timestamp: ?i64,
 };
 
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L178
+pub const VoteStateUpdate = struct {
+    /// The proposed tower
+    lockouts: std.ArrayListUnmanaged(Lockout),
+    /// The proposed root
+    root: ?Slot,
+    /// signature of the bank's state at the last slot
+    hash: Hash,
+    /// processing timestamp of last slot
+    timestamp: ?i64,
+};
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L232
+pub const TowerSync = struct {
+    /// The proposed tower
+    lockouts: std.ArrayListUnmanaged(Lockout),
+    /// The proposed root
+    root: ?Slot,
+    /// signature of the bank's state at the last slot
+    hash: Hash,
+    /// processing timestamp of last slot
+    timestamp: ?i64,
+    /// the unique identifier for the chain up to and
+    /// including this block. Does not require replaying
+    /// in order to compute.
+    block_id: Hash,
+};
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
 pub const AuthorizedVoters = struct {
     voters: SortedMap(Epoch, Pubkey),
 
@@ -652,7 +691,6 @@ pub const VoteState = struct {
             try self.epoch_credits.append(
                 .{ .epoch = epoch, .credits = 0, .prev_credits = 0 },
             );
-            // TODO Revisit and compare panic with Agave
         } else if (epoch != self.epoch_credits.getLast().epoch) {
             const last = self.epoch_credits.getLast();
             const last_credits = last.credits;
@@ -737,7 +775,7 @@ pub const VoteState = struct {
                 slot_hashes.entries[
                 std.math.sub(usize, j, 1) catch
                     return error.ArithmeticOverflow
-            ].@"0") {
+            ][0]) {
                 // Decrement `j` to find newer slots
                 j = std.math.sub(usize, j, 1) catch return error.ArithmeticOverflow;
                 continue;
@@ -761,7 +799,7 @@ pub const VoteState = struct {
             // a matching slot hash in step 2)
             return VoteError.slots_mismatch;
         }
-        if (!vote_hash.eql(slot_hashes.entries[j].@"1")) {
+        if (!vote_hash.eql(slot_hashes.entries[j][1])) {
             // This means the newest slot in the `vote_slots` has a match that
             // doesn't match the expected hash for that slot on this
             // fork
@@ -784,7 +822,7 @@ pub const VoteState = struct {
             }
         }
 
-        try self.popExpiredVotes(next_vote_slot);
+        self.popExpiredVotes(next_vote_slot);
 
         const landed_vote: LandedVote = .{
             .latency = VoteState.computeVoteLatency(next_vote_slot, current_slot),
@@ -812,9 +850,9 @@ pub const VoteState = struct {
     pub fn popExpiredVotes(
         self: *VoteState,
         next_vote_slot: Slot,
-    ) !void {
+    ) void {
         while (self.lastLockout()) |vote| {
-            if (!try vote.isLockedOutAtSlot(next_vote_slot)) {
+            if (!vote.isLockedOutAtSlot(next_vote_slot)) {
                 _ = self.votes.popOrNull();
             } else {
                 break;
@@ -872,7 +910,7 @@ pub const VoteState = struct {
         }
 
         const earliest_slot_in_history = if (slot_hashes.entries.len != 0)
-            slot_hashes.entries[slot_hashes.entries.len - 1].@"0"
+            slot_hashes.entries[slot_hashes.entries.len - 1][0]
         else
             0;
 
@@ -927,6 +965,583 @@ pub const VoteState = struct {
     /// Computes the vote latency for vote on voted_for_slot where the vote itself landed in current_slot
     pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
         return @min(current_slot -| voted_for_slot, std.math.maxInt(u8));
+    }
+
+    fn compareFn(context: void, key: Slot, mid_item: LandedVote) std.math.Order {
+        _ = context;
+        return std.math.order(key, mid_item.lockout.slot);
+    }
+
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L690
+    ///
+    /// Returns if the vote state contains a slot `candidate_slot`
+    pub fn containsSlot(self: *const VoteState, candidate_slot: Slot) bool {
+        return std.sort.binarySearch(
+            LandedVote,
+            candidate_slot,
+            self.votes.items,
+            {},
+            compareFn,
+        ) != null;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1014
+    pub fn processTowerSync(
+        self: *VoteState,
+        allocator: std.mem.Allocator,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        slot: Slot,
+        tower_sync: *TowerSync,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        if (try self.checkAndFilterProposedVoteState(
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+            slot_hashes,
+        )) |err| {
+            return err;
+        }
+
+        var lockouts = try std.ArrayList(LandedVote).initCapacity(
+            allocator,
+            tower_sync.lockouts.items.len,
+        );
+        defer lockouts.deinit();
+        for (tower_sync.lockouts.items) |lockout| {
+            try lockouts.append(
+                LandedVote{ .latency = 0, .lockout = lockout },
+            );
+        }
+
+        return try self.processNewVoteState(
+            &lockouts,
+            tower_sync.root,
+            tower_sync.timestamp,
+            epoch,
+            slot,
+        );
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L964
+    pub fn processVoteStateUpdate(
+        self: *VoteState,
+        allocator: std.mem.Allocator,
+        slot_hashes: *const SlotHashes,
+        epoch: Epoch,
+        slot: Slot,
+        vote_state_update: *VoteStateUpdate,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        if (try self.checkAndFilterProposedVoteState(
+            &vote_state_update.lockouts,
+            &vote_state_update.root,
+            vote_state_update.hash,
+            slot_hashes,
+        )) |err| {
+            return err;
+        }
+
+        var lockouts = try std.ArrayList(LandedVote).initCapacity(
+            allocator,
+            vote_state_update.lockouts.items.len,
+        );
+        defer lockouts.deinit();
+        for (vote_state_update.lockouts.items) |lockout| {
+            try lockouts.append(
+                LandedVote{ .latency = 0, .lockout = lockout },
+            );
+        }
+
+        return try self.processNewVoteState(
+            &lockouts,
+            vote_state_update.root,
+            vote_state_update.timestamp,
+            epoch,
+            slot,
+        );
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L63
+    ///
+    /// Checks the proposed vote state with the current and
+    /// slot hashes, making adjustments to the root / filtering
+    /// votes as needed.
+    pub fn checkAndFilterProposedVoteState(
+        self: *VoteState,
+        proposed_lockouts: *std.ArrayListUnmanaged(Lockout),
+        proposed_root: *?Slot,
+        proposed_hash: Hash,
+        slot_hashes: *const SlotHashes,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        if (proposed_lockouts.items.len == 0) {
+            return VoteError.empty_slots;
+        }
+
+        // must be nonempty, checked above
+        const last_proposed_slot = proposed_lockouts.getLast().slot;
+        // If the proposed state is not new enough, return
+        if (self.votes.getLastOrNull()) |last_vote| {
+            if (last_proposed_slot <= last_vote.lockout.slot) {
+                return VoteError.vote_too_old;
+            }
+        }
+
+        if (slot_hashes.entries.len == 0) {
+            return VoteError.slots_mismatch;
+        }
+
+        const earliest_slot_hash_in_history = slot_hashes
+            .entries[slot_hashes.entries.len - 1][0];
+
+        // Check if the proposed vote state is too old to be in the SlotHash history
+        if (last_proposed_slot < earliest_slot_hash_in_history) {
+            // If this is the last slot in the vote update, it must be in SlotHashes,
+            // otherwise we have no way of confirming if the hash matches
+            return VoteError.vote_too_old;
+        }
+
+        if (proposed_root.*) |root| {
+            // If the new proposed root `R` is less than the earliest slot hash in the history
+            // such that we cannot verify whether the slot was actually was on this fork, set
+            // the root to the latest vote in the vote state that's less than R. If no
+            // votes from the vote state are less than R, use its root instead.
+            //
+            // This handles cases where a proposed root is too old to be verified
+            // against the SlotHash history. It ensures that the root remains
+            // consistent with the validator's voting history while avoiding
+            // issues like finalizing an incorrect fork.
+            if (root < earliest_slot_hash_in_history) {
+                // First overwrite the proposed root with the vote state's root
+                proposed_root.* = self.root_slot;
+                // Then try to find the latest vote in vote state that's less than R
+                var iter = std.mem.reverseIterator(self.votes.items);
+                while (iter.next()) |vote| {
+                    if (vote.lockout.slot <= root) {
+                        proposed_root.* = vote.lockout.slot;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Index into the new proposed vote state's slots, starting with the root if it exists then
+        // we use this mutable root to fold checking the root slot into the below loop
+        // for performance
+        var root_to_check = proposed_root.*;
+        var proposed_lockouts_index: usize = 0;
+        // index into the slot_hashes, starting at the oldest known
+        // slot hash
+        var slot_hashes_index = slot_hashes.entries.len;
+        var proposed_lockouts_indices_to_filter = std.BoundedArray(
+            usize,
+            MAX_LOCKOUT_HISTORY,
+        ).init(
+            0,
+        ) catch return InstructionError.ArithmeticOverflow;
+        // Note:
+        //
+        // 1) `proposed_lockouts` is sorted from oldest/smallest vote to newest/largest
+        // vote, due to the way votes are applied to the vote state (newest votes
+        // pushed to the back).
+        //
+        // 2) Conversely, `slot_hashes` is sorted from newest/largest vote to
+        // the oldest/smallest vote
+        //
+        // We check every proposed lockout because have to ensure that every slot is actually part of
+        // the history, not just the most recent ones
+        while (proposed_lockouts_index < proposed_lockouts.*.items.len and
+            slot_hashes_index > 0)
+        {
+            const proposed_vote_slot: Slot = blk: {
+                if (root_to_check) |root| {
+                    break :blk root;
+                } else {
+                    break :blk proposed_lockouts.*.items[proposed_lockouts_index].slot;
+                }
+            };
+
+            if (root_to_check == null and
+                proposed_lockouts_index > 0 and
+                proposed_vote_slot <= proposed_lockouts.*.items[
+                std.math.sub(usize, proposed_lockouts_index, 1) catch
+                    return error.ArithmeticOverflow
+            ].slot) {
+                return VoteError.slots_not_ordered;
+            }
+            const ancestor_slot = slot_hashes.entries[
+                std.math.sub(usize, slot_hashes_index, 1) catch
+                    return error.ArithmeticOverflow
+            ][0];
+
+            // Find if this slot in the proposed vote state exists in the SlotHashes history
+            // to confirm if it was a valid ancestor on this fork
+            const order = std.math.order(proposed_vote_slot, ancestor_slot);
+            switch (order) {
+                .lt => {
+                    if (slot_hashes_index == slot_hashes.entries.len) {
+                        // The vote slot does not exist in the SlotHashes history because it's too old,
+                        // i.e. older than the oldest slot in the history.
+                        if (proposed_vote_slot >= earliest_slot_hash_in_history) {
+                            return VoteError.assertion_failed;
+                        }
+                        if (!self.containsSlot(proposed_vote_slot) and (root_to_check == null)) {
+                            // If the vote slot is both:
+                            // 1) Too old
+                            // 2) Doesn't already exist in vote state
+                            //
+                            // Then filter it out
+                            proposed_lockouts_indices_to_filter.append(
+                                @as(usize, proposed_lockouts_index),
+                            ) catch return InstructionError.ArithmeticOverflow;
+                        }
+                        if (root_to_check) |new_proposed_root| {
+                            // 1. Because `root_to_check.is_some()`, then we know that
+                            // we haven't checked the root yet in this loop, so
+                            // `proposed_vote_slot` == `new_proposed_root` == `proposed_root`.
+                            std.debug.assert(new_proposed_root == proposed_vote_slot);
+                            // 2. We know from the assert earlier in the function that
+                            // `proposed_vote_slot < earliest_slot_hash_in_history`,
+                            // so from 1. we know that `new_proposed_root < earliest_slot_hash_in_history`.
+                            if (new_proposed_root >= earliest_slot_hash_in_history) {
+                                return VoteError.assertion_failed;
+                            }
+                            root_to_check = null;
+                        } else {
+                            proposed_lockouts_index = std.math.add(
+                                usize,
+                                proposed_lockouts_index,
+                                1,
+                            ) catch return InstructionError.ArithmeticOverflow;
+                        }
+                        continue;
+                    } else {
+                        // If the vote slot is new enough to be in the slot history,
+                        // but is not part of the slot history, then it must belong to another fork,
+                        // which means this proposed vote state is invalid.
+                        if (root_to_check != null) {
+                            return VoteError.root_on_different_fork;
+                        } else {
+                            return VoteError.slots_mismatch;
+                        }
+                    }
+                },
+                .gt => {
+                    // Decrement `slot_hashes_index` to find newer slots in the SlotHashes history
+                    slot_hashes_index = std.math.sub(usize, slot_hashes_index, 1) catch
+                        return InstructionError.ArithmeticOverflow;
+                    continue;
+                },
+                .eq => {
+                    // Once the slot in `proposed_lockouts` is found, bump to the next slot
+                    // in `proposed_lockouts` and continue. If we were checking the root,
+                    // start checking the vote state instead.
+                    if (root_to_check != null) {
+                        root_to_check = null;
+                    } else {
+                        proposed_lockouts_index = std.math.add(
+                            usize,
+                            proposed_lockouts_index,
+                            1,
+                        ) catch return InstructionError.ArithmeticOverflow;
+                        slot_hashes_index = std.math.sub(usize, slot_hashes_index, 1) catch
+                            return InstructionError.ArithmeticOverflow;
+                    }
+                },
+            }
+        }
+
+        if (proposed_lockouts_index != proposed_lockouts.*.items.len) {
+            // The last vote slot in the proposed vote state did not exist in SlotHashes
+            return VoteError.slots_mismatch;
+        }
+
+        // This assertion must be true at this point because we can assume by now:
+        // 1) proposed_lockouts_index == proposed_lockouts.len()
+        // 2) last_proposed_slot >= earliest_slot_hash_in_history
+        // 3) !proposed_lockouts.is_empty()
+        //
+        // 1) implies that during the last iteration of the loop above,
+        // `proposed_lockouts_index` was equal to `proposed_lockouts.len() - 1`,
+        // and was then incremented to `proposed_lockouts.len()`.
+        // This means in that last loop iteration,
+        // `proposed_vote_slot ==
+        //  proposed_lockouts[proposed_lockouts.len() - 1] ==
+        //  last_proposed_slot`.
+        //
+        // Then we know the last comparison `match proposed_vote_slot.cmp(&ancestor_slot)`
+        // is equivalent to `match last_proposed_slot.cmp(&ancestor_slot)`. The result
+        // of this match to increment `proposed_lockouts_index` must have been either:
+        //
+        // 1) The Equal case ran, in which case then we know this assertion must be true
+        // 2) The Less case ran, and more specifically the case
+        // `proposed_vote_slot < earliest_slot_hash_in_history` ran, which is equivalent to
+        // `last_proposed_slot < earliest_slot_hash_in_history`, but this is impossible
+        // due to assumption 3) above.
+        std.debug.assert(last_proposed_slot == slot_hashes.entries[slot_hashes_index][0]);
+
+        if (!slot_hashes.entries[slot_hashes_index][1].eql(proposed_hash)) {
+            return VoteError.slot_hash_mismatch;
+        }
+
+        // Filter out the irrelevant votes
+        proposed_lockouts_index = 0;
+        var filter_votes_index: usize = 0;
+
+        var i: usize = 0;
+        while (i < proposed_lockouts.*.items.len) {
+            const should_retain = blk: {
+                if (filter_votes_index == proposed_lockouts_indices_to_filter.len) {
+                    break :blk true;
+                } else if (proposed_lockouts_index ==
+                    proposed_lockouts_indices_to_filter.get(filter_votes_index))
+                {
+                    filter_votes_index = std.math.add(usize, filter_votes_index, 1) catch
+                        return InstructionError.ArithmeticOverflow;
+                    break :blk false;
+                } else {
+                    break :blk true;
+                }
+            };
+
+            proposed_lockouts_index = std.math.add(usize, proposed_lockouts_index, 1) catch
+                return InstructionError.ArithmeticOverflow;
+
+            if (!should_retain) {
+                _ = proposed_lockouts.*.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        return null;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L426
+    ///
+    /// Ensure `check_and_filter_proposed_vote_state(&)` runs on the slots in `new_state`
+    /// before `process_new_vote_state()` is called
+    /// This function should guarantee the following about `new_state`:
+    ///
+    /// 1) It's well ordered, i.e. the slots are sorted from smallest to largest,
+    /// and the confirmations sorted from largest to smallest.
+    /// 2) Confirmations `c` on any vote slot satisfy `0 < c <= MAX_LOCKOUT_HISTORY`
+    /// 3) Lockouts are not expired by consecutive votes, i.e. for every consecutive
+    /// `v_i`, `v_{i + 1}` satisfy `v_i.last_locked_out_slot() >= v_{i + 1}`.
+    /// We also guarantee that compared to the current vote state, `new_state`
+    /// introduces no rollback. This means:
+    ///
+    /// 1) The last slot in `new_state` is always greater than any slot in the
+    /// current vote state.
+    ///
+    /// 2) From 1), this means that for every vote `s` in the current state:
+    ///    a) If there exists an `s'` in `new_state` where `s.slot == s'.slot`, then
+    ///    we must guarantee `s.confirmations <= s'.confirmations`
+    ///
+    ///    b) If there does not exist any such `s'` in `new_state`, then there exists
+    ///    some `t` that is the smallest vote in `new_state` where `t.slot > s.slot`.
+    ///    `t` must have expired/popped off s', so it must be guaranteed that
+    ///    `s.last_locked_out_slot() < t`.
+    /// Note these two above checks do not guarantee that the vote state being submitted
+    /// is a vote state that could have been created by iteratively building a tower
+    /// by processing one vote at a time. For instance, the tower:
+    ///
+    /// { slot 0, confirmations: 31 }
+    /// { slot 1, confirmations: 30 }
+    ///
+    /// is a legal tower that could be submitted on top of a previously empty tower. However,
+    /// there is no way to create this tower from the iterative process, because slot 1 would
+    /// have to have at least one other slot on top of it, even if the first 30 votes were all
+    /// popped off.
+    pub fn processNewVoteState(
+        self: *VoteState,
+        new_state: *std.ArrayList(LandedVote),
+        new_root: ?Slot,
+        timestamp: ?i64,
+        epoch: Epoch,
+        current_slot: Slot,
+    ) (error{OutOfMemory} || InstructionError)!?VoteError {
+        std.debug.assert(new_state.items.len != 0);
+
+        if (new_state.items.len > MAX_LOCKOUT_HISTORY) {
+            return VoteError.too_many_votes;
+        }
+
+        // New root cannot be older than current root (proposed_new_root < current_root -> reject)
+        if (new_root) |proposed_new_root| {
+            if (self.root_slot) |current_root| {
+                if (proposed_new_root < current_root) {
+                    return VoteError.root_roll_back;
+                }
+            }
+        } else {
+            // Cannot remove an existing root -> reject
+            if (self.root_slot != null) {
+                return VoteError.root_roll_back;
+            }
+        }
+
+        var maybe_previous_vote: ?*const LandedVote = null;
+
+        // Check that all the votes in the new proposed state are:
+        // 1) Strictly sorted from oldest to newest vote
+        // 2) The confirmations are strictly decreasing
+        // 3) Not zero confirmation votes
+        for (new_state.items) |*vote| {
+            if (vote.lockout.confirmation_count == 0) {
+                return VoteError.zero_confirmations;
+            } else if (vote.lockout.confirmation_count > MAX_LOCKOUT_HISTORY) {
+                return VoteError.confirmation_too_large;
+            } else if (new_root) |proposed_new_root| {
+                if (vote.lockout.slot <= proposed_new_root and
+                    // This check is necessary because
+                    // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L120
+                    // always sets a root for even empty towers, which is then hard unwrapped here
+                    // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L776
+                    new_root != 0)
+                {
+                    return VoteError.slot_smaller_than_root;
+                }
+            }
+
+            if (maybe_previous_vote) |previous_vote| {
+                if (previous_vote.lockout.slot >= vote.lockout.slot) {
+                    return VoteError.slots_not_ordered;
+                } else if (previous_vote.lockout.confirmation_count <=
+                    vote.lockout.confirmation_count)
+                {
+                    return VoteError.confirmations_not_ordered;
+                } else if (vote.lockout.slot > previous_vote.lockout.lastLockedOutSlot()) {
+                    return VoteError.new_vote_state_lockout_mismatch;
+                }
+            }
+            maybe_previous_vote = vote;
+        }
+
+        // Find the first vote in the current vote state for a slot greater
+        // than the new proposed root
+        var current_vote_state_index: usize = 0;
+        var new_vote_state_index: usize = 0;
+
+        // Accumulate credits earned by newly rooted slots
+        var earned_credits: u64 = 0;
+
+        if (new_root) |proposed_new_root| {
+            for (self.votes.items) |current_vote| {
+                // Sum credits for all votes in current state that are now rooted. (ie <= proposed_new_root).
+                if (current_vote.lockout.slot <= proposed_new_root) {
+                    earned_credits = std.math.add(u64, earned_credits, self.creditsForVoteAtIndex(
+                        current_vote_state_index,
+                    )) catch return InstructionError.ArithmeticOverflow;
+                    current_vote_state_index = std.math.add(
+                        usize,
+                        current_vote_state_index,
+                        1,
+                    ) catch return InstructionError.ArithmeticOverflow;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        // For any slots newly added to the new vote state, the vote latency of that slot is not provided by the
+        // vote instruction contents, but instead is computed from the actual latency of the vote
+        // instruction. This prevents other validators from manipulating their own vote latencies within their vote states
+        // and forcing the rest of the cluster to accept these possibly fraudulent latency values.  If the
+        // timly_vote_credits feature is not enabled then vote latency is set to 0 for new votes.
+        //
+        // For any slot that is in both the new state and the current state, the vote latency of the new state is taken
+        // from the current state.
+        //
+        // Thus vote latencies are set here for any newly vote-on slots when a vote instruction is received.
+        // They are copied into the new vote state after every vote for already voted-on slots.
+        // And when voted-on slots are rooted, the vote latencies stored in the vote state of all the rooted slots is used
+        // to compute credits earned.
+        // All validators compute the same vote latencies because all process the same vote instruction at the
+        // same slot, and the only time vote latencies are ever computed is at the time that their slot is first voted on;
+        // after that, the latencies are retained unaltered until the slot is rooted.
+
+        // All the votes in our current vote state that are missing from the new vote state
+        // must have been expired by later votes. Check that the lockouts match this assumption.
+        while (current_vote_state_index < self.votes.items.len and
+            new_vote_state_index < new_state.items.len)
+        {
+            const current_vote = &self.votes.items[current_vote_state_index];
+            const new_vote = &new_state.items[new_vote_state_index];
+
+            // If the current slot is less than the new proposed slot, then the
+            // new slot must have popped off the old slot, so check that the
+            // lockouts are correct
+            switch (std.math.order(current_vote.lockout.slot, new_vote.lockout.slot)) {
+                .lt => {
+                    if ((current_vote.lockout.lastLockedOutSlot()) >= new_vote.lockout.slot) {
+                        return VoteError.lockout_conflict;
+                    }
+                    current_vote_state_index = std.math.add(
+                        usize,
+                        current_vote_state_index,
+                        1,
+                    ) catch return InstructionError.ArithmeticOverflow;
+                },
+                .eq => {
+                    // The new vote state should never have less lockout than
+                    // the previous vote state for the same slot
+                    if (new_vote.lockout.confirmation_count <
+                        current_vote.lockout.confirmation_count)
+                    {
+                        return VoteError.confirmation_roll_back;
+                    }
+
+                    // Copy the vote slot latency in from the current state to the new state
+                    new_vote.latency = self.votes.items[current_vote_state_index].latency;
+
+                    current_vote_state_index = std.math.add(
+                        usize,
+                        current_vote_state_index,
+                        1,
+                    ) catch
+                        return InstructionError.ArithmeticOverflow;
+                    new_vote_state_index = std.math.add(usize, new_vote_state_index, 1) catch
+                        return InstructionError.ArithmeticOverflow;
+                },
+                .gt => {
+                    new_vote_state_index = std.math.add(usize, new_vote_state_index, 1) catch
+                        return InstructionError.ArithmeticOverflow;
+                },
+            }
+        }
+
+        // `new_vote_state` passed all the checks, finalize the change by rewriting
+        // our state.
+
+        // Now set the vote latencies on new slots not in the current state.  New slots not in the current vote state will
+        // have had their latency initialized to 0 by the above loop.  Those will now be updated to their actual latency.
+        for (new_state.items) |*new_vote| {
+            if (new_vote.latency == 0) {
+                new_vote.latency = VoteState.computeVoteLatency(
+                    new_vote.lockout.slot,
+                    current_slot,
+                );
+            }
+        }
+
+        if (self.root_slot != new_root) {
+            // Award vote credits based on the number of slots that were voted on and have reached finality
+            // For each finalized slot, there was one voted-on slot in the new vote state that was responsible for
+            // finalizing it. Each of those votes is awarded 1 credit.
+            try self.incrementCredits(epoch, earned_credits);
+        }
+        if (timestamp) |tstamp| {
+            const last_slot = new_state.getLast().lockout.slot;
+            if (self.processTimestamp(last_slot, tstamp)) |err| {
+                return err;
+            }
+        }
+
+        self.root_slot = new_root;
+        self.votes.clearRetainingCapacity();
+        try self.votes.appendSlice(new_state.items);
+        // Everything is fine.
+        return null;
     }
 };
 
@@ -1019,7 +1634,7 @@ test "Lockout.lockout" {
     }
 }
 
-test "Lockout.lastLockedOutSlot" {
+test "state.Lockout.lastLockedOutSlot" {
     // | vote | vote slot | lockout | lock expiration slot |
     // |------|-----------|---------|----------------------|
     // | 4    | 4         | 2       | 6                    |
@@ -1056,7 +1671,7 @@ test "Lockout.lastLockedOutSlot" {
     }
 }
 
-test "Lockout.isLockedOutAtSlot" {
+test "state.Lockout.isLockedOutAtSlot" {
     // | vote | vote slot | lockout | lock expiration slot |
     // |------|-----------|---------|----------------------|
     // | 4    | 4         | 2       | 6                    |
@@ -1068,44 +1683,44 @@ test "Lockout.isLockedOutAtSlot" {
             .slot = 1,
             .confirmation_count = 4,
         };
-        try std.testing.expect(try lockout.isLockedOutAtSlot(16));
-        try std.testing.expect(try lockout.isLockedOutAtSlot(17));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(18));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(19));
+        try std.testing.expect(lockout.isLockedOutAtSlot(16));
+        try std.testing.expect(lockout.isLockedOutAtSlot(17));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(18));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(19));
     }
     {
         const lockout = Lockout{
             .slot = 2,
             .confirmation_count = 3,
         };
-        try std.testing.expect(try lockout.isLockedOutAtSlot(9));
-        try std.testing.expect(try lockout.isLockedOutAtSlot(10));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(11));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(12));
+        try std.testing.expect(lockout.isLockedOutAtSlot(9));
+        try std.testing.expect(lockout.isLockedOutAtSlot(10));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(11));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(12));
     }
     {
         const lockout = Lockout{
             .slot = 3,
             .confirmation_count = 2,
         };
-        try std.testing.expect(try lockout.isLockedOutAtSlot(6));
-        try std.testing.expect(try lockout.isLockedOutAtSlot(7));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(8));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(9));
+        try std.testing.expect(lockout.isLockedOutAtSlot(6));
+        try std.testing.expect(lockout.isLockedOutAtSlot(7));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(8));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(9));
     }
     {
         const lockout = Lockout{
             .slot = 4,
             .confirmation_count = 1,
         };
-        try std.testing.expect(try lockout.isLockedOutAtSlot(5));
-        try std.testing.expect(try lockout.isLockedOutAtSlot(6));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(7));
-        try std.testing.expect(!try lockout.isLockedOutAtSlot(8));
+        try std.testing.expect(lockout.isLockedOutAtSlot(5));
+        try std.testing.expect(lockout.isLockedOutAtSlot(6));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(7));
+        try std.testing.expect(!lockout.isLockedOutAtSlot(8));
     }
 }
 
-test "VoteState.convertToCurrent" {
+test "state.VoteState.convertToCurrent" {
     const allocator = std.testing.allocator;
     // VoteState0_23_5 -> Current
     {
@@ -1221,7 +1836,7 @@ test "VoteState.convertToCurrent" {
     }
 }
 
-test "VoteState.setNewAuthorizedVoter: success" {
+test "state.VoteState.setNewAuthorizedVoter: success" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const node_publey = Pubkey.initRandom(prng.random());
@@ -1255,7 +1870,7 @@ test "VoteState.setNewAuthorizedVoter: success" {
     try std.testing.expectEqual(new_voter, retrived_voter);
 }
 
-test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
+test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const node_publey = Pubkey.initRandom(prng.random());
@@ -1291,7 +1906,7 @@ test "VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
     );
 }
 
-test "VoteState.setNewAuthorizedVoter: invalid account data" {
+test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
     // Test attempt to set a voter with an invalid target epoch
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -1452,7 +2067,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
     try std.testing.expect(uninitialized_state.isUninitialized());
 }
 
-test "AuthorizedVoters.init" {
+test "state.AuthorizedVoters.init" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const voter_pubkey = Pubkey.initRandom(prng.random());
@@ -1461,7 +2076,7 @@ test "AuthorizedVoters.init" {
     try std.testing.expectEqual(authorized_voters.count(), 1);
 }
 
-test "AuthorizedVoters.getAuthorizedVoter" {
+test "state.AuthorizedVoters.getAuthorizedVoter" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1476,7 +2091,7 @@ test "AuthorizedVoters.getAuthorizedVoter" {
     try std.testing.expectEqual(new_pubkey, authorized_voters.getAuthorizedVoter(epoch).?);
 }
 
-test "AuthorizedVoters.purgeAuthorizedVoters" {
+test "state.AuthorizedVoters.purgeAuthorizedVoters" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1493,7 +2108,7 @@ test "AuthorizedVoters.purgeAuthorizedVoters" {
     try std.testing.expectEqual(authorized_voters.count(), 1);
 }
 
-test "AuthorizedVoters.first" {
+test "state.AuthorizedVoters.first" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1509,7 +2124,7 @@ test "AuthorizedVoters.first" {
     try std.testing.expectEqual(voter_pubkey, pubkey);
 }
 
-test "AuthorizedVoters.last" {
+test "state.AuthorizedVoters.last" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1529,7 +2144,7 @@ test "AuthorizedVoters.last" {
     try std.testing.expectEqual(voter_pubkey, pubkey);
 }
 
-test "AuthorizedVoters.isEmpty" {
+test "state.AuthorizedVoters.isEmpty" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1542,7 +2157,7 @@ test "AuthorizedVoters.isEmpty" {
     try std.testing.expect(!authorized_voters.isEmpty());
 }
 
-test "AuthorizedVoters.len" {
+test "state.AuthorizedVoters.len" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1558,7 +2173,7 @@ test "AuthorizedVoters.len" {
     try std.testing.expectEqual(authorized_voters.count(), 3);
 }
 
-test "AuthorizedVoters.contains" {
+test "state.AuthorizedVoters.contains" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1700,7 +2315,7 @@ test "state.VoteState.lastLockout extended" {
     // the root_slot should change to the
     // second vote
     const top_vote = vote_state.votes.items[0].lockout.slot;
-    const slot = try vote_state.lastLockout().?.lastLockedOutSlot();
+    const slot = vote_state.lastLockout().?.lastLockedOutSlot();
 
     try processSlotVoteUnchecked(&vote_state, slot);
     try std.testing.expectEqual(top_vote, vote_state.root_slot);
@@ -1771,7 +2386,7 @@ test "state.VoteState.lockout expire multiple votes" {
     // Expire the second and third votes
     const expire_slot =
         vote_state.votes.items[1].lockout.slot +
-        (try vote_state.votes.items[1].lockout.lockout()) +
+        (vote_state.votes.items[1].lockout.lockout()) +
         1;
     try processSlotVoteUnchecked(&vote_state, expire_slot);
     try std.testing.expectEqual(2, vote_state.votes.items.len);
@@ -1823,7 +2438,7 @@ test "state.VoteState.getCredits" {
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1577
-test "state.VoteState duplicate votes" {
+test "state.VoteState duplicate vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1881,8 +2496,105 @@ test "state.VoteState nth recent lockout" {
     );
 }
 
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1632
+test "state.VoteState.processVote process missed votes" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    const account_a = Pubkey.initRandom(prng.random());
+    var vote_state_a = try createTestVoteState(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        account_a,
+        account_a,
+        0,
+    );
+    defer vote_state_a.deinit();
+
+    const account_b = Pubkey.initRandom(prng.random());
+    var vote_state_b = try createTestVoteState(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        account_b,
+        account_b,
+        0,
+    );
+    defer vote_state_b.deinit();
+
+    // process some votes on account a
+    for (0..5) |i| {
+        try processSlotVoteUnchecked(&vote_state_a, i);
+    }
+
+    {
+        const recent_a = try recentVotes(allocator, &vote_state_a);
+        defer allocator.free(recent_a);
+        const recent_b = try recentVotes(allocator, &vote_state_b);
+        defer allocator.free(recent_b);
+
+        try std.testing.expect(!std.meta.eql(
+            recent_a,
+            recent_b,
+        ));
+    }
+
+    // as long as b has missed less than "NUM_RECENT" votes both accounts should be in sync
+    var slots: [MAX_RECENT_VOTES]Slot = undefined;
+    for (&slots, 0..) |_, i| {
+        slots[i] = i;
+    }
+
+    const vote = Vote{ .slots = &slots, .hash = Hash.ZEROES, .timestamp = null };
+
+    var entries = try std.ArrayList(SlotHash).initCapacity(
+        allocator,
+        slots.len,
+    );
+    defer entries.deinit();
+    var iter = std.mem.reverseIterator(vote.slots);
+    while (iter.next()) |vote_slot| {
+        try entries.append(.{
+            vote_slot,
+            vote.hash,
+        });
+    }
+    const slot_hashes = SlotHashes{
+        .entries = entries.items,
+    };
+
+    {
+        const maybe_error = vote_state_a.processVote(
+            allocator,
+            &vote,
+            slot_hashes,
+            0,
+            0,
+        );
+        try std.testing.expectEqual(null, maybe_error);
+    }
+
+    {
+        const maybe_error = vote_state_b.processVote(
+            allocator,
+            &vote,
+            slot_hashes,
+            0,
+            0,
+        );
+        try std.testing.expectEqual(null, maybe_error);
+    }
+
+    {
+        const recent_a = try recentVotes(allocator, &vote_state_a);
+        defer allocator.free(recent_a);
+        const recent_b = try recentVotes(allocator, &vote_state_b);
+        defer allocator.free(recent_b);
+        try std.testing.expectEqualSlices(Vote, recent_a, recent_b);
+    }
+}
+
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1659
-test "state.VoteState.processVote skips old votes" {
+test "state.VoteState.processVote skips old vote" {
     const allocator = std.testing.allocator;
 
     var vote_state = VoteState.default(allocator);
@@ -1943,8 +2655,8 @@ test "state.VoteState filter old votes" {
     // filter out those older slots
     const vote_slot = 2;
     const vote_slot_hash = for (slot_hashes.entries) |entry| {
-        if (entry.@"0" == vote_slot) {
-            break entry.@"1";
+        if (entry[0] == vote_slot) {
+            break entry[1];
         }
     } else unreachable;
 
@@ -2243,6 +2955,1679 @@ test "state.VoteState.computeVoteLatency" {
     );
 }
 
+test "state.VoteState.contains_slot" {
+    const allocator = std.testing.allocator;
+
+    var vote_state = VoteState.default(allocator);
+    defer vote_state.deinit();
+
+    try vote_state.votes.append(
+        LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 1, .confirmation_count = 1 } },
+    );
+    try vote_state.votes.append(
+        LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 2, .confirmation_count = 2 } },
+    );
+
+    try std.testing.expect(vote_state.containsSlot(1));
+    try std.testing.expect(vote_state.containsSlot(2));
+    try std.testing.expect(!vote_state.containsSlot(3));
+    try std.testing.expect(!vote_state.containsSlot(0));
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2223
+test "state.VoteState process new vote too many votes" {
+    const allocator = std.testing.allocator;
+
+    var vote_state = VoteState.default(allocator);
+    defer vote_state.deinit();
+
+    var bad_votes = std.ArrayList(Lockout).init(allocator);
+    defer bad_votes.deinit();
+
+    var slot: usize = 0;
+    while (slot <= MAX_LOCKOUT_HISTORY) : (slot += 1) {
+        try bad_votes.append(Lockout{
+            .slot = slot,
+            .confirmation_count = @intCast((MAX_LOCKOUT_HISTORY - slot + 1)),
+        });
+    }
+
+    const current_epoch = currentEpoch(&vote_state);
+    const maybe_error = try processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state,
+        bad_votes.items,
+        null,
+        null,
+        current_epoch,
+    );
+    try std.testing.expectEqual(VoteError.too_many_votes, maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2249
+test "state.VoteState process new vote state root rollback" {
+    const allocator = std.testing.allocator;
+
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    for (0..MAX_LOCKOUT_HISTORY + 2) |i| {
+        try processSlotVoteUnchecked(&vote_state1, @as(Slot, i));
+    }
+
+    try std.testing.expectEqual(1, vote_state1.root_slot);
+    // Update vote_state2 with a higher slot so that `process_new_vote_state`
+    // doesn't panic.
+    var vote_state2 = try cloneVoteState(allocator, &vote_state1);
+    defer vote_state2.deinit();
+    try processSlotVoteUnchecked(&vote_state2, @intCast((MAX_LOCKOUT_HISTORY + 3)));
+
+    // Trying to set a lesser root should error
+    const lesser_root: ?Slot = 0;
+
+    const current_epoch = currentEpoch(&vote_state2);
+    const maybe_error = try vote_state1.processNewVoteState(
+        &vote_state2.votes,
+        lesser_root,
+        null,
+        current_epoch,
+        0,
+    );
+
+    try std.testing.expectEqual(VoteError.root_roll_back, maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2295
+test "state.VoteState process new vote state zero confirmations" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 0 },
+        Lockout{ .slot = 1, .confirmation_count = 1 },
+    };
+
+    const maybe_error = try processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.zero_confirmations, maybe_error);
+
+    var anoter_bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 2 },
+        Lockout{ .slot = 1, .confirmation_count = 0 },
+    };
+
+    const another_maybe_error = try processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &anoter_bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.zero_confirmations, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2337
+test "state.VoteState process new vote state confirmations too large" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var good_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = @as(u32, MAX_LOCKOUT_HISTORY) },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &good_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(null, maybe_error);
+
+    var another_vote_state1 = VoteState.default(allocator);
+    var bad_votes = [_]Lockout{
+        Lockout{
+            .slot = 0,
+            .confirmation_count = @as(u32, MAX_LOCKOUT_HISTORY + 1),
+        },
+    };
+
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &another_vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.confirmation_too_large, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2379
+test "state.VoteState process new vote state slot smaller than root" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    const current_epoch = currentEpoch(&vote_state1);
+
+    const root_slot: u64 = 5;
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = root_slot, .confirmation_count = 2 },
+        Lockout{ .slot = root_slot + 1, .confirmation_count = 1 },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        root_slot,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.slot_smaller_than_root, maybe_error);
+
+    var another_bad_votes = [_]Lockout{
+        Lockout{ .slot = root_slot - 1, .confirmation_count = 2 },
+        Lockout{ .slot = root_slot + 1, .confirmation_count = 1 },
+    };
+
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &another_bad_votes,
+        root_slot,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.slot_smaller_than_root, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2422
+test "state.VoteState process new vote state slots not ordered" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = 1, .confirmation_count = 2 },
+        Lockout{ .slot = 0, .confirmation_count = 1 },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.slots_not_ordered, maybe_error);
+
+    var another_bad_votes = [_]Lockout{
+        Lockout{ .slot = 1, .confirmation_count = 2 },
+        Lockout{ .slot = 1, .confirmation_count = 1 },
+    };
+
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &another_bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(VoteError.slots_not_ordered, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2464
+test "state.VoteState process new vote state confirmations not ordered" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 1 },
+        Lockout{ .slot = 1, .confirmation_count = 2 },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(
+        VoteError.confirmations_not_ordered,
+        maybe_error,
+    );
+
+    var another_bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 1 },
+        Lockout{ .slot = 1, .confirmation_count = 1 },
+    };
+
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &another_bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(
+        VoteError.confirmations_not_ordered,
+        another_maybe_error,
+    );
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2506
+test "state.VoteState process new vote state lockout mismatch" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var bad_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 2 },
+        Lockout{ .slot = 7, .confirmation_count = 1 },
+    };
+
+    // Slot 7 should have expired slot 0
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &bad_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(
+        VoteError.new_vote_state_lockout_mismatch,
+        maybe_error,
+    );
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2532
+test "state.VoteState process new vote state confirmation rollback" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+    const current_epoch = currentEpoch(&vote_state1);
+
+    var votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 4 },
+        Lockout{ .slot = 1, .confirmation_count = 3 },
+    };
+
+    const maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(null, maybe_error);
+
+    var another_votes = [_]Lockout{
+        Lockout{ .slot = 0, .confirmation_count = 4 },
+        Lockout{ .slot = 1, .confirmation_count = 2 },
+        Lockout{ .slot = 2, .confirmation_count = 1 },
+    };
+    // Should error because newer vote state should not have lower confirmation the same slot
+    // 1
+    const another_maybe_error = processNewVoteStateFromLockouts(
+        allocator,
+        &vote_state1,
+        &another_votes,
+        null,
+        null,
+        current_epoch,
+    );
+
+    try std.testing.expectEqual(
+        VoteError.confirmation_roll_back,
+        another_maybe_error,
+    );
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2575
+test "state.VoteState process new vote state root progress" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    for (0..MAX_LOCKOUT_HISTORY) |i| {
+        try processSlotVoteUnchecked(&vote_state1, @as(Slot, i));
+    }
+
+    try std.testing.expectEqual(null, vote_state1.root_slot);
+    var vote_state2 = try cloneVoteState(allocator, &vote_state1);
+    defer vote_state2.deinit();
+
+    // 1) Try to update `vote_state1` with no root,
+    // to `vote_state2`, which has a new root, should succeed.
+    //
+    // 2) Then try to update`vote_state1` with an existing root,
+    // to `vote_state2`, which has a newer root, which
+    // should succeed.
+    for (MAX_LOCKOUT_HISTORY + 1..MAX_LOCKOUT_HISTORY + 3) |new_vote| {
+        try processSlotVoteUnchecked(&vote_state2, new_vote);
+        try std.testing.expect(
+            !std.meta.eql(vote_state1.root_slot, vote_state2.root_slot),
+        );
+
+        var cloned_votes = try vote_state2.votes.clone();
+        defer cloned_votes.deinit();
+        const maybe_error = try vote_state1.processNewVoteState(
+            &cloned_votes,
+            vote_state2.root_slot,
+            null,
+            currentEpoch(&vote_state2),
+            0,
+        );
+        try std.testing.expectEqual(null, maybe_error);
+        // TODO have a better way of comparing all of vote_state1 with vote_state2
+        try std.testing.expect(
+            std.meta.eql(vote_state1.root_slot, vote_state2.root_slot),
+        );
+        try std.testing.expectEqualSlices(
+            LandedVote,
+            vote_state1.votes.items,
+            vote_state2.votes.items,
+        );
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2610
+test "state.VoteState process new vote state same slot but not common ancestor" {
+    // It might be possible that during the switch from old vote instructions
+    // to new vote instructions, new_state contains votes for slots LESS
+    // than the current state, for instance:
+    //
+    // Current on-chain state: 1, 5
+    // New state: 1, 2 (lockout: 4), 3, 5, 7
+    //
+    // Imagine the validator made two of these votes:
+    // 1) The first vote {1, 2, 3} didn't land in the old state, but didn't
+    // land on chain
+    // 2) A second vote {1, 2, 5} was then submitted, which landed
+    //
+    //
+    // 2 is not popped off in the local tower because 3 doubled the lockout.
+    // However, 3 did not land in the on-chain state, so the vote {1, 2, 6}
+    // will immediately pop off 2.
+
+    // Construct on-chain vote state
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+    var slots = [_]Slot{ 1, 2, 5 };
+    try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+
+    const expected_slots = [_]u64{ 1, 5 };
+    var actual_slots: [2]u64 = undefined;
+    for (vote_state1.votes.items[0..2], 0..) |vote, i| {
+        actual_slots[i] = vote.lockout.slot;
+    }
+    try std.testing.expect(std.mem.eql(u64, &expected_slots, &actual_slots));
+
+    // Construct local tower state
+    var vote_state2 = VoteState.default(allocator);
+    defer vote_state2.deinit();
+
+    var another_slots = [_]Slot{ 1, 2, 3, 5, 7 };
+    try processSlotVotesUnchecked(&vote_state2, another_slots[0..]);
+
+    const another_expected_slots = [_]u64{ 1, 2, 3, 5, 7 };
+    var another_actual_slots: [5]u64 = undefined;
+    for (vote_state2.votes.items[0..5], 0..) |vote, i| {
+        another_actual_slots[i] = vote.lockout.slot;
+    }
+    try std.testing.expect(std.mem.eql(u64, &another_expected_slots, &another_actual_slots));
+
+    // See that on-chain vote state can update properly
+    var cloned_votes = try vote_state2.votes.clone();
+    defer cloned_votes.deinit();
+    const maybe_error = try vote_state1.processNewVoteState(
+        &cloned_votes,
+        vote_state2.root_slot,
+        null,
+        currentEpoch(&vote_state2),
+        0,
+    );
+    try std.testing.expectEqual(null, maybe_error);
+
+    try std.testing.expectEqualDeep(vote_state1, vote_state2);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2668
+test "state.VoteState process new vote state lockout violation" {
+    // Construct on-chain vote state
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    {
+        var slots = [_]Slot{ 1, 2, 4, 5 };
+        try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+
+        var actual_slots: [4]u64 = undefined;
+        for (vote_state1.votes.items[0..4], 0..) |vote, i| {
+            actual_slots[i] = vote.lockout.slot;
+        }
+        try std.testing.expect(std.mem.eql(u64, &slots, &actual_slots));
+    }
+
+    // Construct conflicting tower state. Vote 4 is missing,
+    // but 5 should not have popped off vote 4.
+    var vote_state2 = VoteState.default(allocator);
+    defer vote_state2.deinit();
+    {
+        var slots = [_]Slot{ 1, 2, 3, 5, 7 };
+        try processSlotVotesUnchecked(&vote_state2, slots[0..]);
+
+        var actual_slots: [5]u64 = undefined;
+        for (vote_state2.votes.items[0..5], 0..) |vote, i| {
+            actual_slots[i] = vote.lockout.slot;
+        }
+        try std.testing.expect(std.mem.eql(u64, &slots, &actual_slots));
+    }
+
+    var cloned_votes = try vote_state2.votes.clone();
+    defer cloned_votes.deinit();
+    const maybe_error = try vote_state1.processNewVoteState(
+        &cloned_votes,
+        vote_state2.root_slot,
+        null,
+        currentEpoch(&vote_state2),
+        0,
+    );
+
+    try std.testing.expectEqual(VoteError.lockout_conflict, maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2710
+test "state.VoteState process new vote state lockout violation2" {
+    // Construct on-chain vote state
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    {
+        var slots = [_]Slot{ 1, 2, 5, 6, 7 };
+        try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+
+        var actual_slots: [4]u64 = undefined;
+        for (vote_state1.votes.items[0..4], 0..) |vote, i| {
+            actual_slots[i] = vote.lockout.slot;
+        }
+        var expected_slots = [_]Slot{ 1, 5, 6, 7 };
+        try std.testing.expect(std.mem.eql(u64, &expected_slots, &actual_slots));
+    }
+
+    // Construct a new vote state. Violates on-chain state because 8
+    // should not have popped off 7
+    var vote_state2 = VoteState.default(allocator);
+    defer vote_state2.deinit();
+    {
+        var slots = [_]Slot{ 1, 2, 3, 5, 6, 8 };
+        try processSlotVotesUnchecked(&vote_state2, slots[0..]);
+
+        var actual_slots: [6]u64 = undefined;
+        for (vote_state2.votes.items[0..6], 0..) |vote, i| {
+            actual_slots[i] = vote.lockout.slot;
+        }
+        try std.testing.expect(std.mem.eql(u64, &slots, &actual_slots));
+    }
+
+    // Both vote states contain `5`, but `5` is not part of the common prefix
+    // of both vote states. However, the violation should still be detected.
+    var cloned_votes = try vote_state2.votes.clone();
+    defer cloned_votes.deinit();
+    const maybe_error = try vote_state1.processNewVoteState(
+        &cloned_votes,
+        vote_state2.root_slot,
+        null,
+        currentEpoch(&vote_state2),
+        0,
+    );
+
+    try std.testing.expectEqual(VoteError.lockout_conflict, maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2753
+test "state.VoteState process new vote state expired ancestor not removed" {
+    // Construct on-chain vote state
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    {
+        var slots = [_]Slot{ 1, 2, 3, 9 };
+        try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+
+        var actual_slots: [2]u64 = undefined;
+        for (vote_state1.votes.items[0..2], 0..) |vote, i| {
+            actual_slots[i] = vote.lockout.slot;
+        }
+        var expected_slots = [_]Slot{ 1, 9 };
+        try std.testing.expect(std.mem.eql(u64, &expected_slots, &actual_slots));
+    }
+
+    // Example: {1: lockout 8, 9: lockout 2}, vote on 10 will not pop off 1
+    // because 9 is not popped off yet
+    var vote_state2 = try cloneVoteState(allocator, &vote_state1);
+    defer vote_state2.deinit();
+
+    try processSlotVoteUnchecked(&vote_state2, 10);
+
+    // Slot 1 has been expired by 10, but is kept alive by its descendant
+    // 9 which has not been expired yet.
+    try std.testing.expectEqual(1, vote_state2.votes.items[0].lockout.slot);
+    try std.testing.expectEqual(9, vote_state2.votes.items[0].lockout.lastLockedOutSlot());
+    {
+        var expected_slots = [_]Slot{ 1, 9, 10 };
+        var actual_slots: [3]u64 = undefined;
+        for (vote_state2.votes.items[0..3], 0..) |vote, i| {
+            actual_slots[i] = vote.lockout.slot;
+        }
+        try std.testing.expect(std.mem.eql(u64, &expected_slots, &actual_slots));
+    }
+
+    // Should be able to update vote_state1
+    var cloned_votes = try vote_state2.votes.clone();
+    defer cloned_votes.deinit();
+    const maybe_error = try vote_state1.processNewVoteState(
+        &cloned_votes,
+        vote_state2.root_slot,
+        null,
+        currentEpoch(&vote_state2),
+        0,
+    );
+    try std.testing.expectEqual(null, maybe_error);
+    // TODO Revisit why std.testing.expectEqualDeep(vote_state1, vote_state2) fails.
+    try std.testing.expectEqualDeep(vote_state1.votes.items, vote_state2.votes.items);
+    try std.testing.expectEqualDeep(vote_state1.root_slot, vote_state2.root_slot);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2799
+test "state.VoteState process new vote current state contains bigger slots" {
+    const allocator = std.testing.allocator;
+    var vote_state1 = VoteState.default(allocator);
+    defer vote_state1.deinit();
+
+    {
+        var slots = [_]Slot{ 6, 7, 8 };
+        try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+
+        var actual_slots: [3]u64 = undefined;
+        for (vote_state1.votes.items[0..3], 0..) |vote, i| {
+            actual_slots[i] = vote.lockout.slot;
+        }
+        try std.testing.expect(std.mem.eql(u64, &slots, &actual_slots));
+    }
+    const root: ?Slot = 1;
+    {
+        // Try to process something with lockout violations
+        var bad_votes = [_]Lockout{
+            Lockout{ .slot = 2, .confirmation_count = 5 },
+            // Slot 14 could not have popped off slot 6 yet
+            Lockout{ .slot = 14, .confirmation_count = 1 },
+        };
+
+        const current_epoch = currentEpoch(&vote_state1);
+
+        const maybe_error = processNewVoteStateFromLockouts(
+            allocator,
+            &vote_state1,
+            &bad_votes,
+            root,
+            null,
+            current_epoch,
+        );
+
+        try std.testing.expectEqual(VoteError.lockout_conflict, maybe_error);
+    }
+
+    {
+        const good_votes_arr = [_]LandedVote{
+            LandedVote{
+                .latency = 0,
+                .lockout = Lockout{ .slot = 2, .confirmation_count = 5 },
+            },
+            LandedVote{
+                .latency = 0,
+                .lockout = Lockout{ .slot = 15, .confirmation_count = 1 },
+            },
+        };
+
+        var good_votes = std.ArrayList(LandedVote).init(allocator);
+        defer good_votes.deinit();
+        try good_votes.appendSlice(&good_votes_arr);
+
+        const another_current_epoch = currentEpoch(&vote_state1);
+
+        const maybe_error = try vote_state1.processNewVoteState(
+            &good_votes,
+            root,
+            null,
+            another_current_epoch,
+            0,
+        );
+
+        try std.testing.expectEqual(null, maybe_error);
+        try std.testing.expectEqualDeep(
+            vote_state1.votes.items,
+            &good_votes_arr,
+        );
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2916
+test "state.VoteState.checkAndFilterProposedVoteState empty" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const empty_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{});
+    var empty_vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{},
+        empty_slot_hashes.items,
+    );
+
+    // Test with empty TowerSync, should return EmptySlots error
+    {
+        var tower_sync = try testTowerSync(
+            allocator,
+            &[_]Lockout{},
+        );
+        defer tower_sync.lockouts.deinit(allocator);
+
+        const maybe_error = try empty_vote_state.checkAndFilterProposedVoteState(
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+            &SlotHashes{ .entries = empty_slot_hashes.items },
+        );
+        try std.testing.expectEqual(VoteError.empty_slots, maybe_error);
+    }
+
+    // Test with non-empty TowerSync, should return SlotsMismatch since nothing exists in SlotHashes
+    {
+        var tower_sync = try testTowerSync(
+            allocator,
+            &[_]Lockout{
+                Lockout{ .slot = 0, .confirmation_count = 1 },
+            },
+        );
+        defer tower_sync.lockouts.deinit(allocator);
+
+        const maybe_error = try empty_vote_state
+            .checkAndFilterProposedVoteState(
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+            &SlotHashes{ .entries = empty_slot_hashes.items },
+        );
+        try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2948
+test "state.VoteState.checkAndFilterProposedVoteState too old" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const latest_vote = 4;
+    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{ 1, 2, 3, latest_vote },
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    {
+        // Test with a vote for a slot less than the latest vote in the vote_state,
+        // should return error `VoteTooOld`
+        var tower_sync = try testTowerSync(
+            allocator,
+            &[_]Lockout{
+                Lockout{ .slot = latest_vote, .confirmation_count = 1 },
+            },
+        );
+        defer tower_sync.lockouts.deinit(allocator);
+
+        const maybe_error = try vote_state
+            .checkAndFilterProposedVoteState(
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+            &SlotHashes{ .entries = slot_hashes.items },
+        );
+        try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
+    }
+
+    // Test with a vote state update where the latest slot `X` in the update is
+    // 1) Less than the earliest slot in slot_hashes history, AND
+    // 2) `X` > latest_vote
+    const earliest_slot_in_history = latest_vote + 2;
+    const another_slot_hashes = try buildSlotHashes(
+        allocator,
+        random,
+        &[_]Slot{earliest_slot_in_history},
+    );
+    defer another_slot_hashes.deinit();
+
+    var another_tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            Lockout{ .slot = earliest_slot_in_history - 1, .confirmation_count = 1 },
+        },
+    );
+    defer another_tower_sync.lockouts.deinit(allocator);
+
+    const maybe_error = try vote_state
+        .checkAndFilterProposedVoteState(
+        &another_tower_sync.lockouts,
+        &another_tower_sync.root,
+        another_tower_sync.hash,
+        &SlotHashes{ .entries = another_slot_hashes.items },
+    );
+
+    try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3063
+test "state.VoteState.checkAndFilterProposedVoteState older than history root" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    // Test when `proposed_root` is in `current_vote_state_slots` but it's not the latest
+    // slot
+    {
+        const earliest_slot_in_history: Slot = 5;
+        const current_vote_state_slots = [_]Slot{ 1, 2, 3, 4 };
+        const current_vote_state_root: ?Slot = null;
+        const proposed_slots_and_lockouts = [_]Lockout{
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+        const proposed_root: Slot = 4;
+        const expected_root: ?Slot = 4;
+        const expected_vote_state = [_]Lockout{
+            Lockout{ .slot = 5, .confirmation_count = 1 },
+        };
+
+        try runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
+            allocator,
+            random,
+            earliest_slot_in_history,
+            &current_vote_state_slots,
+            current_vote_state_root,
+            &proposed_slots_and_lockouts,
+            proposed_root,
+            expected_root,
+            &expected_vote_state,
+        );
+    }
+
+    // Test when `proposed_root` is in `current_vote_state_slots` but it's not the latest
+    // slot and the `current_vote_state_root.is_some()`.
+    {
+        const earliest_slot_in_history: Slot = 5;
+        const current_vote_state_slots = [_]Slot{ 1, 2, 3, 4 };
+        const current_vote_state_root: ?Slot = 0;
+        const proposed_slots_and_lockouts = [_]Lockout{.{ .slot = 5, .confirmation_count = 1 }};
+        const proposed_root: Slot = 4;
+        const expected_root: ?Slot = 4;
+        const expected_vote_state = [_]Lockout{
+            Lockout{ .slot = 5, .confirmation_count = 1 },
+        };
+
+        try runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
+            allocator,
+            random,
+            earliest_slot_in_history,
+            &current_vote_state_slots,
+            current_vote_state_root,
+            &proposed_slots_and_lockouts,
+            proposed_root,
+            expected_root,
+            &expected_vote_state,
+        );
+    }
+
+    // Test when `proposed_root` is in `current_vote_state_slots` but it's not the latest
+    // slot
+    {
+        const earliest_slot_in_history: Slot = 5;
+        const current_vote_state_slots = [_]Slot{ 1, 2, 3, 4 };
+        const current_vote_state_root: ?Slot = 0;
+        const proposed_slots_and_lockouts = [_]Lockout{
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+        const proposed_root: Slot = 3;
+        const expected_root: ?Slot = 3;
+        const expected_vote_state = [_]Lockout{
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+
+        try runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
+            allocator,
+            random,
+            earliest_slot_in_history,
+            &current_vote_state_slots,
+            current_vote_state_root,
+            &proposed_slots_and_lockouts,
+            proposed_root,
+            expected_root,
+            &expected_vote_state,
+        );
+    }
+
+    // Test when `proposed_root` is not in `current_vote_state_slots`
+    {
+        const earliest_slot_in_history: Slot = 5;
+        const current_vote_state_slots = [_]Slot{ 1, 2, 4 };
+        const current_vote_state_root: ?Slot = 0;
+        const proposed_slots_and_lockouts = [_]Lockout{
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+        const proposed_root: Slot = 3;
+        const expected_root: ?Slot = 2;
+        const expected_vote_state = [_]Lockout{
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+
+        try runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
+            allocator,
+            random,
+            earliest_slot_in_history,
+            &current_vote_state_slots,
+            current_vote_state_root,
+            &proposed_slots_and_lockouts,
+            proposed_root,
+            expected_root,
+            &expected_vote_state,
+        );
+    }
+
+    // Test when the `proposed_root` is smaller than all the slots in
+    // `current_vote_state_slots`, no roots should be set.
+    {
+        const earliest_slot_in_history: Slot = 4;
+        const current_vote_state_slots = [_]Slot{ 3, 4 };
+        const current_vote_state_root: ?Slot = null;
+        const proposed_slots_and_lockouts = [_]Lockout{
+            .{ .slot = 3, .confirmation_count = 3 },
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+        const proposed_root: Slot = 2;
+        const expected_root: ?Slot = null;
+        const expected_vote_state = [_]Lockout{
+            .{ .slot = 3, .confirmation_count = 3 },
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+
+        try runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
+            allocator,
+            random,
+            earliest_slot_in_history,
+            &current_vote_state_slots,
+            current_vote_state_root,
+            &proposed_slots_and_lockouts,
+            proposed_root,
+            expected_root,
+            &expected_vote_state,
+        );
+    }
+
+    // Test when `current_vote_state_slots` is empty, no roots should be set
+    {
+        const earliest_slot_in_history: Slot = 4;
+        const current_vote_state_slots = [_]Slot{};
+        const current_vote_state_root: ?Slot = null;
+        const proposed_slots_and_lockouts = [_]Lockout{
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+        const proposed_root: Slot = 2;
+        const expected_root: ?Slot = null;
+        const expected_vote_state = [_]Lockout{
+            .{ .slot = 5, .confirmation_count = 1 },
+        };
+
+        try runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
+            allocator,
+            random,
+            earliest_slot_in_history,
+            &current_vote_state_slots,
+            current_vote_state_root,
+            &proposed_slots_and_lockouts,
+            proposed_root,
+            expected_root,
+            &expected_vote_state,
+        );
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3188
+test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{1},
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    const vote_slot = 3;
+    const vote_slot_hash = blk: {
+        for (slot_hashes.items) |item| {
+            if (item[0] == vote_slot) {
+                break :blk item[1];
+            }
+        }
+        @panic("Missing vote slot hash");
+    };
+
+    // Test with a `TowerSync` where the slots are out of order with empty TowerSync, should return EmptySlots error
+    {
+        var tower_sync = try testTowerSync(
+            allocator,
+            &[_]Lockout{
+                .{ .slot = 2, .confirmation_count = 2 },
+                .{ .slot = 1, .confirmation_count = 3 },
+                .{ .slot = vote_slot, .confirmation_count = 1 },
+            },
+        );
+        defer tower_sync.lockouts.deinit(allocator);
+        tower_sync.hash = vote_slot_hash;
+        const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+            &SlotHashes{ .entries = slot_hashes.items },
+        );
+        try std.testing.expectEqual(VoteError.slots_not_ordered, maybe_error);
+    }
+
+    // Test with a `TowerSync` where there are multiples of the same slot
+    {
+        var tower_sync = try testTowerSync(
+            allocator,
+            &[_]Lockout{
+                .{ .slot = 2, .confirmation_count = 2 },
+                .{ .slot = 2, .confirmation_count = 2 },
+                .{ .slot = vote_slot, .confirmation_count = 1 },
+            },
+        );
+        defer tower_sync.lockouts.deinit(allocator);
+
+        tower_sync.hash = vote_slot_hash;
+
+        const maybe_error = try vote_state
+            .checkAndFilterProposedVoteState(
+            &tower_sync.lockouts,
+            &tower_sync.root,
+            tower_sync.hash,
+            &SlotHashes{ .entries = slot_hashes.items },
+        );
+        try std.testing.expectEqual(VoteError.slots_not_ordered, maybe_error);
+    }
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3228
+test "state.VoteState.checkAndFilterProposedVoteState older than history slots filtered" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
+    defer init_slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{ 1, 2, 3, 4 },
+        init_slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where there:
+    // 1) Exists a slot less than `earliest_slot_in_history`
+    // 2) This slot does not exist in the vote state already
+    // This slot should be filtered out
+    const earliest_slot_in_history = 11;
+    const slot_hashes = try buildSlotHashes(
+        allocator,
+        random,
+        &[_]Slot{ earliest_slot_in_history, 12, 13, 14 },
+    );
+    defer slot_hashes.deinit();
+
+    const vote_slot = 12;
+    const vote_slot_hash = blk: {
+        for (slot_hashes.items) |item| {
+            if (item[0] == vote_slot) {
+                break :blk item[1];
+            }
+        }
+        @panic("Missing vote slot hash");
+    };
+    const missing_older_than_history_slot = earliest_slot_in_history - 1;
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = 1, .confirmation_count = 4 },
+            .{ .slot = missing_older_than_history_slot, .confirmation_count = 2 },
+            .{ .slot = vote_slot, .confirmation_count = 3 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(null, maybe_error);
+
+    // Check the earlier slot was filtered out
+    const expected_lockouts = [_]Lockout{
+        .{ .slot = 1, .confirmation_count = 4 },
+        .{ .slot = vote_slot, .confirmation_count = 3 },
+    };
+    var actual_lockouts: [2]Lockout = undefined;
+    for (tower_sync.lockouts.items[0..2], 0..) |lockout, i| {
+        actual_lockouts[i] = lockout;
+    }
+
+    try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
+
+    const another_maybe_error = try vote_state.processTowerSync(
+        allocator,
+        &SlotHashes{ .entries = slot_hashes.items },
+        0,
+        0,
+        &tower_sync,
+    );
+    try std.testing.expectEqual(null, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3284
+test "state.VoteState.checkAndFilterProposedVoteState older than history slots not filtered" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{4});
+    defer init_slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{4},
+        init_slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where there:
+    // 1) Exists a slot less than `earliest_slot_in_history`
+    // 2) This slot exists in the vote state already
+    // This slot should *NOT* be filtered out
+    const earliest_slot_in_history = 11;
+    const slot_hashes = try buildSlotHashes(
+        allocator,
+        random,
+        &[_]Slot{ earliest_slot_in_history, 12, 13, 14 },
+    );
+    defer slot_hashes.deinit();
+
+    const vote_slot = 12;
+    const vote_slot_hash = blk: {
+        for (slot_hashes.items) |item| {
+            if (item[0] == vote_slot) {
+                break :blk item[1];
+            }
+        }
+        @panic("Missing vote slot hash");
+    };
+    const existing_older_than_history_slot = 4;
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = existing_older_than_history_slot, .confirmation_count = 3 },
+            .{ .slot = vote_slot, .confirmation_count = 2 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(null, maybe_error);
+
+    // Check the earlier slot was *NOT* filtered out
+    try std.testing.expectEqual(tower_sync.lockouts.items.len, 2);
+
+    const expected_lockouts = [_]Lockout{
+        .{ .slot = existing_older_than_history_slot, .confirmation_count = 3 },
+        .{ .slot = vote_slot, .confirmation_count = 2 },
+    };
+    var actual_lockouts: [2]Lockout = undefined;
+    for (tower_sync.lockouts.items[0..2], 0..) |lockout, i| {
+        actual_lockouts[i] = lockout;
+    }
+
+    try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
+
+    const another_maybe_error = try vote_state.processTowerSync(
+        allocator,
+        &SlotHashes{ .entries = slot_hashes.items },
+        0,
+        0,
+        &tower_sync,
+    );
+    try std.testing.expectEqual(null, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3337
+test "state.VoteState.checkAndFilterProposedVoteState older history slots filtered/not filtered" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{6});
+    defer init_slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{6},
+        init_slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where there exists both a slot:
+    // 1) Less than `earliest_slot_in_history`
+    // 2) This slot exists in the vote state already
+    // which should not be filtered
+    //
+    // AND a slot that
+    //
+    // 1) Less than `earliest_slot_in_history`
+    // 2) This slot does not exist in the vote state already
+    // which should be filtered
+    const earliest_slot_in_history = 11;
+    const slot_hashes = try buildSlotHashes(
+        allocator,
+        random,
+        &[_]Slot{ earliest_slot_in_history, 12, 13, 14 },
+    );
+    defer slot_hashes.deinit();
+
+    const vote_slot = 14;
+    const vote_slot_hash = blk: {
+        for (slot_hashes.items) |item| {
+            if (item[0] == vote_slot) {
+                break :blk item[1];
+            }
+        }
+        @panic("Missing vote slot hash");
+    };
+    const missing_older_than_history_slot = 4;
+    const existing_older_than_history_slot = 6;
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = missing_older_than_history_slot, .confirmation_count = 4 },
+            .{ .slot = existing_older_than_history_slot, .confirmation_count = 3 },
+            .{ .slot = 12, .confirmation_count = 2 },
+            .{ .slot = vote_slot, .confirmation_count = 1 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(null, maybe_error);
+
+    try std.testing.expectEqual(tower_sync.lockouts.items.len, 3);
+
+    const expected_lockouts = [_]Lockout{
+        .{ .slot = existing_older_than_history_slot, .confirmation_count = 3 },
+        .{ .slot = 12, .confirmation_count = 2 },
+        .{ .slot = vote_slot, .confirmation_count = 1 },
+    };
+    var actual_lockouts: [3]Lockout = undefined;
+    for (tower_sync.lockouts.items[0..3], 0..) |lockout, i| {
+        actual_lockouts[i] = lockout;
+    }
+    try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
+
+    const another_maybe_error = try vote_state.processTowerSync(
+        allocator,
+        &SlotHashes{ .entries = slot_hashes.items },
+        0,
+        0,
+        &tower_sync,
+    );
+    try std.testing.expectEqual(null, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3404
+test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{ 2, 4, 6 },
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where there:
+    // 1) Exists a slot not in the slot hashes history
+    // 2) The slot is greater than the earliest slot in the history
+    // Thus this slot is not part of the fork and the update should be rejected
+    // with error `SlotsMismatch`
+    const missing_vote_slot = 3;
+
+    // Have to vote for a slot greater than the last vote in the vote state to avoid VoteTooOld
+    // errors
+    const vote_slot = vote_state.votes.getLast().lockout.slot + 2;
+    const vote_slot_hash = blk: {
+        for (slot_hashes.items) |item| {
+            if (item[0] == vote_slot) {
+                break :blk item[1];
+            }
+        }
+        @panic("Missing vote slot hash");
+    };
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = missing_vote_slot, .confirmation_count = 2 },
+            .{ .slot = vote_slot, .confirmation_count = 3 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
+
+    // Test where some earlier vote slots exist in the history, but others don't
+
+    const another_missing_vote_slot = 7;
+    var another_tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = 2, .confirmation_count = 5 },
+            .{ .slot = 4, .confirmation_count = 4 },
+            .{ .slot = 6, .confirmation_count = 3 },
+            .{ .slot = another_missing_vote_slot, .confirmation_count = 2 },
+            .{ .slot = vote_slot, .confirmation_count = 1 },
+        },
+    );
+    defer another_tower_sync.lockouts.deinit(allocator);
+    another_tower_sync.hash = vote_slot_hash;
+
+    const another_maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &another_tower_sync.lockouts,
+        &another_tower_sync.root,
+        another_tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(VoteError.slots_mismatch, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3459
+test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{ 2, 4, 6 },
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where:
+    // 1) The root is not present in slot hashes history
+    // 2) The slot is greater than the earliest slot in the history
+    // Thus this slot is not part of the fork and the update should be rejected
+    // with error `RootOnDifferentFork`
+    const new_root: ?Slot = 3;
+
+    // Have to vote for a slot greater than the last vote in the vote state to avoid VoteTooOld
+    // errors, but also this slot must be present in SlotHashes
+    const vote_slot = 8;
+    try std.testing.expectEqual(slot_hashes.items[0][0], vote_slot);
+    const vote_slot_hash = blk: {
+        for (slot_hashes.items) |item| {
+            if (item[0] == vote_slot) {
+                break :blk item[1];
+            }
+        }
+        @panic("Missing vote slot hash");
+    };
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = vote_slot, .confirmation_count = 1 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+    tower_sync.root = new_root;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(VoteError.root_on_different_fork, maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3495
+test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot history" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8, 10 });
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{ 2, 4, 6 },
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where there:
+    // 1) The last slot in the update is a slot not in the slot hashes history
+    // 2) The slot is greater than the newest slot in the slot history
+    // Thus this slot is not part of the fork and the update should be rejected
+    // with error `SlotsMismatch`
+    const missing_vote_slot = slot_hashes.items[0][0] + 1;
+
+    const vote_slot_hash = Hash.initRandom(random);
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = 8, .confirmation_count = 2 },
+            .{ .slot = missing_vote_slot, .confirmation_count = 3 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3521
+test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in update ok" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{ 2, 4, 6 },
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where every slot in the history is
+    // in the update
+
+    // Have to vote for a slot greater than the last vote in the vote state to avoid VoteTooOld
+    // errors
+    const vote_slot = vote_state.votes.getLast().lockout.slot + 2;
+
+    const vote_slot_hash = blk: {
+        for (slot_hashes.items) |item| {
+            if (item[0] == vote_slot) {
+                break :blk item[1];
+            }
+        }
+        @panic("Missing vote slot hash");
+    };
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = 2, .confirmation_count = 4 },
+            .{ .slot = 4, .confirmation_count = 3 },
+            .{ .slot = 6, .confirmation_count = 2 },
+            .{ .slot = vote_slot, .confirmation_count = 1 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(null, maybe_error);
+
+    // Nothing in the update should have been filtered out
+    const expected_lockouts = [_]Lockout{
+        .{ .slot = 2, .confirmation_count = 4 },
+        .{ .slot = 4, .confirmation_count = 3 },
+        .{ .slot = 6, .confirmation_count = 2 },
+        .{ .slot = vote_slot, .confirmation_count = 1 },
+    };
+    var actual_lockouts: [4]Lockout = undefined;
+    for (tower_sync.lockouts.items[0..4], 0..) |lockout, i| {
+        actual_lockouts[i] = lockout;
+    }
+    try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
+
+    const another_maybe_error = try vote_state.processTowerSync(
+        allocator,
+        &SlotHashes{ .entries = slot_hashes.items },
+        0,
+        0,
+        &tower_sync,
+    );
+    try std.testing.expectEqual(null, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3574
+test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update ok" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8, 10 });
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{6},
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where only some slots in the history are
+    // in the update, and others slots in the history are missing.
+
+    // Have to vote for a slot greater than the last vote in the vote state to avoid VoteTooOld
+    // errors
+    const vote_slot = vote_state.votes.getLast().lockout.slot + 2;
+
+    const vote_slot_hash = blk: {
+        for (slot_hashes.items) |item| {
+            if (item[0] == vote_slot) {
+                break :blk item[1];
+            }
+        }
+        @panic("Missing vote slot hash");
+    };
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = vote_slot, .confirmation_count = 1 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(null, maybe_error);
+
+    // Nothing in the update should have been filtered out
+    const expected_lockouts = [_]Lockout{
+        .{ .slot = 4, .confirmation_count = 2 },
+        .{ .slot = vote_slot, .confirmation_count = 1 },
+    };
+    var actual_lockouts: [2]Lockout = undefined;
+    for (tower_sync.lockouts.items[0..2], 0..) |lockout, i| {
+        actual_lockouts[i] = lockout;
+    }
+    try std.testing.expectEqualDeep(&expected_lockouts, &actual_lockouts);
+
+    // Because 6 from the original VoteState
+    // should not have been popped off in the proposed state,
+    // we should get a lockout conflict
+    const another_maybe_error = try vote_state.processTowerSync(
+        allocator,
+        &SlotHashes{ .entries = slot_hashes.items },
+        0,
+        0,
+        &tower_sync,
+    );
+    try std.testing.expectEqual(VoteError.lockout_conflict, another_maybe_error);
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3630
+test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(
+        allocator,
+        &[_]Slot{ 2, 4, 6 },
+        slot_hashes.items,
+    );
+    defer vote_state.deinit();
+
+    // Test with a `TowerSync` where the hash is mismatched
+
+    // Have to vote for a slot greater than the last vote in the vote state to avoid VoteTooOld
+    // errors
+    const vote_slot = vote_state.votes.getLast().lockout.slot + 2;
+
+    const vote_slot_hash = Hash.initRandom(random);
+
+    var tower_sync = try testTowerSync(
+        allocator,
+        &[_]Lockout{
+            .{ .slot = 2, .confirmation_count = 4 },
+            .{ .slot = 4, .confirmation_count = 3 },
+            .{ .slot = 6, .confirmation_count = 2 },
+            .{ .slot = vote_slot, .confirmation_count = 1 },
+        },
+    );
+    defer tower_sync.lockouts.deinit(allocator);
+    tower_sync.hash = vote_slot_hash;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(VoteError.slot_hash_mismatch, maybe_error);
+}
+
 fn processSlotVoteUnchecked(
     vote_state: *VoteState,
     slot: Slot,
@@ -2277,6 +4662,43 @@ fn processSlotVoteUnchecked(
     );
 }
 
+fn processSlotVotesUnchecked(
+    vote_state: *VoteState,
+    slots: []Slot,
+) !void {
+    if (!builtin.is_test) {
+        @panic("processSlotsVoteUnchecked should only be called in test mode");
+    }
+
+    for (slots) |slot| {
+        try processSlotVoteUnchecked(vote_state, slot);
+    }
+}
+
+fn processNewVoteStateFromLockouts(
+    allocator: std.mem.Allocator,
+    vote_state: *VoteState,
+    new_state: []Lockout,
+    new_root: ?Slot,
+    timestamp: ?i64,
+    epoch: Epoch,
+) !?VoteError {
+    var landed_votes = std.ArrayList(LandedVote).init(allocator);
+    defer landed_votes.deinit();
+
+    for (new_state) |lockout| {
+        try landed_votes.append(LandedVote{ .latency = 0, .lockout = lockout });
+    }
+
+    return try vote_state.processNewVoteState(
+        &landed_votes,
+        new_root,
+        timestamp,
+        epoch,
+        0,
+    );
+}
+
 fn checkLockouts(vote_state: *const VoteState) !void {
     if (!builtin.is_test) {
         @panic("checkLockouts should only be called in test mode");
@@ -2285,12 +4707,12 @@ fn checkLockouts(vote_state: *const VoteState) !void {
     for (vote_state.votes.items, 0..) |*vote, i| {
         const num_votes = vote_state.votes.items.len - i;
         try std.testing.expect(
-            try vote.lockout.lockout() == try std.math.powi(u64, INITIAL_LOCKOUT, num_votes),
+            vote.lockout.lockout() == try std.math.powi(u64, INITIAL_LOCKOUT, num_votes),
         );
     }
 }
 
-pub fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout {
+fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout {
     if (!builtin.is_test) {
         @panic("nthRecentLockout should only be called in test mode");
     }
@@ -2300,4 +4722,288 @@ pub fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout 
         return if (pos < vote_state.votes.items.len) vote_state.votes.items[pos].lockout else null;
     }
     return null;
+}
+
+fn currentEpoch(self: *const VoteState) u64 {
+    if (!builtin.is_test) {
+        @panic("currentEpoch should only be called in test mode");
+    }
+    return if (self.epoch_credits.items.len == 0)
+        0
+    else
+        self.epoch_credits.getLast().epoch;
+}
+
+fn cloneVoteState(
+    allocator: std.mem.Allocator,
+    vote_state: *const VoteState,
+) !VoteState {
+    if (!builtin.is_test) {
+        @panic("cloneVoteState should only be called in test mode");
+    }
+    var cloned_votes = try std.ArrayList(LandedVote).initCapacity(
+        allocator,
+        vote_state.votes.items.len,
+    );
+    try cloned_votes.appendSlice(vote_state.votes.items);
+
+    var cloned_epoch_credits = try std.ArrayList(EpochCredit).initCapacity(
+        allocator,
+        vote_state.epoch_credits.items.len,
+    );
+    try cloned_epoch_credits.appendSlice(vote_state.epoch_credits.items);
+
+    const cloned_voters = AuthorizedVoters{ .voters = try vote_state.voters.voters.clone() };
+
+    return VoteState{
+        .node_pubkey = vote_state.node_pubkey,
+        .withdrawer = vote_state.withdrawer,
+        .commission = vote_state.commission,
+        .votes = cloned_votes,
+        .root_slot = vote_state.root_slot,
+        .voters = cloned_voters,
+        .prior_voters = vote_state.prior_voters,
+        .epoch_credits = cloned_epoch_credits,
+        .last_timestamp = vote_state.last_timestamp,
+    };
+}
+
+const SlotHash = struct { Slot, Hash };
+
+fn buildSlotHashes(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    slots: []const Slot,
+) !std.ArrayList(SlotHash) {
+    if (!builtin.is_test) {
+        @panic("buildSlotHashes should only be called in test mode");
+    }
+
+    var result = try std.ArrayList(SlotHash).initCapacity(
+        allocator,
+        slots.len,
+    );
+    errdefer result.deinit();
+
+    var iter = std.mem.reverseIterator(slots);
+    while (iter.next()) |slot| {
+        try result.append(.{
+            slot,
+            Hash.initRandom(random),
+        });
+    }
+
+    return result;
+}
+
+fn buildVoteState(
+    allocator: std.mem.Allocator,
+    vote_slots: []const Slot,
+    slot_hashes: []const SlotHash,
+) !VoteState {
+    if (!builtin.is_test) {
+        @panic("buildVoteState should only be called in test mode");
+    }
+
+    var vote_state = VoteState.default(allocator);
+
+    if (vote_slots.len > 0) {
+        const last_vote_slot = vote_slots[vote_slots.len - 1];
+        var vote_hash: Hash = undefined;
+
+        for (slot_hashes) |slot_hash| {
+            if (slot_hash[0] == last_vote_slot) {
+                vote_hash = slot_hash[1];
+                break;
+            }
+        }
+
+        const vote = Vote{
+            .slots = vote_slots,
+            .hash = vote_hash,
+            .timestamp = null,
+        };
+
+        _ = try vote_state.processVoteUnfiltered(
+            vote.slots,
+            &vote,
+            &SlotHashes{ .entries = slot_hashes },
+            0,
+            0,
+        );
+    }
+
+    return vote_state;
+}
+
+fn testTowerSync(allocator: std.mem.Allocator, lockouts_slice: []const Lockout) !TowerSync {
+    if (!builtin.is_test) {
+        @panic("testTowerSync should only be called in test mode");
+    }
+
+    var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
+        allocator,
+        lockouts_slice.len,
+    );
+    errdefer lockouts.deinit(allocator);
+
+    for (lockouts_slice) |item| {
+        try lockouts.append(
+            allocator,
+            Lockout{
+                .slot = item.slot,
+                .confirmation_count = item.confirmation_count,
+            },
+        );
+    }
+
+    return TowerSync{
+        .lockouts = lockouts,
+        .root = null,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .block_id = Hash.ZEROES,
+    };
+}
+
+fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    earliest_slot_in_history: Slot,
+    current_vote_state_slots: []const Slot,
+    current_vote_state_root: ?Slot,
+    proposed_slots_and_lockouts: []const Lockout,
+    proposed_root: Slot,
+    expected_root: ?Slot,
+    expected_vote_state: []const Lockout,
+) !void {
+    if (!builtin.is_test) {
+        @panic("runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot should only in test");
+    }
+    try std.testing.expect(proposed_root < earliest_slot_in_history);
+
+    var found_expected_root: ?Slot = null;
+    var i = current_vote_state_slots.len;
+    while (i > 0) {
+        i -= 1;
+        const slot = current_vote_state_slots[i];
+        if (slot <= proposed_root) {
+            found_expected_root = slot;
+            break;
+        }
+    }
+    try std.testing.expectEqual(expected_root, found_expected_root);
+
+    const last_proposed = proposed_slots_and_lockouts[proposed_slots_and_lockouts.len - 1];
+    const latest_slot_in_history = @max(last_proposed.slot, earliest_slot_in_history);
+
+    var slots = std.ArrayList(Slot).init(allocator);
+    defer slots.deinit();
+
+    const first = if (current_vote_state_slots.len > 0)
+        current_vote_state_slots[0]
+    else
+        0;
+
+    for (first..(latest_slot_in_history + @as(u64, 1))) |slot| {
+        try slots.append(slot);
+    }
+
+    var slot_hashes = try buildSlotHashes(allocator, random, slots.items);
+    defer slot_hashes.deinit();
+
+    var vote_state = try buildVoteState(allocator, current_vote_state_slots, slot_hashes.items);
+    defer vote_state.deinit();
+    vote_state.root_slot = current_vote_state_root;
+
+    var j: usize = 0;
+    while (j < slot_hashes.items.len) {
+        if (slot_hashes.items[j][0] < earliest_slot_in_history) {
+            _ = slot_hashes.orderedRemove(j);
+        } else {
+            j += 1;
+        }
+    }
+    try std.testing.expect(proposed_slots_and_lockouts.len > 0);
+
+    const last_proposed_slot = proposed_slots_and_lockouts[
+        proposed_slots_and_lockouts.len - 1
+    ].slot;
+    var proposed_hash: ?Hash = null;
+    for (slot_hashes.items) |slot_hash| {
+        if (slot_hash[0] == last_proposed_slot) {
+            proposed_hash = slot_hash[1];
+            break;
+        }
+    }
+
+    // Test with a `TowerSync` where the root is less than `earliest_slot_in_history`.
+    // Root slot in the `TowerSync` should be updated to match the root slot in the
+    // current vote state
+    var tower_sync = try testTowerSync(allocator, proposed_slots_and_lockouts);
+    defer tower_sync.lockouts.deinit(allocator);
+
+    tower_sync.hash = proposed_hash.?;
+    tower_sync.root = proposed_root;
+
+    const maybe_error = try vote_state.checkAndFilterProposedVoteState(
+        &tower_sync.lockouts,
+        &tower_sync.root,
+        tower_sync.hash,
+        &SlotHashes{ .entries = slot_hashes.items },
+    );
+    try std.testing.expectEqual(null, maybe_error);
+    try std.testing.expectEqual(expected_root, tower_sync.root);
+
+    // The proposed root slot should become the biggest slot in the current vote state less than
+    // `earliest_slot_in_history`.
+
+    const another_maybe_error = try vote_state.processTowerSync(
+        allocator,
+        &SlotHashes{ .entries = slot_hashes.items },
+        0,
+        0,
+        &tower_sync,
+    );
+    try std.testing.expectEqual(null, another_maybe_error);
+    try std.testing.expectEqual(expected_root, vote_state.root_slot);
+
+    var actual_lockouts = try std.ArrayList(Lockout).initCapacity(
+        allocator,
+        vote_state.votes.items.len,
+    );
+    defer actual_lockouts.deinit();
+
+    for (vote_state.votes.items) |vote| {
+        try actual_lockouts.append(vote.lockout);
+    }
+
+    try std.testing.expectEqualSlices(Lockout, expected_vote_state, actual_lockouts.items);
+}
+
+const MAX_RECENT_VOTES: usize = 16;
+fn recentVotes(
+    allocator: std.mem.Allocator,
+    vote_state: *const VoteState,
+) ![]const Vote {
+    if (!builtin.is_test) {
+        @panic("recentVotes should only in test");
+    }
+    const start = vote_state.votes.items.len -| MAX_RECENT_VOTES;
+
+    var votes = try std.ArrayList(Vote).initCapacity(
+        allocator,
+        vote_state.votes.items.len - start,
+    );
+
+    for (start..vote_state.votes.items.len) |i| {
+        const vote = Vote{
+            .slots = &[_]Slot{vote_state.votes.items[i].lockout.slot},
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        };
+        try votes.append(vote);
+    }
+
+    return votes.toOwnedSlice();
 }
