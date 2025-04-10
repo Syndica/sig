@@ -2628,6 +2628,12 @@ pub fn parallelUnpackZstdTarBall(
     );
     defer std.posix.munmap(memory);
 
+    try std.posix.madvise(
+        memory.ptr,
+        memory.len,
+        std.posix.MADV.SEQUENTIAL | std.posix.MADV.WILLNEED,
+    );
+
     var tar_stream = try zstd.Reader.init(memory);
     defer tar_stream.deinit();
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
