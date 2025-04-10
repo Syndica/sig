@@ -1,5 +1,6 @@
 pub const fork_choice = @import("fork_choice.zig");
 pub const tower_storage = @import("tower_storage.zig");
+pub const tower = @import("tower.zig");
 pub const progress_map = @import("progress_map.zig");
 
 pub const HeaviestSubtreeForkChoice = fork_choice.ForkChoice;
