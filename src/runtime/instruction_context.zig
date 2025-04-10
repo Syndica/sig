@@ -80,7 +80,7 @@ pub const InstructionContext = struct {
         if (!T.ID.equals(&account_meta.pubkey))
             return InstructionError.InvalidArgument;
 
-        return self.txn_ctx.sc.sysvar_cache.get(T);
+        return self.txn_ctx.slot_ctx.sysvar_cache.get(T);
     }
 
     pub fn getAccountKeyByIndexUnchecked(self: *const InstructionContext, index: u16) Pubkey {

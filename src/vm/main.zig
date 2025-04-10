@@ -107,13 +107,13 @@ pub fn main() !void {
     };
 
     const sc = SlotContext{
-        .ec = &ec,
+        .epoch_ctx = &ec,
         .sysvar_cache = .{},
     };
 
     var context: TransactionContext = .{
         .allocator = gpa,
-        .sc = &sc,
+        .slot_ctx = &sc,
         .accounts = &.{},
         .instruction_stack = .{},
         .instruction_trace = .{},

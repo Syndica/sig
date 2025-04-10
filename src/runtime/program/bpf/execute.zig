@@ -19,7 +19,7 @@ pub fn execute(
         defer program_account.release();
 
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!ic.txn_ctx.sc.ec.feature_set.active.contains(
+        if (!ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !program_account.account.executable)
@@ -61,7 +61,7 @@ pub fn execute(
     // TODO: jit
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.txn_ctx.sc.ec.feature_set.active.contains(
+    const direct_mapping = ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
@@ -348,7 +348,7 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust,);
 
     // Memory Allocator
-    if (!tc.sc.ec.feature_set.active.contains(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
+    if (!tc.slot_ctx.epoch_ctx.feature_set.active.contains(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_alloc_free_",
@@ -367,7 +367,7 @@ fn registerSyscalls(
     // }
 
     // Poseidon
-    if (tc.sc.ec.feature_set.active.contains(features.ENABLE_POSEIDON_SYSCALL)) {
+    if (tc.slot_ctx.epoch_ctx.feature_set.active.contains(features.ENABLE_POSEIDON_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_poseidon",

@@ -303,7 +303,7 @@ pub fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const program_index_in_transaction = if (tc.sc.ec.feature_set.active.contains(
+    const program_index_in_transaction = if (tc.slot_ctx.epoch_ctx.feature_set.active.contains(
         features.LIFT_CPI_CALLER_RESTRICTION,
     )) blk: {
         break :blk tc.getAccountIndex(callee.program_id) orelse {
@@ -321,7 +321,7 @@ pub fn prepareCpiInstructionInfo(
             try caller.borrowInstructionAccount(index_in_caller);
         defer borrowed_account.release();
 
-        if (!tc.sc.ec.feature_set.active.contains(
+        if (!tc.slot_ctx.epoch_ctx.feature_set.active.contains(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !borrowed_account.account.executable)

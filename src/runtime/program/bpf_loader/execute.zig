@@ -389,7 +389,7 @@ pub fn executeV3DeployWithMaxDataLen(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
             buffer_data[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
             clock.slot,
-            ic.txn_ctx.sc.ec.feature_set,
+            ic.txn_ctx.slot_ctx.epoch_ctx.feature_set,
             if (ic.txn_ctx.log_collector != null) &ic.txn_ctx.log_collector.? else null,
         );
     }
@@ -429,7 +429,7 @@ pub fn executeV3DeployWithMaxDataLen(
         try program_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .program = .{
             .programdata_address = program_data_key,
         } });
-        try program_account.setExecutable(true, try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Rent));
+        try program_account.setExecutable(true, try ic.txn_ctx.slot_ctx.sysvar_cache.get(sysvar.Rent));
     }
 
     try ic.txn_ctx.log("Deployed program {}", .{new_program_id});
@@ -598,7 +598,7 @@ pub fn executeV3Upgrade(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
-            ic.txn_ctx.sc.ec.feature_set,
+            ic.txn_ctx.slot_ctx.epoch_ctx.feature_set,
             if (ic.txn_ctx.log_collector != null) &ic.txn_ctx.log_collector.? else null,
         );
     }
@@ -735,7 +735,7 @@ pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.txn_ctx.sc.ec.feature_set.active.contains(
+    if (!ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
         features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -882,7 +882,7 @@ pub fn executeV3Close(
                 return InstructionError.IncorrectProgramId;
             }
 
-            var clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
+            var clock = try ic.txn_ctx.slot_ctx.sysvar_cache.get(sysvar.Clock);
             if (clock.slot == data.slot) {
                 try ic.txn_ctx.log("Program was deployed in this block already", .{});
                 return InstructionError.InvalidArgument;
@@ -905,7 +905,7 @@ pub fn executeV3Close(
                     program_account_released = true;
                     try commonCloseAccount(ic, authority_address);
 
-                    clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
+                    clock = try ic.txn_ctx.slot_ctx.sysvar_cache.get(sysvar.Clock);
                     // TODO: This depends on program cache which isn't implemented yet.
                     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
                 },
@@ -1027,7 +1027,7 @@ pub fn executeV3ExtendProgram(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.txn_ctx.slot_ctx.sysvar_cache.get(sysvar.Clock);
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
@@ -1053,7 +1053,7 @@ pub fn executeV3ExtendProgram(
     const required_payment = blk: {
         const balance = programdata.account.lamports;
         // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-        const rent = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Rent);
+        const rent = try ic.txn_ctx.slot_ctx.sysvar_cache.get(sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
     };
@@ -1096,7 +1096,7 @@ pub fn executeV3ExtendProgram(
             bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
             data[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
-            ic.txn_ctx.sc.ec.feature_set,
+            ic.txn_ctx.slot_ctx.epoch_ctx.feature_set,
             if (ic.txn_ctx.log_collector != null) &ic.txn_ctx.log_collector.? else null,
         );
     }
@@ -1119,7 +1119,7 @@ pub fn executeV3Migrate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.txn_ctx.sc.ec.feature_set.active.contains(
+    if (!ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
         features.ENABLE_LOADER_V4,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -1136,7 +1136,7 @@ pub fn executeV3Migrate(
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.txn_ctx.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.txn_ctx.slot_ctx.sysvar_cache.get(sysvar.Clock);
 
     // Verify ProgramData account.
     const progdata_info = info: {

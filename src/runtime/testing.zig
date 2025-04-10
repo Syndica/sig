@@ -87,7 +87,7 @@ pub fn createExecutionContexts(
     // Create Slot Context
     const sc = try allocator.create(SlotContext);
     sc.* = .{
-        .ec = ec,
+        .epoch_ctx = ec,
         .sysvar_cache = params.sysvar_cache,
     };
 
@@ -118,7 +118,7 @@ pub fn createExecutionContexts(
     // Create Transaction Context
     const tc = TransactionContext{
         .allocator = allocator,
-        .sc = sc,
+        .slot_ctx = sc,
         .accounts = try accounts.toOwnedSlice(),
         .instruction_stack = .{},
         .instruction_trace = .{},
