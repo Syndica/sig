@@ -1,4 +1,5 @@
 const sig = @import("../../sig.zig");
+const std = @import("std");
 
 const Pubkey = sig.core.Pubkey;
 
@@ -15,7 +16,7 @@ pub const DEFAULT_BURN_PERCENT: u8 = 50;
 pub const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L13
-pub const Rent = struct {
+pub const Rent = extern struct {
     /// Rental rate in lamports/byte-year.
     lamports_per_byte_year: u64,
 
@@ -38,6 +39,14 @@ pub const Rent = struct {
         .burn_percent = DEFAULT_BURN_PERCENT,
     };
 
+    pub fn initRandom(random: std.Random) Rent {
+        return .{
+            .lamports_per_byte_year = random.int(u64),
+            .exemption_threshold = random.float(f64),
+            .burn_percent = random.uintAtMost(u8, 100),
+        };
+    }
+
     pub fn minimumBalance(self: Rent, data_len: usize) u64 {
         const bytes: u64 = @intCast(data_len);
         const lamports_per_year: f64 = @floatFromInt(
@@ -48,5 +57,12 @@ pub const Rent = struct {
 
     pub fn isExempt(self: Rent, lamports: u64, data_len: usize) bool {
         return lamports >= self.minimumBalance(data_len);
+    }
+
+    pub fn dueAmount(self: Rent, data_len: u64, years_elapsed: f64) u64 {
+        const actual_data_len = data_len + ACCOUNT_STORAGE_OVERHEAD;
+        const lamports_per_year: u64 = self.lamports_per_byte_year * actual_data_len;
+
+        return @intFromFloat((@as(f64, @floatFromInt(lamports_per_year)) * years_elapsed));
     }
 };

@@ -14,3 +14,5 @@ pub const Rent = @import("rent.zig").Rent;
 pub const SlotHashes = @import("slot_hashes.zig").SlotHashes;
 pub const StakeHistory = @import("stake_history.zig").StakeHistory;
 pub const SlotHistory = @import("slot_history.zig").SlotHistory;
+
+pub const instruction = @import("instruction.zig");

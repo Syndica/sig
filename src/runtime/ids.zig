@@ -43,3 +43,6 @@ pub const ZK_ELGAMAL_PROOF_PROGRAM_ID =
     Pubkey.parseBase58String("ZkE1Gama1Proof11111111111111111111111111111") catch unreachable;
 pub const ZK_TOKEN_PROOF_PROGRAM_ID =
     Pubkey.parseBase58String("ZkTokenProof1111111111111111111111111111111") catch unreachable;
+
+pub const Incinerator =
+    Pubkey.parseBase58String("1nc1nerator11111111111111111111111111111111") catch unreachable;

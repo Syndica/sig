@@ -22,6 +22,14 @@ pub const AccountSharedData = struct {
     /// the epoch at which this account will next owe rent
     rent_epoch: Epoch,
 
+    pub const EMPTY: AccountSharedData = .{
+        .lamports = 0,
+        .data = &.{},
+        .owner = Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
     pub fn isZeroed(self: AccountSharedData) bool {
         return std.mem.allEqual(u8, self.data, 0);
     }
