@@ -18,7 +18,6 @@ const Duration = sig.time.Duration;
 const Gauge = sig.prometheus.Gauge;
 const GossipTable = sig.gossip.GossipTable;
 const Histogram = sig.prometheus.Histogram;
-const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const LruCacheCustom = sig.utils.lru.LruCacheCustom;
@@ -56,11 +55,12 @@ pub const RepairService = struct {
     exit: *Atomic(bool),
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
-    thread_pool: RequestBatchThreadPool,
+    thread_pool: *sig.sync.ThreadPool,
+    scheduler: RequestBatchScheduler,
     metrics: Metrics,
     prng: std.Random.DefaultPrng,
 
-    pub const RequestBatchThreadPool = HomogeneousThreadPool(struct {
+    pub const RequestBatchScheduler = sig.utils.thread.HomogeneousTaskScheduler(struct {
         requester: *RepairRequester,
         requests: []const AddressedRepairRequest,
 
@@ -103,6 +103,7 @@ pub const RepairService = struct {
         shred_tracker: *BasicShredTracker,
     ) !Self {
         const n_threads = maxRequesterThreads();
+        const thread_pool = try allocator.create(sig.sync.ThreadPool);
         return RepairService{
             .allocator = allocator,
             .requester = requester,
@@ -111,7 +112,8 @@ pub const RepairService = struct {
             .logger = logger.withScope(@typeName(Self)),
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
-            .thread_pool = try RequestBatchThreadPool.init(allocator, n_threads, n_threads),
+            .thread_pool = thread_pool,
+            .scheduler = try RequestBatchScheduler.init(allocator, thread_pool, n_threads),
             .metrics = try registry.initStruct(Metrics),
             .prng = std.Random.DefaultPrng.init(0),
         };
@@ -122,6 +124,8 @@ pub const RepairService = struct {
         self.peer_provider.deinit();
         self.requester.deinit();
         self.thread_pool.deinit();
+        self.allocator.destroy(self.thread_pool);
+        self.scheduler.deinit(self.allocator);
         self.report.deinit();
     }
 
@@ -171,12 +175,12 @@ pub const RepairService = struct {
             for (0..num_threads) |i| {
                 const start = (addressed_requests.items.len * i) / num_threads;
                 const end = (addressed_requests.items.len * (i + 1)) / num_threads;
-                self.thread_pool.schedule(.{
+                self.scheduler.scheduleNow(.{
                     .requester = &self.requester,
                     .requests = addressed_requests.items[start..end],
                 });
             }
-            try self.thread_pool.joinFallible();
+            try self.scheduler.joinFallible(self.allocator);
         }
 
         return addressed_requests.items.len;

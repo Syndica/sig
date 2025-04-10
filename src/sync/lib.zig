@@ -15,6 +15,7 @@ pub const OnceCell = once_cell.OnceCell;
 pub const ReferenceCounter = reference_counter.ReferenceCounter;
 pub const Rc = reference_counter.Rc;
 pub const RcSlice = reference_counter.RcSlice;
+pub const Semaphore = @import("semaphore.zig").Semaphore;
 pub const SharedPointerWindow = shared_memory.SharedPointerWindow;
 pub const ThreadPool = thread_pool.ThreadPool;
 

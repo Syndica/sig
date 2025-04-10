@@ -25,7 +25,6 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
-const ThreadPoolTask = sig.utils.thread.ThreadPoolTask;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
 const Batch = sig.sync.ThreadPool.Batch;
@@ -460,14 +459,14 @@ pub const GossipService = struct {
         }
     }
 
-    const VerifyMessageTask = ThreadPoolTask(VerifyMessageEntry);
-    const VerifyMessageEntry = struct {
+    const VerifyMessageScheduler = sig.utils.thread.HomogeneousTaskScheduler(VerifyMessageTask);
+    const VerifyMessageTask = struct {
         gossip_data_allocator: std.mem.Allocator,
         packet: Packet,
         verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
         logger: ScopedLogger,
 
-        pub fn callback(self: *VerifyMessageEntry) !void {
+        pub fn run(self: *VerifyMessageTask) !void {
             const packet = self.packet;
             var message = bincode.readFromSlice(
                 self.gossip_data_allocator,
@@ -514,18 +513,9 @@ pub const GossipService = struct {
             self.logger.debug().log("verifyPackets loop closed");
         }
 
-        const tasks = try VerifyMessageTask.init(self.allocator, VERIFY_PACKET_PARALLEL_TASKS);
-        defer self.allocator.free(tasks);
-
-        // pre-allocate all the tasks
-        for (tasks) |*task| {
-            task.entry = .{
-                .gossip_data_allocator = self.gossip_data_allocator,
-                .verified_incoming_channel = self.verified_incoming_channel,
-                .packet = undefined,
-                .logger = self.logger,
-            };
-        }
+        var tasks = try VerifyMessageScheduler
+            .init(self.allocator, &self.thread_pool, VERIFY_PACKET_PARALLEL_TASKS);
+        defer tasks.deinit(self.allocator);
 
         // loop until the previous service closes and triggers us to close
         while (true) {
@@ -533,26 +523,26 @@ pub const GossipService = struct {
 
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
-            var task_search_start_idx: usize = 0;
             while (self.packet_incoming_channel.tryReceive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
 
-                const acquired_task_idx = VerifyMessageTask.awaitAndAcquireFirstAvailableTask(tasks, task_search_start_idx);
-                task_search_start_idx = (acquired_task_idx + 1) % tasks.len;
+                const task = VerifyMessageTask{
+                    .gossip_data_allocator = self.gossip_data_allocator,
+                    .verified_incoming_channel = self.verified_incoming_channel,
+                    .packet = packet,
+                    .logger = self.logger,
+                };
 
-                const task_ptr = &tasks[acquired_task_idx];
-                task_ptr.entry.packet = packet;
-                task_ptr.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
-
-                const batch = Batch.from(&task_ptr.task);
-                self.thread_pool.schedule(batch);
+                switch (tasks.schedule(task)) {
+                    .success => {},
+                    .replaced_completed => |task_result| task_result catch |err| self.logger.err()
+                        .logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)}),
+                }
             }
         }
 
-        for (tasks) |*task| {
-            task.blockUntilCompletion();
-            task.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
-        }
+        tasks.joinFallible(self.allocator) catch |err|
+            self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
     }
 
     // structs used in process_messages loop
