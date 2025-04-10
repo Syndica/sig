@@ -446,14 +446,15 @@ test "load accounts rent paid" {
         .owner = Pubkey.ZEROES,
         .rent_epoch = 0,
     });
+
     try bank.accounts.put(allocator, instruction_address, sig.core.Account{
         .data = .{ .unowned_allocation = instruction_data },
         .lamports = 0,
         .executable = true,
-        .owner = runtime.ids.BPF_LOADER_ID,
+        .owner = runtime.program.bpf_loader_program.v1,
         .rent_epoch = 0,
     });
-    try bank.accounts.put(allocator, runtime.ids.BPF_LOADER_ID, sig.core.Account{
+    try bank.accounts.put(allocator, runtime.program.bpf_loader_program.v1, sig.core.Account{
         .data = .{ .empty = .{ .len = 0 } },
         .lamports = 0,
         .executable = true,
