@@ -20,36 +20,39 @@ const Rent = sig.runtime.sysvar.Rent;
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
 pub fn execute(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
-    try ic.txn_ctx.consumeCompute(system_program.COMPUTE_UNITS);
+    try instr_ctx.txn_ctx.consumeCompute(system_program.COMPUTE_UNITS);
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
-    const instruction = try ic.ixn_info.deserializeInstruction(allocator, SystemProgramInstruction);
+    const instruction = try instr_ctx.ixn_info.deserializeInstruction(
+        allocator,
+        SystemProgramInstruction,
+    );
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
         .create_account => |args| try executeCreateAccount(
             allocator,
-            ic,
+            instr_ctx,
             args.lamports,
             args.space,
             args.owner,
         ),
         .assign => |args| try executeAssign(
-            ic,
+            instr_ctx,
             args.owner,
         ),
         .transfer => |args| try executeTransfer(
-            ic,
+            instr_ctx,
             args.lamports,
         ),
         .create_account_with_seed => |args| try executeCreateAccountWithSeed(
             allocator,
-            ic,
+            instr_ctx,
             args.base,
             args.seed,
             args.lamports,
@@ -58,51 +61,51 @@ pub fn execute(
         ),
         .advance_nonce_account => try executeAdvanceNonceAccount(
             allocator,
-            ic,
+            instr_ctx,
         ),
         .withdraw_nonce_account => |arg| try executeWithdrawNonceAccount(
             allocator,
-            ic,
+            instr_ctx,
             arg,
         ),
         .initialize_nonce_account => |arg| try executeInitializeNonceAccount(
             allocator,
-            ic,
+            instr_ctx,
             arg,
         ),
         .authorize_nonce_account => |arg| try executeAuthorizeNonceAccount(
             allocator,
-            ic,
+            instr_ctx,
             arg,
         ),
         .allocate => |args| try executeAllocate(
             allocator,
-            ic,
+            instr_ctx,
             args.space,
         ),
         .allocate_with_seed => |args| try executeAllocateWithSeed(
             allocator,
-            ic,
+            instr_ctx,
             args.base,
             args.seed,
             args.space,
             args.owner,
         ),
         .assign_with_seed => |args| try executeAssignWithSeed(
-            ic,
+            instr_ctx,
             args.base,
             args.seed,
             args.owner,
         ),
         .transfer_with_seed => |args| try executeTransferWithSeed(
-            ic,
+            instr_ctx,
             args.lamports,
             args.from_seed,
             args.from_owner,
         ),
         .upgrade_nonce_account => try executeUpgradeNonceAccount(
             allocator,
-            ic,
+            instr_ctx,
         ),
     };
 }
@@ -110,34 +113,34 @@ pub fn execute(
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L315-L334
 fn executeCreateAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     lamports: u64,
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(2);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(2);
     try createAccount(
         allocator,
-        ic,
+        instr_ctx,
         0,
         1,
         lamports,
         space,
         owner,
-        ic.ixn_info.account_metas.buffer[1].pubkey,
+        instr_ctx.ixn_info.account_metas.buffer[1].pubkey,
     );
 }
 
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L365-L375
 fn executeAssign(
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(1);
-    var account = try ic.borrowInstructionAccount(0);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(1);
+    var account = try instr_ctx.borrowInstructionAccount(0);
     defer account.release();
     try assign(
-        ic,
+        instr_ctx,
         &account,
         owner,
         account.pubkey,
@@ -146,12 +149,12 @@ fn executeAssign(
 
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L378-L386
 fn executeTransfer(
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(2);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(2);
     try transfer(
-        ic,
+        instr_ctx,
         0,
         1,
         lamports,
@@ -161,17 +164,17 @@ fn executeTransfer(
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L343-L362
 fn executeCreateAccountWithSeed(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     base: Pubkey,
     seed: []const u8,
     lamports: u64,
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(2);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(2);
     try checkSeedAddress(
-        ic,
-        ic.ixn_info.account_metas.buffer[1].pubkey,
+        instr_ctx,
+        instr_ctx.ixn_info.account_metas.buffer[1].pubkey,
         base,
         owner,
         seed,
@@ -179,7 +182,7 @@ fn executeCreateAccountWithSeed(
     );
     try createAccount(
         allocator,
-        ic,
+        instr_ctx,
         0,
         1,
         lamports,
@@ -192,62 +195,62 @@ fn executeCreateAccountWithSeed(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L407-L423
 fn executeAdvanceNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(1);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(1);
 
-    var account = try ic.borrowInstructionAccount(0);
+    var account = try instr_ctx.borrowInstructionAccount(0);
     defer account.release();
 
-    const recent_blockhashes = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
+    const recent_blockhashes = try instr_ctx.getSysvarWithAccountCheck(RecentBlockhashes, 1);
     if (recent_blockhashes.isEmpty()) {
-        try ic.txn_ctx.log("Advance nonce account: recent blockhash list is empty", .{});
-        ic.txn_ctx.custom_error = @intFromEnum(SystemProgramError.NonceNoRecentBlockhashes);
+        try instr_ctx.txn_ctx.log("Advance nonce account: recent blockhash list is empty", .{});
+        instr_ctx.txn_ctx.custom_error = @intFromEnum(SystemProgramError.NonceNoRecentBlockhashes);
         return InstructionError.Custom;
     }
 
-    try advanceNonceAccount(allocator, ic, &account);
+    try advanceNonceAccount(allocator, instr_ctx, &account);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L426-L443
 fn executeWithdrawNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(2);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(2);
 
     // TODO: Is this sysvar call required for consensus despite being unused?
-    _ = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
+    _ = try instr_ctx.getSysvarWithAccountCheck(RecentBlockhashes, 2);
 
-    const rent = try ic.getSysvarWithAccountCheck(Rent, 3);
+    const rent = try instr_ctx.getSysvarWithAccountCheck(Rent, 3);
 
-    return withdrawNonceAccount(allocator, ic, lamports, rent);
+    return withdrawNonceAccount(allocator, instr_ctx, lamports, rent);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L446-L463
 fn executeInitializeNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(1);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(1);
 
-    var account = try ic.borrowInstructionAccount(0);
+    var account = try instr_ctx.borrowInstructionAccount(0);
     defer account.release();
 
-    const recent_blockhashes = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
+    const recent_blockhashes = try instr_ctx.getSysvarWithAccountCheck(RecentBlockhashes, 1);
     if (recent_blockhashes.isEmpty()) {
-        try ic.txn_ctx.log("Initialize nonce account: recent blockhash list is empty", .{});
-        ic.txn_ctx.custom_error = @intFromEnum(SystemProgramError.NonceNoRecentBlockhashes);
+        try instr_ctx.txn_ctx.log("Initialize nonce account: recent blockhash list is empty", .{});
+        instr_ctx.txn_ctx.custom_error = @intFromEnum(SystemProgramError.NonceNoRecentBlockhashes);
         return InstructionError.Custom;
     }
 
-    const rent = try ic.getSysvarWithAccountCheck(Rent, 2);
+    const rent = try instr_ctx.getSysvarWithAccountCheck(Rent, 2);
 
     try initializeNonceAccount(
         allocator,
-        ic,
+        instr_ctx,
         &account,
         authority,
         rent,
@@ -257,17 +260,17 @@ fn executeInitializeNonceAccount(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L466-L469
 fn executeAuthorizeNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(1);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(1);
 
-    var account = try ic.borrowInstructionAccount(0);
+    var account = try instr_ctx.borrowInstructionAccount(0);
     defer account.release();
 
     return authorizeNonceAccount(
         allocator,
-        ic,
+        instr_ctx,
         &account,
         authority,
     );
@@ -276,33 +279,33 @@ fn executeAuthorizeNonceAccount(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L488-L498
 fn executeAllocate(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     space: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(1);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(1);
 
-    var account = try ic.borrowInstructionAccount(0);
+    var account = try instr_ctx.borrowInstructionAccount(0);
     defer account.release();
 
-    try allocate(allocator, ic, &account, space, account.pubkey);
+    try allocate(allocator, instr_ctx, &account, space, account.pubkey);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L506-L523
 fn executeAllocateWithSeed(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     base: Pubkey,
     seed: []const u8,
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(1);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(1);
 
-    var account = try ic.borrowInstructionAccount(0);
+    var account = try instr_ctx.borrowInstructionAccount(0);
     defer account.release();
 
     try checkSeedAddress(
-        ic,
+        instr_ctx,
         account.pubkey,
         base,
         owner,
@@ -310,24 +313,24 @@ fn executeAllocateWithSeed(
         "Create: address {} does not match derived address {}",
     );
 
-    try allocate(allocator, ic, &account, space, base);
-    try assign(ic, &account, owner, base);
+    try allocate(allocator, instr_ctx, &account, space, base);
+    try assign(instr_ctx, &account, owner, base);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L526-L536
 fn executeAssignWithSeed(
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     base: Pubkey,
     seed: []const u8,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(1);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(1);
 
-    var account = try ic.borrowInstructionAccount(0);
+    var account = try instr_ctx.borrowInstructionAccount(0);
     defer account.release();
 
     try checkSeedAddress(
-        ic,
+        instr_ctx,
         account.pubkey,
         base,
         owner,
@@ -335,32 +338,32 @@ fn executeAssignWithSeed(
         "Create: address {} does not match derived address {}",
     );
 
-    try assign(ic, &account, owner, base);
+    try assign(instr_ctx, &account, owner, base);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L393-L404
 fn executeTransferWithSeed(
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     lamports: u64,
     from_seed: []const u8,
     from_owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(3);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(3);
 
     const from_index = 0;
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.ixn_info.account_metas.buffer[from_base_index].pubkey;
-    const from_pubkey = ic.ixn_info.account_metas.buffer[from_index].pubkey;
+    const from_base_pubkey = instr_ctx.ixn_info.account_metas.buffer[from_base_index].pubkey;
+    const from_pubkey = instr_ctx.ixn_info.account_metas.buffer[from_index].pubkey;
 
-    if (!try ic.ixn_info.isIndexSigner(from_base_index)) {
-        try ic.txn_ctx.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
+    if (!try instr_ctx.ixn_info.isIndexSigner(from_base_index)) {
+        try instr_ctx.txn_ctx.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
     try checkSeedAddress(
-        ic,
+        instr_ctx,
         from_pubkey,
         from_base_pubkey,
         from_owner,
@@ -369,7 +372,7 @@ fn executeTransferWithSeed(
     );
 
     try transferVerified(
-        ic,
+        instr_ctx,
         from_index,
         to_index,
         lamports,
@@ -379,11 +382,11 @@ fn executeTransferWithSeed(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L472-L485
 fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.ixn_info.checkNumberOfAccounts(1);
+    try instr_ctx.ixn_info.checkNumberOfAccounts(1);
 
-    var account = try ic.borrowInstructionAccount(0);
+    var account = try instr_ctx.borrowInstructionAccount(0);
     defer account.release();
 
     if (!account.account.owner.equals(&system_program.ID))
@@ -407,45 +410,45 @@ fn executeUpgradeNonceAccount(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#70
 fn allocate(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     account: *BorrowedAccount,
     space: u64,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.ixn_info.isPubkeySigner(authority)) {
-        try ic.txn_ctx.log("Allocate: 'base' account {} must sign", .{account.pubkey});
+    if (!instr_ctx.ixn_info.isPubkeySigner(authority)) {
+        try instr_ctx.txn_ctx.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
     if (account.constAccountData().len > 0 or !account.account.owner.equals(&system_program.ID)) {
-        try ic.txn_ctx.log("Allocate: account {} already in use", .{account.pubkey});
-        ic.txn_ctx.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
+        try instr_ctx.txn_ctx.log("Allocate: account {} already in use", .{account.pubkey});
+        instr_ctx.txn_ctx.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
         return InstructionError.Custom;
     }
 
     if (space > system_program.MAX_PERMITTED_DATA_LENGTH) {
-        try ic.txn_ctx.log(
+        try instr_ctx.txn_ctx.log(
             "Allocate: requested {}, max allowed {}",
             .{ space, system_program.MAX_PERMITTED_DATA_LENGTH },
         );
-        ic.txn_ctx.custom_error = @intFromEnum(SystemProgramError.InvalidAccountDataLength);
+        instr_ctx.txn_ctx.custom_error = @intFromEnum(SystemProgramError.InvalidAccountDataLength);
         return InstructionError.Custom;
     }
 
-    try account.setDataLength(allocator, &ic.txn_ctx.accounts_resize_delta, @intCast(space));
+    try account.setDataLength(allocator, &instr_ctx.txn_ctx.accounts_resize_delta, @intCast(space));
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L112
 fn assign(
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     account: *BorrowedAccount,
     owner: Pubkey,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (account.account.owner.equals(&owner)) return;
 
-    if (!ic.ixn_info.isPubkeySigner(authority)) {
-        try ic.txn_ctx.log("Assign: 'base' account {} must sign", .{account.pubkey});
+    if (!instr_ctx.ixn_info.isPubkeySigner(authority)) {
+        try instr_ctx.txn_ctx.log("Assign: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -455,7 +458,7 @@ fn assign(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L145
 fn createAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     from_index: u16,
     to_index: u16,
     lamports: u64,
@@ -464,21 +467,24 @@ fn createAccount(
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     {
-        var account = try ic.borrowInstructionAccount(to_index);
+        var account = try instr_ctx.borrowInstructionAccount(to_index);
         defer account.release();
 
         if (account.account.lamports > 0) {
-            try ic.txn_ctx.log("Create Account: account {} already in use", .{account.pubkey});
-            ic.txn_ctx.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
+            try instr_ctx.txn_ctx.log(
+                "Create Account: account {} already in use",
+                .{account.pubkey},
+            );
+            instr_ctx.txn_ctx.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
             return InstructionError.Custom;
         }
 
-        try allocate(allocator, ic, &account, space, authority);
-        try assign(ic, &account, owner, authority);
+        try allocate(allocator, instr_ctx, &account, space, authority);
+        try assign(instr_ctx, &account, owner, authority);
     }
 
     return transfer(
-        ic,
+        instr_ctx,
         from_index,
         to_index,
         lamports,
@@ -487,21 +493,21 @@ fn createAccount(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L214
 fn transfer(
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     from_index: u16,
     to_index: u16,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!try ic.ixn_info.isIndexSigner(from_index)) {
-        try ic.txn_ctx.log(
+    if (!try instr_ctx.ixn_info.isIndexSigner(from_index)) {
+        try instr_ctx.txn_ctx.log(
             "Transfer: `from` account {} must sign",
-            .{ic.ixn_info.account_metas.buffer[from_index].pubkey},
+            .{instr_ctx.ixn_info.account_metas.buffer[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
     }
 
     return transferVerified(
-        ic,
+        instr_ctx,
         from_index,
         to_index,
         lamports,
@@ -510,26 +516,26 @@ fn transfer(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L182
 fn transferVerified(
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     from_index: u16,
     to_index: u16,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     {
-        var account = try ic.borrowInstructionAccount(from_index);
+        var account = try instr_ctx.borrowInstructionAccount(from_index);
         defer account.release();
 
         if (account.constAccountData().len > 0) {
-            try ic.txn_ctx.log("Transfer: `from` must not carry data", .{});
+            try instr_ctx.txn_ctx.log("Transfer: `from` must not carry data", .{});
             return InstructionError.InvalidArgument;
         }
 
         if (lamports > account.account.lamports) {
-            try ic.txn_ctx.log(
+            try instr_ctx.txn_ctx.log(
                 "Transfer: insufficient lamports {}, need {}",
                 .{ account.account.lamports, lamports },
             );
-            ic.txn_ctx.custom_error =
+            instr_ctx.txn_ctx.custom_error =
                 @intFromEnum(SystemProgramError.ResultWithNegativeLamports);
             return InstructionError.Custom;
         }
@@ -537,7 +543,7 @@ fn transferVerified(
         try account.subtractLamports(lamports);
     }
 
-    var account = try ic.borrowInstructionAccount(to_index);
+    var account = try instr_ctx.borrowInstructionAccount(to_index);
     defer account.release();
 
     try account.addLamports(lamports);
@@ -546,11 +552,11 @@ fn transferVerified(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L20
 fn advanceNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     account: *BorrowedAccount,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!account.context.is_writable) {
-        try ic.txn_ctx.log(
+        try instr_ctx.txn_ctx.log(
             "Advance nonce account: Account {} must be writeable",
             .{account.pubkey},
         );
@@ -560,29 +566,29 @@ fn advanceNonceAccount(
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
     switch (versioned_nonce.getState()) {
         .unintialized => {
-            try ic.txn_ctx.log(
+            try instr_ctx.txn_ctx.log(
                 "Advance nonce account: Account {} state is invalid",
                 .{account.pubkey},
             );
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| {
-            if (!ic.ixn_info.isPubkeySigner(data.authority)) {
-                try ic.txn_ctx.log(
+            if (!instr_ctx.ixn_info.isPubkeySigner(data.authority)) {
+                try instr_ctx.txn_ctx.log(
                     "Advance nonce account: Account {} must be a signer",
                     .{data.authority},
                 );
                 return InstructionError.MissingRequiredSignature;
             }
 
-            const next_durable_nonce = nonce.createDurableNonce(ic.txn_ctx.prev_blockhash);
+            const next_durable_nonce = nonce.createDurableNonce(instr_ctx.txn_ctx.prev_blockhash);
 
             if (data.durable_nonce.eql(next_durable_nonce)) {
-                try ic.txn_ctx.log(
+                try instr_ctx.txn_ctx.log(
                     "Advance nonce account: nonce can only advance once per slot",
                     .{},
                 );
-                ic.txn_ctx.custom_error =
+                instr_ctx.txn_ctx.custom_error =
                     @intFromEnum(SystemProgramError.NonceBlockhashNotExpired);
                 return InstructionError.Custom;
             }
@@ -591,7 +597,7 @@ fn advanceNonceAccount(
                 nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
                     data.authority,
                     next_durable_nonce,
-                    ic.txn_ctx.prev_lamports_per_signature,
+                    instr_ctx.txn_ctx.prev_lamports_per_signature,
                 ) } },
             );
         },
@@ -601,7 +607,7 @@ fn advanceNonceAccount(
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L73-L74
 fn withdrawNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     lamports: u64,
     rent: Rent,
 ) (error{OutOfMemory} || InstructionError)!void {
@@ -609,11 +615,11 @@ fn withdrawNonceAccount(
     const to_account_index = 1;
 
     {
-        var from_account = try ic.borrowInstructionAccount(from_account_index);
+        var from_account = try instr_ctx.borrowInstructionAccount(from_account_index);
         defer from_account.release();
 
         if (!from_account.context.is_writable) {
-            try ic.txn_ctx.log(
+            try instr_ctx.txn_ctx.log(
                 "Withdraw nonce account: Account {} must be writeable",
                 .{from_account.pubkey},
             );
@@ -627,7 +633,7 @@ fn withdrawNonceAccount(
         const authority = switch (versioned_nonce.getState()) {
             .unintialized => blk: {
                 if (lamports > from_account.account.lamports) {
-                    try ic.txn_ctx.log(
+                    try instr_ctx.txn_ctx.log(
                         "Withdraw nonce account: insufficient lamports {}, need {}",
                         .{ from_account.account.lamports, lamports },
                     );
@@ -637,13 +643,14 @@ fn withdrawNonceAccount(
             },
             .initialized => |data| blk: {
                 if (lamports == from_account.account.lamports) {
-                    const durable_nonce = nonce.createDurableNonce(ic.txn_ctx.prev_blockhash);
+                    const durable_nonce =
+                        nonce.createDurableNonce(instr_ctx.txn_ctx.prev_blockhash);
                     if (durable_nonce.eql(data.durable_nonce)) {
-                        try ic.txn_ctx.log(
+                        try instr_ctx.txn_ctx.log(
                             "Withdraw nonce account: nonce can only advance once per slot",
                             .{},
                         );
-                        ic.txn_ctx.custom_error =
+                        instr_ctx.txn_ctx.custom_error =
                             @intFromEnum(SystemProgramError.NonceBlockhashNotExpired);
                         return InstructionError.Custom;
                     }
@@ -655,7 +662,7 @@ fn withdrawNonceAccount(
                     const amount = std.math.add(u64, lamports, min_balance) catch
                         return InstructionError.InsufficientFunds;
                     if (amount > from_account.account.lamports) {
-                        try ic.txn_ctx.log(
+                        try instr_ctx.txn_ctx.log(
                             "Withdraw nonce account: insufficient lamports {}, need {}",
                             .{
                                 from_account.account.lamports,
@@ -669,15 +676,15 @@ fn withdrawNonceAccount(
             },
         };
 
-        if (!ic.ixn_info.isPubkeySigner(authority)) {
-            try ic.txn_ctx.log("Withdraw nonce account: Account {} must sign", .{authority});
+        if (!instr_ctx.ixn_info.isPubkeySigner(authority)) {
+            try instr_ctx.txn_ctx.log("Withdraw nonce account: Account {} must sign", .{authority});
             return InstructionError.MissingRequiredSignature;
         }
 
         try from_account.subtractLamports(lamports);
     }
 
-    var to_account = try ic.borrowInstructionAccount(to_account_index);
+    var to_account = try instr_ctx.borrowInstructionAccount(to_account_index);
     defer to_account.release();
     try to_account.addLamports(lamports);
 }
@@ -685,13 +692,13 @@ fn withdrawNonceAccount(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L155
 fn initializeNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     account: *BorrowedAccount,
     authority: Pubkey,
     rent: Rent,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!account.context.is_writable) {
-        try ic.txn_ctx.log(
+        try instr_ctx.txn_ctx.log(
             "Initialize nonce account: Account {} must be writeable",
             .{account.pubkey},
         );
@@ -703,22 +710,25 @@ fn initializeNonceAccount(
         .unintialized => {
             const min_balance = rent.minimumBalance(account.constAccountData().len);
             if (min_balance > account.account.lamports) {
-                try ic.txn_ctx.log("Initialize nonce account: insufficient lamports {}, need {}", .{
-                    account.account.lamports,
-                    min_balance,
-                });
+                try instr_ctx.txn_ctx.log(
+                    "Initialize nonce account: insufficient lamports {}, need {}",
+                    .{
+                        account.account.lamports,
+                        min_balance,
+                    },
+                );
                 return InstructionError.InsufficientFunds;
             }
             try account.serializeIntoAccountData(nonce.Versions{
                 .current = nonce.State{ .initialized = nonce.Data.init(
                     authority,
-                    nonce.createDurableNonce(ic.txn_ctx.prev_blockhash),
-                    ic.txn_ctx.prev_lamports_per_signature,
+                    nonce.createDurableNonce(instr_ctx.txn_ctx.prev_blockhash),
+                    instr_ctx.txn_ctx.prev_lamports_per_signature,
                 ) },
             });
         },
         .initialized => |_| {
-            try ic.txn_ctx.log(
+            try instr_ctx.txn_ctx.log(
                 "Initialize nonce account: Account {} state is invalid",
                 .{account.pubkey},
             );
@@ -730,12 +740,12 @@ fn initializeNonceAccount(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L203
 pub fn authorizeNonceAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     account: *BorrowedAccount,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (!account.context.is_writable) {
-        try ic.txn_ctx.log(
+        try instr_ctx.txn_ctx.log(
             "Authorize nonce account: Account {} must be writeable",
             .{account.pubkey},
         );
@@ -746,7 +756,7 @@ pub fn authorizeNonceAccount(
 
     const nonce_data = switch (versioned_nonce.getState()) {
         .unintialized => {
-            try ic.txn_ctx.log(
+            try instr_ctx.txn_ctx.log(
                 "Authorize nonce account: Account {} state is invalid",
                 .{account.pubkey},
             );
@@ -755,8 +765,8 @@ pub fn authorizeNonceAccount(
         .initialized => |data| data,
     };
 
-    if (!ic.ixn_info.isPubkeySigner(nonce_data.authority)) {
-        try ic.txn_ctx.log(
+    if (!instr_ctx.ixn_info.isPubkeySigner(nonce_data.authority)) {
+        try instr_ctx.txn_ctx.log(
             "Authorize nonce account: Account {} must sign",
             .{nonce_data.authority},
         );
@@ -777,7 +787,7 @@ pub fn authorizeNonceAccount(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L47-L58
 fn checkSeedAddress(
-    ic: *InstructionContext,
+    instr_ctx: *InstructionContext,
     expected: Pubkey,
     base: Pubkey,
     owner: Pubkey,
@@ -785,12 +795,12 @@ fn checkSeedAddress(
     comptime log_err_fmt: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
     const created = pubkey_utils.createWithSeed(base, seed, owner) catch |err| {
-        ic.txn_ctx.custom_error = pubkey_utils.mapError(err);
+        instr_ctx.txn_ctx.custom_error = pubkey_utils.mapError(err);
         return InstructionError.Custom;
     };
     if (!expected.equals(&created)) {
-        try ic.txn_ctx.log(log_err_fmt, .{ expected, created });
-        ic.txn_ctx.custom_error = @intFromEnum(SystemProgramError.AddressWithSeedMismatch);
+        try instr_ctx.txn_ctx.log(log_err_fmt, .{ expected, created });
+        instr_ctx.txn_ctx.custom_error = @intFromEnum(SystemProgramError.AddressWithSeedMismatch);
         return InstructionError.Custom;
     }
 }
