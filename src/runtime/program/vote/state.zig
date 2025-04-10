@@ -32,8 +32,6 @@ pub const VOTE_CREDITS_MAXIMUM_PER_SLOT: u8 = 16;
 pub const BlockTimestamp = struct {
     slot: Slot,
     timestamp: i64,
-
-    pub const DEFAULT = .{ .slot = null, .timestamp = 0 };
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L85
@@ -133,16 +131,6 @@ pub const TowerSync = struct {
     /// including this block. Does not require replaying
     /// in order to compute.
     block_id: Hash,
-
-    pub fn default(allocator: std.mem.Allocator) TowerSync {
-        return TowerSync{
-            .lockouts = std.ArrayList(Lockout).init(allocator),
-            .root = null,
-            .hash = Hash.ZEROES,
-            .timestamp = 0,
-            .block_id = Hash.ZEROES,
-        };
-    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
