@@ -113,6 +113,7 @@ pub fn main() !void {
 
     var context: TransactionContext = .{
         .allocator = gpa,
+        .epoch_ctx = &ec,
         .slot_ctx = &sc,
         .accounts = &.{},
         .instruction_stack = .{},

@@ -12,6 +12,8 @@ const InstructionError = sig.core.instruction.InstructionError;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 
 const InstructionInfo = sig.runtime.InstructionInfo;
+const EpochContext = sig.runtime.EpochContext;
+const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
@@ -25,7 +27,9 @@ const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAc
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L502
 pub const InstructionContext = struct {
-    /// The transaction context associated with this instruction execution
+    /// Contexts
+    epoch_ctx: *const EpochContext,
+    slot_ctx: *const SlotContext,
     txn_ctx: *TransactionContext,
 
     /// The instruction information which is constant accross execution

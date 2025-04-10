@@ -50,7 +50,8 @@ pub const TransactionContext = struct {
     /// Allocator
     allocator: std.mem.Allocator,
 
-    /// Slot Context
+    /// Contexts
+    epoch_ctx: *const EpochContext,
     slot_ctx: *const SlotContext,
 
     /// Transaction accounts

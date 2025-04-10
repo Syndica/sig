@@ -874,6 +874,8 @@ test "serializeParameters" {
             defer instruction_info.deinit(allocator);
 
             var instr_ctx = InstructionContext{
+                .epoch_ctx = epoch_ctx,
+                .slot_ctx = slot_ctx,
                 .txn_ctx = &txn_ctx,
                 .ixn_info = instruction_info,
                 .depth = 0,

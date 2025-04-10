@@ -547,8 +547,8 @@ fn executeUpdateCommission(
         instr_ctx,
         vote_account,
         commission,
-        try instr_ctx.txn_ctx.slot_ctx.sysvar_cache.get(EpochSchedule),
-        try instr_ctx.txn_ctx.slot_ctx.sysvar_cache.get(Clock),
+        try instr_ctx.slot_ctx.sysvar_cache.get(EpochSchedule),
+        try instr_ctx.slot_ctx.sysvar_cache.get(Clock),
     );
 }
 
@@ -567,7 +567,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (instr_ctx.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
+        if (instr_ctx.epoch_ctx.feature_set.active.contains(
             features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
         )) {
             const versioned_state = vote_account.deserializeFromAccountData(
@@ -588,7 +588,7 @@ fn updateCommission(
     };
 
     if (enforce_commission_update_rule and
-        instr_ctx.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
+        instr_ctx.epoch_ctx.feature_set.active.contains(
         features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
@@ -653,8 +653,8 @@ fn executeWithdraw(
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     try instr_ctx.ixn_info.checkNumberOfAccounts(2);
-    const rent = try instr_ctx.txn_ctx.slot_ctx.sysvar_cache.get(Rent);
-    const clock = try instr_ctx.txn_ctx.slot_ctx.sysvar_cache.get(Clock);
+    const rent = try instr_ctx.slot_ctx.sysvar_cache.get(Rent);
+    const clock = try instr_ctx.slot_ctx.sysvar_cache.get(Clock);
 
     vote_account.release();
 
@@ -746,10 +746,10 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (instr_ctx.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
+    if (instr_ctx.epoch_ctx.feature_set.active.contains(
         features.DEPRECATE_LEGACY_VOTE_IXS,
     ) and
-        instr_ctx.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
+        instr_ctx.epoch_ctx.feature_set.active.contains(
         features.ENABLE_TOWER_SYNC_IX,
     )) {
         return InstructionError.InvalidInstructionData;

@@ -118,6 +118,7 @@ pub fn createExecutionContexts(
     // Create Transaction Context
     const txn_ctx = TransactionContext{
         .allocator = allocator,
+        .epoch_ctx = ec,
         .slot_ctx = sc,
         .accounts = try accounts.toOwnedSlice(),
         .instruction_stack = .{},
