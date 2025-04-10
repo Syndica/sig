@@ -353,8 +353,8 @@ pub const FrameManager = struct {
         std.debug.assert(num_frames > 0);
 
         var frame_map: Map = .{};
-        try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
         errdefer frame_map.deinit(allocator);
+        try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
 
         var eviction_lfu = HierarchicalFIFO.init(
             allocator,
@@ -1128,28 +1128,6 @@ pub const AccountDataHandle = union(enum) {
     }
 };
 
-// ArrayHashMap can currently leak in places it really shouldn't. Let's skip these tests until Zig
-// 0.14.
-const skip_array_hashmap_leak_tests = @import("builtin").zig_version.minor == 13;
-
-test "ArrayHashMap leak" {
-    if (skip_array_hashmap_leak_tests) return error.SkipZigTest;
-
-    const initDeinit = struct {
-        fn f(allocator: std.mem.Allocator) !void {
-            var frame_map: std.AutoArrayHashMapUnmanaged(FileIdFileOffset, FrameIndex) = .{};
-            try frame_map.ensureTotalCapacity(allocator, 1024 * 2);
-            defer frame_map.deinit(allocator);
-        }
-    }.f;
-
-    try std.testing.checkAllAllocationFailures(
-        std.testing.allocator,
-        initDeinit,
-        .{},
-    );
-}
-
 test "BufferPool indicesRequired" {
     const TestCase = struct {
         start: FileOffset,
@@ -1198,13 +1176,11 @@ test "BufferPool init deinit" {
         var bp = try BufferPool.init(allocator, frame_count);
         bp.deinit(allocator);
 
-        if (!skip_array_hashmap_leak_tests) {
-            try std.testing.checkAllAllocationFailures(
-                std.testing.allocator,
-                initDeinit,
-                .{frame_count},
-            );
-        }
+        try std.testing.checkAllAllocationFailures(
+            std.testing.allocator,
+            initDeinit,
+            .{frame_count},
+        );
     }
 }
 
