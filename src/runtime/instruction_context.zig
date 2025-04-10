@@ -108,14 +108,6 @@ pub const InstructionContext = struct {
         );
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/e363f52b5bb4bfb131c647d4dbd6043d23575c78/program-runtime/src/invoke_context.rs#L670
-    pub fn getSysvar(
-        self: *const InstructionContext,
-        comptime T: type,
-    ) InstructionError!T {
-        return self.tc.sysvar_cache.get(T) orelse InstructionError.UnsupportedSysvar;
-    }
-
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/invoke_context.rs#L678
     pub fn getCheckAligned(self: *const InstructionContext) bool {
         const program = self.borrowProgramAccount() catch return true;
