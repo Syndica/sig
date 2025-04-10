@@ -30,13 +30,13 @@ const VoteProgramInstruction = vote_instruction.Instruction;
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
 pub fn execute(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/vote/src/vote_processor.rs#L55C40-L55C45
-    try instr_ctx.txn_ctx.consumeCompute(vote_program.COMPUTE_UNITS);
+    try ixn_ctx.txn_ctx.consumeCompute(vote_program.COMPUTE_UNITS);
 
-    var vote_account = try instr_ctx.borrowInstructionAccount(
+    var vote_account = try ixn_ctx.borrowInstructionAccount(
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.account),
     );
     defer vote_account.release();
@@ -45,7 +45,7 @@ pub fn execute(
         return InstructionError.InvalidAccountOwner;
     }
 
-    const instruction = try instr_ctx.ixn_info.deserializeInstruction(
+    const instruction = try ixn_ctx.ixn_info.deserializeInstruction(
         allocator,
         VoteProgramInstruction,
     );
@@ -54,7 +54,7 @@ pub fn execute(
     return switch (instruction) {
         .initialize_account => |args| try executeIntializeAccount(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args.node_pubkey,
             args.authorized_voter,
@@ -63,14 +63,14 @@ pub fn execute(
         ),
         .authorize => |args| try executeAuthorize(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args.new_authority,
             args.vote_authorize,
         ),
         .authorize_with_seed => |args| try executeAuthorizeWithSeed(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args.new_authority,
             args.authorization_type,
@@ -79,7 +79,7 @@ pub fn execute(
         ),
         .authorize_checked_with_seed => |args| try executeAuthorizeCheckedWithSeed(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args.authorization_type,
             args.current_authority_derived_key_owner,
@@ -87,36 +87,36 @@ pub fn execute(
         ),
         .authorize_checked => |args| try executeAuthorizeChecked(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args,
         ),
         .update_validator_identity => try executeUpdateValidatorIdentity(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
         ),
         .update_commission => |args| try executeUpdateCommission(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args,
         ),
         .withdraw => |args| try executeWithdraw(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args,
         ),
         .vote => |args| try executeProcessVoteWithAccount(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args.vote,
         ),
         .vote_switch => |args| try executeProcessVoteWithAccount(
             allocator,
-            instr_ctx,
+            ixn_ctx,
             &vote_account,
             args.vote,
         ),
@@ -166,14 +166,14 @@ pub fn execute(
 /// that the transaction must be signed by the staker's keys
 fn executeIntializeAccount(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
     commission: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const rent = try instr_ctx.getSysvarWithAccountCheck(
+    const rent = try ixn_ctx.getSysvarWithAccountCheck(
         Rent,
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.rent_sysvar),
     );
@@ -183,14 +183,14 @@ fn executeIntializeAccount(
         return InstructionError.InsufficientFunds;
     }
 
-    const clock = try instr_ctx.getSysvarWithAccountCheck(
+    const clock = try ixn_ctx.getSysvarWithAccountCheck(
         Clock,
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.clock_sysvar),
     );
 
     try intializeAccount(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         node_pubkey,
         authorized_voter,
         authorized_withdrawer,
@@ -207,7 +207,7 @@ fn executeIntializeAccount(
 /// suggests creating only current version is supported.
 fn intializeAccount(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
     authorized_withdrawer: Pubkey,
@@ -226,8 +226,8 @@ fn intializeAccount(
     }
 
     // node must agree to accept this vote account
-    if (!instr_ctx.ixn_info.isPubkeySigner(node_pubkey)) {
-        try instr_ctx.txn_ctx.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
+    if (!ixn_ctx.ixn_info.isPubkeySigner(node_pubkey)) {
+        try ixn_ctx.txn_ctx.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -246,21 +246,21 @@ fn intializeAccount(
 /// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
 fn executeAuthorize(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     pubkey: Pubkey,
     vote_authorize: VoteAuthorize,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const clock = try instr_ctx.getSysvarWithAccountCheck(
+    const clock = try ixn_ctx.getSysvarWithAccountCheck(
         Clock,
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
-    const signers = try instr_ctx.ixn_info.getSigners();
+    const signers = try ixn_ctx.ixn_info.getSigners();
 
     try authorize(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         pubkey,
         vote_authorize,
@@ -276,7 +276,7 @@ fn executeAuthorize(
 /// key.
 fn authorize(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     authorized: Pubkey,
     vote_authorize: VoteAuthorize,
@@ -325,7 +325,7 @@ fn authorize(
                 target_epoch,
             );
             if (maybe_err) |err| {
-                instr_ctx.txn_ctx.custom_error = @intFromEnum(err);
+                ixn_ctx.txn_ctx.custom_error = @intFromEnum(err);
                 return InstructionError.Custom;
             }
         },
@@ -348,18 +348,18 @@ fn authorize(
 /// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
 fn executeAuthorizeWithSeed(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     new_account: Pubkey,
     authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try instr_ctx.ixn_info.checkNumberOfAccounts(3);
+    try ixn_ctx.ixn_info.checkNumberOfAccounts(3);
 
     try authorizeWithSeed(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         new_account,
         authorization_type,
@@ -375,7 +375,7 @@ fn executeAuthorizeWithSeed(
 /// [agave] Analogous to [process_authorize_with_seed_instruction] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L19
 fn authorizeWithSeed(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     new_authority: Pubkey,
     authorization_type: VoteAuthorize,
@@ -384,9 +384,9 @@ fn authorizeWithSeed(
     signer_index: u8,
     clock_index: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const clock = try instr_ctx.getSysvarWithAccountCheck(Clock, clock_index);
+    const clock = try ixn_ctx.getSysvarWithAccountCheck(Clock, clock_index);
 
-    const signer_meta = instr_ctx.ixn_info.getAccountMetaAtIndex(signer_index) orelse
+    const signer_meta = ixn_ctx.ixn_info.getAccountMetaAtIndex(signer_index) orelse
         return InstructionError.NotEnoughAccountKeys;
 
     const expected_authority_keys = if (signer_meta.is_signer)
@@ -395,7 +395,7 @@ fn authorizeWithSeed(
             seed,
             owner,
         ) catch |err| {
-            instr_ctx.txn_ctx.custom_error = pubkey_utils.mapError(err);
+            ixn_ctx.txn_ctx.custom_error = pubkey_utils.mapError(err);
             return InstructionError.Custom;
         }}
     else
@@ -403,7 +403,7 @@ fn authorizeWithSeed(
 
     try authorize(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         new_authority,
         authorization_type,
@@ -415,16 +415,16 @@ fn authorizeWithSeed(
 /// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L96-L102
 fn executeAuthorizeCheckedWithSeed(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try instr_ctx.ixn_info.checkNumberOfAccounts(4);
+    try ixn_ctx.ixn_info.checkNumberOfAccounts(4);
 
     // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = &instr_ctx.ixn_info.account_metas.buffer[
+    const new_authority_meta = &ixn_ctx.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority)
     ];
     if (!new_authority_meta.is_signer) {
@@ -433,7 +433,7 @@ fn executeAuthorizeCheckedWithSeed(
 
     try authorizeWithSeed(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         new_authority_meta.pubkey,
         authorization_type,
@@ -449,21 +449,21 @@ fn executeAuthorizeCheckedWithSeed(
 /// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L239-L248
 fn executeAuthorizeChecked(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote_authorize: vote_instruction.VoteAuthorize,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try instr_ctx.ixn_info.checkNumberOfAccounts(4);
+    try ixn_ctx.ixn_info.checkNumberOfAccounts(4);
 
     // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = &instr_ctx.ixn_info.account_metas.buffer[
+    const new_authority_meta = &ixn_ctx.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_authority)
     ];
     if (!new_authority_meta.is_signer) {
         return InstructionError.MissingRequiredSignature;
     }
 
-    const clock = try instr_ctx.getSysvarWithAccountCheck(
+    const clock = try ixn_ctx.getSysvarWithAccountCheck(
         Clock,
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.clock_sysvar),
     );
@@ -473,11 +473,11 @@ fn executeAuthorizeChecked(
         .withdrawer => VoteAuthorize.withdrawer,
     };
 
-    const signers = try instr_ctx.ixn_info.getSigners();
+    const signers = try ixn_ctx.ixn_info.getSigners();
 
     try authorize(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         new_authority_meta.pubkey,
         authorize_pubkey,
@@ -489,19 +489,19 @@ fn executeAuthorizeChecked(
 /// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L114-L118
 fn executeUpdateValidatorIdentity(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try instr_ctx.ixn_info.checkNumberOfAccounts(2);
+    try ixn_ctx.ixn_info.checkNumberOfAccounts(2);
 
     // Safe since there are at least 2 accounts, and the new_identity index is 1.
-    const new_identity_meta = &instr_ctx.ixn_info.account_metas.buffer[
+    const new_identity_meta = &ixn_ctx.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity)
     ];
 
     try updateValidatorIdentity(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         new_identity_meta.pubkey,
     );
@@ -512,7 +512,7 @@ fn executeUpdateValidatorIdentity(
 /// Update the node_pubkey, requires signature of the authorized voter
 fn updateValidatorIdentity(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     new_identity: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
@@ -525,8 +525,8 @@ fn updateValidatorIdentity(
     defer vote_state.deinit();
 
     // Both the current authorized withdrawer and new identity must sign.
-    if (!instr_ctx.ixn_info.isPubkeySigner(vote_state.withdrawer) or
-        !instr_ctx.ixn_info.isPubkeySigner(new_identity))
+    if (!ixn_ctx.ixn_info.isPubkeySigner(vote_state.withdrawer) or
+        !ixn_ctx.ixn_info.isPubkeySigner(new_identity))
     {
         return InstructionError.MissingRequiredSignature;
     }
@@ -538,17 +538,17 @@ fn updateValidatorIdentity(
 /// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L121-L131
 fn executeUpdateCommission(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     commission: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
     try updateCommission(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         commission,
-        try instr_ctx.slot_ctx.sysvar_cache.get(EpochSchedule),
-        try instr_ctx.slot_ctx.sysvar_cache.get(Clock),
+        try ixn_ctx.slot_ctx.sysvar_cache.get(EpochSchedule),
+        try ixn_ctx.slot_ctx.sysvar_cache.get(Clock),
     );
 }
 
@@ -557,7 +557,7 @@ fn executeUpdateCommission(
 /// Update the vote account's commission
 fn updateCommission(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     commission: u8,
     epoch_schedule: EpochSchedule,
@@ -567,7 +567,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (instr_ctx.epoch_ctx.feature_set.active.contains(
+        if (ixn_ctx.epoch_ctx.feature_set.active.contains(
             features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
         )) {
             const versioned_state = vote_account.deserializeFromAccountData(
@@ -588,7 +588,7 @@ fn updateCommission(
     };
 
     if (enforce_commission_update_rule and
-        instr_ctx.epoch_ctx.feature_set.active.contains(
+        ixn_ctx.epoch_ctx.feature_set.active.contains(
         features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
@@ -596,7 +596,7 @@ fn updateCommission(
             if (maybe_vote_state) |*vote_state| {
                 vote_state.deinit();
             }
-            instr_ctx.txn_ctx.custom_error = @intFromEnum(VoteError.commission_update_too_late);
+            ixn_ctx.txn_ctx.custom_error = @intFromEnum(VoteError.commission_update_too_late);
             return InstructionError.Custom;
         }
     }
@@ -618,7 +618,7 @@ fn updateCommission(
     defer vote_state.deinit();
 
     // Current authorized withdrawer must sign transaction.
-    if (!instr_ctx.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
+    if (!ixn_ctx.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -648,19 +648,19 @@ pub fn isCommissionUpdateAllowed(slot: u64, epoch_schedule: *const EpochSchedule
 /// [agave] https://github.com/anza-xyz/agave/blob/e363f52b5bb4bfb131c647d4dbd6043d23575c78/programs/vote/src/vote_processor.rs#L222-L227
 fn executeWithdraw(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try instr_ctx.ixn_info.checkNumberOfAccounts(2);
-    const rent = try instr_ctx.slot_ctx.sysvar_cache.get(Rent);
-    const clock = try instr_ctx.slot_ctx.sysvar_cache.get(Clock);
+    try ixn_ctx.ixn_info.checkNumberOfAccounts(2);
+    const rent = try ixn_ctx.slot_ctx.sysvar_cache.get(Rent);
+    const clock = try ixn_ctx.slot_ctx.sysvar_cache.get(Clock);
 
     vote_account.release();
 
     try widthraw(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         @intFromEnum(vote_instruction.Withdraw.AccountIndex.account),
         lamports,
         @intFromEnum(vote_instruction.Withdraw.AccountIndex.recipient_authority),
@@ -672,14 +672,14 @@ fn executeWithdraw(
 /// [agave] https://github.com/anza-xyz/agave/blob/e363f52b5bb4bfb131c647d4dbd6043d23575c78/programs/vote/src/vote_state/mod.rs#L824
 fn widthraw(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account_index: u16,
     lamports: u64,
     to_account_index: u16,
     rent: Rent,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!void {
-    var vote_account = try instr_ctx.borrowInstructionAccount(vote_account_index);
+    var vote_account = try ixn_ctx.borrowInstructionAccount(vote_account_index);
     defer vote_account.release();
 
     const versioned_state = try vote_account.deserializeFromAccountData(
@@ -690,7 +690,7 @@ fn widthraw(
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
-    if (!instr_ctx.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
+    if (!ixn_ctx.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -713,7 +713,7 @@ fn widthraw(
         };
 
         if (reject_active_vote_account_close) {
-            instr_ctx.txn_ctx.custom_error = @intFromEnum(VoteError.active_vote_account_close);
+            ixn_ctx.txn_ctx.custom_error = @intFromEnum(VoteError.active_vote_account_close);
             return InstructionError.Custom;
         } else {
             // Deinitialize upon zero-balance
@@ -734,7 +734,7 @@ fn widthraw(
     try vote_account.subtractLamports(lamports);
     vote_account.release();
 
-    var recipient_account = try instr_ctx.borrowInstructionAccount(to_account_index);
+    var recipient_account = try ixn_ctx.borrowInstructionAccount(to_account_index);
     defer recipient_account.release();
     try recipient_account.addLamports(lamports);
 }
@@ -742,31 +742,31 @@ fn widthraw(
 /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_processor.rs#L133
 fn executeProcessVoteWithAccount(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (instr_ctx.epoch_ctx.feature_set.active.contains(
+    if (ixn_ctx.epoch_ctx.feature_set.active.contains(
         features.DEPRECATE_LEGACY_VOTE_IXS,
     ) and
-        instr_ctx.epoch_ctx.feature_set.active.contains(
+        ixn_ctx.epoch_ctx.feature_set.active.contains(
         features.ENABLE_TOWER_SYNC_IX,
     )) {
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try instr_ctx.getSysvarWithAccountCheck(
+    const slot_hashes = try ixn_ctx.getSysvarWithAccountCheck(
         SlotHashes,
         @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
     );
-    const clock = try instr_ctx.getSysvarWithAccountCheck(
+    const clock = try ixn_ctx.getSysvarWithAccountCheck(
         Clock,
         @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
     );
 
     try processVoteWithAccount(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         vote,
         slot_hashes,
@@ -777,7 +777,7 @@ fn executeProcessVoteWithAccount(
 /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L923
 fn processVoteWithAccount(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     vote: Vote,
     slot_hashes: SlotHashes,
@@ -785,7 +785,7 @@ fn processVoteWithAccount(
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_state = try verifyAndGetVoteState(
         allocator,
-        instr_ctx,
+        ixn_ctx,
         vote_account,
         clock,
     );
@@ -800,13 +800,13 @@ fn processVoteWithAccount(
     );
 
     if (maybe_err) |err| {
-        instr_ctx.txn_ctx.custom_error = @intFromEnum(err);
+        ixn_ctx.txn_ctx.custom_error = @intFromEnum(err);
         return InstructionError.Custom;
     }
 
     if (vote.timestamp) |timestamp| {
         if (vote.slots.len == 0) {
-            instr_ctx.txn_ctx.custom_error = @intFromEnum(VoteError.empty_slots);
+            ixn_ctx.txn_ctx.custom_error = @intFromEnum(VoteError.empty_slots);
             return InstructionError.Custom;
         }
 
@@ -816,7 +816,7 @@ fn processVoteWithAccount(
             0;
 
         if (vote_state.processTimestamp(max_slot, timestamp)) |err| {
-            instr_ctx.txn_ctx.custom_error = @intFromEnum(err);
+            ixn_ctx.txn_ctx.custom_error = @intFromEnum(err);
             return InstructionError.Custom;
         }
     }
@@ -945,7 +945,7 @@ fn towerSync(
 /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L905
 fn verifyAndGetVoteState(
     allocator: std.mem.Allocator,
-    instr_ctx: *InstructionContext,
+    ixn_ctx: *InstructionContext,
     vote_account: *BorrowedAccount,
     clock: Clock,
 ) (error{OutOfMemory} || InstructionError)!VoteState {
@@ -962,7 +962,7 @@ fn verifyAndGetVoteState(
     var vote_state = try versioned_state.convertToCurrent(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
-    if (!instr_ctx.ixn_info.isPubkeySigner(authorized_voter)) {
+    if (!ixn_ctx.ixn_info.isPubkeySigner(authorized_voter)) {
         return InstructionError.MissingRequiredSignature;
     }
     return vote_state;

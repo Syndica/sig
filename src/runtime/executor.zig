@@ -124,12 +124,12 @@ fn processNextInstruction(
 ) (error{OutOfMemory} || InstructionError)!void {
     // Get next instruction context from the stack
     if (txn_ctx.instruction_stack.len == 0) return InstructionError.CallDepth;
-    const instr_ctx = &txn_ctx.instruction_stack.buffer[txn_ctx.instruction_stack.len - 1];
+    const ixn_ctx = &txn_ctx.instruction_stack.buffer[txn_ctx.instruction_stack.len - 1];
 
     // Lookup the program id
     // [agave] https://github.com/anza-xyz/agave/blob/a1ed2b1052bde05e79c31388b399dba9da10f7de/program-runtime/src/invoke_context.rs#L518-L529
     const program_id = blk: {
-        const program_account = instr_ctx.borrowProgramAccount() catch
+        const program_account = ixn_ctx.borrowProgramAccount() catch
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
@@ -153,7 +153,7 @@ fn processNextInstruction(
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
             program_id.base58String().slice(),
         );
-        instr_ctx.txn_ctx.return_data.data.len = 0;
+        ixn_ctx.txn_ctx.return_data.data.len = 0;
         break :blk native_program_fn;
     };
 
@@ -164,15 +164,15 @@ fn processNextInstruction(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1160-L1167
     try stable_log.programInvoke(
-        instr_ctx.txn_ctx,
+        ixn_ctx.txn_ctx,
         program_id,
-        instr_ctx.txn_ctx.instruction_stack.len,
+        ixn_ctx.txn_ctx.instruction_stack.len,
     );
-    native_program_fn(allocator, instr_ctx) catch |execute_error| {
-        try stable_log.programFailure(instr_ctx.txn_ctx, program_id, execute_error);
+    native_program_fn(allocator, ixn_ctx) catch |execute_error| {
+        try stable_log.programFailure(ixn_ctx.txn_ctx, program_id, execute_error);
         return execute_error;
     };
-    try stable_log.programSuccess(instr_ctx.txn_ctx, program_id);
+    try stable_log.programSuccess(ixn_ctx.txn_ctx, program_id);
 }
 
 /// Pop an instruction from the instruction stack\
@@ -188,18 +188,18 @@ fn popInstruction(
 
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L411-L426
     const unbalanced_instruction = blk: {
-        const instr_ctx = &txn_ctx.instruction_stack.buffer[txn_ctx.instruction_stack.len - 1];
+        const ixn_ctx = &txn_ctx.instruction_stack.buffer[txn_ctx.instruction_stack.len - 1];
 
         // Check program account has no outstanding borrows
-        const program_account = instr_ctx.borrowProgramAccount() catch {
+        const program_account = ixn_ctx.borrowProgramAccount() catch {
             return InstructionError.AccountBorrowOutstanding;
         };
         program_account.release();
 
-        const initial_lamports = instr_ctx.ixn_info.initial_account_lamports;
+        const initial_lamports = ixn_ctx.ixn_info.initial_account_lamports;
         const current_lamports = try sumAccountLamports(
             txn_ctx,
-            instr_ctx.ixn_info.account_metas.constSlice(),
+            ixn_ctx.ixn_info.account_metas.constSlice(),
         );
 
         break :blk (initial_lamports != current_lamports);

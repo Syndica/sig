@@ -1581,7 +1581,7 @@ pub fn createTestVoteState(
 
 pub fn verifyAndGetVoteState(
     allocator: std.mem.Allocator,
-    instr_ctx: *sig.runtime.InstructionContext,
+    ixn_ctx: *sig.runtime.InstructionContext,
     vote_account: *sig.runtime.BorrowedAccount,
     clock: *const Clock,
 ) (error{OutOfMemory} || InstructionError)!VoteState {
@@ -1596,7 +1596,7 @@ pub fn verifyAndGetVoteState(
     var vote_state = try versioned_state.convertToCurrent(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
-    if (!instr_ctx.ixn_info.isPubkeySigner(authorized_voter)) {
+    if (!ixn_ctx.ixn_info.isPubkeySigner(authorized_voter)) {
         return InstructionError.MissingRequiredSignature;
     }
 
