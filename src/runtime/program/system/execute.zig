@@ -578,7 +578,10 @@ fn advanceNonceAccount(
             const next_durable_nonce = nonce.createDurableNonce(ic.txn_ctx.prev_blockhash);
 
             if (data.durable_nonce.eql(next_durable_nonce)) {
-                try ic.txn_ctx.log("Advance nonce account: nonce can only advance once per slot", .{});
+                try ic.txn_ctx.log(
+                    "Advance nonce account: nonce can only advance once per slot",
+                    .{},
+                );
                 ic.txn_ctx.custom_error =
                     @intFromEnum(SystemProgramError.NonceBlockhashNotExpired);
                 return InstructionError.Custom;
@@ -624,10 +627,10 @@ fn withdrawNonceAccount(
         const authority = switch (versioned_nonce.getState()) {
             .unintialized => blk: {
                 if (lamports > from_account.account.lamports) {
-                    try ic.txn_ctx.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
-                        from_account.account.lamports,
-                        lamports,
-                    });
+                    try ic.txn_ctx.log(
+                        "Withdraw nonce account: insufficient lamports {}, need {}",
+                        .{ from_account.account.lamports, lamports },
+                    );
                     return InstructionError.InsufficientFunds;
                 }
                 break :blk from_account.pubkey;
@@ -753,7 +756,10 @@ pub fn authorizeNonceAccount(
     };
 
     if (!ic.ixn_info.isPubkeySigner(nonce_data.authority)) {
-        try ic.txn_ctx.log("Authorize nonce account: Account {} must sign", .{nonce_data.authority});
+        try ic.txn_ctx.log(
+            "Authorize nonce account: Account {} must sign",
+            .{nonce_data.authority},
+        );
         return InstructionError.MissingRequiredSignature;
     }
 

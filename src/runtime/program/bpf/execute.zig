@@ -348,7 +348,9 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust,);
 
     // Memory Allocator
-    if (!tc.slot_ctx.epoch_ctx.feature_set.active.contains(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
+    if (!tc.slot_ctx.epoch_ctx.feature_set.active.contains(
+        features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL,
+    )) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_alloc_free_",
@@ -367,7 +369,9 @@ fn registerSyscalls(
     // }
 
     // Poseidon
-    if (tc.slot_ctx.epoch_ctx.feature_set.active.contains(features.ENABLE_POSEIDON_SYSCALL)) {
+    if (tc.slot_ctx.epoch_ctx.feature_set.active.contains(
+        features.ENABLE_POSEIDON_SYSCALL,
+    )) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_poseidon",

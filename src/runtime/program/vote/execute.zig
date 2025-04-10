@@ -584,7 +584,8 @@ fn updateCommission(
         }
     };
 
-    if (enforce_commission_update_rule and ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
+    if (enforce_commission_update_rule and
+        ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
         features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
@@ -742,9 +743,12 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(features.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX))
-    {
+    if (ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
+        features.DEPRECATE_LEGACY_VOTE_IXS,
+    ) and
+        ic.txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
+        features.ENABLE_TOWER_SYNC_IX,
+    )) {
         return InstructionError.InvalidInstructionData;
     }
 

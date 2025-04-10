@@ -556,7 +556,10 @@ fn deserializeParametersUnaligned(
                 if (start + pre_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + pre_len];
                 const can_data_be_resized =
-                    borrowed_account.checkCanSetDataLength(ic.txn_ctx.accounts_resize_delta, pre_len);
+                    borrowed_account.checkCanSetDataLength(
+                    ic.txn_ctx.accounts_resize_delta,
+                    pre_len,
+                );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataFromSlice(
@@ -647,7 +650,10 @@ fn deserializeParametersAligned(
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
-                    borrowed_account.checkCanSetDataLength(ic.txn_ctx.accounts_resize_delta, post_len);
+                    borrowed_account.checkCanSetDataLength(
+                    ic.txn_ctx.accounts_resize_delta,
+                    post_len,
+                );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataFromSlice(
@@ -666,7 +672,10 @@ fn deserializeParametersAligned(
                 if (start + post_len > memory.len) return InstructionError.InvalidArgument;
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
-                    borrowed_account.checkCanSetDataLength(ic.txn_ctx.accounts_resize_delta, post_len);
+                    borrowed_account.checkCanSetDataLength(
+                    ic.txn_ctx.accounts_resize_delta,
+                    post_len,
+                );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataLength(

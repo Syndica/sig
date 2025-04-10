@@ -531,10 +531,16 @@ fn closeLookupTable(
 
     try ic.ixn_info.checkNumberOfAccounts(3);
 
-    if ((ic.ixn_info.getAccountMetaAtIndex(0) orelse return error.NotEnoughAccountKeys).pubkey.equals(
-        &(ic.ixn_info.getAccountMetaAtIndex(2) orelse return error.NotEnoughAccountKeys).pubkey,
-    )) {
-        try ic.txn_ctx.log("Lookup table cannot be the recipient of reclaimed lamports", .{});
+    const lookup_table_meta = ic.ixn_info.getAccountMetaAtIndex(0) orelse
+        return error.NotEnoughAccountKeys;
+    const payer_meta = ic.ixn_info.getAccountMetaAtIndex(2) orelse
+        return error.NotEnoughAccountKeys;
+
+    if (lookup_table_meta.pubkey.equals(&payer_meta.pubkey)) {
+        try ic.txn_ctx.log(
+            "Lookup table cannot be the recipient of reclaimed lamports",
+            .{},
+        );
         return error.InvalidArgument;
     }
 

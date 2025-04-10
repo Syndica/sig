@@ -429,7 +429,10 @@ pub fn executeV3DeployWithMaxDataLen(
         try program_account.serializeIntoAccountData(bpf_loader_program.v3.State{ .program = .{
             .programdata_address = program_data_key,
         } });
-        try program_account.setExecutable(true, try ic.txn_ctx.slot_ctx.sysvar_cache.get(sysvar.Rent));
+        try program_account.setExecutable(
+            true,
+            try ic.txn_ctx.slot_ctx.sysvar_cache.get(sysvar.Rent),
+        );
     }
 
     try ic.txn_ctx.log("Deployed program {}", .{new_program_id});
@@ -819,9 +822,14 @@ pub fn executeV3Close(
     const AccountIndex = bpf_loader_program.v3.instruction.Close.AccountIndex;
     try ic.ixn_info.checkNumberOfAccounts(2);
 
-    if (ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.account)).?.index_in_transaction ==
-        ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.recipient)).?.index_in_transaction)
-    {
+    const account_index_in_txn = ic.ixn_info.getAccountMetaAtIndex(
+        @intFromEnum(AccountIndex.account),
+    ).?.index_in_transaction;
+    const recipient_index_in_txn = ic.ixn_info.getAccountMetaAtIndex(
+        @intFromEnum(AccountIndex.recipient),
+    ).?.index_in_transaction;
+
+    if (account_index_in_txn == recipient_index_in_txn) {
         try ic.txn_ctx.log("Recipient is the same as the account being closed", .{});
         return InstructionError.InvalidArgument;
     }
@@ -1039,7 +1047,10 @@ pub fn executeV3ExtendProgram(
                 return InstructionError.InvalidArgument;
             }
             if (data.upgrade_authority_address == null) {
-                try ic.txn_ctx.log("Cannot extend ProgramData accounts that are not upgradeable", .{});
+                try ic.txn_ctx.log(
+                    "Cannot extend ProgramData accounts that are not upgradeable",
+                    .{},
+                );
                 return InstructionError.Immutable;
             }
             break :blk data.upgrade_authority_address;
