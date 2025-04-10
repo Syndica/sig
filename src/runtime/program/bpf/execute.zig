@@ -164,7 +164,7 @@ pub fn execute(
 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L299-L300
 fn initVm(
     allocator: std.mem.Allocator,
-    tc: *TransactionContext,
+    txn_ctx: *TransactionContext,
     executable: *const vm.Executable,
     regions: []vm.memory.Region,
     syscalls: *const vm.BuiltinProgram,
@@ -177,10 +177,10 @@ fn initVm(
     const PAGE_SIZE: u64 = 32 * 1024;
 
     const stack_size = executable.config.stackSize();
-    const heap_size = tc.compute_budget.heap_size;
+    const heap_size = txn_ctx.compute_budget.heap_size;
     const cost = std.mem.alignBackward(u64, heap_size -| 1, PAGE_SIZE) / PAGE_SIZE;
-    const heap_cost = cost * tc.compute_budget.heap_cost;
-    try tc.consumeCompute(heap_cost);
+    const heap_cost = cost * txn_ctx.compute_budget.heap_cost;
+    try txn_ctx.consumeCompute(heap_cost);
 
     const heap = try allocator.alloc(u8, heap_size);
     @memset(heap, 0);
@@ -217,7 +217,7 @@ fn initVm(
         memory_map,
         syscalls,
         stack.len,
-        tc,
+        txn_ctx,
     );
     errdefer sbpf_vm.deinit();
 
@@ -232,7 +232,7 @@ fn initVm(
 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/syscalls/mod.rs#L335
 fn registerSyscalls(
     allocator: std.mem.Allocator,
-    tc: *TransactionContext,
+    txn_ctx: *TransactionContext,
 ) !vm.BuiltinProgram {
     // TODO: Feature Activation
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/syscalls/mod.rs#L341-L374
@@ -348,7 +348,7 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust,);
 
     // Memory Allocator
-    if (!tc.slot_ctx.epoch_ctx.feature_set.active.contains(
+    if (!txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
         features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL,
     )) {
         _ = try syscalls.functions.registerHashed(
@@ -369,7 +369,7 @@ fn registerSyscalls(
     // }
 
     // Poseidon
-    if (tc.slot_ctx.epoch_ctx.feature_set.active.contains(
+    if (txn_ctx.slot_ctx.epoch_ctx.feature_set.active.contains(
         features.ENABLE_POSEIDON_SYSCALL,
     )) {
         _ = try syscalls.functions.registerHashed(

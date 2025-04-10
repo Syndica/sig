@@ -738,7 +738,7 @@ test "serializeParameters" {
         }) |copy_account_data| {
             const program_id = Pubkey.initRandom(prng.random());
 
-            const ec, const sc, var tc = try createExecutionContexts(
+            const epoch_ctx, const slot_ctx, var txn_ctx = try createExecutionContexts(
                 allocator,
                 prng.random(),
                 .{
@@ -802,14 +802,14 @@ test "serializeParameters" {
                 },
             );
             defer {
-                ec.deinit();
-                allocator.destroy(ec);
-                allocator.destroy(sc);
-                tc.deinit();
+                epoch_ctx.deinit();
+                allocator.destroy(epoch_ctx);
+                allocator.destroy(slot_ctx);
+                txn_ctx.deinit();
             }
 
             const instruction_info = try createInstructionInfo(
-                &tc,
+                &txn_ctx,
                 program_id,
                 [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 },
                 &.{
@@ -873,8 +873,8 @@ test "serializeParameters" {
             );
             defer instruction_info.deinit(allocator);
 
-            var ic = InstructionContext{
-                .txn_ctx = &tc,
+            var instr_ctx = InstructionContext{
+                .txn_ctx = &txn_ctx,
                 .ixn_info = instruction_info,
                 .depth = 0,
             };
@@ -885,7 +885,7 @@ test "serializeParameters" {
                     for (accounts.items) |account| account.deinit(allocator);
                     accounts.deinit();
                 }
-                for (tc.accounts) |account| {
+                for (txn_ctx.accounts) |account| {
                     try accounts.append(TransactionContextAccount.init(account.pubkey, .{
                         .lamports = account.account.lamports,
                         .owner = account.account.owner,
@@ -903,7 +903,7 @@ test "serializeParameters" {
 
             const memory, const regions, const account_metas = try serializeParameters(
                 allocator,
-                &ic,
+                &instr_ctx,
                 copy_account_data,
             );
             defer {
@@ -924,13 +924,13 @@ test "serializeParameters" {
 
             try deserializeParameters(
                 allocator,
-                &ic,
+                &instr_ctx,
                 copy_account_data,
                 memory,
                 account_metas,
             );
             for (pre_accounts, 0..) |pre_account, index_in_transaction| {
-                const post_account = tc.accounts[index_in_transaction];
+                const post_account = txn_ctx.accounts[index_in_transaction];
                 try std.testing.expectEqual(
                     pre_account.read_refs,
                     post_account.read_refs,

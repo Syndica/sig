@@ -164,16 +164,16 @@ pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!vo
 pub const MAX_RETURN_DATA: usize = 1024;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/4f68141ba70b7574da0bc185ef5d08fe33d19887/programs/bpf_loader/src/syscalls/mod.rs#L1450
-pub fn setReturnData(tc: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) Error!void {
+pub fn setReturnData(ctx: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) Error!void {
     const addr = rm.get(.r1);
     const len = rm.get(.r2);
 
-    const cost = if (tc.compute_budget.cpi_bytes_per_unit > 0)
-        (len / tc.compute_budget.cpi_bytes_per_unit) +| tc.compute_budget.syscall_base_cost
+    const cost = if (ctx.compute_budget.cpi_bytes_per_unit > 0)
+        (len / ctx.compute_budget.cpi_bytes_per_unit) +| ctx.compute_budget.syscall_base_cost
     else
         std.math.maxInt(u64);
 
-    try tc.consumeCompute(cost);
+    try ctx.consumeCompute(cost);
 
     if (len > TransactionReturnData.MAX_RETURN_DATA) {
         return error.ReturnDataTooLarge;
@@ -185,13 +185,13 @@ pub fn setReturnData(tc: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) E
     else
         try mm.vmap(.constant, addr, len);
 
-    if (tc.instruction_stack.len == 0) return error.CallDepth;
-    const ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
-    const program_id = ic.ixn_info.program_meta.pubkey;
+    if (ctx.instruction_stack.len == 0) return error.CallDepth;
+    const instr_ctx = ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+    const program_id = instr_ctx.ixn_info.program_meta.pubkey;
 
-    tc.return_data.program_id = program_id;
-    tc.return_data.data.len = 0;
-    tc.return_data.data.appendSliceAssumeCapacity(return_data);
+    ctx.return_data.program_id = program_id;
+    ctx.return_data.data.len = 0;
+    ctx.return_data.data.appendSliceAssumeCapacity(return_data);
 }
 
 // hashing
