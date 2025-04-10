@@ -193,7 +193,7 @@ pub fn serializeParameters(
     []Region,
     []SerializedAccountMeta,
 } {
-    if (ic.info.account_metas.len > std.math.maxInt(u8))
+    if (ic.ixn_info.account_metas.len > std.math.maxInt(u8))
         return InstructionError.MaxAccountsExceeded;
 
     const is_loader_v1 = blk: {
@@ -204,11 +204,11 @@ pub fn serializeParameters(
 
     var accounts = std.ArrayList(SerializedAccount).initCapacity(
         allocator,
-        ic.info.account_metas.len,
+        ic.ixn_info.account_metas.len,
     ) catch return InstructionError.ProgramEnvironmentSetupFailure;
     defer accounts.deinit();
 
-    for (ic.info.account_metas.constSlice(), 0..) |account_meta, index_in_instruction| {
+    for (ic.ixn_info.account_metas.constSlice(), 0..) |account_meta, index_in_instruction| {
         if (account_meta.index_in_callee != index_in_instruction) {
             accounts.appendAssumeCapacity(.{ .duplicate = @intCast(account_meta.index_in_callee) });
         } else {
@@ -225,16 +225,16 @@ pub fn serializeParameters(
         serializeParametersUnaligned(
             allocator,
             accounts.items,
-            ic.info.instruction_data,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.instruction_data,
+            ic.ixn_info.program_meta.pubkey,
             copy_account_data,
         )
     else
         serializeParametersAligned(
             allocator,
             accounts.items,
-            ic.info.instruction_data,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.instruction_data,
+            ic.ixn_info.program_meta.pubkey,
             copy_account_data,
         );
 }
@@ -524,9 +524,9 @@ fn deserializeParametersUnaligned(
     account_lengths: []const usize,
 ) (error{OutOfMemory} || InstructionError)!void {
     var start: usize = @sizeOf(u64);
-    for (0..ic.info.account_metas.len) |index_in_instruction_| {
+    for (0..ic.ixn_info.account_metas.len) |index_in_instruction_| {
         const index_in_instruction: u16 = @intCast(index_in_instruction_);
-        const account_meta = ic.info.account_metas.buffer[index_in_instruction];
+        const account_meta = ic.ixn_info.account_metas.buffer[index_in_instruction];
         const pre_len = account_lengths[index_in_instruction];
 
         start += 1; // is_dup
@@ -589,9 +589,9 @@ fn deserializeParametersAligned(
 ) (error{OutOfMemory} || InstructionError)!void {
     var start: usize = @sizeOf(u64);
 
-    for (0..ic.info.account_metas.len) |index_in_instruction_| {
+    for (0..ic.ixn_info.account_metas.len) |index_in_instruction_| {
         const index_in_instruction: u16 = @intCast(index_in_instruction_);
-        const account_meta = ic.info.account_metas.buffer[index_in_instruction];
+        const account_meta = ic.ixn_info.account_metas.buffer[index_in_instruction];
         const pre_len = account_lengths[index_in_instruction];
 
         start += @sizeOf(u8);
@@ -866,7 +866,7 @@ test "serializeParameters" {
 
             var ic = InstructionContext{
                 .txn_ctx = &tc,
-                .info = instruction_info,
+                .ixn_info = instruction_info,
                 .depth = 0,
             };
 

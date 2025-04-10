@@ -108,7 +108,7 @@ pub fn execute(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1646-L1653
     try ic.txn_ctx.log("Program {} consumed {} of {} compute units", .{
-        ic.info.program_meta.pubkey,
+        ic.ixn_info.program_meta.pubkey,
         compute_consumed,
         compute_available,
     });
@@ -117,7 +117,7 @@ pub fn execute(
     if (ic.txn_ctx.return_data.data.len != 0) {
         try stable_log.programReturn(
             ic.txn_ctx,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             ic.txn_ctx.return_data.data.constSlice(),
         );
     }
@@ -129,7 +129,7 @@ pub fn execute(
                 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
                 std.debug.print(
                     "Program {} failed: {}\n",
-                    .{ ic.info.program_meta.pubkey, status },
+                    .{ ic.ixn_info.program_meta.pubkey, status },
                 );
                 @panic("sbpf error handling not implemented!");
             } else {

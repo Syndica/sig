@@ -92,7 +92,7 @@ pub const TransactionContext = struct {
     );
 
     pub const InstructionTrace = std.BoundedArray(struct {
-        info: InstructionInfo,
+        ixn_info: InstructionInfo,
         depth: u8,
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 

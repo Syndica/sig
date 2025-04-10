@@ -67,7 +67,7 @@ fn pushInstruction(
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
     for (tc.instruction_stack.constSlice(), 0..) |ic, level| {
         // If the program is on the stack, it must be the last entry otherwise it is a reentrancy violation
-        if (program_id.equals(&ic.info.program_meta.pubkey) and
+        if (program_id.equals(&ic.ixn_info.program_meta.pubkey) and
             level != tc.instruction_stack.len - 1)
         {
             return InstructionError.ReentrancyNotAllowed;
@@ -88,9 +88,9 @@ fn pushInstruction(
 
     if (tc.instruction_stack.len > 0) {
         const parent = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
-        const initial_lamports = parent.info.initial_account_lamports;
+        const initial_lamports = parent.ixn_info.initial_account_lamports;
         const current_lamports =
-            try sumAccountLamports(tc, parent.info.account_metas.constSlice());
+            try sumAccountLamports(tc, parent.ixn_info.account_metas.constSlice());
         if (initial_lamports != current_lamports) return InstructionError.UnbalancedInstruction;
     }
 
@@ -104,12 +104,12 @@ fn pushInstruction(
 
     tc.instruction_stack.appendAssumeCapacity(.{
         .txn_ctx = tc,
-        .info = instruction_info,
+        .ixn_info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
     });
 
     tc.instruction_trace.appendAssumeCapacity(.{
-        .info = instruction_info,
+        .ixn_info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
     });
 }
@@ -190,8 +190,8 @@ fn popInstruction(
         };
         program_account.release();
 
-        const initial_lamports = ic.info.initial_account_lamports;
-        const current_lamports = try sumAccountLamports(tc, ic.info.account_metas.constSlice());
+        const initial_lamports = ic.ixn_info.initial_account_lamports;
+        const current_lamports = try sumAccountLamports(tc, ic.ixn_info.account_metas.constSlice());
 
         break :blk (initial_lamports != current_lamports);
     };
@@ -242,7 +242,7 @@ pub fn prepareCpiInstructionInfo(
             deduped_meta.is_signer = deduped_meta.is_signer or account.is_signer;
             deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
         } else {
-            const index_in_caller = caller.info.getAccountMetaIndex(account.pubkey) orelse {
+            const index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse {
                 try tc.log("Instruction references unknown account {}", .{account.pubkey});
                 return InstructionError.MissingAccount;
             };
@@ -311,11 +311,11 @@ pub fn prepareCpiInstructionInfo(
             return InstructionError.MissingAccount;
         };
     } else blk: {
-        const index_in_caller = caller.info.getAccountMetaIndex(callee.program_id) orelse {
+        const index_in_caller = caller.ixn_info.getAccountMetaIndex(callee.program_id) orelse {
             try tc.log("Unknown program {}", .{callee.program_id});
             return InstructionError.MissingAccount;
         };
-        const program_meta = caller.info.account_metas.buffer[index_in_caller];
+        const program_meta = caller.ixn_info.account_metas.buffer[index_in_caller];
 
         const borrowed_account =
             try caller.borrowInstructionAccount(index_in_caller);

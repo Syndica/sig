@@ -28,7 +28,7 @@ pub fn execute(
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
-    const instruction = try ic.info.deserializeInstruction(allocator, SystemProgramInstruction);
+    const instruction = try ic.ixn_info.deserializeInstruction(allocator, SystemProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -115,7 +115,7 @@ fn executeCreateAccount(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
     try createAccount(
         allocator,
         ic,
@@ -124,7 +124,7 @@ fn executeCreateAccount(
         lamports,
         space,
         owner,
-        ic.info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.buffer[1].pubkey,
     );
 }
 
@@ -133,7 +133,7 @@ fn executeAssign(
     ic: *InstructionContext,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
     try assign(
@@ -149,7 +149,7 @@ fn executeTransfer(
     ic: *InstructionContext,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
     try transfer(
         ic,
         0,
@@ -168,10 +168,10 @@ fn executeCreateAccountWithSeed(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
-        ic.info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.buffer[1].pubkey,
         base,
         owner,
         seed,
@@ -194,7 +194,7 @@ fn executeAdvanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -215,7 +215,7 @@ fn executeWithdrawNonceAccount(
     ic: *InstructionContext,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
     // TODO: Is this sysvar call required for consensus despite being unused?
     _ = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
@@ -231,7 +231,7 @@ fn executeInitializeNonceAccount(
     ic: *InstructionContext,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -260,7 +260,7 @@ fn executeAuthorizeNonceAccount(
     ic: *InstructionContext,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -279,7 +279,7 @@ fn executeAllocate(
     ic: *InstructionContext,
     space: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -296,7 +296,7 @@ fn executeAllocateWithSeed(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -321,7 +321,7 @@ fn executeAssignWithSeed(
     seed: []const u8,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -345,16 +345,16 @@ fn executeTransferWithSeed(
     from_seed: []const u8,
     from_owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     const from_index = 0;
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.info.account_metas.buffer[from_base_index].pubkey;
-    const from_pubkey = ic.info.account_metas.buffer[from_index].pubkey;
+    const from_base_pubkey = ic.ixn_info.account_metas.buffer[from_base_index].pubkey;
+    const from_pubkey = ic.ixn_info.account_metas.buffer[from_index].pubkey;
 
-    if (!try ic.info.isIndexSigner(from_base_index)) {
+    if (!try ic.ixn_info.isIndexSigner(from_base_index)) {
         try ic.txn_ctx.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -381,7 +381,7 @@ fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -412,7 +412,7 @@ fn allocate(
     space: u64,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.info.isPubkeySigner(authority)) {
+    if (!ic.ixn_info.isPubkeySigner(authority)) {
         try ic.txn_ctx.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -444,7 +444,7 @@ fn assign(
 ) (error{OutOfMemory} || InstructionError)!void {
     if (account.account.owner.equals(&owner)) return;
 
-    if (!ic.info.isPubkeySigner(authority)) {
+    if (!ic.ixn_info.isPubkeySigner(authority)) {
         try ic.txn_ctx.log("Assign: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -492,10 +492,10 @@ fn transfer(
     to_index: u16,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!try ic.info.isIndexSigner(from_index)) {
+    if (!try ic.ixn_info.isIndexSigner(from_index)) {
         try ic.txn_ctx.log(
             "Transfer: `from` account {} must sign",
-            .{ic.info.account_metas.buffer[from_index].pubkey},
+            .{ic.ixn_info.account_metas.buffer[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
     }
@@ -567,7 +567,7 @@ fn advanceNonceAccount(
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| {
-            if (!ic.info.isPubkeySigner(data.authority)) {
+            if (!ic.ixn_info.isPubkeySigner(data.authority)) {
                 try ic.txn_ctx.log(
                     "Advance nonce account: Account {} must be a signer",
                     .{data.authority},
@@ -666,7 +666,7 @@ fn withdrawNonceAccount(
             },
         };
 
-        if (!ic.info.isPubkeySigner(authority)) {
+        if (!ic.ixn_info.isPubkeySigner(authority)) {
             try ic.txn_ctx.log("Withdraw nonce account: Account {} must sign", .{authority});
             return InstructionError.MissingRequiredSignature;
         }
@@ -752,7 +752,7 @@ pub fn authorizeNonceAccount(
         .initialized => |data| data,
     };
 
-    if (!ic.info.isPubkeySigner(nonce_data.authority)) {
+    if (!ic.ixn_info.isPubkeySigner(nonce_data.authority)) {
         try ic.txn_ctx.log("Authorize nonce account: Account {} must sign", .{nonce_data.authority});
         return InstructionError.MissingRequiredSignature;
     }

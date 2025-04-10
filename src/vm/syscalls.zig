@@ -187,7 +187,7 @@ pub fn setReturnData(tc: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) E
 
     if (tc.instruction_stack.len == 0) return error.CallDepth;
     const ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
-    const program_id = ic.info.program_meta.pubkey;
+    const program_id = ic.ixn_info.program_meta.pubkey;
 
     tc.return_data.program_id = program_id;
     tc.return_data.data.len = 0;

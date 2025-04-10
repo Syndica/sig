@@ -28,7 +28,7 @@ pub fn execute(
     // agave: consumed in declare_process_instruction
     try ic.txn_ctx.consumeCompute(program.COMPUTE_UNITS);
 
-    const lookuptable_instruction = try ic.info.deserializeInstruction(allocator, Instruction);
+    const lookuptable_instruction = try ic.ixn_info.deserializeInstruction(allocator, Instruction);
     defer sig.bincode.free(allocator, lookuptable_instruction);
 
     return switch (lookuptable_instruction) {
@@ -529,10 +529,10 @@ fn closeLookupTable(
         break :blk authority_account.pubkey;
     };
 
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
-    if ((ic.info.getAccountMetaAtIndex(0) orelse return error.NotEnoughAccountKeys).pubkey.equals(
-        &(ic.info.getAccountMetaAtIndex(2) orelse return error.NotEnoughAccountKeys).pubkey,
+    if ((ic.ixn_info.getAccountMetaAtIndex(0) orelse return error.NotEnoughAccountKeys).pubkey.equals(
+        &(ic.ixn_info.getAccountMetaAtIndex(2) orelse return error.NotEnoughAccountKeys).pubkey,
     )) {
         try ic.txn_ctx.log("Lookup table cannot be the recipient of reclaimed lamports", .{});
         return error.InvalidArgument;

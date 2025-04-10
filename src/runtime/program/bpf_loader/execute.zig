@@ -37,18 +37,18 @@ pub fn execute(
 
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
     if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
-        if (bpf_loader_program.v1.ID.equals(&ic.info.program_meta.pubkey)) {
+        if (bpf_loader_program.v1.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
             try ic.txn_ctx.consumeCompute(bpf_loader_program.v1.COMPUTE_UNITS);
             try ic.txn_ctx.log("Deprecated loader is no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_program.v2.ID.equals(&ic.info.program_meta.pubkey)) {
+        } else if (bpf_loader_program.v2.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
             try ic.txn_ctx.consumeCompute(bpf_loader_program.v2.COMPUTE_UNITS);
             try ic.txn_ctx.log("BPF loader management instructions are no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_program.v3.ID.equals(&ic.info.program_meta.pubkey)) {
+        } else if (bpf_loader_program.v3.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
             try ic.txn_ctx.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
             return executeBpfLoaderV3ProgramInstruction(allocator, ic);
-        } else if (bpf_loader_program.v4.ID.equals(&ic.info.program_meta.pubkey)) {
+        } else if (bpf_loader_program.v4.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
             try ic.txn_ctx.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
             return executeBpfLoaderV4ProgramInstruction(allocator, ic);
         } else {
@@ -80,7 +80,7 @@ pub fn executeBpfLoaderV3ProgramInstruction(
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L477
     const instruction =
-        try ic.info.deserializeInstruction(allocator, bpf_loader_program.v3.Instruction);
+        try ic.ixn_info.deserializeInstruction(allocator, bpf_loader_program.v3.Instruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -133,7 +133,7 @@ pub fn executeV3InitializeBuffer(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.InitializeBuffer.AccountIndex;
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
     var buffer_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer buffer_account.release();
@@ -163,7 +163,7 @@ pub fn executeV3Write(
     bytes: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.Write.AccountIndex;
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
     var buffer_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer buffer_account.release();
@@ -178,7 +178,7 @@ pub fn executeV3Write(
                     return InstructionError.IncorrectAuthority;
                 }
 
-                if (!try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority))) {
+                if (!try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority))) {
                     try ic.txn_ctx.log("Buffer authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -214,7 +214,7 @@ pub fn executeV3DeployWithMaxDataLen(
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.DeployWithMaxDataLen.AccountIndex;
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L565
-    try ic.info.checkNumberOfAccounts(4);
+    try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safety: at least 4 accounts are present
     const payer_key =
@@ -226,7 +226,7 @@ pub fn executeV3DeployWithMaxDataLen(
     const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, @intFromEnum(AccountIndex.clock));
 
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L575
-    try ic.info.checkNumberOfAccounts(8);
+    try ic.ixn_info.checkNumberOfAccounts(8);
 
     // Safety: at least 8 accounts are present
     const authority_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
@@ -280,7 +280,7 @@ pub fn executeV3DeployWithMaxDataLen(
                 }
 
                 // Safety: at least 8 accounts are present
-                if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+                if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
                     try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -342,7 +342,7 @@ pub fn executeV3DeployWithMaxDataLen(
     const signer_derived_key = pubkey_utils.createProgramAddress(
         &.{&new_program_id.data},
         &.{bump_seed},
-        ic.info.program_meta.pubkey,
+        ic.ixn_info.program_meta.pubkey,
     ) catch |err| {
         ic.txn_ctx.custom_error = @intFromError(err);
         return InstructionError.Custom;
@@ -355,7 +355,7 @@ pub fn executeV3DeployWithMaxDataLen(
             .create_account = .{
                 .lamports = @max(1, rent.minimumBalance(program_data_len)),
                 .space = program_data_len,
-                .owner = ic.info.program_meta.pubkey,
+                .owner = ic.ixn_info.program_meta.pubkey,
             },
         },
         &.{
@@ -385,7 +385,7 @@ pub fn executeV3DeployWithMaxDataLen(
         try deployProgram(
             allocator,
             new_program_id,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
             buffer_data[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
             clock.slot,
@@ -441,7 +441,7 @@ pub fn executeV3Upgrade(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.Upgrade.AccountIndex;
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     const programdata_key =
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
@@ -449,7 +449,7 @@ pub fn executeV3Upgrade(
     const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, @intFromEnum(AccountIndex.rent));
     const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, @intFromEnum(AccountIndex.clock));
 
-    try ic.info.checkNumberOfAccounts(7);
+    try ic.ixn_info.checkNumberOfAccounts(7);
     const authority_key = ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // Verify program account
@@ -502,7 +502,7 @@ pub fn executeV3Upgrade(
                     try ic.txn_ctx.log("Buffer and upgrade authority don't match", .{});
                     return InstructionError.IncorrectAuthority;
                 }
-                if (!(try ic.info.isIndexSigner(6))) {
+                if (!(try ic.ixn_info.isIndexSigner(6))) {
                     try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -563,7 +563,7 @@ pub fn executeV3Upgrade(
                     try ic.txn_ctx.log("Incorrect upgrade authority provided", .{});
                     return InstructionError.IncorrectAuthority;
                 }
-                if (!(try ic.info.isIndexSigner(6))) {
+                if (!(try ic.ixn_info.isIndexSigner(6))) {
                     try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -594,7 +594,7 @@ pub fn executeV3Upgrade(
         try deployProgram(
             allocator,
             new_program_id,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
@@ -665,7 +665,7 @@ pub fn executeV3SetAuthority(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.SetAuthority.AccountIndex;
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
     var account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer account.release();
@@ -673,7 +673,7 @@ pub fn executeV3SetAuthority(
     const present_authority_key = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.present_authority),
     );
-    const new_authority = if (ic.info.getAccountMetaAtIndex(
+    const new_authority = if (ic.ixn_info.getAccountMetaAtIndex(
         @intFromEnum(AccountIndex.new_authority),
     )) |meta| meta.pubkey else null;
 
@@ -691,7 +691,7 @@ pub fn executeV3SetAuthority(
                 try ic.txn_ctx.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.info.isIndexSigner(1))) {
+            if (!(try ic.ixn_info.isIndexSigner(1))) {
                 try ic.txn_ctx.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -710,7 +710,7 @@ pub fn executeV3SetAuthority(
                 try ic.txn_ctx.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
+            if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
                 try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -742,7 +742,7 @@ pub fn executeV3SetAuthorityChecked(
     }
 
     const AccountIndex = bpf_loader_program.v3.instruction.SetAuthorityChecked.AccountIndex;
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     var account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer account.release();
@@ -764,11 +764,11 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.txn_ctx.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
+            if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
                 try ic.txn_ctx.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.new_authority)))) {
+            if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.new_authority)))) {
                 try ic.txn_ctx.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -787,11 +787,11 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.txn_ctx.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
+            if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.present_authority)))) {
                 try ic.txn_ctx.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.new_authority)))) {
+            if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.new_authority)))) {
                 try ic.txn_ctx.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -817,10 +817,10 @@ pub fn executeV3Close(
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.Close.AccountIndex;
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
-    if (ic.info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.account)).?.index_in_transaction ==
-        ic.info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.recipient)).?.index_in_transaction)
+    if (ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.account)).?.index_in_transaction ==
+        ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.recipient)).?.index_in_transaction)
     {
         try ic.txn_ctx.log("Recipient is the same as the account being closed", .{});
         return InstructionError.InvalidArgument;
@@ -852,7 +852,7 @@ pub fn executeV3Close(
             try ic.txn_ctx.log("Closed Uninitialized {any}", .{close_key});
         },
         .buffer => |data| {
-            try ic.info.checkNumberOfAccounts(3);
+            try ic.ixn_info.checkNumberOfAccounts(3);
             close_account.release();
             close_account_released = true;
 
@@ -860,7 +860,7 @@ pub fn executeV3Close(
             try ic.txn_ctx.log("Closed Buffer {any}", .{close_key});
         },
         .program_data => |data| {
-            try ic.info.checkNumberOfAccounts(4);
+            try ic.ixn_info.checkNumberOfAccounts(4);
             close_account.release();
             close_account_released = true;
 
@@ -934,7 +934,7 @@ fn commonCloseAccount(
     }
 
     const AccountIndex = bpf_loader_program.v3.instruction.Close.AccountIndex;
-    const auth_account = ic.info.getAccountMetaAtIndex(
+    const auth_account = ic.ixn_info.getAccountMetaAtIndex(
         @intFromEnum(AccountIndex.authority),
     ) orelse return InstructionError.MissingAccount;
 
@@ -942,7 +942,7 @@ fn commonCloseAccount(
         try ic.txn_ctx.log("Incorrect authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
-    if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+    if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
         try ic.txn_ctx.log("Authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }
@@ -1065,7 +1065,7 @@ pub fn executeV3ExtendProgram(
     // Determine the program ID to prevent overlapping mutable/immutable borrow of invoke context.
     if (required_payment > 0) {
         // [agave] https://github.com/anza-xyz/agave/blob/ad0983afd4efa711cf2258aa9630416ed6716d2a/transaction-context/src/lib.rs#L260-L267
-        const payer = ic.info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.payer)) orelse
+        const payer = ic.ixn_info.getAccountMetaAtIndex(@intFromEnum(AccountIndex.payer)) orelse
             return InstructionError.NotEnoughAccountKeys;
 
         try ic.nativeInvoke(
@@ -1092,7 +1092,7 @@ pub fn executeV3ExtendProgram(
         try deployProgram(
             allocator,
             program_key,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
             data[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
@@ -1126,7 +1126,7 @@ pub fn executeV3Migrate(
     }
 
     const AccountIndex = bpf_loader_program.v3.instruction.Migrate.AccountIndex;
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     const programdata_key =
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
@@ -1180,7 +1180,7 @@ pub fn executeV3Migrate(
         try ic.txn_ctx.log("Incorrect migration authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
-    if (!(try ic.info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+    if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
         try ic.txn_ctx.log("Migration authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }

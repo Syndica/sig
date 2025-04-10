@@ -45,7 +45,7 @@ pub fn execute(
         return InstructionError.InvalidAccountOwner;
     }
 
-    const instruction = try ic.info.deserializeInstruction(allocator, VoteProgramInstruction);
+    const instruction = try ic.ixn_info.deserializeInstruction(allocator, VoteProgramInstruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -223,7 +223,7 @@ fn intializeAccount(
     }
 
     // node must agree to accept this vote account
-    if (!ic.info.isPubkeySigner(node_pubkey)) {
+    if (!ic.ixn_info.isPubkeySigner(node_pubkey)) {
         try ic.txn_ctx.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -253,7 +253,7 @@ fn executeAuthorize(
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
-    const signers = try ic.info.getSigners();
+    const signers = try ic.ixn_info.getSigners();
 
     try authorize(
         allocator,
@@ -352,7 +352,7 @@ fn executeAuthorizeWithSeed(
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     try authorizeWithSeed(
         allocator,
@@ -383,7 +383,7 @@ fn authorizeWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
-    const signer_meta = ic.info.getAccountMetaAtIndex(signer_index) orelse
+    const signer_meta = ic.ixn_info.getAccountMetaAtIndex(signer_index) orelse
         return InstructionError.NotEnoughAccountKeys;
 
     const expected_authority_keys = if (signer_meta.is_signer)
@@ -418,10 +418,10 @@ fn executeAuthorizeCheckedWithSeed(
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(4);
+    try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = &ic.info.account_metas.buffer[
+    const new_authority_meta = &ic.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority)
     ];
     if (!new_authority_meta.is_signer) {
@@ -450,10 +450,10 @@ fn executeAuthorizeChecked(
     vote_account: *BorrowedAccount,
     vote_authorize: vote_instruction.VoteAuthorize,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(4);
+    try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = &ic.info.account_metas.buffer[
+    const new_authority_meta = &ic.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_authority)
     ];
     if (!new_authority_meta.is_signer) {
@@ -470,7 +470,7 @@ fn executeAuthorizeChecked(
         .withdrawer => VoteAuthorize.withdrawer,
     };
 
-    const signers = try ic.info.getSigners();
+    const signers = try ic.ixn_info.getSigners();
 
     try authorize(
         allocator,
@@ -489,10 +489,10 @@ fn executeUpdateValidatorIdentity(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
     // Safe since there are at least 2 accounts, and the new_identity index is 1.
-    const new_identity_meta = &ic.info.account_metas.buffer[
+    const new_identity_meta = &ic.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity)
     ];
 
@@ -522,8 +522,8 @@ fn updateValidatorIdentity(
     defer vote_state.deinit();
 
     // Both the current authorized withdrawer and new identity must sign.
-    if (!ic.info.isPubkeySigner(vote_state.withdrawer) or
-        !ic.info.isPubkeySigner(new_identity))
+    if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer) or
+        !ic.ixn_info.isPubkeySigner(new_identity))
     {
         return InstructionError.MissingRequiredSignature;
     }
@@ -614,7 +614,7 @@ fn updateCommission(
     defer vote_state.deinit();
 
     // Current authorized withdrawer must sign transaction.
-    if (!ic.info.isPubkeySigner(vote_state.withdrawer)) {
+    if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -648,7 +648,7 @@ fn executeWithdraw(
     vote_account: *BorrowedAccount,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
     const rent = try ic.txn_ctx.sc.sysvar_cache.get(Rent);
     const clock = try ic.txn_ctx.sc.sysvar_cache.get(Clock);
 
@@ -686,7 +686,7 @@ fn widthraw(
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
-    if (!ic.info.isPubkeySigner(vote_state.withdrawer)) {
+    if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -955,7 +955,7 @@ fn verifyAndGetVoteState(
     var vote_state = try versioned_state.convertToCurrent(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
-    if (!ic.info.isPubkeySigner(authorized_voter)) {
+    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
         return InstructionError.MissingRequiredSignature;
     }
     return vote_state;
