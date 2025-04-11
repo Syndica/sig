@@ -104,7 +104,7 @@ const IoUringError = err: {
 /// A frame dies when its index is evicted from HierarchicalFifo (inside of
 /// evictUnusedFrame).
 pub const BufferPool = struct {
-    frames: []Frame,
+    frames: []align(std.mem.page_size) Frame,
     frame_manager: FrameManager,
 
     pub const ReadBlockingError = FrameManager.GetError || std.posix.PReadError;
@@ -345,7 +345,7 @@ pub const FrameManager = struct {
 
     contains_valid_data: []std.atomic.Value(bool),
 
-    pub const Map = std.AutoHashMapUnmanaged(FileIdFileOffset, FrameIndex);
+    pub const Map = std.AutoArrayHashMapUnmanaged(FileIdFileOffset, FrameIndex);
 
     const GetError = error{ InvalidArgument, OffsetsOutOfBounds, OutOfMemory };
 
@@ -353,8 +353,8 @@ pub const FrameManager = struct {
         std.debug.assert(num_frames > 0);
 
         var frame_map: Map = .{};
-        try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
         errdefer frame_map.deinit(allocator);
+        try frame_map.ensureTotalCapacity(allocator, num_frames * 2);
 
         var eviction_lfu = HierarchicalFIFO.init(
             allocator,
@@ -514,7 +514,7 @@ pub const FrameManager = struct {
 
                 std.debug.assert(!std.meta.eql(evicted_key, key)); // inserted key we just evicted
 
-                const removed = frame_map.remove(evicted_key);
+                const removed = frame_map.swapRemove(evicted_key);
                 std.debug.assert(removed); // evicted key was not in map
             }
         }
@@ -1268,25 +1268,11 @@ test "BufferPool allocation sizes" {
     var bp = try BufferPool.init(allocator, frame_count);
     defer bp.deinit(allocator);
 
-    // We expect all allocations to be a multiple of the frame size in length
-    // except for the s3_fifo queues, which are split to be ~90% and ~10% of that
-    // length.
-    var total_requested_bytes = gpa.total_requested_bytes;
-    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("ghost").buf.len *
-        @sizeOf(FrameIndex);
-    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("main").buf.len *
-        @sizeOf(FrameIndex);
-    total_requested_bytes -= bp.frame_manager.eviction_lfu.readField("small").buf.len *
-        @sizeOf(FrameIndex);
-    total_requested_bytes -= @sizeOf(usize) * 3; // hashmap header
-
-    try std.testing.expect(total_requested_bytes % frame_count == 0);
-
     // metadata should be small!
     // As of writing, all metadata (excluding eviction_lfu, including frame_map)
     // is 50 bytes or ~9% of memory usage at a frame size of 512, or 50MB for a
     // million frames.
-    try std.testing.expect((total_requested_bytes / frame_count) - FRAME_SIZE <= 80);
+    try std.testing.expect((gpa.total_requested_bytes / frame_count) - FRAME_SIZE <= 80);
 }
 
 test "BufferPool filesize > frame_size * num_frames" {
