@@ -18,6 +18,16 @@ pub const FeatureSet = struct {
         var active_ = self.active;
         active_.deinit(allocator);
     }
+
+    pub fn isActive(
+        self: *const FeatureSet,
+        feature: Pubkey,
+        slot: Slot,
+    ) bool {
+        if (self.active.get(feature)) |activated_slot|
+            return slot >= activated_slot;
+        return false;
+    }
 };
 
 pub const DEPRECATE_REWARDS_SYSVAR =

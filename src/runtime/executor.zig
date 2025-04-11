@@ -58,7 +58,7 @@ fn pushInstruction(
     const program_id = instruction_info.program_meta.pubkey;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
-    // [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_executor.c#L1001-L101
+    // [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_executor.c#L1001-L1011
     if (program_id.equals(&ids.NATIVE_LOADER_ID)) {
         return InstructionError.UnsupportedProgramId;
     }
