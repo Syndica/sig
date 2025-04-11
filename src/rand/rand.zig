@@ -135,8 +135,8 @@ pub fn fillHashmapWithRng(
     /// The length to set the hashmap to.
     hm_len: if (sig.utils.types.hashMapInfo(@TypeOf(hashmap.*))) |hm_info| hm_info.Size() else usize,
     /// Expected to provide methods & fields/decls:
-    /// * `fn randomKey(context, random: std.Random) Key`
-    /// * `fn randomValue(context, random: std.Random) Value`
+    /// * `fn randomKey(context, random: std.Random) !Key`
+    /// * `fn randomValue(context, random: std.Random) !Value`
     context: anytype,
 ) !void {
     const Hm = @TypeOf(hashmap.*);
