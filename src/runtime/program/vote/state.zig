@@ -1596,7 +1596,7 @@ pub fn verifyAndGetVoteState(
     var vote_state = try versioned_state.convertToCurrent(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
-    if (!ic.info.isPubkeySigner(authorized_voter)) {
+    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
         return InstructionError.MissingRequiredSignature;
     }
 

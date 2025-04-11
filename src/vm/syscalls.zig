@@ -12,6 +12,7 @@ const Pubkey = sig.core.Pubkey;
 const MemoryMap = lib.memory.MemoryMap;
 const RegisterMap = interpreter.RegisterMap;
 const TransactionContext = transaction_context.TransactionContext;
+const TransactionReturnData = transaction_context.TransactionReturnData;
 const InstructionError = sig.core.instruction.InstructionError;
 
 pub const Error = error{
@@ -27,6 +28,7 @@ pub const Error = error{
     NonCanonical,
     Unexpected,
     ComputationalBudgetExceeded,
+    ReturnDataTooLarge,
 } || std.fs.File.WriteError || InstructionError;
 
 pub const Syscall = *const fn (
@@ -156,6 +158,40 @@ fn consumeMemoryCompute(ctx: *TransactionContext, length: u64) !void {
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
     @panic("TODO: implement allocFree syscall");
+}
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
+pub const MAX_RETURN_DATA: usize = 1024;
+
+/// [agave] https://github.com/anza-xyz/agave/blob/4f68141ba70b7574da0bc185ef5d08fe33d19887/programs/bpf_loader/src/syscalls/mod.rs#L1450
+pub fn setReturnData(ctx: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) Error!void {
+    const addr = rm.get(.r1);
+    const len = rm.get(.r2);
+
+    const cost = if (ctx.compute_budget.cpi_bytes_per_unit > 0)
+        (len / ctx.compute_budget.cpi_bytes_per_unit) +| ctx.compute_budget.syscall_base_cost
+    else
+        std.math.maxInt(u64);
+
+    try ctx.consumeCompute(cost);
+
+    if (len > TransactionReturnData.MAX_RETURN_DATA) {
+        return error.ReturnDataTooLarge;
+    }
+
+    const empty_return_data: []const u8 = &[_]u8{};
+    const return_data = if (len == 0)
+        empty_return_data
+    else
+        try mm.vmap(.constant, addr, len);
+
+    if (ctx.instruction_stack.len == 0) return error.CallDepth;
+    const ic = ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+    const program_id = ic.ixn_info.program_meta.pubkey;
+
+    ctx.return_data.program_id = program_id;
+    ctx.return_data.data.len = 0;
+    ctx.return_data.data.appendSliceAssumeCapacity(return_data);
 }
 
 // hashing

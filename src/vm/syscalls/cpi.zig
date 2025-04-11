@@ -6,7 +6,7 @@ const memory = @import("../memory.zig");
 const ids = sig.runtime.ids;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 const system_program = sig.runtime.program.system_program;
-const feature_set = sig.runtime.feature_set;
+const features = sig.runtime.features;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
@@ -15,6 +15,8 @@ const InstructionError = sig.core.instruction.InstructionError;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
+const EpochContext = sig.runtime.EpochContext;
+const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
@@ -264,8 +266,8 @@ const CallerAccount = struct {
     ) !CallerAccount {
         _ = _vm_addr; // unused
 
-        const direct_mapping = ic.tc.feature_set.active.contains(
-            feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+        const direct_mapping = ic.ec.feature_set.active.contains(
+            features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
         );
 
         if (direct_mapping) {
@@ -428,8 +430,8 @@ const CallerAccount = struct {
         account_info: *const AccountInfoC,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
-        const direct_mapping = ic.tc.feature_set.active.contains(
-            feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+        const direct_mapping = ic.ec.feature_set.active.contains(
+            features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
         );
 
         if (direct_mapping) {
@@ -656,8 +658,8 @@ fn translateAccounts(
     // translate_account_infos():
     // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L805
 
-    const direct_mapping = ic.tc.feature_set.active.contains(
-        feature_set.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    const direct_mapping = ic.ec.feature_set.active.contains(
+        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
     // In the same vein as the other checkAccountInfoPtr() checks, we don't lock
@@ -680,9 +682,9 @@ fn translateAccounts(
 
     // check_account_infos():
     // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1018
-    if (ic.tc.feature_set.active.contains(feature_set.LOOSEN_CPI_SIZE_RESTRICTION)) {
-        const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active.contains(
-            feature_set.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
+    if (ic.ec.feature_set.active.contains(features.LOOSEN_CPI_SIZE_RESTRICTION)) {
+        const max_cpi_account_infos: u64 = if (ic.ec.feature_set.active.contains(
+            features.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
         )) 128 else 64;
 
         if (account_infos.len > max_cpi_account_infos) {
@@ -704,7 +706,7 @@ fn translateAccounts(
 
     var accounts: TranslatedAccounts = .{};
     try accounts.append(.{
-        .index_in_caller = ic.info.program_meta.index_in_transaction,
+        .index_in_caller = ic.ixn_info.program_meta.index_in_transaction,
         .caller_account = null,
     });
 
@@ -744,7 +746,7 @@ fn translateAccounts(
             return InstructionError.MissingAccount;
         };
 
-        const serialized_metadata = if (meta.index_in_caller < ic.info.account_metas.len) blk: {
+        const serialized_metadata = if (meta.index_in_caller < ic.ixn_info.account_metas.len) blk: {
             break :blk &ic.vm_accounts.slice()[meta.index_in_caller];
         } else {
             try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
@@ -796,6 +798,8 @@ fn translateAccounts(
 }
 
 const TestContext = struct {
+    ec: *EpochContext,
+    sc: *SlotContext,
     tc: *TransactionContext,
     ic: InstructionContext,
 
@@ -806,9 +810,9 @@ const TestContext = struct {
         errdefer allocator.destroy(tc);
 
         const account_key = Pubkey.initRandom(prng);
-        const testing = sig.runtime.program.testing;
+        const testing = sig.runtime.testing;
 
-        tc.* = try testing.createTransactionContext(allocator, prng, .{
+        const ec, const sc, tc.* = try testing.createExecutionContexts(allocator, prng, .{
             .accounts = &.{
                 .{
                     .pubkey = account_key,
@@ -822,13 +826,19 @@ const TestContext = struct {
                 },
             },
         });
-        errdefer tc.deinit(allocator);
+        errdefer {
+            ec.deinit();
+            allocator.destroy(ec);
+            allocator.destroy(sc);
+            tc.deinit();
+        }
 
         const ic = InstructionContext{
             .depth = 0,
+            .ec = ec,
+            .sc = sc,
             .tc = tc,
-            .info = try testing.createInstructionInfo(
-                allocator,
+            .ixn_info = try testing.createInstructionInfo(
                 tc,
                 system_program.ID,
                 system_program.Instruction{ .assign = .{ .owner = account_key } }, // whatever.
@@ -841,20 +851,25 @@ const TestContext = struct {
         errdefer ic.deinit(allocator);
 
         return .{
+            .ec = ec,
+            .sc = sc,
             .tc = tc,
             .ic = ic,
         };
     }
 
     fn deinit(self: *TestContext, allocator: std.mem.Allocator) void {
-        self.ic.deinit(allocator);
-        self.tc.deinit(allocator);
+        self.ec.deinit();
+        allocator.destroy(self.ec);
+        allocator.destroy(self.sc);
+        self.tc.deinit();
         allocator.destroy(self.tc);
+        self.ic.deinit(allocator);
     }
 
     fn getAccount(self: *const TestContext) TestAccount {
         const index = 0;
-        const account_meta = self.ic.info.account_metas.get(index);
+        const account_meta = self.ic.ixn_info.account_metas.get(index);
         const account_shared = self.ic.tc.accounts[index].account;
 
         return .{

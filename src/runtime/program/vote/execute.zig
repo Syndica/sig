@@ -23,7 +23,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
-const feature_set = sig.runtime.feature_set;
+const features = sig.runtime.features;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
 
@@ -45,7 +45,10 @@ pub fn execute(
         return InstructionError.InvalidAccountOwner;
     }
 
-    const instruction = try ic.info.deserializeInstruction(allocator, VoteProgramInstruction);
+    const instruction = try ic.ixn_info.deserializeInstruction(
+        allocator,
+        VoteProgramInstruction,
+    );
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -223,7 +226,7 @@ fn intializeAccount(
     }
 
     // node must agree to accept this vote account
-    if (!ic.info.isPubkeySigner(node_pubkey)) {
+    if (!ic.ixn_info.isPubkeySigner(node_pubkey)) {
         try ic.tc.log("IntializeAccount: 'node' {} must sign", .{node_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -253,7 +256,7 @@ fn executeAuthorize(
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
-    const signers = try ic.info.getSigners();
+    const signers = try ic.ixn_info.getSigners();
 
     try authorize(
         allocator,
@@ -352,7 +355,7 @@ fn executeAuthorizeWithSeed(
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     try authorizeWithSeed(
         allocator,
@@ -383,7 +386,7 @@ fn authorizeWithSeed(
 ) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
 
-    const signer_meta = ic.info.getAccountMetaAtIndex(signer_index) orelse
+    const signer_meta = ic.ixn_info.getAccountMetaAtIndex(signer_index) orelse
         return InstructionError.NotEnoughAccountKeys;
 
     const expected_authority_keys = if (signer_meta.is_signer)
@@ -418,10 +421,10 @@ fn executeAuthorizeCheckedWithSeed(
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(4);
+    try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = &ic.info.account_metas.buffer[
+    const new_authority_meta = &ic.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.VoteAuthorizeCheckedWithSeedArgs.AccountIndex.new_authority)
     ];
     if (!new_authority_meta.is_signer) {
@@ -450,10 +453,10 @@ fn executeAuthorizeChecked(
     vote_account: *BorrowedAccount,
     vote_authorize: vote_instruction.VoteAuthorize,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(4);
+    try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safe since there are at least 4 accounts, and the new_authority index is 3.
-    const new_authority_meta = &ic.info.account_metas.buffer[
+    const new_authority_meta = &ic.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.new_authority)
     ];
     if (!new_authority_meta.is_signer) {
@@ -470,7 +473,7 @@ fn executeAuthorizeChecked(
         .withdrawer => VoteAuthorize.withdrawer,
     };
 
-    const signers = try ic.info.getSigners();
+    const signers = try ic.ixn_info.getSigners();
 
     try authorize(
         allocator,
@@ -489,10 +492,10 @@ fn executeUpdateValidatorIdentity(
     ic: *InstructionContext,
     vote_account: *BorrowedAccount,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
     // Safe since there are at least 2 accounts, and the new_identity index is 1.
-    const new_identity_meta = &ic.info.account_metas.buffer[
+    const new_identity_meta = &ic.ixn_info.account_metas.buffer[
         @intFromEnum(vote_instruction.UpdateVoteIdentity.AccountIndex.new_identity)
     ];
 
@@ -522,8 +525,8 @@ fn updateValidatorIdentity(
     defer vote_state.deinit();
 
     // Both the current authorized withdrawer and new identity must sign.
-    if (!ic.info.isPubkeySigner(vote_state.withdrawer) or
-        !ic.info.isPubkeySigner(new_identity))
+    if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer) or
+        !ic.ixn_info.isPubkeySigner(new_identity))
     {
         return InstructionError.MissingRequiredSignature;
     }
@@ -544,8 +547,8 @@ fn executeUpdateCommission(
         ic,
         vote_account,
         commission,
-        try ic.tc.sysvar_cache.get(EpochSchedule),
-        try ic.tc.sysvar_cache.get(Clock),
+        try ic.sc.sysvar_cache.get(EpochSchedule),
+        try ic.sc.sysvar_cache.get(Clock),
     );
 }
 
@@ -564,7 +567,9 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.tc.feature_set.active.contains(feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME)) {
+        if (ic.ec.feature_set.active.contains(
+            features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+        )) {
             const versioned_state = vote_account.deserializeFromAccountData(
                 allocator,
                 VoteStateVersions,
@@ -582,8 +587,9 @@ fn updateCommission(
         }
     };
 
-    if (enforce_commission_update_rule and ic.tc.feature_set.active.contains(
-        feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+    if (enforce_commission_update_rule and
+        ic.ec.feature_set.active.contains(
+        features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
             // Clean up before returning, if we have a vote_state already.
@@ -612,7 +618,7 @@ fn updateCommission(
     defer vote_state.deinit();
 
     // Current authorized withdrawer must sign transaction.
-    if (!ic.info.isPubkeySigner(vote_state.withdrawer)) {
+    if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -646,9 +652,9 @@ fn executeWithdraw(
     vote_account: *BorrowedAccount,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
-    const rent = try ic.tc.sysvar_cache.get(Rent);
-    const clock = try ic.tc.sysvar_cache.get(Clock);
+    try ic.ixn_info.checkNumberOfAccounts(2);
+    const rent = try ic.sc.sysvar_cache.get(Rent);
+    const clock = try ic.sc.sysvar_cache.get(Clock);
 
     vote_account.release();
 
@@ -684,7 +690,7 @@ fn widthraw(
     var vote_state = try versioned_state.convertToCurrent(allocator);
     defer vote_state.deinit();
 
-    if (!ic.info.isPubkeySigner(vote_state.withdrawer)) {
+    if (!ic.ixn_info.isPubkeySigner(vote_state.withdrawer)) {
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -740,9 +746,12 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
-    {
+    if (ic.ec.feature_set.active.contains(
+        features.DEPRECATE_LEGACY_VOTE_IXS,
+    ) and
+        ic.ec.feature_set.active.contains(
+        features.ENABLE_TOWER_SYNC_IX,
+    )) {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -823,14 +832,14 @@ fn executeUpdateVoteState(
     vote_state_update: VoteStateUpdate,
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_state_update_mut = vote_state_update;
-    if (ic.tc.feature_set.active.contains(feature_set.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX))
+    if (ic.ec.feature_set.active.contains(features.DEPRECATE_LEGACY_VOTE_IXS) and
+        ic.ec.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX))
     {
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
-    const clock = try ic.tc.sysvar_cache.get(Clock);
+    const slot_hashes = try ic.sc.sysvar_cache.get(SlotHashes);
+    const clock = try ic.sc.sysvar_cache.get(Clock);
 
     try voteStateUpdate(
         allocator,
@@ -883,12 +892,12 @@ fn executeTowerSync(
     tower_sync: TowerSync,
 ) (error{OutOfMemory} || InstructionError)!void {
     var tower_sync_mut = tower_sync;
-    if (!ic.tc.feature_set.active.contains(feature_set.ENABLE_TOWER_SYNC_IX)) {
+    if (!ic.ec.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX)) {
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
-    const clock = try ic.tc.sysvar_cache.get(Clock);
+    const slot_hashes = try ic.sc.sysvar_cache.get(SlotHashes);
+    const clock = try ic.sc.sysvar_cache.get(Clock);
 
     try towerSync(
         allocator,
@@ -953,7 +962,7 @@ fn verifyAndGetVoteState(
     var vote_state = try versioned_state.convertToCurrent(allocator);
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
-    if (!ic.info.isPubkeySigner(authorized_voter)) {
+    if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
         return InstructionError.MissingRequiredSignature;
     }
     return vote_state;
@@ -2144,11 +2153,11 @@ test "vote_program: update_commission increasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2171,11 +2180,11 @@ test "vote_program: update_commission increasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2269,11 +2278,11 @@ test "vote_program: update_commission decreasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2296,11 +2305,11 @@ test "vote_program: update_commission decreasing commission" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2501,11 +2510,11 @@ test "vote_program: update_commission error commission update too late failure" 
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2528,11 +2537,11 @@ test "vote_program: update_commission error commission update too late failure" 
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2631,11 +2640,11 @@ test "vote_program: update_commission missing signature" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -2658,11 +2667,11 @@ test "vote_program: update_commission missing signature" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
+                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
                     .slot = 0,
                 },
                 .{
-                    .pubkey = feature_set.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
                     .slot = 0,
                 },
             },
@@ -4427,7 +4436,7 @@ test "vote_program: tower sync" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ENABLE_TOWER_SYNC_IX,
+                    .pubkey = features.ENABLE_TOWER_SYNC_IX,
                     .slot = 0,
                 },
             },
@@ -4581,7 +4590,7 @@ test "vote_program: tower sync switch" {
             },
             .feature_set = &.{
                 .{
-                    .pubkey = feature_set.ENABLE_TOWER_SYNC_IX,
+                    .pubkey = features.ENABLE_TOWER_SYNC_IX,
                     .slot = 0,
                 },
             },

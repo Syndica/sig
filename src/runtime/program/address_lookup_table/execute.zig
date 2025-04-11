@@ -28,7 +28,10 @@ pub fn execute(
     // agave: consumed in declare_process_instruction
     try ic.tc.consumeCompute(program.COMPUTE_UNITS);
 
-    const lookuptable_instruction = try ic.info.deserializeInstruction(allocator, Instruction);
+    const lookuptable_instruction = try ic.ixn_info.deserializeInstruction(
+        allocator,
+        Instruction,
+    );
     defer sig.bincode.free(allocator, lookuptable_instruction);
 
     return switch (lookuptable_instruction) {
@@ -39,7 +42,11 @@ pub fn execute(
             args.bump_seed,
         ),
         .FreezeLookupTable => try freezeLookupTable(allocator, ic),
-        .ExtendLookupTable => |args| try extendLookupTable(allocator, ic, args.new_addresses),
+        .ExtendLookupTable => |args| try extendLookupTable(
+            allocator,
+            ic,
+            args.new_addresses,
+        ),
         .DeactivateLookupTable => try deactivateLookupTable(allocator, ic),
         .CloseLookupTable => try closeLookupTable(allocator, ic),
     };
@@ -55,8 +62,8 @@ fn createLookupTable(
     const AccountIndex = instruction.CreateLookupTable.AccountIndex;
 
     const has_relax_authority_signer_check_for_lookup_table_creation =
-        ic.tc.feature_set.active.contains(
-        runtime.feature_set.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
+        ic.ec.feature_set.active.contains(
+        runtime.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L59
@@ -113,7 +120,7 @@ fn createLookupTable(
     };
 
     const derivation_slot = blk: {
-        const slot_hashes = try ic.tc.sysvar_cache.get(sysvar.SlotHashes);
+        const slot_hashes = try ic.sc.sysvar_cache.get(sysvar.SlotHashes);
 
         if (slot_hashes.get(untrusted_recent_slot)) |_| {
             break :blk untrusted_recent_slot;
@@ -135,7 +142,10 @@ fn createLookupTable(
         return error.Custom;
     };
     if (!table_key.equals(&derived_table_key)) {
-        try ic.tc.log("Table address must mach derived address: {}", .{derived_table_key});
+        try ic.tc.log(
+            "Table address must mach derived address: {}",
+            .{derived_table_key},
+        );
         return error.InvalidArgument;
     }
 
@@ -145,7 +155,7 @@ fn createLookupTable(
         return; // success
     }
 
-    const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
+    const rent = try ic.sc.sysvar_cache.get(sysvar.Rent);
     const required_lamports = @max(
         rent.minimumBalance(LOOKUP_TABLE_META_SIZE),
         1,
@@ -338,7 +348,10 @@ fn extendLookupTable(
         }
 
         if (lookup_table.addresses.len >= state.LOOKUP_TABLE_MAX_ADDRESSES) {
-            try ic.tc.log("Lookup table is full and cannot contain more addresses", .{});
+            try ic.tc.log(
+                "Lookup table is full and cannot contain more addresses",
+                .{},
+            );
             return error.InvalidArgument;
         }
 
@@ -356,7 +369,7 @@ fn extendLookupTable(
             return error.InvalidInstructionData;
         }
 
-        const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+        const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
         if (clock.slot != lookup_table.meta.last_extended_slot) {
             lookup_table.meta.last_extended_slot = clock.slot;
             lookup_table.meta.last_extended_slot_start_index = std.math.cast(
@@ -398,7 +411,7 @@ fn extendLookupTable(
         break :blk .{ lookup_table_account.account.lamports, new_table_data_len };
     };
 
-    const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
+    const rent = try ic.sc.sysvar_cache.get(sysvar.Rent);
     const required_lamports = @max(rent.minimumBalance(new_table_data_len), 1) -|
         lookup_table_lamports;
 
@@ -489,7 +502,7 @@ fn deactivateLookupTable(
         return error.InvalidArgument;
     }
 
-    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
 
     var lookup_table_meta = lookup_table.meta;
     lookup_table_meta.deactivation_slot = clock.slot;
@@ -529,12 +542,18 @@ fn closeLookupTable(
         break :blk authority_account.pubkey;
     };
 
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
-    if ((ic.info.getAccountMetaAtIndex(0) orelse return error.NotEnoughAccountKeys).pubkey.equals(
-        &(ic.info.getAccountMetaAtIndex(2) orelse return error.NotEnoughAccountKeys).pubkey,
-    )) {
-        try ic.tc.log("Lookup table cannot be the recipient of reclaimed lamports", .{});
+    const lookup_table_meta = ic.ixn_info.getAccountMetaAtIndex(0) orelse
+        return error.NotEnoughAccountKeys;
+    const payer_meta = ic.ixn_info.getAccountMetaAtIndex(2) orelse
+        return error.NotEnoughAccountKeys;
+
+    if (lookup_table_meta.pubkey.equals(&payer_meta.pubkey)) {
+        try ic.tc.log(
+            "Lookup table cannot be the recipient of reclaimed lamports",
+            .{},
+        );
         return error.InvalidArgument;
     }
 
@@ -559,8 +578,8 @@ fn closeLookupTable(
             return error.Immutable;
         }
 
-        const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
-        const slot_hashes = try ic.tc.sysvar_cache.get(sysvar.SlotHashes);
+        const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+        const slot_hashes = try ic.sc.sysvar_cache.get(sysvar.SlotHashes);
 
         switch (lookup_table.meta.status(clock.slot, slot_hashes)) {
             .Activated => {
@@ -609,6 +628,9 @@ pub fn deriveLookupTableAddress(
 }
 
 test "address-lookup-table missing accounts" {
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const expectProgramExecuteError = sig.runtime.program.testing.expectProgramExecuteError;
+
     var prng = std.rand.DefaultPrng.init(0);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
@@ -620,7 +642,7 @@ test "address-lookup-table missing accounts" {
     );
     _ = bump_seed;
 
-    const accounts: []const runtime.testing.TransactionContextAccountParams = &.{
+    const accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{ .pubkey = lookup_table_address },
     };
 
@@ -633,22 +655,22 @@ test "address-lookup-table missing accounts" {
     };
 
     for (instructions) |instr| {
-        const value = runtime.program.testing.expectProgramExecuteResult(
+        try expectProgramExecuteError(
+            error.CouldNotFindProgramAccount,
             std.testing.allocator,
             @This().ID,
             instr,
             &.{},
             .{ .accounts = accounts },
-            .{ .accounts = accounts },
             .{},
         );
-
-        try std.testing.expectError(error.CouldNotFindProgramAccount, value);
     }
 }
 
 test "address-lookup-table create" {
-    const testing = runtime.program.testing;
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const InstructionInfoAccountMetaParams = sig.runtime.testing.InstructionInfoAccountMetaParams;
+    const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
@@ -686,7 +708,7 @@ test "address-lookup-table create" {
     const expected_state = try sig.bincode.writeAlloc(std.testing.allocator, new_state, .{});
     defer std.testing.allocator.free(expected_state);
 
-    const accounts: []const testing.TransactionContextAccountParams = &.{
+    const accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
             .owner = runtime.program.system_program.ID,
@@ -703,7 +725,7 @@ test "address-lookup-table create" {
         },
     };
 
-    const accounts_after: []const testing.TransactionContextAccountParams = &.{
+    const accounts_after: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
             .owner = program.ID,
@@ -720,7 +742,7 @@ test "address-lookup-table create" {
         },
     };
 
-    const meta: []const testing.InstructionContextAccountMetaParams = &.{
+    const meta: []const InstructionInfoAccountMetaParams = &.{
         .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
         .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
         .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
@@ -736,7 +758,7 @@ test "address-lookup-table create" {
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
-    try testing.expectProgramExecuteResult(
+    try expectProgramExecuteResult(
         allocator,
         @This().ID,
         Instruction{
@@ -744,7 +766,6 @@ test "address-lookup-table create" {
         },
         meta,
         .{
-            .log_collector = runtime.LogCollector.default(std.testing.allocator),
             .accounts = accounts,
             .compute_meter = before_compute_meter,
             .sysvar_cache = sysvar_cache,
@@ -759,7 +780,10 @@ test "address-lookup-table create" {
 }
 
 test "address-lookup-table freeze" {
-    const testing = runtime.program.testing;
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const InstructionInfoAccountMetaParams = sig.runtime.testing.InstructionInfoAccountMetaParams;
+    const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
@@ -793,7 +817,7 @@ test "address-lookup-table freeze" {
     // set authority to null
     @memset(after_lookup_table[21..][0 .. @sizeOf(Pubkey) + 1], 0);
 
-    const accounts: []const testing.TransactionContextAccountParams = &.{
+    const accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
             .owner = program.ID,
@@ -809,7 +833,7 @@ test "address-lookup-table freeze" {
         },
     };
 
-    const expected_accounts: []const testing.TransactionContextAccountParams = &.{
+    const expected_accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
             .owner = program.ID,
@@ -825,7 +849,7 @@ test "address-lookup-table freeze" {
         },
     };
 
-    const meta: []const testing.InstructionContextAccountMetaParams = &.{
+    const meta: []const InstructionInfoAccountMetaParams = &.{
         .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
         .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
@@ -844,13 +868,12 @@ test "address-lookup-table freeze" {
     const before_compute_meter = 9999999;
     const after_compute_meter = before_compute_meter - expected_used_compute;
 
-    try testing.expectProgramExecuteResult(
+    try expectProgramExecuteResult(
         allocator,
         @This().ID,
         Instruction.FreezeLookupTable,
         meta,
         .{
-            .log_collector = runtime.LogCollector.default(std.testing.allocator),
             .accounts = accounts,
             .compute_meter = before_compute_meter,
             .sysvar_cache = sysvar_cache,
@@ -865,7 +888,10 @@ test "address-lookup-table freeze" {
 }
 
 test "address-lookup-table close" {
-    const testing = runtime.program.testing;
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const InstructionInfoAccountMetaParams = sig.runtime.testing.InstructionInfoAccountMetaParams;
+    const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
@@ -898,7 +924,7 @@ test "address-lookup-table close" {
     );
     @memcpy(before_lookup_table[LOOKUP_TABLE_META_SIZE..], &first_address.data);
 
-    const accounts: []const testing.TransactionContextAccountParams = &.{
+    const accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
             .owner = program.ID,
@@ -915,7 +941,7 @@ test "address-lookup-table close" {
         },
     };
 
-    const expected_accounts: []const testing.TransactionContextAccountParams = &.{
+    const expected_accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
             .owner = program.ID,
@@ -932,7 +958,7 @@ test "address-lookup-table close" {
         },
     };
 
-    const meta: []const testing.InstructionContextAccountMetaParams = &.{
+    const meta: []const InstructionInfoAccountMetaParams = &.{
         .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
         .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
         .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
@@ -952,13 +978,12 @@ test "address-lookup-table close" {
     const before_compute_meter = 9999999;
     const after_compute_meter = before_compute_meter - expected_used_compute;
 
-    try testing.expectProgramExecuteResult(
+    try expectProgramExecuteResult(
         allocator,
         @This().ID,
         Instruction.CloseLookupTable,
         meta,
         .{
-            .log_collector = runtime.LogCollector.default(std.testing.allocator),
             .accounts = accounts,
             .compute_meter = before_compute_meter,
             .sysvar_cache = sysvar_cache,
@@ -973,7 +998,10 @@ test "address-lookup-table close" {
 }
 
 test "address-lookup-table deactivate" {
-    const testing = runtime.program.testing;
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const InstructionInfoAccountMetaParams = sig.runtime.testing.InstructionInfoAccountMetaParams;
+    const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
@@ -1007,7 +1035,7 @@ test "address-lookup-table deactivate" {
     // set deactivation slot to zero (same as clock)
     @memset(after_lookup_table[4..][0..8], 0);
 
-    const accounts: []const testing.TransactionContextAccountParams = &.{
+    const accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
             .owner = program.ID,
@@ -1023,7 +1051,7 @@ test "address-lookup-table deactivate" {
         },
     };
 
-    const expected_accounts: []const testing.TransactionContextAccountParams = &.{
+    const expected_accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
             .owner = program.ID,
@@ -1039,7 +1067,7 @@ test "address-lookup-table deactivate" {
         },
     };
 
-    const meta: []const testing.InstructionContextAccountMetaParams = &.{
+    const meta: []const InstructionInfoAccountMetaParams = &.{
         .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
         .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
@@ -1058,13 +1086,12 @@ test "address-lookup-table deactivate" {
     const before_compute_meter = 9999999;
     const after_compute_meter = before_compute_meter - expected_used_compute;
 
-    try testing.expectProgramExecuteResult(
+    try expectProgramExecuteResult(
         allocator,
         @This().ID,
         Instruction.DeactivateLookupTable,
         meta,
         .{
-            .log_collector = runtime.LogCollector.default(std.testing.allocator),
             .accounts = accounts,
             .compute_meter = before_compute_meter,
             .sysvar_cache = sysvar_cache,
@@ -1079,7 +1106,10 @@ test "address-lookup-table deactivate" {
 }
 
 test "address-lookup-table extend" {
-    const testing = runtime.program.testing;
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    const InstructionInfoAccountMetaParams = sig.runtime.testing.InstructionInfoAccountMetaParams;
+    const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
+
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
@@ -1118,7 +1148,7 @@ test "address-lookup-table extend" {
     const required_lamports = 1503360;
 
     inline for (.{ true, false }) |payer_required| {
-        const accounts: []const testing.TransactionContextAccountParams = &.{
+        const accounts: []const ExecuteContextsParams.AccountParams = &.{
             .{
                 .pubkey = lookup_table_address,
                 .owner = program.ID,
@@ -1139,7 +1169,7 @@ test "address-lookup-table extend" {
             },
         };
 
-        const expected_accounts: []const testing.TransactionContextAccountParams = &.{
+        const expected_accounts: []const ExecuteContextsParams.AccountParams = &.{
             .{
                 .pubkey = lookup_table_address,
                 .owner = program.ID,
@@ -1160,7 +1190,7 @@ test "address-lookup-table extend" {
             },
         };
 
-        const meta: []const testing.InstructionContextAccountMetaParams = &.{
+        const meta: []const InstructionInfoAccountMetaParams = &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
             .{ .is_signer = authority_is_signer, .is_writable = false, .index_in_transaction = 1 },
             .{ .is_signer = true, .is_writable = true, .index_in_transaction = 2 },
@@ -1182,13 +1212,12 @@ test "address-lookup-table extend" {
         const before_compute_meter = 9999999;
         const after_compute_meter = before_compute_meter - expected_used_compute;
 
-        try testing.expectProgramExecuteResult(
+        try expectProgramExecuteResult(
             allocator,
             @This().ID,
             Instruction{ .ExtendLookupTable = .{ .new_addresses = &.{first_address} } },
             meta,
             .{
-                .log_collector = runtime.LogCollector.default(std.testing.allocator),
                 .accounts = accounts,
                 .compute_meter = before_compute_meter,
                 .sysvar_cache = sysvar_cache,

@@ -26,7 +26,6 @@ pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
 /// was borrowed. It replaces the reference to an `InstructionContext` used in Agave.
 pub const BorrowedAccountContext = struct {
     program_id: Pubkey,
-    tc: *const TransactionContext,
     is_signer: bool = false,
     is_writable: bool = false,
 };
@@ -229,9 +228,8 @@ pub const BorrowedAccount = struct {
     pub fn setExecutable(
         self: *BorrowedAccount,
         executable: bool,
+        rent: sysvar.Rent,
     ) InstructionError!void {
-        const rent = try self.context.tc.sysvar_cache.get(sysvar.Rent);
-
         if (!rent.isExempt(self.account.lamports, self.account.data.len) or
             !self.account.owner.equals(&self.context.program_id) or
             !self.context.is_writable or

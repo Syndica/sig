@@ -24,9 +24,36 @@ pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
 // https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
 pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 
+pub const EpochContext = struct {
+    /// Allocator
+    allocator: std.mem.Allocator,
+
+    /// Feature Set
+    feature_set: FeatureSet,
+
+    pub fn deinit(self: EpochContext) void {
+        self.feature_set.deinit(self.allocator);
+    }
+};
+
+pub const SlotContext = struct {
+    /// Epoch Context
+    ec: *const EpochContext,
+
+    /// Sysvar Cache
+    sysvar_cache: SysvarCache,
+};
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
 pub const TransactionContext = struct {
+    /// Allocator
+    allocator: std.mem.Allocator,
+
+    /// Contexts
+    ec: *const EpochContext,
+    sc: *const SlotContext,
+
     /// Transaction accounts
     accounts: []TransactionContextAccount,
 
@@ -46,6 +73,9 @@ pub const TransactionContext = struct {
     /// the designated compute budget during program execution.
     compute_meter: u64,
 
+    /// Compute budget for this transaction
+    compute_budget: ComputeBudget,
+
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.custom will be returned
     custom_error: ?u32,
@@ -53,14 +83,9 @@ pub const TransactionContext = struct {
     /// Optional log collector
     log_collector: ?LogCollector,
 
-    // TODO: the following feilds should live above the transaction level, however, they are
-    // defined here temporarily for convenience.
-    // https://github.com/orgs/Syndica/projects/2/views/14?filterQuery=+-status%3A%22%E2%9C%85+Done%22++-no%3Astatus+&pane=issue&itemId=97691745
-    sysvar_cache: SysvarCache,
-    lamports_per_signature: u64,
-    last_blockhash: Hash,
-    feature_set: FeatureSet,
-    compute_budget: ComputeBudget,
+    /// Previous blockhash and lamports per signature from the blockhash queue
+    prev_blockhash: Hash,
+    prev_lamports_per_signature: u64,
 
     pub const InstructionStack = std.BoundedArray(
         InstructionContext,
@@ -68,29 +93,14 @@ pub const TransactionContext = struct {
     );
 
     pub const InstructionTrace = std.BoundedArray(struct {
-        info: InstructionInfo,
+        ixn_info: InstructionInfo,
         depth: u8,
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
-    pub fn deinit(self: *TransactionContext, allocator: std.mem.Allocator) void {
-        for (self.accounts) |account| account.deinit(allocator);
-        allocator.free(self.accounts);
-        if (self.log_collector) |lc| lc.deinit();
-        self.feature_set.deinit(allocator);
-    }
-
-    pub fn deinitWriteLogs(
-        self: *TransactionContext,
-        allocator: std.mem.Allocator,
-        writer: anytype,
-    ) !void {
-        if (self.log_collector) |collector| {
-            try writer.print("logs:\n");
-            for (collector.collect()) |log_line| {
-                try writer.print("    {s}\n", .{log_line});
-            }
-        }
-        self.deinit(allocator);
+    pub fn deinit(self: TransactionContext) void {
+        for (self.accounts) |account| account.deinit(self.allocator);
+        self.allocator.free(self.accounts);
+        if (self.log_collector) |lc| lc.deinit(self.allocator);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233
@@ -149,36 +159,23 @@ pub const TransactionContext = struct {
         self.compute_meter -|= compute;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/43e1f62c9fa318daedec80b3f0ea1f9e7da71b11/transaction-context/src/lib.rs#L436
-    pub fn getReturnData(
-        self: *TransactionContext,
-    ) TransactionReturnData {
-        return self.return_data;
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/43e1f62c9fa318daedec80b3f0ea1f9e7da71b11/transaction-context/src/lib.rs#L441
-    pub fn setReturnData(
-        self: *TransactionContext,
-        program_id: Pubkey,
-        data: []const u8,
-    ) !InstructionError {
-        self.return_data = TransactionReturnData{ program_id, data };
-    }
-
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L94
     pub fn log(
         self: *TransactionContext,
         comptime fmt: []const u8,
         args: anytype,
     ) (error{OutOfMemory} || InstructionError)!void {
-        if (self.log_collector) |*lc| try lc.log(fmt, args);
+        if (self.log_collector) |*lc| try lc.log(self.allocator, fmt, args);
     }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L493
 pub const TransactionReturnData = struct {
     program_id: Pubkey = Pubkey.ZEROES,
-    data: std.ArrayListUnmanaged(u8) = .{},
+    data: std.BoundedArray(u8, MAX_RETURN_DATA) = .{},
+
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
+    pub const MAX_RETURN_DATA: usize = 1024;
 };
 
 /// Represents an account within a transaction and provides single threaded

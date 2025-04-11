@@ -8,76 +8,110 @@ const runtime_testing = sig.runtime.testing;
 const Pubkey = sig.core.Pubkey;
 const LogCollector = sig.runtime.LogCollector;
 
-pub const InstructionContextAccountMetaParams = runtime_testing.InstructionContextAccountMetaParams;
-pub const TransactionContextParams = runtime_testing.TransactionContextParams;
-pub const TransactionContextAccountParams = runtime_testing.TransactionContextAccountParams;
+pub const InstructionContextAccountMetaParams = runtime_testing.InstructionInfoAccountMetaParams;
+pub const TransactionContextParams = runtime_testing.ExecuteContextsParams;
 
-pub const createTransactionContext = runtime_testing.createTransactionContext;
-pub const createInstructionInfo = runtime_testing.createInstructionInfo;
-pub const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
+const createExecutionContexts = runtime_testing.createExecutionContexts;
+const createInstructionInfo = runtime_testing.createInstructionInfo;
+const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
 
 pub const Options = struct {
     print_logs: bool = false,
 };
 
+pub fn expectProgramExecuteError(
+    expected_error: anytype,
+    allocator: std.mem.Allocator,
+    program_id: Pubkey,
+    instruction: anytype,
+    instruction_accounts: []const InstructionContextAccountMetaParams,
+    initial_context_params: TransactionContextParams,
+    options: Options,
+) !void {
+    try std.testing.expectError(
+        expected_error,
+        expectProgramExecuteResult(
+            allocator,
+            program_id,
+            instruction,
+            instruction_accounts,
+            initial_context_params,
+            .{},
+            options,
+        ),
+    );
+}
+
 pub fn expectProgramExecuteResult(
     allocator: std.mem.Allocator,
     program_id: Pubkey,
     instruction: anytype,
-    instruction_accounts_params: []const InstructionContextAccountMetaParams,
-    transaction_context_params: TransactionContextParams,
-    expected_transaction_context_params: TransactionContextParams,
+    instruction_accounts: []const InstructionContextAccountMetaParams,
+    initial_context_params: TransactionContextParams,
+    expected_context_params: TransactionContextParams,
     options: Options,
 ) !void {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
-    var txn_context_params = transaction_context_params;
-    if (options.print_logs and transaction_context_params.log_collector == null) {
-        txn_context_params.log_collector = LogCollector.init(allocator, null);
+    var initial_context_params_ = initial_context_params;
+    if (options.print_logs and initial_context_params.log_collector == null) {
+        initial_context_params_.log_collector = LogCollector.init(null);
     }
 
-    var prng_0 = std.rand.DefaultPrng.init(0);
-    var transaction_context = try createTransactionContext(
+    // Create the initial transaction context
+    var initial_prng = std.rand.DefaultPrng.init(0);
+
+    const initial_ec, const initial_sc, var initial_tc = try createExecutionContexts(
         allocator,
-        prng_0.random(),
-        txn_context_params,
+        initial_prng.random(),
+        initial_context_params_,
     );
     defer {
         // Log messages before deiniting the transaction context
         if (options.print_logs) {
-            if (transaction_context.log_collector) |collector| {
-                std.debug.print("Execution Logs:\n", .{});
-                for (collector.collect(), 1..) |log, index| {
-                    std.debug.print("    {}: {s}\n", .{ index, log });
-                }
+            std.debug.print("Execution Logs:\n", .{});
+            for (initial_tc.log_collector.?.collect(), 1..) |log, index| {
+                std.debug.print("    {}: {s}\n", .{ index, log });
             }
         }
-        transaction_context.deinit(allocator);
+        initial_ec.deinit();
+        allocator.destroy(initial_ec);
+        allocator.destroy(initial_sc);
+        initial_tc.deinit();
     }
 
-    var prng_1 = std.rand.DefaultPrng.init(0);
-    var expected_transaction_context = try createTransactionContext(
-        allocator,
-        prng_1.random(),
-        expected_transaction_context_params,
-    );
-    defer expected_transaction_context.deinit(allocator);
+    // Create the expected transaction context
+    var expected_prng = std.rand.DefaultPrng.init(0);
 
-    var instruction_info = try createInstructionInfo(
+    const expected_ec, const expected_sc, var expected_tc = try createExecutionContexts(
         allocator,
-        &transaction_context,
+        expected_prng.random(),
+        expected_context_params,
+    );
+    defer {
+        expected_ec.deinit();
+        allocator.destroy(expected_ec);
+        allocator.destroy(expected_sc);
+        expected_tc.deinit();
+    }
+
+    // Create the instruction info
+    var instruction_info = try createInstructionInfo(
+        &initial_tc,
         program_id,
         instruction,
-        instruction_accounts_params,
+        instruction_accounts,
     );
     defer instruction_info.deinit(allocator);
 
+    // Execute the instruction
     try executor.executeInstruction(
         allocator,
-        &transaction_context,
+        &initial_tc,
         instruction_info,
     );
 
-    try expectTransactionContextEqual(expected_transaction_context, transaction_context);
+    // Check the result
+    try expectTransactionContextEqual(expected_tc, initial_tc);
 }

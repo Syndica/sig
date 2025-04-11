@@ -11,6 +11,8 @@ const sbpf = sig.vm.sbpf;
 const syscalls = sig.vm.syscalls;
 const Config = sig.vm.Config;
 const MemoryMap = memory.MemoryMap;
+const EpochContext = sig.runtime.transaction_context.EpochContext;
+const SlotContext = sig.runtime.transaction_context.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const FeatureSet = sig.runtime.FeatureSet;
 const Hash = sig.core.Hash;
@@ -99,7 +101,20 @@ pub fn main() !void {
         config,
     );
 
+    const ec = EpochContext{
+        .allocator = gpa,
+        .feature_set = FeatureSet.EMPTY,
+    };
+
+    const sc = SlotContext{
+        .ec = &ec,
+        .sysvar_cache = .{},
+    };
+
     var context: TransactionContext = .{
+        .allocator = gpa,
+        .ec = &ec,
+        .sc = &sc,
         .accounts = &.{},
         .instruction_stack = .{},
         .instruction_trace = .{},
@@ -107,11 +122,9 @@ pub fn main() !void {
         .return_data = .{},
         .custom_error = null,
         .log_collector = null,
-        .sysvar_cache = .{},
         .compute_meter = std.math.maxInt(u64),
-        .feature_set = FeatureSet.EMPTY,
-        .lamports_per_signature = 0,
-        .last_blockhash = Hash.ZEROES,
+        .prev_blockhash = Hash.ZEROES,
+        .prev_lamports_per_signature = 0,
         .compute_budget = ComputeBudget.default(1_400_000),
     };
     var vm = try Vm.init(

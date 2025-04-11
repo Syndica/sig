@@ -28,7 +28,10 @@ pub fn execute(
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
-    const instruction = try ic.info.deserializeInstruction(allocator, SystemProgramInstruction);
+    const instruction = try ic.ixn_info.deserializeInstruction(
+        allocator,
+        SystemProgramInstruction,
+    );
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
@@ -115,7 +118,7 @@ fn executeCreateAccount(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
     try createAccount(
         allocator,
         ic,
@@ -124,7 +127,7 @@ fn executeCreateAccount(
         lamports,
         space,
         owner,
-        ic.info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.buffer[1].pubkey,
     );
 }
 
@@ -133,7 +136,7 @@ fn executeAssign(
     ic: *InstructionContext,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
     try assign(
@@ -149,7 +152,7 @@ fn executeTransfer(
     ic: *InstructionContext,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
     try transfer(
         ic,
         0,
@@ -168,10 +171,10 @@ fn executeCreateAccountWithSeed(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
-        ic.info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.buffer[1].pubkey,
         base,
         owner,
         seed,
@@ -194,7 +197,7 @@ fn executeAdvanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -215,7 +218,7 @@ fn executeWithdrawNonceAccount(
     ic: *InstructionContext,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
     // TODO: Is this sysvar call required for consensus despite being unused?
     _ = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
@@ -231,7 +234,7 @@ fn executeInitializeNonceAccount(
     ic: *InstructionContext,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -260,7 +263,7 @@ fn executeAuthorizeNonceAccount(
     ic: *InstructionContext,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -279,7 +282,7 @@ fn executeAllocate(
     ic: *InstructionContext,
     space: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -296,7 +299,7 @@ fn executeAllocateWithSeed(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -321,7 +324,7 @@ fn executeAssignWithSeed(
     seed: []const u8,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -345,16 +348,16 @@ fn executeTransferWithSeed(
     from_seed: []const u8,
     from_owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     const from_index = 0;
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.info.account_metas.buffer[from_base_index].pubkey;
-    const from_pubkey = ic.info.account_metas.buffer[from_index].pubkey;
+    const from_base_pubkey = ic.ixn_info.account_metas.buffer[from_base_index].pubkey;
+    const from_pubkey = ic.ixn_info.account_metas.buffer[from_index].pubkey;
 
-    if (!try ic.info.isIndexSigner(from_base_index)) {
+    if (!try ic.ixn_info.isIndexSigner(from_base_index)) {
         try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -381,7 +384,7 @@ fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -412,7 +415,7 @@ fn allocate(
     space: u64,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.info.isPubkeySigner(authority)) {
+    if (!ic.ixn_info.isPubkeySigner(authority)) {
         try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -444,7 +447,7 @@ fn assign(
 ) (error{OutOfMemory} || InstructionError)!void {
     if (account.account.owner.equals(&owner)) return;
 
-    if (!ic.info.isPubkeySigner(authority)) {
+    if (!ic.ixn_info.isPubkeySigner(authority)) {
         try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -468,7 +471,10 @@ fn createAccount(
         defer account.release();
 
         if (account.account.lamports > 0) {
-            try ic.tc.log("Create Account: account {} already in use", .{account.pubkey});
+            try ic.tc.log(
+                "Create Account: account {} already in use",
+                .{account.pubkey},
+            );
             ic.tc.custom_error = @intFromEnum(SystemProgramError.AccountAlreadyInUse);
             return InstructionError.Custom;
         }
@@ -492,10 +498,10 @@ fn transfer(
     to_index: u16,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!try ic.info.isIndexSigner(from_index)) {
+    if (!try ic.ixn_info.isIndexSigner(from_index)) {
         try ic.tc.log(
             "Transfer: `from` account {} must sign",
-            .{ic.info.account_metas.buffer[from_index].pubkey},
+            .{ic.ixn_info.account_metas.buffer[from_index].pubkey},
         );
         return InstructionError.MissingRequiredSignature;
     }
@@ -567,7 +573,7 @@ fn advanceNonceAccount(
             return InstructionError.InvalidAccountData;
         },
         .initialized => |data| {
-            if (!ic.info.isPubkeySigner(data.authority)) {
+            if (!ic.ixn_info.isPubkeySigner(data.authority)) {
                 try ic.tc.log(
                     "Advance nonce account: Account {} must be a signer",
                     .{data.authority},
@@ -575,10 +581,13 @@ fn advanceNonceAccount(
                 return InstructionError.MissingRequiredSignature;
             }
 
-            const next_durable_nonce = nonce.createDurableNonce(ic.tc.last_blockhash);
+            const next_durable_nonce = nonce.createDurableNonce(ic.tc.prev_blockhash);
 
             if (data.durable_nonce.eql(next_durable_nonce)) {
-                try ic.tc.log("Advance nonce account: nonce can only advance once per slot", .{});
+                try ic.tc.log(
+                    "Advance nonce account: nonce can only advance once per slot",
+                    .{},
+                );
                 ic.tc.custom_error =
                     @intFromEnum(SystemProgramError.NonceBlockhashNotExpired);
                 return InstructionError.Custom;
@@ -588,7 +597,7 @@ fn advanceNonceAccount(
                 nonce.Versions{ .current = nonce.State{ .initialized = nonce.Data.init(
                     data.authority,
                     next_durable_nonce,
-                    ic.tc.lamports_per_signature,
+                    ic.tc.prev_lamports_per_signature,
                 ) } },
             );
         },
@@ -624,17 +633,18 @@ fn withdrawNonceAccount(
         const authority = switch (versioned_nonce.getState()) {
             .unintialized => blk: {
                 if (lamports > from_account.account.lamports) {
-                    try ic.tc.log("Withdraw nonce account: insufficient lamports {}, need {}", .{
-                        from_account.account.lamports,
-                        lamports,
-                    });
+                    try ic.tc.log(
+                        "Withdraw nonce account: insufficient lamports {}, need {}",
+                        .{ from_account.account.lamports, lamports },
+                    );
                     return InstructionError.InsufficientFunds;
                 }
                 break :blk from_account.pubkey;
             },
             .initialized => |data| blk: {
                 if (lamports == from_account.account.lamports) {
-                    const durable_nonce = nonce.createDurableNonce(ic.tc.last_blockhash);
+                    const durable_nonce =
+                        nonce.createDurableNonce(ic.tc.prev_blockhash);
                     if (durable_nonce.eql(data.durable_nonce)) {
                         try ic.tc.log(
                             "Withdraw nonce account: nonce can only advance once per slot",
@@ -666,7 +676,7 @@ fn withdrawNonceAccount(
             },
         };
 
-        if (!ic.info.isPubkeySigner(authority)) {
+        if (!ic.ixn_info.isPubkeySigner(authority)) {
             try ic.tc.log("Withdraw nonce account: Account {} must sign", .{authority});
             return InstructionError.MissingRequiredSignature;
         }
@@ -700,17 +710,20 @@ fn initializeNonceAccount(
         .unintialized => {
             const min_balance = rent.minimumBalance(account.constAccountData().len);
             if (min_balance > account.account.lamports) {
-                try ic.tc.log("Initialize nonce account: insufficient lamports {}, need {}", .{
-                    account.account.lamports,
-                    min_balance,
-                });
+                try ic.tc.log(
+                    "Initialize nonce account: insufficient lamports {}, need {}",
+                    .{
+                        account.account.lamports,
+                        min_balance,
+                    },
+                );
                 return InstructionError.InsufficientFunds;
             }
             try account.serializeIntoAccountData(nonce.Versions{
                 .current = nonce.State{ .initialized = nonce.Data.init(
                     authority,
-                    nonce.createDurableNonce(ic.tc.last_blockhash),
-                    ic.tc.lamports_per_signature,
+                    nonce.createDurableNonce(ic.tc.prev_blockhash),
+                    ic.tc.prev_lamports_per_signature,
                 ) },
             });
         },
@@ -752,8 +765,11 @@ pub fn authorizeNonceAccount(
         .initialized => |data| data,
     };
 
-    if (!ic.info.isPubkeySigner(nonce_data.authority)) {
-        try ic.tc.log("Authorize nonce account: Account {} must sign", .{nonce_data.authority});
+    if (!ic.ixn_info.isPubkeySigner(nonce_data.authority)) {
+        try ic.tc.log(
+            "Authorize nonce account: Account {} must sign",
+            .{nonce_data.authority},
+        );
         return InstructionError.MissingRequiredSignature;
     }
 
@@ -973,7 +989,7 @@ test "executeAdvanceNonceAccount" {
     var prng = std.Random.DefaultPrng.init(5083);
 
     // Last Blockhash is used to compute the next durable nonce
-    const last_blockhash = Hash.initRandom(prng.random());
+    const prev_blockhash = Hash.initRandom(prng.random());
 
     // Lamports per signature is set when the nonce is advanced
     const lamports_per_signature = 5_000;
@@ -994,7 +1010,7 @@ test "executeAdvanceNonceAccount" {
         .current = nonce.State{
             .initialized = nonce.Data.init(
                 nonce_authority, // Unchanged
-                nonce.createDurableNonce(last_blockhash), // Updated
+                nonce.createDurableNonce(prev_blockhash), // Updated
                 lamports_per_signature, // Updated
             ),
         },
@@ -1035,8 +1051,8 @@ test "executeAdvanceNonceAccount" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
-            .lamports_per_signature = lamports_per_signature,
-            .last_blockhash = last_blockhash,
+            .prev_blockhash = prev_blockhash,
+            .prev_lamports_per_signature = lamports_per_signature,
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
             },
@@ -1052,8 +1068,8 @@ test "executeAdvanceNonceAccount" {
                 .{ .pubkey = nonce_authority },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
-            .lamports_per_signature = lamports_per_signature,
-            .last_blockhash = last_blockhash,
+            .prev_blockhash = prev_blockhash,
+            .prev_lamports_per_signature = lamports_per_signature,
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
             },
@@ -1155,7 +1171,7 @@ test "executeInitializeNonceAccount" {
     var prng = std.Random.DefaultPrng.init(5083);
 
     // Last Blockhash is used to compute the next durable nonce
-    const last_blockhash = Hash.initRandom(prng.random());
+    const prev_blockhash = Hash.initRandom(prng.random());
 
     // Lamports per signature is set when the nonce is advanced
     const lamports_per_signature = 5_000;
@@ -1165,7 +1181,7 @@ test "executeInitializeNonceAccount" {
     const final_nonce_state = nonce.Versions{
         .current = nonce.State{ .initialized = nonce.Data.init(
             nonce_authority,
-            nonce.createDurableNonce(last_blockhash),
+            nonce.createDurableNonce(prev_blockhash),
             lamports_per_signature,
         ) },
     };
@@ -1214,8 +1230,8 @@ test "executeInitializeNonceAccount" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = system_program.COMPUTE_UNITS,
-            .lamports_per_signature = lamports_per_signature,
-            .last_blockhash = last_blockhash,
+            .prev_lamports_per_signature = lamports_per_signature,
+            .prev_blockhash = prev_blockhash,
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
                 .rent = rent,
@@ -1233,8 +1249,8 @@ test "executeInitializeNonceAccount" {
                 .{ .pubkey = Rent.ID },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
-            .lamports_per_signature = lamports_per_signature,
-            .last_blockhash = last_blockhash,
+            .prev_lamports_per_signature = lamports_per_signature,
+            .prev_blockhash = prev_blockhash,
             .sysvar_cache = .{
                 .recent_blockhashes = recent_blockhashes,
                 .rent = rent,

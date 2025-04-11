@@ -16,7 +16,7 @@ const MemoryMap = memory.MemoryMap;
 const OpCode = sbpf.Instruction.OpCode;
 
 const expectEqual = std.testing.expectEqual;
-const createTransactionContext = sig.runtime.testing.createTransactionContext;
+const createExecutionContexts = sig.runtime.testing.createExecutionContexts;
 
 // Execution tests
 
@@ -66,11 +66,16 @@ fn testAsmWithMemory(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    var context = try createTransactionContext(
+    const ec, const sc, var context = try createExecutionContexts(
         allocator,
         prng.random(),
-        .{ .accounts = &.{}, .compute_meter = expected[1] },
+        .{ .compute_meter = expected[1] },
     );
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        allocator.destroy(sc);
+    }
     var vm = try Vm.init(
         allocator,
         &executable,
@@ -1894,11 +1899,16 @@ test "pqr" {
     program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
     var prng = std.Random.DefaultPrng.init(10);
-    var context = try createTransactionContext(
+    const ec, const sc, var context = try createExecutionContexts(
         allocator,
         prng.random(),
-        .{ .accounts = &.{}, .compute_meter = 6 },
+        .{ .compute_meter = 6 },
     );
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        allocator.destroy(sc);
+    }
     const max_int = std.math.maxInt(u64);
     inline for (
         // zig fmt: off
@@ -2010,7 +2020,8 @@ test "pqr divide by zero" {
     program[0] = @intFromEnum(OpCode.mov32_imm);
     program[16] = @intFromEnum(OpCode.exit_or_syscall);
 
-    inline for (.{
+    // TODO: Why does this cause a transitive error when using inline?
+    for ([_]OpCode{
         OpCode.udiv32_reg,
         OpCode.udiv64_reg,
         OpCode.urem32_reg,
@@ -2038,11 +2049,18 @@ test "pqr divide by zero" {
 
         const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
         var prng = std.Random.DefaultPrng.init(10);
-        var context = try createTransactionContext(
+
+        const ec, const sc, var context = try createExecutionContexts(
             allocator,
             prng.random(),
-            .{ .accounts = &.{}, .compute_meter = 2 },
+            .{ .compute_meter = 2 },
         );
+        defer {
+            ec.deinit();
+            allocator.destroy(ec);
+            allocator.destroy(sc);
+        }
+
         var vm = try Vm.init(
             allocator,
             &executable,
@@ -2314,11 +2332,16 @@ pub fn testElfWithSyscalls(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    var context = try createTransactionContext(
+    const ec, const sc, var context = try createExecutionContexts(
         allocator,
         prng.random(),
-        .{ .accounts = &.{}, .compute_meter = expected[1] },
+        .{ .compute_meter = expected[1] },
     );
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        allocator.destroy(sc);
+    }
     var vm = try Vm.init(
         allocator,
         &executable,

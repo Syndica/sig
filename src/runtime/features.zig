@@ -54,11 +54,10 @@ pub const INCREASE_TX_ACCOUNT_LOCK_LIMIT =
 pub const FeatureSet = struct {
     active: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
 
-    pub const EMPTY = FeatureSet{
-        .active = .{},
-    };
+    pub const EMPTY: FeatureSet = .{ .active = .{} };
 
-    pub fn deinit(self: *FeatureSet, allocator: std.mem.Allocator) void {
-        self.active.deinit(allocator);
+    pub fn deinit(self: FeatureSet, allocator: std.mem.Allocator) void {
+        var active_ = self.active;
+        active_.deinit(allocator);
     }
 };
