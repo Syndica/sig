@@ -176,7 +176,7 @@ pub const RepairService = struct {
             for (0..num_threads) |i| {
                 const start = (addressed_requests.items.len * i) / num_threads;
                 const end = (addressed_requests.items.len * (i + 1)) / num_threads;
-                self.scheduler.scheduleNow(.{
+                self.scheduler.scheduleNow(self.allocator, .{
                     .requester = &self.requester,
                     .requests = addressed_requests.items[start..end],
                 });

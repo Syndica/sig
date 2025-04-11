@@ -159,11 +159,8 @@ pub fn parallelUntarToFileSystem(
                     .dir = dir,
                     .file_name = file_name,
                 };
-                switch (tasks.schedule(task)) {
-                    .success => {},
-                    .replaced_completed => |result| result catch |err| logger.err()
-                        .logf("UnTarTask encountered error: {s}", .{@errorName(err)}),
-                }
+                if (try tasks.schedule(allocator, task)) |result| result catch |err|
+                    logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
             },
             .global_extended_header, .extended_header => {
                 return error.TarUnsupportedFileType;

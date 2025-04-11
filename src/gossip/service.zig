@@ -533,7 +533,7 @@ pub const GossipService = struct {
                     .logger = self.logger,
                 };
 
-                switch (tasks.schedule(task)) {
+                switch (tasks.schedule(self.allocator, task)) {
                     .success => {},
                     .replaced_completed => |task_result| task_result catch |err| self.logger.err()
                         .logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)}),
