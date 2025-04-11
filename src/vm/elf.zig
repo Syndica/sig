@@ -72,6 +72,24 @@ pub const Elf = struct {
                 try safeSlice(bytes, header.e_phoff, phsize),
             );
 
+            // TODO: In Agave, when loading an elf only the `eflags` are read prior to loading with
+            // the strict, or lenient parser. In Sig we currently parse the headers and the data before
+            // loading with the strict or lenient parser. This is incorrect since the strict and lenient
+            // approaches in Agave parse the headers and data differently, which may lead to conformance
+            // issues, particularly in relation to the sequencing of error returns. This fix addresses a
+            // conformance issue relating to invalid program headers. A more thorough review of these
+            // implications is required.
+            // [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf.rs#L622
+            var maybe_prev_vaddr: ?elf.Elf64_Addr = null;
+            for (phdrs) |phdr| {
+                if (phdr.p_type != elf.PT_LOAD) continue;
+                if (maybe_prev_vaddr) |prev_addr| if (phdr.p_vaddr < prev_addr)
+                    return error.InvalidProgramHeader;
+                const offset = try std.math.add(u64, phdr.p_offset, phdr.p_filesz);
+                if (offset > bytes.len) return error.OutOfBounds;
+                maybe_prev_vaddr = phdr.p_vaddr;
+            }
+
             return .{
                 .bytes = bytes,
                 .header = header,
@@ -765,7 +783,6 @@ pub const Elf = struct {
         sbpf_version: sbpf.Version,
         config: Config,
     ) !Elf {
-        std.debug.print("parseStrict\n", .{});
         const header = headers.header;
 
         // A list of the first 5 expected program headers.
@@ -899,7 +916,6 @@ pub const Elf = struct {
         config: Config,
         loader: *BuiltinProgram,
     ) !Elf {
-        std.debug.print("parseLenient\n", .{});
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
         const offset = headers.header.e_entry -| text_section.sh_addr;

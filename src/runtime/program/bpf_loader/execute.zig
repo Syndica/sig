@@ -1460,8 +1460,8 @@ pub fn deployProgram(
             .sanitize_user_provided_values = true,
             .optimize_rodata = false,
             .aligned_memory_mapping = true,
-            .maximum_version = vm.sbpf.Version.v1,
-            .minimum_version = vm.sbpf.Version.v1,
+            .maximum_version = vm.sbpf.Version.v0,
+            .minimum_version = vm.sbpf.Version.v0,
         },
     ) catch |err| {
         try tc.log("{s}", .{@errorName(err)});
