@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 pub const ParseError = std.json.ParseError(std.json.Scanner) || error{MissingResult};
 
@@ -7,7 +8,7 @@ pub const ParseError = std.json.ParseError(std.json.Scanner) || error{MissingRes
 pub fn Response(comptime T: type) type {
     return struct {
         arena: *std.heap.ArenaAllocator,
-        id: u64,
+        id: sig.rpc.request.Id,
         jsonrpc: []const u8,
         payload: Payload,
         const Self = @This();
@@ -27,7 +28,7 @@ pub fn Response(comptime T: type) type {
             errdefer arena.deinit();
             const raw_response = try std.json.parseFromSliceLeaky(
                 struct {
-                    id: u64,
+                    id: sig.rpc.request.Id,
                     jsonrpc: []const u8,
                     result: ?T = null,
                     @"error": ?Error = null,
@@ -64,7 +65,7 @@ pub fn Response(comptime T: type) type {
 }
 
 pub const Error = struct {
-    code: i64,
+    code: ErrorCode,
     message: []const u8,
     data: ?std.json.Value = null,
 
@@ -77,3 +78,102 @@ pub const Error = struct {
         return self.code == other.code and std.mem.eql(u8, self.message, other.message);
     }
 };
+
+pub const ErrorCode = enum(i64) {
+    /// Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.
+    parse_error = -32700,
+    /// The JSON sent is not a valid Request object.
+    invalid_request = -32600,
+    /// The method does not exist / is not available.
+    method_not_found = -32601,
+    /// Invalid method parameter(s).
+    invalid_params = -32602,
+    /// Internal JSON-RPC error.
+    internal_error = -32603,
+
+    _,
+
+    pub const server_error_first: ErrorCode = @enumFromInt(-32_000);
+    pub const server_error_last: ErrorCode = @enumFromInt(-32_099);
+
+    pub const reserved_error_first: ErrorCode = @enumFromInt(-32_100);
+    pub const reserved_error_last: ErrorCode = @enumFromInt(-32_768);
+
+    pub fn isServerError(code: ErrorCode) bool {
+        return switch (code) {
+            server_error_first...server_error_last => true,
+            else => false,
+        };
+    }
+
+    pub fn isAppError(code: ErrorCode) bool {
+        return switch (code) {
+            server_error_first...server_error_last => false,
+            reserved_error_first...reserved_error_last => false,
+            else => true,
+        };
+    }
+
+    pub fn jsonParse(
+        allocator: std.mem.Allocator,
+        /// * `std.json.Scanner`
+        /// * `std.json.Reader(...)`
+        source: anytype,
+        options: std.json.ParseOptions,
+    ) std.json.ParseError(@TypeOf(source.*))!ErrorCode {
+        return @enumFromInt(try std.json.innerParse(i64, allocator, source, options));
+    }
+
+    pub fn jsonStringify(
+        self: ErrorCode,
+        /// `*std.json.WriteStream(...)`
+        jw: anytype,
+    ) @TypeOf(jw.*).Error!void {
+        try jw.write(@intFromEnum(self));
+    }
+};
+
+test testErrorCodeParse {
+    try testErrorCodeParse(.{}, .parse_error, "-32700");
+    try testErrorCodeParse(.{}, .invalid_request, "-32600");
+    try testErrorCodeParse(.{}, .method_not_found, "-32601");
+    try testErrorCodeParse(.{}, .invalid_params, "-32602");
+    try testErrorCodeParse(.{}, .internal_error, "-32603");
+    try testErrorCodeParse(.{}, @enumFromInt(-1), "-1");
+    try testErrorCodeParse(.{}, error.Overflow, "999999999999999999999999999999999999999999");
+}
+
+fn testErrorCodeParse(
+    options: std.json.ParseOptions,
+    expected: std.json.ParseError(std.json.Scanner)!ErrorCode,
+    str: []const u8,
+) !void {
+    const allocator = std.testing.allocator;
+    const actual_res = std.json.parseFromSlice(ErrorCode, allocator, str, options) catch |err| {
+        try std.testing.expectEqual(expected, err);
+        return;
+    };
+    defer actual_res.deinit();
+    const actual = actual_res.value;
+    try std.testing.expectEqual(expected, actual);
+}
+
+test testErrorCodeStringify {
+    try testErrorCodeStringify(.{}, .parse_error, "-32700");
+    try testErrorCodeStringify(.{}, .invalid_request, "-32600");
+    try testErrorCodeStringify(.{}, .method_not_found, "-32601");
+    try testErrorCodeStringify(.{}, .invalid_params, "-32602");
+    try testErrorCodeStringify(.{}, .internal_error, "-32603");
+    try testErrorCodeStringify(.{}, @enumFromInt(-1), "-1");
+}
+
+fn testErrorCodeStringify(
+    options: std.json.StringifyOptions,
+    value: ErrorCode,
+    expected: []const u8,
+) !void {
+    const allocator = std.testing.allocator;
+    const actual = try std.json.stringifyAlloc(allocator, value, options);
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualStrings(expected, actual);
+}
