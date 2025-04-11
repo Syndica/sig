@@ -44,7 +44,11 @@ pub const EpochSchedule = struct {
         true,
     ) catch unreachable;
 
-    pub fn custom(slots_per_epoch: Slot, leader_schedule_slot_offset: Slot, warmup: bool) !EpochSchedule {
+    pub fn custom(
+        slots_per_epoch: Slot,
+        leader_schedule_slot_offset: Slot,
+        warmup: bool,
+    ) !EpochSchedule {
         std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
         const first_normal_epoch, const first_normal_slot = if (warmup) blk: {
             const next_power_of_two = std.math.ceilPowerOfTwo(Slot, slots_per_epoch) catch 0;

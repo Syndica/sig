@@ -128,7 +128,12 @@ pub const InstructionInfo = struct {
     }
 };
 
-pub fn limitedFixedBufferStream(comptime Buffer: type, buffer: Buffer, limit: usize) LimitedFixedBufferStream(Buffer) {
+/// Custom limited fixed buffer stream to support limited deserialization of instructions
+pub fn limitedFixedBufferStream(
+    comptime Buffer: type,
+    buffer: Buffer,
+    limit: usize,
+) LimitedFixedBufferStream(Buffer) {
     return .{
         .buffer = buffer,
         .pos = 0,
