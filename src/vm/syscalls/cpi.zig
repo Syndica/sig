@@ -53,7 +53,7 @@ const StableInstructionRust = extern struct {
     program_id: Pubkey,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L577
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L577
 const StableInstructionC = extern struct {
     program_id_addr: u64,
     accounts_addr: u64,
@@ -72,7 +72,7 @@ const AccountMetaRust = extern struct {
     is_writable: bool,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L588
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L588
 const AccountMetaC = extern struct {
     pubkey_addr: u64,
     is_writable: bool,
@@ -91,7 +91,7 @@ const AccountInfoRust = extern struct {
     executable: bool,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/master/359d7eb2b68639443d750ffcec0c7e358f138975/bpf_loader/src/syscalls/cpi.rs#L597
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/359d7eb2b68639443d750ffcec0c7e358f138975/bpf_loader/src/syscalls/cpi.rs#L597
 const AccountInfoC = extern struct {
     key_addr: u64,
     lamports_addr: u64,
@@ -105,7 +105,7 @@ const AccountInfoC = extern struct {
 };
 
 /// [rust] https://doc.rust-lang.org/src/alloc/rc.rs.html#281-289
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L2971
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2971
 fn RcBox(comptime T: type) type {
     return extern struct {
         strong: usize = 0,
@@ -173,8 +173,8 @@ fn VmValue(comptime T: type) type {
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
 const VmSlice = extern struct {
     ptr: u64,
     len: u64,
@@ -558,7 +558,7 @@ const CallerAccount = struct {
     }
 
     // TODO: used in `cpi_common`
-    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L372C8-L372C22
+    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L372C8-L372C22
     // fn reallocRegion(
     //     self: *const CallerAccount,
     //     allocator: std.mem.Allocator,
@@ -587,7 +587,7 @@ const CallerAccount = struct {
 /// When true is returned, the caller account must be updated after CPI. This
 /// is only set for direct mapping when the pointer may have changed.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1201
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L1201
 fn updateCalleeAccount(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
@@ -710,7 +710,7 @@ fn translateAccounts(
     );
 
     // check_account_infos():
-    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1018
+    // [agave] https://github.com/anza-xyz/agave/blob/master/https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L1018/bpf_loader/src/syscalls/cpi.rs#L1018
     if (ic.ec.feature_set.active.contains(features.LOOSEN_CPI_SIZE_RESTRICTION)) {
         const max_cpi_account_infos: u64 = if (ic.ec.feature_set.active.contains(
             features.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
@@ -731,7 +731,7 @@ fn translateAccounts(
     }
 
     // translate_and_update_accounts():
-    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L853
+    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L853
 
     var accounts: TranslatedAccounts = .{};
     try accounts.append(.{
@@ -826,6 +826,8 @@ fn translateAccounts(
     return accounts;
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L438
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L650
 fn translateInstruction(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
@@ -871,6 +873,7 @@ fn translateInstruction(
             ix.program_id_addr,
             ic.getCheckAligned(),
         )).*,
+        else => unreachable,
     };
 
     const loosen_cpi_size_restriction = ic.tc.feature_set.active.contains(
@@ -878,16 +881,16 @@ fn translateInstruction(
     );
 
     // check_instruction_size():
-    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L980
+    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L980
     if (loosen_cpi_size_restriction) {
-        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L19
+        // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L19
         const MAX_CPI_INSTRUCTION_DATA_LEN = 10 * 1024;
         if (data.len > MAX_CPI_INSTRUCTION_DATA_LEN) {
             // TODO: add error context { data_len, max_data_len }
             return SyscallError.MaxInstructionDataLenExceeded;
         }
 
-        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L25
+        // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L25
         const MAX_CPI_INSTRUCTION_ACCOUNTS = std.math.maxInt(u8);
         if (account_metas.len > MAX_CPI_INSTRUCTION_ACCOUNTS) {
             // TODO: add error context { num_accounts, max_accounts }
@@ -915,9 +918,9 @@ fn translateInstruction(
 
     for (account_metas, 0..) |account_meta, i| {
         // NOTE: checks for bools to be 0 or 1, but why is this volatile?
-        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L482
-        if (@as(*volatile u8, @ptrCast(&account_meta.is_signer)).* > 1 or
-            @as(*volatile u8, @ptrCast(&account_meta.is_writable)).* > 1)
+        // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L482
+        if (@as(*const volatile u8, @ptrCast(&account_meta.is_signer)).* > 1 or
+            @as(*const volatile u8, @ptrCast(&account_meta.is_writable)).* > 1)
         {
             return InstructionError.InvalidArgument;
         }
@@ -934,6 +937,7 @@ fn translateInstruction(
                     account_meta.pubkey_addr,
                     ic.getCheckAligned(),
                 )).*,
+                else => unreachable,
             },
         };
     }
@@ -945,7 +949,7 @@ fn translateInstruction(
     };
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/mod.rs#L81
+// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L81
 const MAX_SIGNERS = 16;
 
 fn translateSigners(
@@ -1005,69 +1009,6 @@ fn translateSigners(
     }
 
     return signers;
-}
-
-test "vm.syscalls.cpi: translateSigners" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foo");
-    defer ctx.deinit(allocator);
-
-    const program_id = Pubkey.initRandom(prng.random());
-    const derive_key, const bump_seed = pubkey_utils.findProgramAddress(&.{"foo"}, program_id).?;
-
-    // mock_signers(&.{"foo", &.{bump_seed}}, vm_addr)
-    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L2815
-    const signers: []const []const u8 = &.{ "foo", &.{bump_seed} };
-    const total_size = @sizeOf(VmSlice) +
-        (signers.len * @sizeOf(VmSlice)) +
-        signers[0].len + signers[1].len;
-
-    const buffer = try allocator.alloc(u8, total_size);
-    defer allocator.free(buffer);
-
-    const vm_addr = MM_INPUT_START;
-    const memory_map = try MemoryMap.init(
-        allocator,
-        &.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START),
-            memory.Region.init(.mutable, &.{}, memory.STACK_START),
-            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
-            memory.Region.init(.mutable, buffer, memory.INPUT_START),
-        },
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
-
-    var buf = std.io.fixedBufferStream(buffer);
-    try buf.writer().writeAll(std.mem.asBytes(&VmSlice{
-        .ptr = vm_addr + @sizeOf(VmSlice), // start of signers below
-        .len = signers.len,
-    }));
-
-    var bytes_offset = @sizeOf(VmSlice) + (signers.len * @sizeOf(VmSlice));
-    for (signers) |bytes| {
-        try buf.writer().writeAll(std.mem.asBytes(&VmSlice{
-            .ptr = vm_addr + bytes_offset,
-            .len = bytes.len,
-        }));
-        bytes_offset += bytes.len;
-    }
-    for (signers) |bytes| {
-        try buf.writer().writeAll(bytes);
-    }
-
-    const translated_signers = try translateSigners(
-        &ctx.ic,
-        &memory_map,
-        vm_addr,
-        1,
-        program_id,
-    );
-    try std.testing.expectEqual(translated_signers.len, 1);
-    try std.testing.expect(translated_signers.get(0).equals(&derive_key));
 }
 
 const TestContext = struct {
@@ -1436,4 +1377,187 @@ test "vm.syscalls.cpi: translateAccounts" {
     const caller_account = accounts.get(1).caller_account.?;
     try std.testing.expect(std.mem.eql(u8, caller_account.serialized_data, account.data));
     try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
+}
+
+fn testTranslateInstruction(comptime AccountInfoType: type) !void {
+    const InstructionType, const AccountMetaType = switch (AccountInfoType) {
+        AccountInfoRust => .{ StableInstructionRust, AccountMetaRust },
+        AccountInfoC => .{ StableInstructionC, AccountMetaC },
+        else => @compileError("invalid AccountInfo type"),
+    };
+
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
+    defer ctx.deinit(allocator);
+
+    const data = "ins data";
+    const program_id = Pubkey.initRandom(prng.random());
+    const accounts = [_]InstructionAccount{.{
+        .pubkey = Pubkey.initRandom(prng.random()),
+        .is_signer = true,
+        .is_writable = false,
+    }};
+
+    const accounts_len = @sizeOf(AccountMetaType) * accounts.len;
+    var total_size = @sizeOf(InstructionType) + accounts_len + data.len;
+    
+    const keys_offset = total_size;
+    if (AccountInfoType == AccountInfoC) {
+        total_size += @sizeOf(Pubkey) + (accounts.len * @sizeOf(Pubkey));
+    }
+
+    const buffer = try allocator.alloc(u8, total_size);
+    defer allocator.free(buffer);
+
+    const vm_addr = MM_INPUT_START;
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
+            memory.Region.init(.mutable, buffer, memory.INPUT_START),
+        },
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    const ins: InstructionType = switch (InstructionType) {
+        StableInstructionRust => .{
+            .accounts_addr = vm_addr + @sizeOf(InstructionType),
+            .accounts_cap = accounts.len,
+            .accounts_len = accounts.len,
+            .data_addr = vm_addr + @sizeOf(InstructionType) + accounts_len,
+            .data_cap = data.len,
+            .data_len = data.len,
+            .program_id = program_id,
+        },
+        StableInstructionC => .{
+            .program_id_addr = vm_addr + keys_offset,
+            .accounts_addr = vm_addr + @sizeOf(InstructionType),
+            .accounts_len = accounts.len,
+            .data_addr = vm_addr + @sizeOf(InstructionType) + accounts_len,
+            .data_len = data.len,
+        },
+        else => unreachable,
+    };
+
+    var buf = std.io.fixedBufferStream(buffer);
+    try buf.writer().writeAll(std.mem.asBytes(&ins));
+
+    for (accounts, 0..) |ins_account, i| {
+        const account_meta: AccountMetaType = switch (AccountMetaType) {
+            AccountMetaC => .{
+                .pubkey_addr = keys_offset + ((i + 1) * @sizeOf(Pubkey)),
+                .is_writable = ins_account.is_writable,
+                .is_signer = ins_account.is_signer,
+            },
+            AccountMetaRust => .{
+                .pubkey = ins_account.pubkey,
+                .is_writable = ins_account.is_writable,
+                .is_signer = ins_account.is_signer,
+            },
+            else => unreachable,
+        };
+        try buf.writer().writeAll(std.mem.asBytes(&account_meta));
+    }
+
+    try buf.writer().writeAll(data);
+    if (AccountInfoType == AccountInfoC) {
+        try buf.writer().writeAll(std.mem.asBytes(&program_id));
+        for (accounts) |a| try buf.writer().writeAll(std.mem.asBytes(&a.pubkey));
+    }
+
+    const translated_instruction = try translateInstruction(
+        allocator,
+        &ctx.ic,
+        &memory_map,
+        AccountInfoType,
+        vm_addr,
+    );
+    defer allocator.free(translated_instruction.accounts);
+
+    try std.testing.expect(translated_instruction.program_id.equals(&program_id));
+    try std.testing.expect(std.mem.eql(u8, translated_instruction.data, data));
+
+    try std.testing.expectEqual(translated_instruction.accounts.len, accounts.len);
+    for (accounts, translated_instruction.accounts) |a, b| {
+        try std.testing.expect(a.pubkey.equals(&b.pubkey));
+        try std.testing.expectEqual(a.is_signer, b.is_signer);
+        try std.testing.expectEqual(a.is_writable, b.is_writable);
+    }
+}
+
+test "vm.syscalls.cpi: translateInstructionRust" {
+    try testTranslateInstruction(AccountInfoRust);
+}
+
+test "vm.syscalls.cpi: translateInstructionC" {
+    try testTranslateInstruction(AccountInfoC);
+}
+
+test "vm.syscalls.cpi: translateSigners" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
+    defer ctx.deinit(allocator);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const derive_key, const bump_seed = pubkey_utils.findProgramAddress(&.{"foo"}, program_id).?;
+
+    // mock_signers(&.{"foo", &.{bump_seed}}, vm_addr)
+    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2815
+    const signers: []const []const u8 = &.{ "foo", &.{bump_seed} };
+    const total_size = @sizeOf(VmSlice) +
+        (signers.len * @sizeOf(VmSlice)) +
+        signers[0].len + signers[1].len;
+
+    const buffer = try allocator.alloc(u8, total_size);
+    defer allocator.free(buffer);
+
+    const vm_addr = MM_INPUT_START;
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
+            memory.Region.init(.mutable, buffer, memory.INPUT_START),
+        },
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    var buf = std.io.fixedBufferStream(buffer);
+    try buf.writer().writeAll(std.mem.asBytes(&VmSlice{
+        .ptr = vm_addr + @sizeOf(VmSlice), // start of signers below
+        .len = signers.len,
+    }));
+
+    var bytes_offset = @sizeOf(VmSlice) + (signers.len * @sizeOf(VmSlice));
+    for (signers) |bytes| {
+        try buf.writer().writeAll(std.mem.asBytes(&VmSlice{
+            .ptr = vm_addr + bytes_offset,
+            .len = bytes.len,
+        }));
+        bytes_offset += bytes.len;
+    }
+    for (signers) |bytes| {
+        try buf.writer().writeAll(bytes);
+    }
+
+    const translated_signers = try translateSigners(
+        &ctx.ic,
+        &memory_map,
+        vm_addr,
+        1,
+        program_id,
+    );
+    try std.testing.expectEqual(translated_signers.len, 1);
+    try std.testing.expect(translated_signers.get(0).equals(&derive_key));
 }
