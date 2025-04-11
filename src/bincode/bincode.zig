@@ -343,6 +343,16 @@ pub fn readIntAsLength(comptime T: type, reader: anytype, params: bincode.Params
     return @intCast(len_u64);
 }
 
+pub fn readUtf8String(allocator: std.mem.Allocator, reader: anytype, _: bincode.Params) ![]const u8 {
+    const len = try reader.readInt(u64, .little);
+    const str = try allocator.alloc(u8, len);
+    errdefer allocator.free(str);
+    const bytes_read = try reader.readAll(str);
+    if (bytes_read != len) return error.NoBytesLeft;
+    if (!std.unicode.utf8ValidateSlice(str)) return error.InvalidUtf8;
+    return str;
+}
+
 pub fn readFieldWithConfig(
     allocator: std.mem.Allocator,
     reader: anytype,

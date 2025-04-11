@@ -109,9 +109,9 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        if (self.instruction_data.len > Transaction.MAX_BYTES)
-            return InstructionError.InvalidInstructionData;
-        return bincode.readFromSlice(allocator, T, self.instruction_data, .{}) catch {
+        const max_len = @min(self.instruction_data.len, Transaction.MAX_BYTES);
+        const buffer = self.instruction_data[0..max_len];
+        return bincode.readFromSlice(allocator, T, buffer, .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
     }
@@ -124,34 +124,3 @@ pub const InstructionInfo = struct {
         if (self.account_metas.len < minimum_accounts) return InstructionError.NotEnoughAccountKeys;
     }
 };
-
-test "deserializeInstruction: invalid instruction data" {
-    const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
-
-    const DummyInstruction = struct { data: []const u8 };
-
-    const dummy_instruction: DummyInstruction = .{
-        .data = &[_]u8{0} ** (Transaction.MAX_BYTES + 10),
-    };
-
-    const instruction_info: InstructionInfo = .{
-        .program_meta = .{
-            .pubkey = Pubkey.initRandom(prng.random()),
-            .index_in_transaction = 0,
-        },
-        .account_metas = .{},
-        .instruction_data = try bincode.writeAlloc(
-            allocator,
-            dummy_instruction,
-            .{},
-        ),
-        .initial_account_lamports = 0,
-    };
-    defer instruction_info.deinit(allocator);
-
-    try std.testing.expectError(
-        InstructionError.InvalidInstructionData,
-        instruction_info.deserializeInstruction(allocator, u32),
-    );
-}
