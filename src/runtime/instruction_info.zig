@@ -109,9 +109,12 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        const max_len = @min(self.instruction_data.len, Transaction.MAX_BYTES);
-        const buffer = self.instruction_data[0..max_len];
-        return bincode.readFromSlice(allocator, T, buffer, .{}) catch {
+        var lfbs = limitedFixedBufferStream(
+            []const u8,
+            self.instruction_data,
+            Transaction.MAX_BYTES,
+        );
+        return bincode.read(allocator, T, lfbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
     }
@@ -124,3 +127,41 @@ pub const InstructionInfo = struct {
         if (self.account_metas.len < minimum_accounts) return InstructionError.NotEnoughAccountKeys;
     }
 };
+
+pub fn limitedFixedBufferStream(comptime Buffer: type, buffer: Buffer, limit: usize) LimitedFixedBufferStream(Buffer) {
+    return .{
+        .buffer = buffer,
+        .pos = 0,
+        .limit = limit,
+    };
+}
+
+pub fn LimitedFixedBufferStream(comptime Buffer: type) type {
+    return struct {
+        /// `Buffer` is either a `[]u8` or `[]const u8`.
+        buffer: Buffer,
+        pos: usize,
+        limit: usize,
+
+        pub const ReadError = error{LimitBreach};
+
+        pub const Reader = std.io.Reader(*Self, ReadError, read);
+
+        const Self = @This();
+
+        pub fn reader(self: *Self) Reader {
+            return .{ .context = self };
+        }
+
+        pub fn read(self: *Self, dest: []u8) ReadError!usize {
+            const size = @min(dest.len, self.buffer.len - self.pos);
+            const end = self.pos + size;
+            if (end > self.limit) return error.LimitBreach;
+
+            @memcpy(dest[0..size], self.buffer[self.pos..end]);
+            self.pos = end;
+
+            return size;
+        }
+    };
+}

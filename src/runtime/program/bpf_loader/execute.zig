@@ -310,7 +310,7 @@ pub fn executeV3DeployWithMaxDataLen(
         const buffer_data = buffer_account.constAccountData();
         if (buffer_data.len <= V3State.BUFFER_METADATA_SIZE) {
             try ic.tc.log("Buffer account too small", .{});
-            return InstructionError.AccountDataTooSmall;
+            return InstructionError.InvalidAccountData;
         }
 
         const buffer_data_len = buffer_data.len -| V3State.BUFFER_METADATA_SIZE;
@@ -1437,21 +1437,41 @@ pub fn deployProgram(
     const source = try allocator.dupe(u8, data);
     defer allocator.free(source);
 
+    try tc.log("Source[0..4] = {any}", .{source[0..4]});
+    try tc.log("elf.MAGIC = {any}", .{std.elf.MAGIC});
+
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L133-L143
     var executable = vm.Executable.fromBytes(
         allocator,
         source,
         &syscalls,
-        .{},
+        // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L290
+        .{
+            .max_call_depth = 64,
+            .stack_frame_size = 4096,
+            .enable_address_translation = true,
+            .enable_stack_frame_gaps = true,
+            .instruction_meter_checkpoint_distance = 10_000,
+            .enable_instruction_meter = true,
+            .enable_instruction_tracing = false,
+            .enable_symbol_and_section_labels = false,
+            .reject_broken_elfs = true,
+            .noop_instruction_rate = 256,
+            .sanitize_user_provided_values = true,
+            .optimize_rodata = false,
+            .aligned_memory_mapping = true,
+            .maximum_version = vm.sbpf.Version.v1,
+            .minimum_version = vm.sbpf.Version.v1,
+        },
     ) catch |err| {
         try tc.log("{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };
     defer executable.deinit(allocator);
 
-    _ = program_id;
-    _ = owner_id;
+    try tc.log("Deploying program {}", .{program_id});
     _ = slot;
+    _ = owner_id;
 }
 
 test "executeV3InitializeBuffer" {
