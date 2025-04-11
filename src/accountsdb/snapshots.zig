@@ -2628,11 +2628,13 @@ pub fn parallelUnpackZstdTarBall(
     );
     defer std.posix.munmap(memory);
 
-    try std.posix.madvise(
-        memory.ptr,
-        memory.len,
-        std.posix.MADV.SEQUENTIAL | std.posix.MADV.WILLNEED,
-    );
+    if (@import("builtin").os.tag != .macos) {
+        try std.posix.madvise(
+            memory.ptr,
+            memory.len,
+            std.posix.MADV.SEQUENTIAL | std.posix.MADV.WILLNEED,
+        );
+    }
 
     var tar_stream = try zstd.Reader.init(memory);
     defer tar_stream.deinit();
