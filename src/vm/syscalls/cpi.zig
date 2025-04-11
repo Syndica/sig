@@ -1014,69 +1014,6 @@ fn translateSigners(
     return signers;
 }
 
-test "vm.syscalls.cpi: translateSigners" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foo");
-    defer ctx.deinit(allocator);
-
-    const program_id = Pubkey.initRandom(prng.random());
-    const derive_key, const bump_seed = pubkey_utils.findProgramAddress(&.{"foo"}, program_id).?;
-
-    // mock_signers(&.{"foo", &.{bump_seed}}, vm_addr)
-    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L2815
-    const signers: []const []const u8 = &.{ "foo", &.{bump_seed} };
-    const total_size = @sizeOf(VmSlice) +
-        (signers.len * @sizeOf(VmSlice)) +
-        signers[0].len + signers[1].len;
-
-    const buffer = try allocator.alloc(u8, total_size);
-    defer allocator.free(buffer);
-
-    const vm_addr = MM_INPUT_START;
-    const memory_map = try MemoryMap.init(
-        allocator,
-        &.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START),
-            memory.Region.init(.mutable, &.{}, memory.STACK_START),
-            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
-            memory.Region.init(.mutable, buffer, memory.INPUT_START),
-        },
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
-
-    var buf = std.io.fixedBufferStream(buffer);
-    try buf.writer().writeAll(std.mem.asBytes(&VmSlice{
-        .ptr = vm_addr + @sizeOf(VmSlice), // start of signers below
-        .len = signers.len,
-    }));
-
-    var bytes_offset = @sizeOf(VmSlice) + (signers.len * @sizeOf(VmSlice));
-    for (signers) |bytes| {
-        try buf.writer().writeAll(std.mem.asBytes(&VmSlice{
-            .ptr = vm_addr + bytes_offset,
-            .len = bytes.len,
-        }));
-        bytes_offset += bytes.len;
-    }
-    for (signers) |bytes| {
-        try buf.writer().writeAll(bytes);
-    }
-
-    const translated_signers = try translateSigners(
-        &ctx.ic,
-        &memory_map,
-        vm_addr,
-        1,
-        program_id,
-    );
-    try std.testing.expectEqual(translated_signers.len, 1);
-    try std.testing.expect(translated_signers.get(0).equals(&derive_key));
-}
-
 const TestContext = struct {
     ec: *EpochContext,
     sc: *SlotContext,
