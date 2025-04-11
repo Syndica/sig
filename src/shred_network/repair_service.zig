@@ -104,6 +104,7 @@ pub const RepairService = struct {
     ) !Self {
         const n_threads = maxRequesterThreads();
         const thread_pool = try allocator.create(sig.sync.ThreadPool);
+        thread_pool.* = sig.sync.ThreadPool.init(.{ .max_threads = n_threads });
         return RepairService{
             .allocator = allocator,
             .requester = requester,
@@ -123,7 +124,7 @@ pub const RepairService = struct {
         self.exit.store(true, .release);
         self.peer_provider.deinit();
         self.requester.deinit();
-        self.thread_pool.deinit();
+        self.thread_pool.shutdown();
         self.allocator.destroy(self.thread_pool);
         self.scheduler.deinit(self.allocator);
         self.report.deinit();

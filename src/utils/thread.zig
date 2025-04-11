@@ -123,7 +123,7 @@ pub fn HomogeneousTaskScheduler(comptime TaskType: type) type {
         /// blocks until the task is complete.
         fn join(self: *Self) void {
             self.semaphore.wait();
-            self.semaphore.post(); // TODO: ???
+            self.semaphore.post();
         }
     };
 
@@ -156,6 +156,7 @@ pub fn HomogeneousTaskScheduler(comptime TaskType: type) type {
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
+            for (self.tasks.items) |*task| task.join();
             self.tasks.deinit(allocator);
             self.results.deinit(allocator);
         }
@@ -317,22 +318,25 @@ test "typed thread pool" {
         }
     };
 
-    var pool = ThreadPool.init(.{ .max_threads = 2 });
+    var pool = ThreadPool.init(.{ .max_threads = 3 });
+    defer pool.shutdown();
     var scheduler = try HomogeneousTaskScheduler(AdditionTask)
-        .init(std.testing.allocator, &pool, 3);
+        .init(std.testing.allocator, &pool, 2);
     defer scheduler.deinit(std.testing.allocator);
+
     try std.testing.expectEqual(.success, scheduler.schedule(.{ .a = 1, .b = 1 }));
+    std.time.sleep(std.time.ns_per_ms);
     try std.testing.expectEqual(.success, scheduler.schedule(.{ .a = 1, .b = 2 }));
+    const next = scheduler.schedule(.{ .a = 1, .b = 4 });
     try std.testing.expectEqual(
-        HomogeneousTaskScheduler(AdditionTask).ScheduleResult{ .replaced_completed = 1 },
-        scheduler.schedule(.{ .a = 1, .b = 4 }),
+        HomogeneousTaskScheduler(AdditionTask).ScheduleResult{ .replaced_completed = 2 },
+        next,
     );
 
     var results = try scheduler.join(std.testing.allocator);
     defer results.deinit(std.testing.allocator);
 
-    try std.testing.expect(3 == results.items.len);
-    try std.testing.expect(2 == results.items[0]);
+    try std.testing.expect(2 == results.items.len);
+    try std.testing.expect(5 == results.items[0]);
     try std.testing.expect(3 == results.items[1]);
-    try std.testing.expect(5 == results.items[2]);
 }
