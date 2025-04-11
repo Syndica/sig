@@ -1387,7 +1387,7 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
 
     const accounts_len = @sizeOf(AccountMetaType) * accounts.len;
     var total_size = @sizeOf(InstructionType) + accounts_len + data.len;
-    
+
     const keys_offset = total_size;
     if (AccountInfoType == AccountInfoC) {
         total_size += @sizeOf(Pubkey) + (accounts.len * @sizeOf(Pubkey));
@@ -1436,7 +1436,7 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
     for (accounts, 0..) |ins_account, i| {
         const account_meta: AccountMetaType = switch (AccountMetaType) {
             AccountMetaC => .{
-                .pubkey_addr = keys_offset + ((i + 1) * @sizeOf(Pubkey)),
+                .pubkey_addr = vm_addr + keys_offset + ((i + 1) * @sizeOf(Pubkey)),
                 .is_writable = ins_account.is_writable,
                 .is_signer = ins_account.is_signer,
             },
