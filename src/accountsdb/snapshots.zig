@@ -2618,12 +2618,25 @@ pub fn parallelUnpackZstdTarBall(
     // TODO: improve `zstd.Reader` to be capable of sourcing a stream of bytes
     // rather than a fixed slice of bytes, so we don't have to load the entire
     // snapshot file into memory.
-    const file_data = try allocator.alloc(u8, file_size);
-    defer allocator.free(file_data);
-    if (try file.readAll(file_data) != file_size) {
-        return error.UnexpectedEOF; // has the file shrunk since we got its size?
+    const memory = try std.posix.mmap(
+        null,
+        file_size,
+        std.posix.PROT.READ,
+        std.posix.MAP{ .TYPE = .PRIVATE },
+        file.handle,
+        0,
+    );
+    defer std.posix.munmap(memory);
+
+    if (@import("builtin").os.tag != .macos) {
+        try std.posix.madvise(
+            memory.ptr,
+            memory.len,
+            std.posix.MADV.SEQUENTIAL | std.posix.MADV.WILLNEED,
+        );
     }
-    var tar_stream = try zstd.Reader.init(file_data);
+
+    var tar_stream = try zstd.Reader.init(memory);
     defer tar_stream.deinit();
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
 
