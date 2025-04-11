@@ -131,6 +131,16 @@ pub const TowerSync = struct {
     /// including this block. Does not require replaying
     /// in order to compute.
     block_id: Hash,
+
+    pub fn default(allocator: std.mem.Allocator) !TowerSync {
+        return .{
+            .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        };
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
