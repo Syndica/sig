@@ -141,10 +141,10 @@ fn executeCreateAccountWithSeed(
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
     try checkSeedAddress(
         ic,
-        ic.info.account_metas.buffer[1].pubkey,
+        ic.ixn_info.account_metas.buffer[1].pubkey,
         base,
         owner,
         seed,
@@ -199,16 +199,16 @@ fn executeTransferWithSeed(
     from_seed: []const u8,
     from_owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     const from_index = 0;
     const from_base_index = 1;
     const to_index = 2;
 
-    const from_base_pubkey = ic.info.account_metas.buffer[from_base_index].pubkey;
-    const from_pubkey = ic.info.account_metas.buffer[from_index].pubkey;
+    const from_base_pubkey = ic.ixn_info.account_metas.buffer[from_base_index].pubkey;
+    const from_pubkey = ic.ixn_info.account_metas.buffer[from_index].pubkey;
 
-    if (!try ic.info.isIndexSigner(from_base_index)) {
+    if (!try ic.ixn_info.isIndexSigner(from_base_index)) {
         try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -319,7 +319,7 @@ fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    try ic.info.checkNumberOfAccounts(1);
+    try ic.ixn_info.checkNumberOfAccounts(1);
 
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
@@ -446,7 +446,7 @@ fn assign(
 ) (error{OutOfMemory} || InstructionError)!void {
     if (account.account.owner.equals(&owner)) return;
 
-    if (!ic.info.isPubkeySigner(authority)) {
+    if (!ic.ixn_info.isPubkeySigner(authority)) {
         try ic.tc.log("Assign: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -755,7 +755,7 @@ fn allocate(
     space: u64,
     authority: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.info.isPubkeySigner(authority)) {
+    if (!ic.ixn_info.isPubkeySigner(authority)) {
         try ic.tc.log("Allocate: 'base' account {} must sign", .{account.pubkey});
         return InstructionError.MissingRequiredSignature;
     }
