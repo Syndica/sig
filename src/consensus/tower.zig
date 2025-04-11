@@ -37,76 +37,72 @@ pub const VoteTransaction = union(enum) {
     compact_vote_state_update: VoteStateUpdate,
     tower_sync: TowerSync,
 
-    pub fn default(allocator: std.mem.Allocator) VoteTransaction {
-        return VoteTransaction{ .tower_sync = TowerSync.default(allocator) };
+    pub fn default(allocator: std.mem.Allocator) !VoteTransaction {
+        return VoteTransaction{ .tower_sync = try TowerSync.default(allocator) };
     }
 
     pub fn timestamp(self: *const VoteTransaction) ?UnixTimestamp {
-        switch (self) {
+        return switch (self.*) {
             .vote => |args| args.timestamp,
             .vote_state_update => |args| args.timestamp,
             .compact_vote_state_update => |args| args.timestamp,
             .tower_sync => |args| args.timestamp,
-        }
+        };
     }
 
-    pub fn lastVotedSlot(self: *const VoteTransaction) ?i64 {
-        switch (self) {
+    pub fn lastVotedSlot(self: *const VoteTransaction) ?Slot {
+        return switch (self.*) {
             .vote => |args| args.slots[args.slots.len - 1],
-            .vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1],
-            .compact_vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1],
-            .tower_sync => |args| args.lockouts.items[args.lockouts.items.len - 1],
-        }
+            .vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1].slot,
+            .compact_vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1].slot,
+            .tower_sync => |args| args.lockouts.items[args.lockouts.items.len - 1].slot,
+        };
     }
 
     pub fn setTimestamp(self: *VoteTransaction, ts: ?UnixTimestamp) void {
         switch (self.*) {
-            .Vote => |*vote| vote.timestamp = ts,
-            .VoteStateUpdate, .CompactVoteStateUpdate => |*vote_state_update| {
+            .vote => |*vote| vote.timestamp = ts,
+            .vote_state_update, .compact_vote_state_update => |*vote_state_update| {
                 vote_state_update.timestamp = ts;
             },
-            .TowerSync => |*tower_sync| tower_sync.timestamp = ts,
+            .tower_sync => |*tower_sync| tower_sync.timestamp = ts,
         }
     }
 
-    pub fn isEmpty(self: *const VoteTransaction) void {
-        switch (self) {
-            .Vote => |vote| vote.slots.len == 0,
-            .VoteStateUpdate, .CompactVoteStateUpdate => |vote_state_update| {
-                vote_state_update.lockouts.items.len == 0;
-            },
-            .TowerSync => |tower_sync| tower_sync.lockouts.items.len == 0,
-        }
+    pub fn isEmpty(self: *const VoteTransaction) bool {
+        return switch (self.*) {
+            .vote => |vote| vote.slots.len == 0,
+            .vote_state_update, .compact_vote_state_update => |vote_state_update|
+                vote_state_update.lockouts.items.len == 0,
+            .tower_sync => |tower_sync| tower_sync.lockouts.items.len == 0,
+        };
     }
 
-    pub fn slot(self: *const VoteTransaction, i: usize) void {
-        switch (self) {
-            .Vote => |vote| vote.slots[i],
-            .VoteStateUpdate, .CompactVoteStateUpdate => |vote_state_update| {
-                vote_state_update.lockouts.items[i];
-            },
-            .TowerSync => |tower_sync| tower_sync.lockouts.items[i],
-        }
+    pub fn slot(self: *const VoteTransaction, i: usize) Slot {
+        return switch (self.*) {
+            .vote => |vote| vote.slots[i],
+            .vote_state_update, .compact_vote_state_update => |vote_state_update|
+                vote_state_update.lockouts.items[i].slot,
+            .tower_sync => |tower_sync| tower_sync.lockouts.items[i].slot,
+        };
     }
 
     pub fn len(self: *const VoteTransaction) usize {
-        switch (self) {
-            .Vote => |vote| vote.slots.len,
-            .VoteStateUpdate, .CompactVoteStateUpdate => |vote_state_update| {
-                vote_state_update.lockouts.items.len;
-            },
-            .TowerSync => |tower_sync| tower_sync.lockouts.items.len,
-        }
+        return switch (self.*) {
+            .vote => |vote| vote.slots.len,
+            .vote_state_update, .compact_vote_state_update => |vote_state_update|
+                vote_state_update.lockouts.items.len,
+            .tower_sync => |tower_sync| tower_sync.lockouts.items.len,
+        };
     }
 
-    pub fn hash(self: *const VoteTransaction) usize {
-        switch (self) {
-            .Vote => |vote| vote.hash,
-            .VoteStateUpdate, .CompactVoteStateUpdate => |vote_state_update| {
-                vote_state_update.hash;
-            },
-            .TowerSync => |tower_sync| tower_sync.hash,
-        }
+    pub fn hash(self: *const VoteTransaction) Hash {
+        return switch (self.*) {
+            .vote => |vote| vote.hash,
+            .vote_state_update, .compact_vote_state_update => |vote_state_update|
+                vote_state_update.hash,
+            .tower_sync => |tower_sync| tower_sync.hash,
+        };
     }
 };
 
