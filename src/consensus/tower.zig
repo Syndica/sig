@@ -54,7 +54,9 @@ pub const VoteTransaction = union(enum) {
         return switch (self.*) {
             .vote => |args| args.slots[args.slots.len - 1],
             .vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1].slot,
-            .compact_vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1].slot,
+            .compact_vote_state_update => |args| args.lockouts.items[
+                args.lockouts.items.len - 1
+            ].slot,
             .tower_sync => |args| args.lockouts.items[args.lockouts.items.len - 1].slot,
         };
     }
@@ -72,8 +74,10 @@ pub const VoteTransaction = union(enum) {
     pub fn isEmpty(self: *const VoteTransaction) bool {
         return switch (self.*) {
             .vote => |vote| vote.slots.len == 0,
-            .vote_state_update, .compact_vote_state_update => |vote_state_update|
-                vote_state_update.lockouts.items.len == 0,
+            // zig fmt: off
+            .vote_state_update,
+            .compact_vote_state_update => |vote_state_update|
+              vote_state_update.lockouts.items.len == 0,
             .tower_sync => |tower_sync| tower_sync.lockouts.items.len == 0,
         };
     }
@@ -81,8 +85,10 @@ pub const VoteTransaction = union(enum) {
     pub fn slot(self: *const VoteTransaction, i: usize) Slot {
         return switch (self.*) {
             .vote => |vote| vote.slots[i],
-            .vote_state_update, .compact_vote_state_update => |vote_state_update|
-                vote_state_update.lockouts.items[i].slot,
+            // zig fmt: off
+            .vote_state_update,
+            .compact_vote_state_update => |vote_state_update|
+              vote_state_update.lockouts.items[i].slot,
             .tower_sync => |tower_sync| tower_sync.lockouts.items[i].slot,
         };
     }
@@ -90,8 +96,10 @@ pub const VoteTransaction = union(enum) {
     pub fn len(self: *const VoteTransaction) usize {
         return switch (self.*) {
             .vote => |vote| vote.slots.len,
-            .vote_state_update, .compact_vote_state_update => |vote_state_update|
-                vote_state_update.lockouts.items.len,
+            // zig fmt: off
+            .vote_state_update,
+            .compact_vote_state_update => |vote_state_update|
+              vote_state_update.lockouts.items.len,
             .tower_sync => |tower_sync| tower_sync.lockouts.items.len,
         };
     }
@@ -99,8 +107,9 @@ pub const VoteTransaction = union(enum) {
     pub fn hash(self: *const VoteTransaction) Hash {
         return switch (self.*) {
             .vote => |vote| vote.hash,
-            .vote_state_update, .compact_vote_state_update => |vote_state_update|
-                vote_state_update.hash,
+            // zig fmt: off
+            .vote_state_update,
+            .compact_vote_state_update => |vote_state_update| vote_state_update.hash,
             .tower_sync => |tower_sync| tower_sync.hash,
         };
     }
