@@ -410,7 +410,7 @@ pub fn executeV3DeployWithMaxDataLen(
             allocator,
             ic.tc,
             new_program_id,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             buffer_data[V3State.BUFFER_METADATA_SIZE..],
             clock.slot,
         );
@@ -639,7 +639,7 @@ pub fn executeV3Upgrade(
             allocator,
             ic.tc,
             new_program_id,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
         );
@@ -1172,7 +1172,7 @@ pub fn executeV3ExtendProgram(
             allocator,
             ic.tc,
             program_key,
-            ic.info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             data[V3State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
         );
