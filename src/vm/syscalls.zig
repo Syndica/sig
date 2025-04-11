@@ -186,8 +186,8 @@ pub fn setReturnData(ctx: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) 
         try mm.vmap(.constant, addr, len);
 
     if (ctx.instruction_stack.len == 0) return error.CallDepth;
-    const ixn_ctx = ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
-    const program_id = ixn_ctx.ixn_info.program_meta.pubkey;
+    const ic = ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+    const program_id = ic.ixn_info.program_meta.pubkey;
 
     ctx.return_data.program_id = program_id;
     ctx.return_data.data.len = 0;

@@ -28,9 +28,9 @@ const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAc
 /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L502
 pub const InstructionContext = struct {
     /// Contexts
-    epoch_ctx: *const EpochContext,
-    slot_ctx: *const SlotContext,
-    txn_ctx: *TransactionContext,
+    ec: *const EpochContext,
+    sc: *const SlotContext,
+    tc: *TransactionContext,
 
     /// The instruction information which is constant accross execution
     ixn_info: InstructionInfo,
@@ -52,7 +52,7 @@ pub const InstructionContext = struct {
     pub fn borrowProgramAccount(
         self: *const InstructionContext,
     ) InstructionError!BorrowedAccount {
-        return self.txn_ctx.borrowAccountAtIndex(self.ixn_info.program_meta.index_in_transaction, .{
+        return self.tc.borrowAccountAtIndex(self.ixn_info.program_meta.index_in_transaction, .{
             .program_id = self.ixn_info.program_meta.pubkey,
         });
     }
@@ -65,7 +65,7 @@ pub const InstructionContext = struct {
         const account_meta = self.ixn_info.getAccountMetaAtIndex(index_in_instruction) orelse
             return InstructionError.NotEnoughAccountKeys;
 
-        return try self.txn_ctx.borrowAccountAtIndex(account_meta.index_in_transaction, .{
+        return try self.tc.borrowAccountAtIndex(account_meta.index_in_transaction, .{
             .program_id = self.ixn_info.program_meta.pubkey,
             .is_signer = account_meta.is_signer,
             .is_writable = account_meta.is_writable,
@@ -84,7 +84,7 @@ pub const InstructionContext = struct {
         if (!T.ID.equals(&account_meta.pubkey))
             return InstructionError.InvalidArgument;
 
-        return self.txn_ctx.slot_ctx.sysvar_cache.get(T);
+        return self.tc.sc.sysvar_cache.get(T);
     }
 
     pub fn getAccountKeyByIndexUnchecked(self: *const InstructionContext, index: u16) Pubkey {
@@ -107,7 +107,7 @@ pub const InstructionContext = struct {
 
         try executor.executeNativeCpiInstruction(
             allocator,
-            self.txn_ctx,
+            self.tc,
             Instruction{
                 .program_id = program_id,
                 .accounts = account_metas,

@@ -38,7 +38,7 @@ pub const EpochContext = struct {
 
 pub const SlotContext = struct {
     /// Epoch Context
-    epoch_ctx: *const EpochContext,
+    ec: *const EpochContext,
 
     /// Sysvar Cache
     sysvar_cache: SysvarCache,
@@ -51,8 +51,8 @@ pub const TransactionContext = struct {
     allocator: std.mem.Allocator,
 
     /// Contexts
-    epoch_ctx: *const EpochContext,
-    slot_ctx: *const SlotContext,
+    ec: *const EpochContext,
+    sc: *const SlotContext,
 
     /// Transaction accounts
     accounts: []TransactionContextAccount,

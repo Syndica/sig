@@ -12,25 +12,25 @@ const TransactionContext = sig.runtime.TransactionContext;
 
 pub fn execute(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     var executable, var syscalls, const source = blk: {
-        const program_account = try ixn_ctx.borrowProgramAccount();
+        const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
 
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!ixn_ctx.epoch_ctx.feature_set.active.contains(
+        if (!ic.ec.feature_set.active.contains(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !program_account.account.executable)
         {
-            try ixn_ctx.txn_ctx.log("Program is not executable", .{});
+            try ic.tc.log("Program is not executable", .{});
             return InstructionError.IncorrectProgramId;
         }
 
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
-        var syscalls = registerSyscalls(allocator, ixn_ctx.txn_ctx) catch |err| {
-            try ixn_ctx.txn_ctx.log("Failed to register syscalls: {s}", .{@errorName(err)});
+        var syscalls = registerSyscalls(allocator, ic.tc) catch |err| {
+            try ic.tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
         errdefer syscalls.deinit(allocator);
@@ -46,7 +46,7 @@ pub fn execute(
             &syscalls,
             .{},
         ) catch |err| {
-            try ixn_ctx.txn_ctx.log("{s}", .{@errorName(err)});
+            try ic.tc.log("{s}", .{@errorName(err)});
             return InstructionError.InvalidAccountData;
         };
         break :blk .{ executable, syscalls, source };
@@ -61,7 +61,7 @@ pub fn execute(
     // TODO: jit
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ixn_ctx.epoch_ctx.feature_set.active.contains(
+    const direct_mapping = ic.ec.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
@@ -69,7 +69,7 @@ pub fn execute(
     const parameter_bytes, const regions, const accounts_metadata =
         try serialize.serializeParameters(
         allocator,
-        ixn_ctx,
+        ic,
         !direct_mapping,
     );
     defer {
@@ -82,16 +82,16 @@ pub fn execute(
     // TODO: save account addresses for access violation errors resolution
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1621-L1640
-    const compute_available = ixn_ctx.txn_ctx.compute_meter;
+    const compute_available = ic.tc.compute_meter;
     const result, const compute_consumed = blk: {
         var sbpf_vm, const stack, const heap, const mm_regions = initVm(
             allocator,
-            ixn_ctx.txn_ctx,
+            ic.tc,
             &executable,
             regions,
             &syscalls,
         ) catch |err| {
-            try ixn_ctx.txn_ctx.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
+            try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
         defer {
@@ -107,18 +107,18 @@ pub fn execute(
     // TODO: timings
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1646-L1653
-    try ixn_ctx.txn_ctx.log("Program {} consumed {} of {} compute units", .{
-        ixn_ctx.ixn_info.program_meta.pubkey,
+    try ic.tc.log("Program {} consumed {} of {} compute units", .{
+        ic.ixn_info.program_meta.pubkey,
         compute_consumed,
         compute_available,
     });
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1653-L1657
-    if (ixn_ctx.txn_ctx.return_data.data.len != 0) {
+    if (ic.tc.return_data.data.len != 0) {
         try stable_log.programReturn(
-            ixn_ctx.txn_ctx,
-            ixn_ctx.ixn_info.program_meta.pubkey,
-            ixn_ctx.txn_ctx.return_data.data.constSlice(),
+            ic.tc,
+            ic.ixn_info.program_meta.pubkey,
+            ic.tc.return_data.data.constSlice(),
         );
     }
 
@@ -129,7 +129,7 @@ pub fn execute(
                 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
                 std.debug.print(
                     "Program {} failed: {}\n",
-                    .{ ixn_ctx.ixn_info.program_meta.pubkey, status },
+                    .{ ic.ixn_info.program_meta.pubkey, status },
                 );
                 @panic("sbpf error handling not implemented!");
             } else {
@@ -147,7 +147,7 @@ pub fn execute(
     const execute_or_deserialize_error = if (execute_error == null)
         serialize.deserializeParameters(
             allocator,
-            ixn_ctx,
+            ic,
             !direct_mapping,
             parameter_bytes,
             accounts_metadata,
@@ -164,7 +164,7 @@ pub fn execute(
 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L299-L300
 fn initVm(
     allocator: std.mem.Allocator,
-    txn_ctx: *TransactionContext,
+    tc: *TransactionContext,
     executable: *const vm.Executable,
     regions: []vm.memory.Region,
     syscalls: *const vm.BuiltinProgram,
@@ -177,10 +177,10 @@ fn initVm(
     const PAGE_SIZE: u64 = 32 * 1024;
 
     const stack_size = executable.config.stackSize();
-    const heap_size = txn_ctx.compute_budget.heap_size;
+    const heap_size = tc.compute_budget.heap_size;
     const cost = std.mem.alignBackward(u64, heap_size -| 1, PAGE_SIZE) / PAGE_SIZE;
-    const heap_cost = cost * txn_ctx.compute_budget.heap_cost;
-    try txn_ctx.consumeCompute(heap_cost);
+    const heap_cost = cost * tc.compute_budget.heap_cost;
+    try tc.consumeCompute(heap_cost);
 
     const heap = try allocator.alloc(u8, heap_size);
     @memset(heap, 0);
@@ -217,7 +217,7 @@ fn initVm(
         memory_map,
         syscalls,
         stack.len,
-        txn_ctx,
+        tc,
     );
     errdefer sbpf_vm.deinit();
 
@@ -232,7 +232,7 @@ fn initVm(
 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/syscalls/mod.rs#L335
 fn registerSyscalls(
     allocator: std.mem.Allocator,
-    txn_ctx: *TransactionContext,
+    tc: *TransactionContext,
 ) !vm.BuiltinProgram {
     // TODO: Feature Activation
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/syscalls/mod.rs#L341-L374
@@ -348,7 +348,7 @@ fn registerSyscalls(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust,);
 
     // Memory Allocator
-    if (!txn_ctx.epoch_ctx.feature_set.active.contains(
+    if (!tc.ec.feature_set.active.contains(
         features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL,
     )) {
         _ = try syscalls.functions.registerHashed(
@@ -369,7 +369,7 @@ fn registerSyscalls(
     // }
 
     // Poseidon
-    if (txn_ctx.epoch_ctx.feature_set.active.contains(
+    if (tc.ec.feature_set.active.contains(
         features.ENABLE_POSEIDON_SYSCALL,
     )) {
         _ = try syscalls.functions.registerHashed(

@@ -87,7 +87,7 @@ pub fn createExecutionContexts(
     // Create Slot Context
     const sc = try allocator.create(SlotContext);
     sc.* = .{
-        .epoch_ctx = ec,
+        .ec = ec,
         .sysvar_cache = params.sysvar_cache,
     };
 
@@ -116,10 +116,10 @@ pub fn createExecutionContexts(
     return_data.data.appendSliceAssumeCapacity(params.return_data.data);
 
     // Create Transaction Context
-    const txn_ctx = TransactionContext{
+    const tc = TransactionContext{
         .allocator = allocator,
-        .epoch_ctx = ec,
-        .slot_ctx = sc,
+        .ec = ec,
+        .sc = sc,
         .accounts = try accounts.toOwnedSlice(),
         .instruction_stack = .{},
         .instruction_trace = .{},
@@ -133,11 +133,11 @@ pub fn createExecutionContexts(
         .prev_lamports_per_signature = params.prev_lamports_per_signature,
     };
 
-    return .{ ec, sc, txn_ctx };
+    return .{ ec, sc, tc };
 }
 
 pub fn createInstructionInfo(
-    txn_ctx: *TransactionContext,
+    tc: *TransactionContext,
     program_id: Pubkey,
     instruction: anytype,
     accounts_params: []const InstructionInfoAccountMetaParams,
@@ -145,17 +145,17 @@ pub fn createInstructionInfo(
     if (!builtin.is_test)
         @compileError("createInstructionContext should only be called in test mode");
 
-    const program_index_in_transaction = for (txn_ctx.accounts, 0..) |account, index| {
+    const program_index_in_transaction = for (tc.accounts, 0..) |account, index| {
         if (account.pubkey.equals(&program_id)) break index;
     } else return error.CouldNotFindProgramAccount;
 
-    const account_metas = try createInstructionInfoAccountMetas(txn_ctx, accounts_params);
+    const account_metas = try createInstructionInfoAccountMetas(tc, accounts_params);
 
     const instruction_data = if (@TypeOf(instruction) == []const u8)
-        try txn_ctx.allocator.dupe(u8, instruction)
+        try tc.allocator.dupe(u8, instruction)
     else
         try bincode.writeAlloc(
-            txn_ctx.allocator,
+            tc.allocator,
             instruction,
             .{},
         );
@@ -179,7 +179,7 @@ pub const InstructionInfoAccountMetaParams = struct {
 };
 
 pub fn createInstructionInfoAccountMetas(
-    txn_ctx: *const TransactionContext,
+    tc: *const TransactionContext,
     account_meta_params: []const InstructionInfoAccountMetaParams,
 ) !std.BoundedArray(
     InstructionInfo.AccountMeta,
@@ -193,7 +193,7 @@ pub fn createInstructionInfoAccountMetas(
         InstructionInfo.MAX_ACCOUNT_METAS,
     ){};
     for (account_meta_params, 0..) |acc, idx| {
-        if (acc.index_in_transaction >= txn_ctx.accounts.len)
+        if (acc.index_in_transaction >= tc.accounts.len)
             return error.AccountIndexOutOfBounds;
 
         const index_in_callee = blk: {
@@ -208,7 +208,7 @@ pub fn createInstructionInfoAccountMetas(
         };
 
         try account_metas.append(.{
-            .pubkey = txn_ctx.accounts[acc.index_in_transaction].pubkey,
+            .pubkey = tc.accounts[acc.index_in_transaction].pubkey,
             .index_in_transaction = acc.index_in_transaction,
             .index_in_caller = acc.index_in_caller orelse acc.index_in_transaction,
             .index_in_callee = acc.index_in_callee orelse @intCast(index_in_callee),

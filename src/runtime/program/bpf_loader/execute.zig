@@ -25,35 +25,35 @@ const migration_authority =
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
 pub fn execute(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     // The borrowed program cannot be held during calls to other execute functions.
     // Agave originally drops it at the relevant sites, but we can just extract needed fields here.
     const program_owner = blk: {
-        const program_account = try ixn_ctx.borrowProgramAccount();
+        const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
         break :blk program_account.account.owner;
     };
 
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
     if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
-        if (bpf_loader_program.v1.ID.equals(&ixn_ctx.ixn_info.program_meta.pubkey)) {
-            try ixn_ctx.txn_ctx.consumeCompute(bpf_loader_program.v1.COMPUTE_UNITS);
-            try ixn_ctx.txn_ctx.log("Deprecated loader is no longer supported", .{});
+        if (bpf_loader_program.v1.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
+            try ic.tc.consumeCompute(bpf_loader_program.v1.COMPUTE_UNITS);
+            try ic.tc.log("Deprecated loader is no longer supported", .{});
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_program.v2.ID.equals(&ixn_ctx.ixn_info.program_meta.pubkey)) {
-            try ixn_ctx.txn_ctx.consumeCompute(bpf_loader_program.v2.COMPUTE_UNITS);
-            try ixn_ctx.txn_ctx.log(
+        } else if (bpf_loader_program.v2.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
+            try ic.tc.consumeCompute(bpf_loader_program.v2.COMPUTE_UNITS);
+            try ic.tc.log(
                 "BPF loader management instructions are no longer supported",
                 .{},
             );
             return InstructionError.UnsupportedProgramId;
-        } else if (bpf_loader_program.v3.ID.equals(&ixn_ctx.ixn_info.program_meta.pubkey)) {
-            try ixn_ctx.txn_ctx.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
-            return executeBpfLoaderV3ProgramInstruction(allocator, ixn_ctx);
-        } else if (bpf_loader_program.v4.ID.equals(&ixn_ctx.ixn_info.program_meta.pubkey)) {
-            try ixn_ctx.txn_ctx.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
-            return executeBpfLoaderV4ProgramInstruction(allocator, ixn_ctx);
+        } else if (bpf_loader_program.v3.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
+            try ic.tc.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
+            return executeBpfLoaderV3ProgramInstruction(allocator, ic);
+        } else if (bpf_loader_program.v4.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
+            try ic.tc.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
+            return executeBpfLoaderV4ProgramInstruction(allocator, ic);
         } else {
             return InstructionError.IncorrectProgramId;
         }
@@ -62,70 +62,70 @@ pub fn execute(
     // NOTE: We reborrow the program account within bpf_program.execute, this adds an additional
     // borrow wrt Agave's implementation. It should not cause an issue but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
-    try bpf_program.execute(allocator, ixn_ctx);
+    try bpf_program.execute(allocator, ic);
 }
 
 // TODO: v4 loader
 // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/loader-v4/src/lib.rs#L487-L549
 pub fn executeBpfLoaderV4ProgramInstruction(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     _ = allocator;
-    _ = ixn_ctx;
+    _ = ic;
 }
 
 pub fn executeBpfLoaderV3ProgramInstruction(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L477
     const instruction =
-        try ixn_ctx.ixn_info.deserializeInstruction(allocator, bpf_loader_program.v3.Instruction);
+        try ic.ixn_info.deserializeInstruction(allocator, bpf_loader_program.v3.Instruction);
     defer sig.bincode.free(allocator, instruction);
 
     return switch (instruction) {
         .initialize_buffer => executeV3InitializeBuffer(
             allocator,
-            ixn_ctx,
+            ic,
         ),
         .write => |args| executeV3Write(
             allocator,
-            ixn_ctx,
+            ic,
             args.offset,
             args.bytes,
         ),
         .deploy_with_max_data_len => |args| executeV3DeployWithMaxDataLen(
             allocator,
-            ixn_ctx,
+            ic,
             args.max_data_len,
         ),
         .upgrade => executeV3Upgrade(
             allocator,
-            ixn_ctx,
+            ic,
         ),
         .set_authority => executeV3SetAuthority(
             allocator,
-            ixn_ctx,
+            ic,
         ),
         .set_authority_checked => executeV3SetAuthorityChecked(
             allocator,
-            ixn_ctx,
+            ic,
         ),
         .close => executeV3Close(
             allocator,
-            ixn_ctx,
+            ic,
         ),
         .extend_program => |args| executeV3ExtendProgram(
             allocator,
-            ixn_ctx,
+            ic,
             args.additional_bytes,
         ),
         .migrate => executeV3Migrate(
             allocator,
-            ixn_ctx,
+            ic,
         ),
     };
 }
@@ -133,12 +133,12 @@ pub fn executeBpfLoaderV3ProgramInstruction(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L479-L495
 pub fn executeV3InitializeBuffer(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.InitializeBuffer.AccountIndex;
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
-    var buffer_account = try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
+    var buffer_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer buffer_account.release();
     const buffer_account_state = try buffer_account.deserializeFromAccountData(
         allocator,
@@ -146,11 +146,11 @@ pub fn executeV3InitializeBuffer(
     );
 
     if (buffer_account_state != bpf_loader_program.v3.State.uninitialized) {
-        try ixn_ctx.txn_ctx.log("Buffer account already initialized", .{});
+        try ic.tc.log("Buffer account already initialized", .{});
         return InstructionError.AccountAlreadyInitialized;
     }
 
-    const authority_key = ixn_ctx.getAccountKeyByIndexUnchecked(
+    const authority_key = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.authority),
     );
     try buffer_account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -163,37 +163,37 @@ pub fn executeV3InitializeBuffer(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L496-L526
 pub fn executeV3Write(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
     offset: u32,
     bytes: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.Write.AccountIndex;
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
-    var buffer_account = try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
+    var buffer_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer buffer_account.release();
 
     switch (try buffer_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |state| {
             if (state.authority_address) |buffer_authority| {
                 if (!buffer_authority.equals(
-                    &ixn_ctx.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority)),
+                    &ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority)),
                 )) {
-                    try ixn_ctx.txn_ctx.log("Incorrect buffer authority provided", .{});
+                    try ic.tc.log("Incorrect buffer authority provided", .{});
                     return InstructionError.IncorrectAuthority;
                 }
 
-                if (!try ixn_ctx.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority))) {
-                    try ixn_ctx.txn_ctx.log("Buffer authority did not sign", .{});
+                if (!try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority))) {
+                    try ic.tc.log("Buffer authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
             } else {
-                try ixn_ctx.txn_ctx.log("Buffer is immutable", .{});
+                try ic.tc.log("Buffer is immutable", .{});
                 return InstructionError.Immutable;
             }
         },
         else => {
-            try ixn_ctx.txn_ctx.log("Invalid Buffer account", .{});
+            try ic.tc.log("Invalid Buffer account", .{});
             return InstructionError.InvalidAccountData;
         },
     }
@@ -204,7 +204,7 @@ pub fn executeV3Write(
     const end = start +| bytes.len;
 
     if (end > buffer_account.constAccountData().len) {
-        try ixn_ctx.txn_ctx.log("Write overflow: {} < {}", .{ bytes.len, end });
+        try ic.tc.log("Write overflow: {} < {}", .{ bytes.len, end });
         return InstructionError.AccountDataTooSmall;
     }
 
@@ -214,40 +214,40 @@ pub fn executeV3Write(
 /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L565-L738
 pub fn executeV3DeployWithMaxDataLen(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
     max_data_len: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.DeployWithMaxDataLen.AccountIndex;
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L565
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(4);
+    try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safety: at least 4 accounts are present
     const payer_key =
-        ixn_ctx.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.payer));
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.payer));
     const program_data_key =
-        ixn_ctx.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
 
-    const rent = try ixn_ctx.getSysvarWithAccountCheck(
+    const rent = try ic.getSysvarWithAccountCheck(
         sysvar.Rent,
         @intFromEnum(AccountIndex.rent),
     );
-    const clock = try ixn_ctx.getSysvarWithAccountCheck(
+    const clock = try ic.getSysvarWithAccountCheck(
         sysvar.Clock,
         @intFromEnum(AccountIndex.clock),
     );
 
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L575
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(8);
+    try ic.ixn_info.checkNumberOfAccounts(8);
 
     // Safety: at least 8 accounts are present
-    const authority_key = ixn_ctx.getAccountKeyByIndexUnchecked(
+    const authority_key = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.authority),
     );
 
     // Verify program account and retrieve its program id
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L582-L597
     const new_program_id = blk: {
-        const program_account = try ixn_ctx.borrowInstructionAccount(
+        const program_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program),
         );
         defer program_account.release();
@@ -256,19 +256,19 @@ pub fn executeV3DeployWithMaxDataLen(
             try program_account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State);
 
         if (program_state != bpf_loader_program.v3.State.uninitialized) {
-            try ixn_ctx.txn_ctx.log("Program account already initialized", .{});
+            try ic.tc.log("Program account already initialized", .{});
             return InstructionError.AccountAlreadyInitialized;
         }
 
         if (program_account.constAccountData().len < bpf_loader_program.v3.State.PROGRAM_SIZE) {
-            try ixn_ctx.txn_ctx.log("Program account too small", .{});
+            try ic.tc.log("Program account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
         if (program_account.account.lamports <
             rent.minimumBalance(program_account.constAccountData().len))
         {
-            try ixn_ctx.txn_ctx.log("Program account not rent-exempt", .{});
+            try ic.tc.log("Program account not rent-exempt", .{});
             return InstructionError.ExecutableAccountNotRentExempt;
         }
 
@@ -279,7 +279,7 @@ pub fn executeV3DeployWithMaxDataLen(
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L601-L638
     const program_data_len = bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE +| max_data_len;
     {
-        const buffer_account = try ixn_ctx.borrowInstructionAccount(
+        const buffer_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.buffer),
         );
         defer buffer_account.release();
@@ -292,37 +292,37 @@ pub fn executeV3DeployWithMaxDataLen(
                 if (state.authority_address == null or
                     !state.authority_address.?.equals(&authority_key))
                 {
-                    try ixn_ctx.txn_ctx.log("Buffer and upgrade authority don't match", .{});
+                    try ic.tc.log("Buffer and upgrade authority don't match", .{});
                     return InstructionError.IncorrectAuthority;
                 }
 
                 // Safety: at least 8 accounts are present
-                if (!(try ixn_ctx.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
-                    try ixn_ctx.txn_ctx.log("Upgrade authority did not sign", .{});
+                if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+                    try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
             },
             else => {
-                try ixn_ctx.txn_ctx.log("Invalid Buffer account", .{});
+                try ic.tc.log("Invalid Buffer account", .{});
                 return InstructionError.InvalidArgument;
             },
         }
 
         const buffer_data = buffer_account.constAccountData();
         if (buffer_data.len <= bpf_loader_program.v3.State.BUFFER_METADATA_SIZE) {
-            try ixn_ctx.txn_ctx.log("Buffer account too small", .{});
+            try ic.tc.log("Buffer account too small", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
         const buffer_data_len = buffer_data.len -| bpf_loader_program.v3.State.BUFFER_METADATA_SIZE;
 
         if (max_data_len < buffer_data_len) {
-            try ixn_ctx.txn_ctx.log("Max data length is too small to hold Buffer data", .{});
+            try ic.tc.log("Max data length is too small to hold Buffer data", .{});
             return InstructionError.AccountDataTooSmall;
         }
 
         if (program_data_len > system_program.MAX_PERMITTED_DATA_LENGTH) {
-            try ixn_ctx.txn_ctx.log("Max data length is too large", .{});
+            try ic.tc.log("Max data length is too large", .{});
             return InstructionError.InvalidArgument;
         }
     }
@@ -338,18 +338,18 @@ pub fn executeV3DeployWithMaxDataLen(
     };
 
     if (!derived_key.equals(&program_data_key)) {
-        try ixn_ctx.txn_ctx.log("ProgramData address is not derived", .{});
+        try ic.tc.log("ProgramData address is not derived", .{});
         return InstructionError.InvalidArgument;
     }
 
     // Drain the Buffer account to payer before paying for program data account
     {
-        var buffer_account = try ixn_ctx.borrowInstructionAccount(
+        var buffer_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.buffer),
         );
         defer buffer_account.release();
 
-        var payer_account = try ixn_ctx.borrowInstructionAccount(
+        var payer_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.payer),
         );
         defer payer_account.release();
@@ -363,20 +363,20 @@ pub fn executeV3DeployWithMaxDataLen(
     const signer_derived_key = pubkey_utils.createProgramAddress(
         &.{&new_program_id.data},
         &.{bump_seed},
-        ixn_ctx.ixn_info.program_meta.pubkey,
+        ic.ixn_info.program_meta.pubkey,
     ) catch |err| {
-        ixn_ctx.txn_ctx.custom_error = @intFromError(err);
+        ic.tc.custom_error = @intFromError(err);
         return InstructionError.Custom;
     };
 
-    try ixn_ctx.nativeInvoke(
+    try ic.nativeInvoke(
         allocator,
         system_program.ID,
         system_program.Instruction{
             .create_account = .{
                 .lamports = @max(1, rent.minimumBalance(program_data_len)),
                 .space = program_data_len,
-                .owner = ixn_ctx.ixn_info.program_meta.pubkey,
+                .owner = ic.ixn_info.program_meta.pubkey,
             },
         },
         &.{
@@ -385,7 +385,7 @@ pub fn executeV3DeployWithMaxDataLen(
             // pass an extra account to avoid the overly strict UnbalancedInstruction error
             // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L668-L669
             .{
-                .pubkey = ixn_ctx.getAccountKeyByIndexUnchecked(
+                .pubkey = ic.getAccountKeyByIndexUnchecked(
                     @intFromEnum(AccountIndex.buffer),
                 ),
                 .is_signer = false,
@@ -398,7 +398,7 @@ pub fn executeV3DeployWithMaxDataLen(
     // Load and verify the program bits and deploy the program
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L683-L698
     {
-        const buffer_account = try ixn_ctx.borrowInstructionAccount(
+        const buffer_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.buffer),
         );
         defer buffer_account.release();
@@ -410,13 +410,13 @@ pub fn executeV3DeployWithMaxDataLen(
         try deployProgram(
             allocator,
             new_program_id,
-            ixn_ctx.ixn_info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| program_data_len,
             buffer_data[bpf_loader_program.v3.State.BUFFER_METADATA_SIZE..],
             clock.slot,
-            ixn_ctx.epoch_ctx.feature_set,
-            if (ixn_ctx.txn_ctx.log_collector != null)
-                &ixn_ctx.txn_ctx.log_collector.?
+            ic.ec.feature_set,
+            if (ic.tc.log_collector != null)
+                &ic.tc.log_collector.?
             else
                 null,
         );
@@ -425,7 +425,7 @@ pub fn executeV3DeployWithMaxDataLen(
     // Update the PorgramData account and record the program bits
     // https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L704-L726
     {
-        var program_data_account = try ixn_ctx.borrowInstructionAccount(
+        var program_data_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program_data),
         );
         defer program_data_account.release();
@@ -437,7 +437,7 @@ pub fn executeV3DeployWithMaxDataLen(
         });
         const program_data = try program_data_account.mutableAccountData();
 
-        var buffer_account = try ixn_ctx.borrowInstructionAccount(
+        var buffer_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.buffer),
         );
         defer buffer_account.release();
@@ -446,7 +446,7 @@ pub fn executeV3DeployWithMaxDataLen(
 
         try buffer_account.setDataLength(
             allocator,
-            &ixn_ctx.txn_ctx.accounts_resize_delta,
+            &ic.tc.accounts_resize_delta,
             bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
         );
     }
@@ -454,7 +454,7 @@ pub fn executeV3DeployWithMaxDataLen(
     // Update the program account
     // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L729-735
     {
-        var program_account = try ixn_ctx.borrowInstructionAccount(
+        var program_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program),
         );
         defer program_account.release();
@@ -463,56 +463,56 @@ pub fn executeV3DeployWithMaxDataLen(
         } });
         try program_account.setExecutable(
             true,
-            try ixn_ctx.slot_ctx.sysvar_cache.get(sysvar.Rent),
+            try ic.sc.sysvar_cache.get(sysvar.Rent),
         );
     }
 
-    try ixn_ctx.txn_ctx.log("Deployed program {}", .{new_program_id});
+    try ic.tc.log("Deployed program {}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L705-L894
 pub fn executeV3Upgrade(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.Upgrade.AccountIndex;
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     const programdata_key =
-        ixn_ctx.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
 
-    const rent = try ixn_ctx.getSysvarWithAccountCheck(
+    const rent = try ic.getSysvarWithAccountCheck(
         sysvar.Rent,
         @intFromEnum(AccountIndex.rent),
     );
-    const clock = try ixn_ctx.getSysvarWithAccountCheck(
+    const clock = try ic.getSysvarWithAccountCheck(
         sysvar.Clock,
         @intFromEnum(AccountIndex.clock),
     );
 
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(7);
-    const authority_key = ixn_ctx.getAccountKeyByIndexUnchecked(
+    try ic.ixn_info.checkNumberOfAccounts(7);
+    const authority_key = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.authority),
     );
 
     // Verify program account
 
     const new_program_id = blk: {
-        const program_account = try ixn_ctx.borrowInstructionAccount(
+        const program_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program),
         );
         defer program_account.release();
 
         if (!program_account.account.executable) {
-            try ixn_ctx.txn_ctx.log("Program account not executable", .{});
+            try ic.tc.log("Program account not executable", .{});
             return InstructionError.AccountNotExecutable;
         }
         if (!program_account.context.is_writable) {
-            try ixn_ctx.txn_ctx.log("Program account not writeable", .{});
+            try ic.tc.log("Program account not writeable", .{});
             return InstructionError.InvalidArgument;
         }
         if (!program_account.isOwnedByCurrentProgram()) {
-            try ixn_ctx.txn_ctx.log("Program account not owned by loader", .{});
+            try ic.tc.log("Program account not owned by loader", .{});
             return InstructionError.IncorrectProgramId;
         }
         switch (try program_account.deserializeFromAccountData(
@@ -521,12 +521,12 @@ pub fn executeV3Upgrade(
         )) {
             .program => |data| {
                 if (!data.programdata_address.equals(&programdata_key)) {
-                    try ixn_ctx.txn_ctx.log("Program and ProgramData account mismatch", .{});
+                    try ic.tc.log("Program and ProgramData account mismatch", .{});
                     return InstructionError.InvalidArgument;
                 }
             },
             else => {
-                try ixn_ctx.txn_ctx.log("Invalid Program account", .{});
+                try ic.tc.log("Invalid Program account", .{});
                 return InstructionError.InvalidAccountData;
             },
         }
@@ -536,7 +536,7 @@ pub fn executeV3Upgrade(
     // Verify buffer account
 
     const buf = blk: {
-        const buffer = try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.buffer));
+        const buffer = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.buffer));
         defer buffer.release();
 
         switch (try buffer.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
@@ -544,16 +544,16 @@ pub fn executeV3Upgrade(
                 if (data.authority_address == null or
                     !data.authority_address.?.equals(&authority_key))
                 {
-                    try ixn_ctx.txn_ctx.log("Buffer and upgrade authority don't match", .{});
+                    try ic.tc.log("Buffer and upgrade authority don't match", .{});
                     return InstructionError.IncorrectAuthority;
                 }
-                if (!(try ixn_ctx.ixn_info.isIndexSigner(6))) {
-                    try ixn_ctx.txn_ctx.log("Upgrade authority did not sign", .{});
+                if (!(try ic.ixn_info.isIndexSigner(6))) {
+                    try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
             },
             else => {
-                try ixn_ctx.txn_ctx.log("Invalid Buffer account", .{});
+                try ic.tc.log("Invalid Buffer account", .{});
                 return InstructionError.InvalidArgument;
             },
         }
@@ -565,7 +565,7 @@ pub fn executeV3Upgrade(
                 bpf_loader_program.v3.State.BUFFER_METADATA_SIZE,
         };
         if (buffer.constAccountData().len < buf.data_offset or buf.data_len == 0) {
-            try ixn_ctx.txn_ctx.log("Buffer account too small", .{});
+            try ic.tc.log("Buffer account too small", .{});
             return InstructionError.InvalidAccountData;
         }
         break :blk buf;
@@ -575,7 +575,7 @@ pub fn executeV3Upgrade(
 
     const progdata = blk: {
         const programdata =
-            try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
+            try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
         defer programdata.release();
 
         const offset = bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE;
@@ -583,11 +583,11 @@ pub fn executeV3Upgrade(
         const progdata_size = bpf_loader_program.v3.State.sizeOfProgramData(buf.data_len);
 
         if (programdata.constAccountData().len < progdata_size) {
-            try ixn_ctx.txn_ctx.log("ProgramData account not large enough", .{});
+            try ic.tc.log("ProgramData account not large enough", .{});
             return InstructionError.AccountDataTooSmall;
         }
         if (programdata.account.lamports +| buf.lamports < balance_required) {
-            try ixn_ctx.txn_ctx.log("Buffer account balance too low to fund upgrade", .{});
+            try ic.tc.log("Buffer account balance too low to fund upgrade", .{});
             return InstructionError.InsufficientFunds;
         }
 
@@ -597,24 +597,24 @@ pub fn executeV3Upgrade(
         )) {
             .program_data => |data| {
                 if (clock.slot == data.slot) {
-                    try ixn_ctx.txn_ctx.log("Program was deployed in this block already", .{});
+                    try ic.tc.log("Program was deployed in this block already", .{});
                     return InstructionError.InvalidArgument;
                 }
                 if (data.upgrade_authority_address == null) {
-                    try ixn_ctx.txn_ctx.log("Program not upgradeable", .{});
+                    try ic.tc.log("Program not upgradeable", .{});
                     return InstructionError.Immutable;
                 }
                 if (!data.upgrade_authority_address.?.equals(&authority_key)) {
-                    try ixn_ctx.txn_ctx.log("Incorrect upgrade authority provided", .{});
+                    try ic.tc.log("Incorrect upgrade authority provided", .{});
                     return InstructionError.IncorrectAuthority;
                 }
-                if (!(try ixn_ctx.ixn_info.isIndexSigner(6))) {
-                    try ixn_ctx.txn_ctx.log("Upgrade authority did not sign", .{});
+                if (!(try ic.ixn_info.isIndexSigner(6))) {
+                    try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
             },
             else => {
-                try ixn_ctx.txn_ctx.log("Invalid ProgramData account", .{});
+                try ic.tc.log("Invalid ProgramData account", .{});
                 return InstructionError.InvalidAccountData;
             },
         }
@@ -629,7 +629,7 @@ pub fn executeV3Upgrade(
     // Load and verify the program bits
 
     {
-        const buffer = try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.buffer));
+        const buffer = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.buffer));
         defer buffer.release();
 
         if (buffer.constAccountData().len < buf.data_offset) {
@@ -639,13 +639,13 @@ pub fn executeV3Upgrade(
         try deployProgram(
             allocator,
             new_program_id,
-            ixn_ctx.ixn_info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| progdata.len,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
-            ixn_ctx.epoch_ctx.feature_set,
-            if (ixn_ctx.txn_ctx.log_collector != null)
-                &ixn_ctx.txn_ctx.log_collector.?
+            ic.ec.feature_set,
+            if (ic.tc.log_collector != null)
+                &ic.tc.log_collector.?
             else
                 null,
         );
@@ -653,7 +653,7 @@ pub fn executeV3Upgrade(
 
     // Update the ProgramData account, record the upgraded data, and zero the rest:
 
-    var programdata = try ixn_ctx.borrowInstructionAccount(
+    var programdata = try ic.borrowInstructionAccount(
         @intFromEnum(AccountIndex.program_data),
     );
     defer programdata.release();
@@ -669,7 +669,7 @@ pub fn executeV3Upgrade(
             return InstructionError.AccountDataTooSmall;
         }
 
-        const buffer = try ixn_ctx.borrowInstructionAccount(
+        const buffer = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.buffer),
         );
         defer buffer.release();
@@ -691,10 +691,10 @@ pub fn executeV3Upgrade(
     }
 
     // Fund ProgramData to rent-exemption, spill the rest
-    var buffer = try ixn_ctx.borrowInstructionAccount(2);
+    var buffer = try ic.borrowInstructionAccount(2);
     defer buffer.release();
 
-    var spill = try ixn_ctx.borrowInstructionAccount(3);
+    var spill = try ic.borrowInstructionAccount(3);
     defer spill.release();
 
     try spill.addLamports(
@@ -704,47 +704,47 @@ pub fn executeV3Upgrade(
     try programdata.setLamports(progdata.balance_required);
     try buffer.setDataLength(
         allocator,
-        &ixn_ctx.txn_ctx.accounts_resize_delta,
+        &ic.tc.accounts_resize_delta,
         bpf_loader_program.v3.State.sizeOfBuffer(0),
     );
 
-    try ixn_ctx.txn_ctx.log("Upgraded program {any}", .{new_program_id});
+    try ic.tc.log("Upgraded program {any}", .{new_program_id});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010
 pub fn executeV3SetAuthority(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.SetAuthority.AccountIndex;
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
-    var account = try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
+    var account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer account.release();
 
-    const present_authority_key = ixn_ctx.getAccountKeyByIndexUnchecked(
+    const present_authority_key = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.present_authority),
     );
-    const new_authority = if (ixn_ctx.ixn_info.getAccountMetaAtIndex(
+    const new_authority = if (ic.ixn_info.getAccountMetaAtIndex(
         @intFromEnum(AccountIndex.new_authority),
     )) |meta| meta.pubkey else null;
 
     switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |buffer| {
             if (new_authority == null) {
-                try ixn_ctx.txn_ctx.log("Buffer authority is not optional", .{});
+                try ic.tc.log("Buffer authority is not optional", .{});
                 return InstructionError.IncorrectAuthority;
             }
             if (buffer.authority_address == null) {
-                try ixn_ctx.txn_ctx.log("Buffer is immutable", .{});
+                try ic.tc.log("Buffer is immutable", .{});
                 return InstructionError.Immutable;
             }
             if (!buffer.authority_address.?.equals(&present_authority_key)) {
-                try ixn_ctx.txn_ctx.log("Incorrect buffer authority provided", .{});
+                try ic.tc.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ixn_ctx.ixn_info.isIndexSigner(1))) {
-                try ixn_ctx.txn_ctx.log("Buffer authority did not sign", .{});
+            if (!(try ic.ixn_info.isIndexSigner(1))) {
+                try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             try account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -755,17 +755,17 @@ pub fn executeV3SetAuthority(
         },
         .program_data => |data| {
             if (data.upgrade_authority_address == null) {
-                try ixn_ctx.txn_ctx.log("Program not upgradeable", .{});
+                try ic.tc.log("Program not upgradeable", .{});
                 return InstructionError.Immutable;
             }
             if (!data.upgrade_authority_address.?.equals(&present_authority_key)) {
-                try ixn_ctx.txn_ctx.log("Incorrect upgrade authority provided", .{});
+                try ic.tc.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ixn_ctx.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isIndexSigner(
                 @intFromEnum(AccountIndex.present_authority),
             ))) {
-                try ixn_ctx.txn_ctx.log("Upgrade authority did not sign", .{});
+                try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             try account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -776,58 +776,58 @@ pub fn executeV3SetAuthority(
             });
         },
         else => {
-            try ixn_ctx.txn_ctx.log("Account does not support authorities", .{});
+            try ic.tc.log("Account does not support authorities", .{});
             return InstructionError.InvalidArgument;
         },
     }
 
-    try ixn_ctx.txn_ctx.log("New authority {?}", .{new_authority});
+    try ic.tc.log("New authority {?}", .{new_authority});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L1011-L1083
 pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ixn_ctx.epoch_ctx.feature_set.active.contains(
+    if (!ic.ec.feature_set.active.contains(
         features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IDX,
     )) {
         return InstructionError.InvalidInstructionData;
     }
 
     const AccountIndex = bpf_loader_program.v3.instruction.SetAuthorityChecked.AccountIndex;
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
-    var account = try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
+    var account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     defer account.release();
 
-    const present_authority_key = ixn_ctx.getAccountKeyByIndexUnchecked(
+    const present_authority_key = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.present_authority),
     );
-    const new_authority = ixn_ctx.getAccountKeyByIndexUnchecked(
+    const new_authority = ic.getAccountKeyByIndexUnchecked(
         @intFromEnum(AccountIndex.new_authority),
     );
 
     switch (try account.deserializeFromAccountData(allocator, bpf_loader_program.v3.State)) {
         .buffer => |buffer| {
             if (buffer.authority_address == null) {
-                try ixn_ctx.txn_ctx.log("Buffer is immutable", .{});
+                try ic.tc.log("Buffer is immutable", .{});
                 return InstructionError.Immutable;
             }
             if (!buffer.authority_address.?.equals(&present_authority_key)) {
-                try ixn_ctx.txn_ctx.log("Incorrect buffer authority provided", .{});
+                try ic.tc.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ixn_ctx.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isIndexSigner(
                 @intFromEnum(AccountIndex.present_authority),
             ))) {
-                try ixn_ctx.txn_ctx.log("Buffer authority did not sign", .{});
+                try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!(try ixn_ctx.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isIndexSigner(
                 @intFromEnum(AccountIndex.new_authority),
             ))) {
-                try ixn_ctx.txn_ctx.log("New authority did not sign", .{});
+                try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             try account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -838,23 +838,23 @@ pub fn executeV3SetAuthorityChecked(
         },
         .program_data => |data| {
             if (data.upgrade_authority_address == null) {
-                try ixn_ctx.txn_ctx.log("Program not upgradeable", .{});
+                try ic.tc.log("Program not upgradeable", .{});
                 return InstructionError.Immutable;
             }
             if (!data.upgrade_authority_address.?.equals(&present_authority_key)) {
-                try ixn_ctx.txn_ctx.log("Incorrect upgrade authority provided", .{});
+                try ic.tc.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ixn_ctx.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isIndexSigner(
                 @intFromEnum(AccountIndex.present_authority),
             ))) {
-                try ixn_ctx.txn_ctx.log("Upgrade authority did not sign", .{});
+                try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!(try ixn_ctx.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isIndexSigner(
                 @intFromEnum(AccountIndex.new_authority),
             ))) {
-                try ixn_ctx.txn_ctx.log("New authority did not sign", .{});
+                try ic.tc.log("New authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
             try account.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -865,35 +865,35 @@ pub fn executeV3SetAuthorityChecked(
             });
         },
         else => {
-            try ixn_ctx.txn_ctx.log("Account does not support authorities", .{});
+            try ic.tc.log("Account does not support authorities", .{});
             return InstructionError.InvalidArgument;
         },
     }
 
-    try ixn_ctx.txn_ctx.log("New authority {?}", .{new_authority});
+    try ic.tc.log("New authority {?}", .{new_authority});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1033-L1138
 pub fn executeV3Close(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.Close.AccountIndex;
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(2);
+    try ic.ixn_info.checkNumberOfAccounts(2);
 
-    const account_index_in_txn = ixn_ctx.ixn_info.getAccountMetaAtIndex(
+    const account_index_in_txn = ic.ixn_info.getAccountMetaAtIndex(
         @intFromEnum(AccountIndex.account),
     ).?.index_in_transaction;
-    const recipient_index_in_txn = ixn_ctx.ixn_info.getAccountMetaAtIndex(
+    const recipient_index_in_txn = ic.ixn_info.getAccountMetaAtIndex(
         @intFromEnum(AccountIndex.recipient),
     ).?.index_in_transaction;
 
     if (account_index_in_txn == recipient_index_in_txn) {
-        try ixn_ctx.txn_ctx.log("Recipient is the same as the account being closed", .{});
+        try ic.tc.log("Recipient is the same as the account being closed", .{});
         return InstructionError.InvalidArgument;
     }
 
-    var close_account = try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
+    var close_account = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.account));
     var close_account_released = false; // NOTE: used to simulate drop(close_account) below.
     defer if (!close_account_released) close_account.release();
 
@@ -904,34 +904,34 @@ pub fn executeV3Close(
     );
     try close_account.setDataLength(
         allocator,
-        &ixn_ctx.txn_ctx.accounts_resize_delta,
+        &ic.tc.accounts_resize_delta,
         bpf_loader_program.v3.State.UNINITIALIZED_SIZE,
     );
     switch (close_account_state) {
         .uninitialized => {
-            var recipient_account = try ixn_ctx.borrowInstructionAccount(
+            var recipient_account = try ic.borrowInstructionAccount(
                 @intFromEnum(AccountIndex.recipient),
             );
             defer recipient_account.release();
 
             try recipient_account.addLamports(close_account.account.lamports);
             try close_account.setLamports(0);
-            try ixn_ctx.txn_ctx.log("Closed Uninitialized {any}", .{close_key});
+            try ic.tc.log("Closed Uninitialized {any}", .{close_key});
         },
         .buffer => |data| {
-            try ixn_ctx.ixn_info.checkNumberOfAccounts(3);
+            try ic.ixn_info.checkNumberOfAccounts(3);
             close_account.release();
             close_account_released = true;
 
-            try commonCloseAccount(ixn_ctx, data.authority_address);
-            try ixn_ctx.txn_ctx.log("Closed Buffer {any}", .{close_key});
+            try commonCloseAccount(ic, data.authority_address);
+            try ic.tc.log("Closed Buffer {any}", .{close_key});
         },
         .program_data => |data| {
-            try ixn_ctx.ixn_info.checkNumberOfAccounts(4);
+            try ic.ixn_info.checkNumberOfAccounts(4);
             close_account.release();
             close_account_released = true;
 
-            var program_account = try ixn_ctx.borrowInstructionAccount(
+            var program_account = try ic.borrowInstructionAccount(
                 @intFromEnum(AccountIndex.program),
             );
             var program_account_released = false; // NOTE: simulates drop(program_account) below.
@@ -941,17 +941,17 @@ pub fn executeV3Close(
             const authority_address = data.upgrade_authority_address;
 
             if (!program_account.context.is_writable) {
-                try ixn_ctx.txn_ctx.log("Program account is not writable", .{});
+                try ic.tc.log("Program account is not writable", .{});
                 return InstructionError.InvalidArgument;
             }
             if (!program_account.isOwnedByCurrentProgram()) {
-                try ixn_ctx.txn_ctx.log("Program account is not owned by the loader", .{});
+                try ic.tc.log("Program account is not owned by the loader", .{});
                 return InstructionError.IncorrectProgramId;
             }
 
-            var clock = try ixn_ctx.slot_ctx.sysvar_cache.get(sysvar.Clock);
+            var clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
             if (clock.slot == data.slot) {
-                try ixn_ctx.txn_ctx.log("Program was deployed in this block already", .{});
+                try ic.tc.log("Program was deployed in this block already", .{});
                 return InstructionError.InvalidArgument;
             }
 
@@ -961,7 +961,7 @@ pub fn executeV3Close(
             )) {
                 .program => |program_data| {
                     if (!program_data.programdata_address.equals(&close_key)) {
-                        try ixn_ctx.txn_ctx.log(
+                        try ic.tc.log(
                             "ProgramData account does not match ProgramData account",
                             .{},
                         );
@@ -970,56 +970,56 @@ pub fn executeV3Close(
 
                     program_account.release();
                     program_account_released = true;
-                    try commonCloseAccount(ixn_ctx, authority_address);
+                    try commonCloseAccount(ic, authority_address);
 
-                    clock = try ixn_ctx.slot_ctx.sysvar_cache.get(sysvar.Clock);
+                    clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
                     // TODO: This depends on program cache which isn't implemented yet.
                     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
                 },
                 else => {
-                    try ixn_ctx.txn_ctx.log("Invalid Program Account", .{});
+                    try ic.tc.log("Invalid Program Account", .{});
                     return InstructionError.InvalidArgument;
                 },
             }
 
-            try ixn_ctx.txn_ctx.log("Closed Program {any}", .{program_key});
+            try ic.tc.log("Closed Program {any}", .{program_key});
         },
         else => {
-            try ixn_ctx.txn_ctx.log("Account does not support closing", .{});
+            try ic.tc.log("Account does not support closing", .{});
             return InstructionError.InvalidArgument;
         },
     }
 }
 
 fn commonCloseAccount(
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
     authority_address: ?Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (authority_address == null) {
-        try ixn_ctx.txn_ctx.log("Account is immutable", .{});
+        try ic.tc.log("Account is immutable", .{});
         return InstructionError.Immutable;
     }
 
     const AccountIndex = bpf_loader_program.v3.instruction.Close.AccountIndex;
-    const auth_account = ixn_ctx.ixn_info.getAccountMetaAtIndex(
+    const auth_account = ic.ixn_info.getAccountMetaAtIndex(
         @intFromEnum(AccountIndex.authority),
     ) orelse return InstructionError.MissingAccount;
 
     if (!authority_address.?.equals(&auth_account.pubkey)) {
-        try ixn_ctx.txn_ctx.log("Incorrect authority provided", .{});
+        try ic.tc.log("Incorrect authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
-    if (!(try ixn_ctx.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
-        try ixn_ctx.txn_ctx.log("Authority did not sign", .{});
+    if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+        try ic.tc.log("Authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }
 
-    var close_account = try ixn_ctx.borrowInstructionAccount(
+    var close_account = try ic.borrowInstructionAccount(
         @intFromEnum(AccountIndex.account),
     );
     defer close_account.release();
 
-    var recipient_account = try ixn_ctx.borrowInstructionAccount(
+    var recipient_account = try ic.borrowInstructionAccount(
         @intFromEnum(AccountIndex.recipient),
     );
     defer recipient_account.release();
@@ -1032,17 +1032,17 @@ fn commonCloseAccount(
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1139-L1296
 pub fn executeV3ExtendProgram(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
     additional_bytes: u32,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (additional_bytes == 0) {
-        try ixn_ctx.txn_ctx.log("Additional bytes must be greater than 0", .{});
+        try ic.tc.log("Additional bytes must be greater than 0", .{});
         return InstructionError.InvalidInstructionData;
     }
 
     const AccountIndex = bpf_loader_program.v3.instruction.ExtendProgram.AccountIndex;
 
-    var programdata = try ixn_ctx.borrowInstructionAccount(
+    var programdata = try ic.borrowInstructionAccount(
         @intFromEnum(AccountIndex.program_data),
     );
     var programdata_released = false; // simulate drop(program_data) down below.
@@ -1050,26 +1050,26 @@ pub fn executeV3ExtendProgram(
 
     const programdata_key = programdata.pubkey;
     if (!programdata.isOwnedByCurrentProgram()) {
-        try ixn_ctx.txn_ctx.log("ProgramData owner is invalid", .{});
+        try ic.tc.log("ProgramData owner is invalid", .{});
         return InstructionError.InvalidAccountOwner;
     }
     if (!programdata.context.is_writable) {
-        try ixn_ctx.txn_ctx.log("ProgramData owner is invalid", .{});
+        try ic.tc.log("ProgramData owner is invalid", .{});
         return InstructionError.InvalidArgument;
     }
 
     const program_key = blk: {
-        var program_account = try ixn_ctx.borrowInstructionAccount(
+        var program_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program),
         );
         defer program_account.release();
 
         if (!program_account.context.is_writable) {
-            try ixn_ctx.txn_ctx.log("Program account is not writeable", .{});
+            try ic.tc.log("Program account is not writeable", .{});
             return InstructionError.InvalidArgument;
         }
         if (!program_account.isOwnedByCurrentProgram()) {
-            try ixn_ctx.txn_ctx.log("Program account not owned by loader", .{});
+            try ic.tc.log("Program account not owned by loader", .{});
             return InstructionError.InvalidAccountOwner;
         }
 
@@ -1079,7 +1079,7 @@ pub fn executeV3ExtendProgram(
         )) {
             .program => |data| {
                 if (!data.programdata_address.equals(&programdata_key)) {
-                    try ixn_ctx.txn_ctx.log(
+                    try ic.tc.log(
                         "Program account does not match ProgramData account",
                         .{},
                     );
@@ -1087,7 +1087,7 @@ pub fn executeV3ExtendProgram(
                 }
             },
             else => {
-                try ixn_ctx.txn_ctx.log("Invalid Program account", .{});
+                try ic.tc.log("Invalid Program account", .{});
                 return InstructionError.InvalidAccountData;
             },
         }
@@ -1097,7 +1097,7 @@ pub fn executeV3ExtendProgram(
 
     const new_len = programdata.constAccountData().len +| additional_bytes;
     if (new_len > system_program.MAX_PERMITTED_DATA_LENGTH) {
-        try ixn_ctx.txn_ctx.log(
+        try ic.tc.log(
             "Extended ProgramData length of {} bytes exceeds max account data length of {}",
             .{ new_len, system_program.MAX_PERMITTED_DATA_LENGTH },
         );
@@ -1105,7 +1105,7 @@ pub fn executeV3ExtendProgram(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ixn_ctx.slot_ctx.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
@@ -1113,11 +1113,11 @@ pub fn executeV3ExtendProgram(
     )) {
         .program_data => |data| blk: {
             if (clock.slot == data.slot) {
-                try ixn_ctx.txn_ctx.log("Program was extended in this block already", .{});
+                try ic.tc.log("Program was extended in this block already", .{});
                 return InstructionError.InvalidArgument;
             }
             if (data.upgrade_authority_address == null) {
-                try ixn_ctx.txn_ctx.log(
+                try ic.tc.log(
                     "Cannot extend ProgramData accounts that are not upgradeable",
                     .{},
                 );
@@ -1126,7 +1126,7 @@ pub fn executeV3ExtendProgram(
             break :blk data.upgrade_authority_address;
         },
         else => {
-            try ixn_ctx.txn_ctx.log("ProgramData state is invalid", .{});
+            try ic.tc.log("ProgramData state is invalid", .{});
             return InstructionError.InvalidAccountData;
         },
     };
@@ -1134,7 +1134,7 @@ pub fn executeV3ExtendProgram(
     const required_payment = blk: {
         const balance = programdata.account.lamports;
         // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-        const rent = try ixn_ctx.slot_ctx.sysvar_cache.get(sysvar.Rent);
+        const rent = try ic.sc.sysvar_cache.get(sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
     };
@@ -1146,12 +1146,12 @@ pub fn executeV3ExtendProgram(
     // Determine the program ID to prevent overlapping mutable/immutable borrow of invoke context.
     if (required_payment > 0) {
         // [agave] https://github.com/anza-xyz/agave/blob/ad0983afd4efa711cf2258aa9630416ed6716d2a/transaction-context/src/lib.rs#L260-L267
-        const payer = ixn_ctx.ixn_info.getAccountMetaAtIndex(
+        const payer = ic.ixn_info.getAccountMetaAtIndex(
             @intFromEnum(AccountIndex.payer),
         ) orelse
             return InstructionError.NotEnoughAccountKeys;
 
-        try ixn_ctx.nativeInvoke(
+        try ic.nativeInvoke(
             allocator,
             system_program.ID,
             system_program.Instruction{
@@ -1166,30 +1166,30 @@ pub fn executeV3ExtendProgram(
     }
 
     {
-        programdata = try ixn_ctx.borrowInstructionAccount(
+        programdata = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program_data),
         );
         defer programdata.release();
 
-        try programdata.setDataLength(allocator, &ixn_ctx.txn_ctx.accounts_resize_delta, new_len);
+        try programdata.setDataLength(allocator, &ic.tc.accounts_resize_delta, new_len);
         const data = programdata.constAccountData();
 
         try deployProgram(
             allocator,
             program_key,
-            ixn_ctx.ixn_info.program_meta.pubkey,
+            ic.ixn_info.program_meta.pubkey,
             bpf_loader_program.v3.State.PROGRAM_SIZE +| new_len,
             data[bpf_loader_program.v3.State.PROGRAM_DATA_METADATA_SIZE..],
             clock.slot,
-            ixn_ctx.epoch_ctx.feature_set,
-            if (ixn_ctx.txn_ctx.log_collector != null)
-                &ixn_ctx.txn_ctx.log_collector.?
+            ic.ec.feature_set,
+            if (ic.tc.log_collector != null)
+                &ic.tc.log_collector.?
             else
                 null,
         );
     }
 
-    programdata = try ixn_ctx.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
+    programdata = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.program_data));
     defer programdata.release();
 
     try programdata.serializeIntoAccountData(bpf_loader_program.v3.State{
@@ -1199,42 +1199,42 @@ pub fn executeV3ExtendProgram(
         },
     });
 
-    try ixn_ctx.txn_ctx.log("Extended ProgramData account by {} bytes", .{additional_bytes});
+    try ic.tc.log("Extended ProgramData account by {} bytes", .{additional_bytes});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L1346-L1515
 pub fn executeV3Migrate(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ixn_ctx.epoch_ctx.feature_set.active.contains(
+    if (!ic.ec.feature_set.active.contains(
         features.ENABLE_LOADER_V4,
     )) {
         return InstructionError.InvalidInstructionData;
     }
 
     const AccountIndex = bpf_loader_program.v3.instruction.Migrate.AccountIndex;
-    try ixn_ctx.ixn_info.checkNumberOfAccounts(3);
+    try ic.ixn_info.checkNumberOfAccounts(3);
 
     const programdata_key =
-        ixn_ctx.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
     const program_key =
-        ixn_ctx.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program));
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program));
     const provided_authority_key =
-        ixn_ctx.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
+        ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ixn_ctx.slot_ctx.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
 
     // Verify ProgramData account.
     const progdata_info = info: {
-        var programdata = try ixn_ctx.borrowInstructionAccount(
+        var programdata = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program_data),
         );
         defer programdata.release();
 
         if (!programdata.context.is_writable) {
-            try ixn_ctx.txn_ctx.log("ProgramData account not writeable", .{});
+            try ic.tc.log("ProgramData account not writeable", .{});
             return InstructionError.InvalidArgument;
         }
 
@@ -1244,7 +1244,7 @@ pub fn executeV3Migrate(
         )) {
             .program_data => |data| blk: {
                 if (clock.slot == data.slot) {
-                    try ixn_ctx.txn_ctx.log("Program was deployed in this block already", .{});
+                    try ic.tc.log("Program was deployed in this block already", .{});
                     return InstructionError.InvalidArgument;
                 }
 
@@ -1267,27 +1267,27 @@ pub fn executeV3Migrate(
     if (!migration_authority.equals(&provided_authority_key) and
         !provided_authority_key.equals(&(progdata_info.upgrade_key orelse program_key)))
     {
-        try ixn_ctx.txn_ctx.log("Incorrect migration authority provided", .{});
+        try ic.tc.log("Incorrect migration authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
-    if (!(try ixn_ctx.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
-        try ixn_ctx.txn_ctx.log("Migration authority did not sign", .{});
+    if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+        try ic.tc.log("Migration authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }
 
     // Verify Program account
     {
-        var program_account = try ixn_ctx.borrowInstructionAccount(
+        var program_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program),
         );
         defer program_account.release();
 
         if (!program_account.context.is_writable) {
-            try ixn_ctx.txn_ctx.log("Program account not writeable", .{});
+            try ic.tc.log("Program account not writeable", .{});
             return InstructionError.InvalidArgument;
         }
         if (!program_account.isOwnedByCurrentProgram()) {
-            try ixn_ctx.txn_ctx.log("Program account not owned by loader", .{});
+            try ic.tc.log("Program account not owned by loader", .{});
             return InstructionError.IncorrectProgramId;
         }
 
@@ -1297,12 +1297,12 @@ pub fn executeV3Migrate(
         )) {
             .program => |data| {
                 if (!programdata_key.equals(&data.programdata_address)) {
-                    try ixn_ctx.txn_ctx.log("Program and ProgramData account mismatch", .{});
+                    try ic.tc.log("Program and ProgramData account mismatch", .{});
                     return InstructionError.InvalidArgument;
                 }
             },
             else => {
-                try ixn_ctx.txn_ctx.log("Invalid Program account", .{});
+                try ic.tc.log("Invalid Program account", .{});
                 return InstructionError.InvalidAccountData;
             },
         }
@@ -1319,7 +1319,7 @@ pub fn executeV3Migrate(
     }
 
     {
-        var programdata = try ixn_ctx.borrowInstructionAccount(
+        var programdata = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program_data),
         );
         defer programdata.release();
@@ -1327,7 +1327,7 @@ pub fn executeV3Migrate(
     }
 
     if (progdata_info.len > 0) {
-        try ixn_ctx.nativeInvoke(
+        try ic.nativeInvoke(
             allocator,
             bpf_loader_program.v4.ID,
             bpf_loader_program.v4.Instruction{
@@ -1343,7 +1343,7 @@ pub fn executeV3Migrate(
             &.{},
         );
 
-        try ixn_ctx.nativeInvoke(
+        try ic.nativeInvoke(
             allocator,
             bpf_loader_program.v4.ID,
             bpf_loader_program.v4.Instruction{
@@ -1361,7 +1361,7 @@ pub fn executeV3Migrate(
             &.{},
         );
 
-        try ixn_ctx.nativeInvoke(
+        try ic.nativeInvoke(
             allocator,
             bpf_loader_program.v4.ID,
             bpf_loader_program.v4.Instruction{
@@ -1375,7 +1375,7 @@ pub fn executeV3Migrate(
         );
 
         if (progdata_info.upgrade_key) |upgrade_key| {
-            try ixn_ctx.nativeInvoke(
+            try ic.nativeInvoke(
                 allocator,
                 bpf_loader_program.v4.ID,
                 bpf_loader_program.v4.Instruction{
@@ -1389,7 +1389,7 @@ pub fn executeV3Migrate(
                 &.{},
             );
         } else {
-            try ixn_ctx.nativeInvoke(
+            try ic.nativeInvoke(
                 allocator,
                 bpf_loader_program.v4.ID,
                 bpf_loader_program.v4.Instruction{
@@ -1406,7 +1406,7 @@ pub fn executeV3Migrate(
     }
 
     {
-        var programdata = try ixn_ctx.borrowInstructionAccount(
+        var programdata = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program_data),
         );
         defer programdata.release();
@@ -1416,7 +1416,7 @@ pub fn executeV3Migrate(
         try programdata.setOwner(system_program.ID);
     }
 
-    try ixn_ctx.txn_ctx.log("Migrated program {any}", .{program_key});
+    try ic.tc.log("Migrated program {any}", .{program_key});
 }
 
 /// TODO: This function depends on syscalls and program cache implementations

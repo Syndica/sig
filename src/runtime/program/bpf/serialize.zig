@@ -186,33 +186,33 @@ pub const Serializer = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L188
 pub fn serializeParameters(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
     copy_account_data: bool,
 ) (error{OutOfMemory} || InstructionError)!struct {
     []u8,
     []Region,
     []SerializedAccountMeta,
 } {
-    if (ixn_ctx.ixn_info.account_metas.len > std.math.maxInt(u8))
+    if (ic.ixn_info.account_metas.len > std.math.maxInt(u8))
         return InstructionError.MaxAccountsExceeded;
 
     const is_loader_v1 = blk: {
-        const program_account = try ixn_ctx.borrowProgramAccount();
+        const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
         break :blk program_account.account.owner.equals(&program.bpf_loader_program.v1.ID);
     };
 
     var accounts = std.ArrayList(SerializedAccount).initCapacity(
         allocator,
-        ixn_ctx.ixn_info.account_metas.len,
+        ic.ixn_info.account_metas.len,
     ) catch return InstructionError.ProgramEnvironmentSetupFailure;
     defer accounts.deinit();
 
-    for (ixn_ctx.ixn_info.account_metas.constSlice(), 0..) |account_meta, index_in_instruction| {
+    for (ic.ixn_info.account_metas.constSlice(), 0..) |account_meta, index_in_instruction| {
         if (account_meta.index_in_callee != index_in_instruction) {
             accounts.appendAssumeCapacity(.{ .duplicate = @intCast(account_meta.index_in_callee) });
         } else {
-            const account = try ixn_ctx.borrowInstructionAccount(@intCast(index_in_instruction));
+            const account = try ic.borrowInstructionAccount(@intCast(index_in_instruction));
             defer account.release();
             accounts.appendAssumeCapacity(.{ .account = .{
                 @intCast(index_in_instruction),
@@ -225,16 +225,16 @@ pub fn serializeParameters(
         serializeParametersUnaligned(
             allocator,
             accounts.items,
-            ixn_ctx.ixn_info.instruction_data,
-            ixn_ctx.ixn_info.program_meta.pubkey,
+            ic.ixn_info.instruction_data,
+            ic.ixn_info.program_meta.pubkey,
             copy_account_data,
         )
     else
         serializeParametersAligned(
             allocator,
             accounts.items,
-            ixn_ctx.ixn_info.instruction_data,
-            ixn_ctx.ixn_info.program_meta.pubkey,
+            ic.ixn_info.instruction_data,
+            ic.ixn_info.program_meta.pubkey,
             copy_account_data,
         );
 }
@@ -478,13 +478,13 @@ fn serializeParametersAligned(
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L251
 pub fn deserializeParameters(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
     copy_account_data: bool,
     memory: []u8,
     account_metas: []SerializedAccountMeta,
 ) (error{OutOfMemory} || InstructionError)!void {
     const is_loader_v1 = blk: {
-        const program_account = try ixn_ctx.borrowProgramAccount();
+        const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
         break :blk program_account.account.owner.equals(&program.bpf_loader_program.v1.ID);
     };
@@ -500,7 +500,7 @@ pub fn deserializeParameters(
     if (is_loader_v1)
         try deserializeParametersUnaligned(
             allocator,
-            ixn_ctx,
+            ic,
             copy_account_data,
             memory,
             account_lengths.items,
@@ -508,7 +508,7 @@ pub fn deserializeParameters(
     else
         try deserializeParametersAligned(
             allocator,
-            ixn_ctx,
+            ic,
             copy_account_data,
             memory,
             account_lengths.items,
@@ -518,20 +518,20 @@ pub fn deserializeParameters(
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L360
 fn deserializeParametersUnaligned(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
     copy_account_data: bool,
     memory: []u8,
     account_lengths: []const usize,
 ) (error{OutOfMemory} || InstructionError)!void {
     var start: usize = @sizeOf(u64);
-    for (0..ixn_ctx.ixn_info.account_metas.len) |index_in_instruction_| {
+    for (0..ic.ixn_info.account_metas.len) |index_in_instruction_| {
         const index_in_instruction: u16 = @intCast(index_in_instruction_);
-        const account_meta = ixn_ctx.ixn_info.account_metas.buffer[index_in_instruction];
+        const account_meta = ic.ixn_info.account_metas.buffer[index_in_instruction];
         const pre_len = account_lengths[index_in_instruction];
 
         start += 1; // is_dup
         if (account_meta.index_in_callee == index_in_instruction) {
-            var borrowed_account = try ixn_ctx.borrowInstructionAccount(index_in_instruction);
+            var borrowed_account = try ic.borrowInstructionAccount(index_in_instruction);
             defer borrowed_account.release();
 
             start += @sizeOf(u8) // is_signer
@@ -557,14 +557,14 @@ fn deserializeParametersUnaligned(
                 const data = memory[start .. start + pre_len];
                 const can_data_be_resized =
                     borrowed_account.checkCanSetDataLength(
-                    ixn_ctx.txn_ctx.accounts_resize_delta,
+                    ic.tc.accounts_resize_delta,
                     pre_len,
                 );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataFromSlice(
                         allocator,
-                        &ixn_ctx.txn_ctx.accounts_resize_delta,
+                        &ic.tc.accounts_resize_delta,
                         data,
                     );
                 } else {
@@ -585,23 +585,23 @@ fn deserializeParametersUnaligned(
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L501
 fn deserializeParametersAligned(
     allocator: std.mem.Allocator,
-    ixn_ctx: *InstructionContext,
+    ic: *InstructionContext,
     copy_account_data: bool,
     memory: []u8,
     account_lengths: []const usize,
 ) (error{OutOfMemory} || InstructionError)!void {
     var start: usize = @sizeOf(u64);
 
-    for (0..ixn_ctx.ixn_info.account_metas.len) |index_in_instruction_| {
+    for (0..ic.ixn_info.account_metas.len) |index_in_instruction_| {
         const index_in_instruction: u16 = @intCast(index_in_instruction_);
-        const account_meta = ixn_ctx.ixn_info.account_metas.buffer[index_in_instruction];
+        const account_meta = ic.ixn_info.account_metas.buffer[index_in_instruction];
         const pre_len = account_lengths[index_in_instruction];
 
         start += @sizeOf(u8);
         if (account_meta.index_in_callee != index_in_instruction) {
             start += 7;
         } else {
-            var borrowed_account = try ixn_ctx.borrowInstructionAccount(index_in_instruction);
+            var borrowed_account = try ic.borrowInstructionAccount(index_in_instruction);
             defer borrowed_account.release();
 
             start += @sizeOf(u8) // is_signer
@@ -651,14 +651,14 @@ fn deserializeParametersAligned(
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
                     borrowed_account.checkCanSetDataLength(
-                    ixn_ctx.txn_ctx.accounts_resize_delta,
+                    ic.tc.accounts_resize_delta,
                     post_len,
                 );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataFromSlice(
                         allocator,
-                        &ixn_ctx.txn_ctx.accounts_resize_delta,
+                        &ic.tc.accounts_resize_delta,
                         data,
                     );
                 } else {
@@ -673,14 +673,14 @@ fn deserializeParametersAligned(
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
                     borrowed_account.checkCanSetDataLength(
-                    ixn_ctx.txn_ctx.accounts_resize_delta,
+                    ic.tc.accounts_resize_delta,
                     post_len,
                 );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataLength(
                         allocator,
-                        &ixn_ctx.txn_ctx.accounts_resize_delta,
+                        &ic.tc.accounts_resize_delta,
                         post_len,
                     );
                     const allocated_bytes = post_len -| pre_len;
@@ -738,7 +738,7 @@ test "serializeParameters" {
         }) |copy_account_data| {
             const program_id = Pubkey.initRandom(prng.random());
 
-            const epoch_ctx, const slot_ctx, var txn_ctx = try createExecutionContexts(
+            const ec, const sc, var tc = try createExecutionContexts(
                 allocator,
                 prng.random(),
                 .{
@@ -802,14 +802,14 @@ test "serializeParameters" {
                 },
             );
             defer {
-                epoch_ctx.deinit();
-                allocator.destroy(epoch_ctx);
-                allocator.destroy(slot_ctx);
-                txn_ctx.deinit();
+                ec.deinit();
+                allocator.destroy(ec);
+                allocator.destroy(sc);
+                tc.deinit();
             }
 
             const instruction_info = try createInstructionInfo(
-                &txn_ctx,
+                &tc,
                 program_id,
                 [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 },
                 &.{
@@ -873,10 +873,10 @@ test "serializeParameters" {
             );
             defer instruction_info.deinit(allocator);
 
-            var ixn_ctx = InstructionContext{
-                .epoch_ctx = epoch_ctx,
-                .slot_ctx = slot_ctx,
-                .txn_ctx = &txn_ctx,
+            var ic = InstructionContext{
+                .ec = ec,
+                .sc = sc,
+                .tc = &tc,
                 .ixn_info = instruction_info,
                 .depth = 0,
             };
@@ -887,7 +887,7 @@ test "serializeParameters" {
                     for (accounts.items) |account| account.deinit(allocator);
                     accounts.deinit();
                 }
-                for (txn_ctx.accounts) |account| {
+                for (tc.accounts) |account| {
                     try accounts.append(TransactionContextAccount.init(account.pubkey, .{
                         .lamports = account.account.lamports,
                         .owner = account.account.owner,
@@ -905,7 +905,7 @@ test "serializeParameters" {
 
             const memory, const regions, const account_metas = try serializeParameters(
                 allocator,
-                &ixn_ctx,
+                &ic,
                 copy_account_data,
             );
             defer {
@@ -926,13 +926,13 @@ test "serializeParameters" {
 
             try deserializeParameters(
                 allocator,
-                &ixn_ctx,
+                &ic,
                 copy_account_data,
                 memory,
                 account_metas,
             );
             for (pre_accounts, 0..) |pre_account, index_in_transaction| {
-                const post_account = txn_ctx.accounts[index_in_transaction];
+                const post_account = tc.accounts[index_in_transaction];
                 try std.testing.expectEqual(
                     pre_account.read_refs,
                     post_account.read_refs,
