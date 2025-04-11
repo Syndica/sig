@@ -712,6 +712,7 @@ pub const Elf = struct {
         if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version) or
             @intFromEnum(sbpf_version) > @intFromEnum(config.maximum_version))
         {
+            // TODO: Conformance issue vs. agave-v2.1.0
             return error.VersionUnsupported;
         }
 
@@ -764,6 +765,7 @@ pub const Elf = struct {
         sbpf_version: sbpf.Version,
         config: Config,
     ) !Elf {
+        std.debug.print("parseStrict\n", .{});
         const header = headers.header;
 
         // A list of the first 5 expected program headers.
@@ -897,6 +899,7 @@ pub const Elf = struct {
         config: Config,
         loader: *BuiltinProgram,
     ) !Elf {
+        std.debug.print("parseLenient\n", .{});
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
         const offset = headers.header.e_entry -| text_section.sh_addr;
