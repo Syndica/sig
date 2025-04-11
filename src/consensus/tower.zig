@@ -489,8 +489,7 @@ pub const Tower = struct {
     }
 
     fn isFirstSwitchCheck(self: *const Tower) bool {
-        _ = self;
-        @panic("unimplimented");
+        return self.last_switch_threshold_check == null;
     }
 
     pub fn checkVoteStakeThresholds(
@@ -646,13 +645,37 @@ pub const Tower = struct {
         @panic("unimplimented");
     }
 
+    // Optimistically skip the stake check if casting a vote would not increase
+    // the lockout at this threshold. This is because if you bounce back to
+    // voting on the main fork after not voting for a while, your latest vote
+    // might pop off a lot of the votes in the tower. The stake from these votes
+    // would have rolled up to earlier votes in the tower, which presumably
+    // could have helped us pass the threshold check. Worst case, we'll just
+    // recheck later without having increased lockouts.
     fn optimisticallyBypassVoteStakeThresholdCheck(
+        // Needs to be an iterator that produces Lockout
         tower_before_applying_vote: anytype,
         threshold_vote: *const Lockout,
     ) bool {
-        _ = tower_before_applying_vote;
-        _ = threshold_vote;
-        @panic("unimplimented");
+        const IteratorType = @TypeOf(tower_before_applying_vote);
+        comptime {
+            if (!@hasDecl(IteratorType, "next")) {
+                @compileError("Parameter must be an iterator (must have next() method)");
+            }
+            const NextReturnType = @typeInfo(@TypeOf(IteratorType.next)).Fn.return_type.?;
+            if (NextReturnType != Lockout) {
+                @compileError("Iterator must produce Lockout items");
+            }
+        }
+
+        for (tower_before_applying_vote.next()) |old_vote| {
+            if (old_vote.slot() == threshold_vote.slot and
+                old_vote.confirmation_count == threshold_vote.confirmation_count)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     fn checkVoteStakeThreshold(
