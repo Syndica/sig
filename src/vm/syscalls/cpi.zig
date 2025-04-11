@@ -7,9 +7,12 @@ const ids = sig.runtime.ids;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 const system_program = sig.runtime.program.system_program;
 const features = sig.runtime.features;
+const pubkey_utils = sig.runtime.pubkey_utils;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
+const Instruction = sig.core.Instruction;
+const InstructionAccount = sig.core.instruction.InstructionAccount;
 const InstructionError = sig.core.instruction.InstructionError;
 
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -24,36 +27,67 @@ const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
 
 pub const SyscallError = error{
+    BadSeeds,
     UnalignedPointer,
     InvalidPointer,
     TooManyAccounts,
+    InstructionTooLarge,
+    MaxInstructionDataLenExceeded,
+    MaxInstructionAccountsExceeded,
     MaxInstructionAccountInfosExceeded,
 } || sig.vm.syscalls.Error;
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/master/stable-layout/src/stable_vec.rs#L30
-const StableVec = extern struct {
-    addr: u64,
-    cap: u64,
-    len: u64,
-};
 
+/// [agave] StableVec: https://github.com/anza-xyz/solana-sdk/blob/master/stable-layout/src/stable_vec.rs#L30
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0666fa5999750153070e5c43d64813467bfdc38e/stable-layout/src/stable_instruction.rs#L33
-const StableInstruction = extern struct {
-    accounts: StableVec, // StableVec(AccountMeta)
-    data: StableVec, // StableVec(u8)
+const StableInstructionRust = extern struct {
+    // StableVec(AccountMetaRust)
+    accounts_addr: u64,
+    accounts_cap: u64,
+    accounts_len: u64,
+    // StableVec(u8)
+    data_addr: u64,
+    data_cap: u64,
+    data_len: u64,
+    // Stores Pubkey directly instead of vm address
     program_id: Pubkey,
 };
 
-/// This struct will be backed by mmaped and snapshotted data files.
-/// So the data layout must be stable and consistent across the entire cluster!
-const AccountMeta = extern struct {
-    /// lamports in the account
-    lamports: u64,
-    /// the epoch at which this account will next owe rent
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L577
+const StableInstructionC = extern struct {
+    program_id_addr: u64,
+    accounts_addr: u64,
+    accounts_len: u64,
+    data_addr: u64,
+    data_len: u64,
+};
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/f7a6475ae883e0216eaeab42f525833f667965a0/instruction/src/account_meta.rs#L25
+const AccountMetaRust = extern struct {
+    /// An account's public key.
+    pubkey: Pubkey,
+    /// True if an `Instruction` requires a `Transaction` signature matching `pubkey`.
+    is_signer: bool,
+    /// True if the account data or metadata may be mutated during program execution.
+    is_writable: bool,
+};
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L588
+const AccountMetaC = extern struct {
+    pubkey_addr: u64,
+    is_writable: bool,
+    is_signer: bool,
+};
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
+const AccountInfoRust = extern struct {
+    key_addr: u64,
+    lamports_addr: Rc(RefCell(u64)),
+    data: Rc(RefCell([]u8)),
+    owner_addr: u64,
     rent_epoch: Epoch,
-    /// the program that owns this account. If executable, the program that loads this account.
-    owner: Pubkey,
-    /// this account's data contains a loaded program (and is now read-only)
+    is_signer: bool,
+    is_writable: bool,
     executable: bool,
 };
 
@@ -65,18 +99,6 @@ const AccountInfoC = extern struct {
     data_addr: u64,
     owner_addr: u64,
     rent_epoch: u64,
-    is_signer: bool,
-    is_writable: bool,
-    executable: bool,
-};
-
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
-const AccountInfoRust = extern struct {
-    key_addr: u64,
-    lamports_addr: Rc(RefCell(u64)),
-    data: Rc(RefCell([]u8)),
-    owner_addr: u64,
-    rent_epoch: Epoch,
     is_signer: bool,
     is_writable: bool,
     executable: bool,
@@ -151,10 +173,17 @@ fn VmValue(comptime T: type) type {
     };
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
+const VmSlice = extern struct {
+    ptr: u64,
+    len: u64,
+};
+
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L604
 fn translate(
-    memory_map: *const MemoryMap,
     comptime state: memory.MemoryState,
+    memory_map: *const MemoryMap,
     vm_addr: u64,
     len: u64,
 ) !u64 {
@@ -173,7 +202,7 @@ fn translateType(
     .mutable => *T,
     .constant => *const T,
 }) {
-    const host_addr = try translate(memory_map, state, vm_addr, @sizeOf(T));
+    const host_addr = try translate(state, memory_map, vm_addr, @sizeOf(T));
     if (!check_aligned) {
         return @ptrFromInt(host_addr);
     } else if (host_addr % @alignOf(T) != 0) {
@@ -191,10 +220,10 @@ fn translateSlice(
     vm_addr: u64,
     len: u64,
     check_aligned: bool,
-) !switch (state) {
+) !(switch (state){
     .mutable => []T,
     .constant => []const T,
-} {
+}) {
     if (len == 0) {
         return &.{}; // &mut []
     }
@@ -202,7 +231,7 @@ fn translateSlice(
     const total_size = len *| @sizeOf(T);
     _ = std.math.cast(isize, total_size) orelse return SyscallError.InvalidLength;
 
-    const host_addr = try translate(memory_map, state, vm_addr, total_size);
+    const host_addr = try translate(state, memory_map, vm_addr, total_size);
     if (check_aligned and host_addr % @alignOf(T) != 0) {
         return SyscallError.UnalignedPointer;
     }
@@ -377,8 +406,8 @@ const CallerAccount = struct {
                 } };
             } else r2l: {
                 const translated: *u64 = @ptrFromInt(try translate(
-                    memory_map,
                     .constant,
+                    memory_map,
                     data_ptr +| @sizeOf(u64),
                     8,
                 ));
@@ -512,8 +541,8 @@ const CallerAccount = struct {
             } }
         else
             VmValue(u64){ .translated = @ptrFromInt(try translate(
-                memory_map,
                 .mutable,
+                memory_map,
                 data_len_vm_addr,
                 @sizeOf(u64),
             )) };
@@ -795,6 +824,187 @@ fn translateAccounts(
     }
 
     return accounts;
+}
+
+fn translateInstruction(
+    allocator: std.mem.Allocator,
+    ic: *const InstructionContext,
+    memory_map: *const MemoryMap,
+    comptime AccountInfoType: type,
+    vm_addr: u64,
+) !Instruction {
+    const InstructionType, const AccountMetaType = switch (AccountInfoType) {
+        AccountInfoRust => .{ StableInstructionRust, AccountMetaRust },
+        AccountInfoC => .{ StableInstructionC, AccountMetaC },
+        else => @compileError("invalid AccountInfo type"),
+    };
+
+    const ix = try translateType(
+        InstructionType,
+        .constant,
+        memory_map,
+        vm_addr,
+        ic.getCheckAligned(),
+    );
+    const account_metas = try translateSlice(
+        AccountMetaType,
+        .constant,
+        memory_map,
+        ix.accounts_addr,
+        ix.accounts_len,
+        ic.getCheckAligned(),
+    );
+    const data = try translateSlice(
+        u8,
+        .constant,
+        memory_map,
+        ix.data_addr,
+        ix.data_len,
+        ic.getCheckAligned(),
+    );
+    const program_id = switch (AccountInfoType) {
+        AccountInfoRust => ix.program_id,
+        AccountInfoC => (try translateType(
+            Pubkey,
+            .constant,
+            memory_map,
+            ix.program_id_addr,
+            ic.getCheckAligned(),
+        )).*,
+    };
+
+    const loosen_cpi_size_restriction = ic.tc.feature_set.active.contains(
+        features.LOOSEN_CPI_SIZE_RESTRICTION,
+    );
+
+    // check_instruction_size():
+    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L980
+    if (loosen_cpi_size_restriction) {
+        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L19
+        const MAX_CPI_INSTRUCTION_DATA_LEN = 10 * 1024;
+        if (data.len > MAX_CPI_INSTRUCTION_DATA_LEN) {
+            // TODO: add error context { data_len, max_data_len }
+            return SyscallError.MaxInstructionDataLenExceeded;
+        }
+
+        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L25
+        const MAX_CPI_INSTRUCTION_ACCOUNTS = std.math.maxInt(u8);
+        if (account_metas.len > MAX_CPI_INSTRUCTION_ACCOUNTS) {
+            // TODO: add error context { num_accounts, max_accounts }
+            return SyscallError.MaxInstructionAccountsExceeded;
+        }
+    } else {
+        const max_size = ic.tc.compute_budget.max_cpi_instruction_size;
+        const size = (@as(u64, account_metas.len) *| @sizeOf(AccountMetaType)) +| data.len;
+        if (size > max_size) {
+            // TODO: add error context { size, max_size }
+            return SyscallError.InstructionTooLarge;
+        }
+    }
+
+    if (loosen_cpi_size_restriction) {
+        try ic.tc.consumeCompute(std.math.divFloor(
+            u64,
+            data.len,
+            ic.tc.compute_budget.cpi_bytes_per_unit,
+        ) catch std.math.maxInt(u64));
+    }
+
+    var accounts = try allocator.alloc(InstructionAccount, account_metas.len);
+    errdefer allocator.free(accounts);
+
+    for (account_metas, 0..) |account_meta, i| {
+        // NOTE: checks for bools to be 0 or 1, but why is this volatile?
+        // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L482
+        if (@as(*volatile u8, @ptrCast(&account_meta.is_signer)).* > 1 or
+            @as(*volatile u8, @ptrCast(&account_meta.is_writable)).* > 1)
+        {
+            return InstructionError.InvalidArgument;
+        }
+
+        accounts[i] = InstructionAccount{
+            .is_signer = account_meta.is_signer,
+            .is_writable = account_meta.is_writable,
+            .pubkey = switch (AccountInfoType) {
+                AccountInfoRust => account_meta.pubkey,
+                AccountInfoC => (try translateType(
+                    Pubkey,
+                    .constant,
+                    memory_map,
+                    account_meta.pubkey_addr,
+                    ic.getCheckAligned(),
+                )).*,
+            },
+        };
+    }
+
+    return Instruction{
+        .accounts = accounts,
+        .data = data,
+        .program_id = program_id,
+    };
+}
+
+// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/mod.rs#L81
+const MAX_SIGNERS = 16;
+
+fn translateSigners(
+    ic: *const InstructionContext,
+    memory_map: *const MemoryMap,
+    signers_seeds_addr: u64,
+    signers_seeds_len: u64,
+    program_id: Pubkey,
+) !std.BoundedArray(Pubkey, MAX_SIGNERS) {
+    if (signers_seeds_len == 0) return .{};
+
+    const signers_seeds: []const VmSlice = try translateSlice(
+        VmSlice,
+        .constant,
+        memory_map,
+        signers_seeds_addr,
+        signers_seeds_len,
+        ic.getCheckAligned(),
+    );
+
+    if (signers_seeds.len > MAX_SIGNERS) {
+        return SyscallError.TooManySigners;
+    }
+
+    var signers: std.BoundedArray(Pubkey, MAX_SIGNERS) = {};
+    for (signers_seeds) |signer_vm_slice| {
+        const untranslated_seeds = try translateSlice(
+            VmSlice,
+            .constant,
+            memory_map,
+            signer_vm_slice.ptr,
+            signer_vm_slice.len,
+            ic.getCheckAligned(),
+        );
+        
+        if (untranslated_seeds.len > MAX_SIGNERS) {
+            return SyscallError.TooManySigners;
+        }
+
+        var seeds: std.BoundedArray([]const u8, MAX_SIGNERS) = {};
+        for (untranslated_seeds) |seeds_vm_slice| {
+            seeds.appendAssumeCapacity(try translateSlice(
+                u8,
+                .constant,
+                memory_map,
+                seeds_vm_slice.ptr,
+                seeds_vm_slice.len,
+                ic.getCheckAligned(),
+            ));
+        }
+
+        signers.appendAssumeCapacity(pubkey_utils.createProgramAddress(
+            seeds.slice(),
+            &.{}, // NOTE: no bump seeds AFAIK
+            program_id,
+        ) catch return SyscallError.BadSeeds);
+    }
+
+    return signers;
 }
 
 const TestContext = struct {
