@@ -10,12 +10,12 @@
 //! ```zig
 //! .foo = .{
 //!     .fizz = "1",
-//!     .bar = .{
+//!     .subcmd = .{ .bar = .{
 //!         .buzz = true,
-//!         .baz = .{
+//!         .subcmd = .{ .baz = .{
 //!             .fizzbuzz = true,
-//!         },
-//!     },
+//!         } },
+//!     } },
 //! }
 //! ```
 //!
@@ -123,7 +123,9 @@ pub fn OptionInfo(comptime Opt: type) type {
     return struct {
         /// A named option will be specifiable as `--{name_override orelse field_name}(=<value>)?`,
         /// irrespective of position within the scope of the (sub)command.
-        /// A positional option
+        ///
+        /// A positional option will be specifiable as `{<value>}`, with respect to the position
+        /// it is declared relative to other positional options within the scope of the (sub)command.
         kind: enum { named, positional },
 
         /// Used to override the name displayed on the command line, or null
