@@ -19,6 +19,13 @@ pub const Pubkey = extern struct {
         return .{ .data = bytes };
     }
 
+    pub fn order(self: Pubkey, other: Pubkey) std.math.Order {
+        return for (self.data, other.data) |a_byte, b_byte| {
+            if (a_byte > b_byte) break .gt;
+            if (a_byte < b_byte) break .lt;
+        } else .eq;
+    }
+
     pub fn equals(self: *const Pubkey, other: *const Pubkey) bool {
         const xx: @Vector(SIZE, u8) = self.data;
         const yy: @Vector(SIZE, u8) = other.data;

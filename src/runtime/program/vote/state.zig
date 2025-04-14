@@ -72,6 +72,11 @@ pub const Lockout = struct {
             ),
         );
     }
+
+    pub fn eql(self: Lockout, other: Lockout) bool {
+        return self.slot == other.slot and
+            self.confirmation_count == other.confirmation_count;
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L135
@@ -108,6 +113,12 @@ pub const Vote = struct {
     hash: Hash,
     /// processing timestamp of last slot
     timestamp: ?i64,
+
+    pub const DEFAULT = Vote{
+        .slots = &[0]Slot{},
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    };
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L178
@@ -120,6 +131,15 @@ pub const VoteStateUpdate = struct {
     hash: Hash,
     /// processing timestamp of last slot
     timestamp: ?i64,
+
+    pub fn default(allocator: std.mem.Allocator) !VoteStateUpdate {
+        return .{
+            .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        };
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L232
