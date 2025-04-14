@@ -72,28 +72,6 @@ pub const Elf = struct {
                 try safeSlice(bytes, header.e_phoff, phsize),
             );
 
-            // TODO: In Agave, when loading an elf only the `eflags` are read prior to loading with
-            // the strict, or lenient parser. In Sig we currently parse the headers and the data before
-            // loading with the strict or lenient parser. This has the potential to cause a difference in
-            // logs recorded by Sig and Agave since when an elf fails to parse during deployment, the
-            // associated error is logged. For example, based on existing Sig tests the strict parser should return an
-            // InvalidProgramHeader where the lenient parser will return an OutOfBounds error as a result of
-            // the block introduced below. This issue was identified by a test vector which revealed Sig's
-            // failure to return InvalidProgramHeader when the program header virtual addresses are out
-            // of sequence during lenient parsing. The offset check is commented out for now to avoid breaking
-            // the existing strict parser tests. The difference in behavior is pretty annoying and we
-            // may need to shuffle things a little to match Agave's behavior.
-            // [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/elf.rs#L622
-            var maybe_prev_vaddr: ?elf.Elf64_Addr = null;
-            for (phdrs) |phdr| {
-                if (phdr.p_type != elf.PT_LOAD) continue;
-                if (maybe_prev_vaddr) |prev_addr| if (phdr.p_vaddr < prev_addr)
-                    return error.InvalidProgramHeader;
-                // const offset = try std.math.add(u64, phdr.p_offset, phdr.p_filesz);
-                // if (offset > bytes.len) return error.OutOfBounds;
-                maybe_prev_vaddr = phdr.p_vaddr;
-            }
-
             return .{
                 .bytes = bytes,
                 .header = header,
@@ -920,6 +898,16 @@ pub const Elf = struct {
         config: Config,
         loader: *BuiltinProgram,
     ) !Elf {
+        var maybe_prev_vaddr: ?elf.Elf64_Addr = null;
+        for (headers.phdrs) |phdr| {
+            if (phdr.p_type != elf.PT_LOAD) continue;
+            if (maybe_prev_vaddr) |prev_addr| if (phdr.p_vaddr < prev_addr)
+                return error.InvalidProgramHeader;
+            const offset = try std.math.add(u64, phdr.p_offset, phdr.p_filesz);
+            if (offset > bytes.len) return error.OutOfBounds;
+            maybe_prev_vaddr = phdr.p_vaddr;
+        }
+
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
         const offset = headers.header.e_entry -| text_section.sh_addr;
