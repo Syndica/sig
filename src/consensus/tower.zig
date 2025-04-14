@@ -1204,6 +1204,7 @@ pub const Tower = struct {
                 }
 
                 try self.adjustLockoutsWithSlotHistory(
+                    allocator,
                     slot_history,
                 );
                 self.initializeRoot(replayed_root);
@@ -1224,7 +1225,7 @@ pub const Tower = struct {
                 // and retaining all of future votes correctly while sanitizing.
                 warped_slot_history.add(tower_root);
 
-                try self.adjustLockoutsWithSlotHistory(&warped_slot_history);
+                try self.adjustLockoutsWithSlotHistory(allocator, &warped_slot_history);
                 // don't update root; future tower's root should be kept across validator
                 // restarts to continue to show the scary messages at restarts until the next
                 // voting.
@@ -1239,13 +1240,126 @@ pub const Tower = struct {
         return self.*;
     }
 
+    // TODO revisit
     fn adjustLockoutsWithSlotHistory(
         self: *Tower,
+        allocator: std.mem.Allocator,
         slot_history: *const SlotHistory,
     ) !void {
-        _ = self;
-        _ = slot_history;
-        @panic("unimplimented");
+        const tower_root = self.getRoot();
+        // retained slots will be consisted only from divergent slots
+        var retain_flags_for_each_vote_in_reverse = try std.ArrayList(bool).initCapacity(
+            allocator,
+            self.vote_state.votes.items.len,
+        );
+        defer retain_flags_for_each_vote_in_reverse.deinit();
+
+        var still_in_future = true;
+        var past_outside_history = false;
+        var maybe_checked_slot: ?Slot = null;
+        var maybe_anchored_slot: ?Slot = null;
+
+        var slots_in_tower = std.ArrayList(Slot).init(allocator);
+        defer slots_in_tower.deinit();
+        try slots_in_tower.append(tower_root);
+        try slots_in_tower.appendSlice(try self.votedSlots(allocator));
+
+        // iterate over votes + root (if any) in the newest => oldest order
+        // bail out early if bad condition is found
+        var iter = std.mem.reverseIterator(slots_in_tower.items);
+        while (iter.next()) |slot_in_tower| {
+            const check = slot_history.check(slot_in_tower);
+
+            if (maybe_anchored_slot == null and check == Check.found) {
+                maybe_anchored_slot = slot_in_tower;
+            } else if (maybe_anchored_slot != null and check == Check.not_found) {
+                // this can't happen unless we're fed with bogus snapshot
+                // TODO Agave returns error with data.
+                return TowerError.FatallyInconsistent;
+            }
+
+            if (still_in_future and check != Check.future) {
+                still_in_future = false;
+            } else if (!still_in_future and check == Check.future) {
+                // really odd cases: bad ordered votes?
+                // TODO Agave returns error with data.
+                return TowerError.FatallyInconsistent;
+            }
+
+            if (!past_outside_history and check == Check.too_old) {
+                past_outside_history = true;
+            } else if (past_outside_history and check != Check.too_old) {
+                // really odd cases: bad ordered votes?
+                // TODO Agave returns error with data.
+                return TowerError.FatallyInconsistent;
+            }
+
+            if (maybe_checked_slot) |checked_slot| {
+                // This is really special, only if tower is initialized and contains
+                // a vote for the root, the root slot can repeat only once
+                const voting_for_root = slot_in_tower == checked_slot and
+                    slot_in_tower == tower_root;
+
+                if (!voting_for_root) {
+                    // Unless we're voting since genesis, slots_in_tower must always be older than last checked_slot
+                    // including all vote slot and the root slot.
+                    std.debug.assert(slot_in_tower < checked_slot);
+                }
+            }
+
+            maybe_checked_slot = slot_in_tower;
+            try retain_flags_for_each_vote_in_reverse.append(maybe_anchored_slot == null);
+        }
+
+        // Check for errors if not anchored
+        if (maybe_anchored_slot == null) {
+            // this error really shouldn't happen unless ledger/tower is corrupted
+            // TODO Agave returns error with data.
+            return TowerError.FatallyInconsistent;
+        }
+
+        std.debug.assert(
+            slots_in_tower.items.len == retain_flags_for_each_vote_in_reverse.items.len,
+        );
+
+        // pop for the tower root
+        _ = retain_flags_for_each_vote_in_reverse.pop();
+        var retain_flags_for_each_vote = std.mem.reverseIterator(
+            retain_flags_for_each_vote_in_reverse.items,
+        );
+
+        var reversed_flags = std.ArrayList(bool).init(allocator);
+        defer reversed_flags.deinit();
+
+        for (retain_flags_for_each_vote_in_reverse.items) |flag| {
+            try reversed_flags.insert(0, flag);
+        }
+
+        var flags = try std.DynamicBitSetUnmanaged.initEmpty(
+            allocator,
+            retain_flags_for_each_vote_in_reverse.items.len,
+        );
+        defer flags.deinit(allocator);
+
+        var i: usize = 0;
+        while (retain_flags_for_each_vote.next()) |flag| {
+            flags.setValue(i, flag);
+            i += 1;
+        }
+
+        self.initializeLockouts(flags);
+
+        if (self.vote_state.votes.items.len == 0) {
+            // we might not have banks for those votes so just reset.
+            // That's because the votes may well past replayed_root
+            self.last_vote = VoteTransaction{ .vote = Vote.DEFAULT };
+        } else {
+            const voted_slots = try self.votedSlots(allocator);
+            std.debug.assert(self.lastVotedSlot().? == voted_slots[voted_slots.len - 1]);
+            self.stray_restored_slot = self.last_vote.lastVotedSlot();
+        }
+
+        return;
     }
 
     fn initializeLockoutsFromBank(
@@ -1261,13 +1375,28 @@ pub const Tower = struct {
         @panic("unimplimented");
     }
 
+    // TODO Revisit the closure pattern
+    // fn initializeLockouts(
+    //     self: *Tower,
+    //     should_retain: fn (Lockout) ?bool,
+    // ) void {
+    //     for (self.vote_state.votes, 0..) |vote, i| {
+    //         if (!should_retain(vote)) {
+    //             self.vote_state.votes.orderedRemove(i);
+    //         }
+    //     }
+    // }
+
     fn initializeLockouts(
         self: *Tower,
-        should_retain: fn (Lockout) ?bool,
+        should_retain: std.DynamicBitSetUnmanaged,
     ) void {
-        for (self.vote_state.votes, 0..) |vote, i| {
-            if (!should_retain(vote)) {
-                self.vote_state.votes.orderedRemove(i);
+        var i: usize = 0;
+        while (i < self.vote_state.votes.items.len) {
+            if (!should_retain.isSet(i)) {
+                _ = self.vote_state.votes.orderedRemove(i);
+            } else {
+                i += 1;
             }
         }
     }
