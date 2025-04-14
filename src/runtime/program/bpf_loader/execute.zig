@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
@@ -2875,7 +2876,7 @@ fn createValidProgramData(
     state_size: usize,
     additional_bytes: usize,
 ) ![]u8 {
-    if (!@import("builtin").is_test)
+    if (!builtin.is_test)
         @compileError("createValidProgramData should only be used in tests");
 
     const elf_bytes = try std.fs.cwd().readFileAlloc(
