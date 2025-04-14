@@ -761,6 +761,33 @@ pub const ForkChoice = struct {
         return fork_info.isCandidate();
     }
 
+    /// Returns if a node with slot `maybe_ancestor_slot` is an ancestor of the node with
+    /// key `node_key`
+    pub fn isStrictAncestor(
+        self: *const ForkChoice,
+        maybe_ancestor_key: *const SlotAndHash,
+        node_key: *const SlotAndHash,
+    ) bool {
+        if (maybe_ancestor_key == node_key) {
+            return false;
+        }
+
+        if (maybe_ancestor_key.slot > node_key.slot) {
+            return false;
+        }
+        // TODO Is this idiomatic/correct?
+        var self_copy = self.*;
+        var ancestor_iterator = self_copy.ancestorIterator(node_key.*);
+        while (ancestor_iterator.next()) |ancenstor| {
+            if (ancenstor.slot == maybe_ancestor_key.slot and
+                ancenstor.hash.eql(maybe_ancestor_key.hash))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/tree_diff.rs#L12
     ///
     /// Find all nodes reachable from `root1`, excluding subtree at `root2`

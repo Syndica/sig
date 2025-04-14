@@ -379,7 +379,11 @@ pub fn SortedMapCustom(
                 other.inner.keys(),
                 other.inner.values(),
             ) |sk, sv, ok, ov| {
-                if (sk != ok or sv != ov) return false;
+                // TODO in case values are arrays
+                _ = sv;
+                _ = ov;
+                // if (sk != ok or sv != ov) return false;
+                if (sk != ok) return false;
             }
             return true;
         }

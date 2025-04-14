@@ -1,3 +1,6 @@
+// TODO
+// - Use sortedset
+//
 const std = @import("std");
 const sig = @import("../sig.zig");
 
@@ -19,6 +22,7 @@ const SlotAndHash = sig.core.hash.SlotAndHash;
 const Bank = sig.accounts_db.Bank;
 const SortedMap = sig.utils.collections.SortedMap;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const SortedSet = sig.utils.collections.SortedSet;
 
 const UnixTimestamp = i64;
 
@@ -75,10 +79,8 @@ pub const VoteTransaction = union(enum) {
     pub fn isEmpty(self: *const VoteTransaction) bool {
         return switch (self.*) {
             .vote => |vote| vote.slots.len == 0,
-            // zig fmt: off
-            .vote_state_update,
-            .compact_vote_state_update => |vote_state_update|
-              vote_state_update.lockouts.items.len == 0,
+            .vote_state_update, .compact_vote_state_update => |vote_state_update| vote_state_update
+                .lockouts.items.len == 0,
             .tower_sync => |tower_sync| tower_sync.lockouts.items.len == 0,
         };
     }
@@ -86,10 +88,8 @@ pub const VoteTransaction = union(enum) {
     pub fn slot(self: *const VoteTransaction, i: usize) Slot {
         return switch (self.*) {
             .vote => |vote| vote.slots[i],
-            // zig fmt: off
-            .vote_state_update,
-            .compact_vote_state_update => |vote_state_update|
-              vote_state_update.lockouts.items[i].slot,
+            .vote_state_update, .compact_vote_state_update => |vote_state_update| vote_state_update
+                .lockouts.items[i].slot,
             .tower_sync => |tower_sync| tower_sync.lockouts.items[i].slot,
         };
     }
@@ -97,10 +97,8 @@ pub const VoteTransaction = union(enum) {
     pub fn len(self: *const VoteTransaction) usize {
         return switch (self.*) {
             .vote => |vote| vote.slots.len,
-            // zig fmt: off
-            .vote_state_update,
-            .compact_vote_state_update => |vote_state_update|
-              vote_state_update.lockouts.items.len,
+            .vote_state_update, .compact_vote_state_update => |vote_state_update| vote_state_update
+                .lockouts.items.len,
             .tower_sync => |tower_sync| tower_sync.lockouts.items.len,
         };
     }
@@ -108,26 +106,115 @@ pub const VoteTransaction = union(enum) {
     pub fn hash(self: *const VoteTransaction) Hash {
         return switch (self.*) {
             .vote => |vote| vote.hash,
-            // zig fmt: off
-            .vote_state_update,
-            .compact_vote_state_update => |vote_state_update| vote_state_update.hash,
+            .vote_state_update, .compact_vote_state_update => |vote_state_update| vote_state_update
+                .hash,
             .tower_sync => |tower_sync| tower_sync.hash,
+        };
+    }
+
+    pub fn eql(self: *const VoteTransaction, other: *const VoteTransaction) bool {
+        // TODO implement
+        _ = self;
+        _ = other;
+        return true;
+    }
+};
+
+pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+
+// TODO this is defined in a different crate in Agave
+//
+pub const Check = enum {
+    future,
+    too_old,
+    found,
+    not_found,
+};
+
+pub const SlotHistory = struct {
+    bits: std.DynamicBitSet,
+    next_slot: u64,
+
+    pub fn deinit(self: *SlotHistory) void {
+        self.bits.deinit();
+    }
+    pub fn add(self: *SlotHistory, slot: u64) void {
+        if (slot > self.next_slot and
+            slot - self.next_slot >= MAX_ENTRIES)
+        {
+            // Wrapped past current history,
+            // clear entire bitvec.
+            const full_blocks = @as(usize, MAX_ENTRIES) / 64;
+            for (0..full_blocks) |i| {
+                self.bits.unset(i);
+            }
+        } else {
+            for (self.next_slot..slot) |skipped| {
+                self.bits.unset(skipped % MAX_ENTRIES);
+            }
+        }
+
+        self.bits.set(slot % MAX_ENTRIES);
+        self.next_slot = slot + 1;
+    }
+
+    pub fn check(self: *const SlotHistory, slot: u64) Check {
+        if (slot > self.newest()) {
+            return Check.future;
+        } else if (slot < self.oldest()) {
+            return Check.too_old;
+        } else if (self.bits.isSet(slot % MAX_ENTRIES)) {
+            return Check.found;
+        } else {
+            return Check.not_found;
+        }
+    }
+
+    pub fn oldest(self: *const SlotHistory) u64 {
+        return self.next_slot -| MAX_ENTRIES;
+    }
+
+    pub fn newest(self: *const SlotHistory) u64 {
+        return self.next_slot - 1;
+    }
+
+    pub fn clone(
+        self: *const SlotHistory,
+        allocator: std.mem.Allocator,
+    ) !SlotHistory {
+        return SlotHistory{
+            .bits = try self.bits.clone(allocator),
+            .next_slot = self.next_slot,
         };
     }
 };
 
-// TODO this is defined in a different crate in Agave
-pub const SlotHistory = struct {
-    bits: std.DynamicBitSet,
-    next_slot: u64,
+pub const ForkStats = struct {
+    computed: bool,
+    lockout_intervals: LockoutIntervals,
 };
 
+pub const ForkProgress = struct {
+    fork_stats: ForkStats,
+};
 // TODO Needs to be implemented and moved out of the tower.zig
-pub const LatestValidatorVotesForFrozenBanks = struct {};
+pub const LatestValidatorVotesForFrozenBanks = struct {
+    max_gossip_frozen_votes: std.AutoHashMap(Pubkey, struct { slot: Slot, hashes: []Hash }),
+};
 pub const VoteAccount = struct {};
-pub const ProgressMap = struct {};
+pub const ProgressMap = struct {
+    progress_map: std.AutoHashMap(Slot, ForkProgress),
+    pub fn getHash(_: ProgressMap, _: Slot) ?Hash {
+        @panic("Unimplemented");
+    }
+    pub fn getForkStats(_: ProgressMap, _: Slot) ?ForkStats {
+        @panic("Unimplemented");
+    }
+};
 
-pub const VoteAccountsHashMap = std.AutoHashMap(Pubkey, struct { u64, VoteAccount });
+pub const StakedAccount = struct { stake: u64, account: VoteAccount };
+
+pub const VoteAccountsHashMap = std.AutoHashMap(Pubkey, StakedAccount);
 
 const SwitchForkDecision = union(enum) {
     switch_proof: Hash,
@@ -141,14 +228,14 @@ const SwitchForkDecision = union(enum) {
     failed_switch_duplicate_rollback: Slot,
 };
 
+const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
 
 pub const Stake = u64;
 pub const ExpirationSlot = Slot;
 pub const VotedSlot = Slot;
 pub const VotedStakes = AutoHashMap(Slot, Stake);
-// pub const LockoutIntervals = SortedMap(ExpirationSlot, std.ArrayList(struct { VotedSlot, Pubkey }));
-// TODO modify SortedMap to allow array in value
-pub const LockoutIntervals = SortedMap(ExpirationSlot, VotedSlot);
+// TODO modify SortedMap to allow array in value - support eq
+pub const LockoutIntervals = SortedMap(ExpirationSlot, std.ArrayList(VotedSlotAndPubkey));
 
 const ComputedBankState = struct {
     voted_stakes: VotedStakes,
@@ -192,11 +279,24 @@ const TowerVoteState = struct {
         return self.lastLockout().?.slot;
     }
 
-    pub fn clone(self: TowerVoteState, allocator: std.mem.Allocator,) error{OutOfMemory}!TowerVoteState {
+    pub fn clone(
+        self: TowerVoteState,
+        allocator: std.mem.Allocator,
+    ) (error{OutOfMemory})!TowerVoteState {
         return .{ .votes = try self.votes.clone(allocator), .root_slot = self.root_slot };
     }
 
-    pub fn processNextVoteSlot(self: *TowerVoteState, allocator: std.mem.Allocator, next_vote_slot: Slot) !void {
+    pub fn nthRecentLockout(self: *const TowerVoteState, position: usize) ?*const Lockout {
+        const pos = std.math.add(usize, self.votes.items.len, position +| 1) catch
+            return null;
+        return &self.votes.items[pos];
+    }
+
+    pub fn processNextVoteSlot(
+        self: *TowerVoteState,
+        allocator: std.mem.Allocator,
+        next_vote_slot: Slot,
+    ) !void {
         // Ignore votes for slots earlier than we already have votes for
         if (self.lastVotedSlot()) |last_voted_slot| {
             if (next_vote_slot <= last_voted_slot) {
@@ -258,7 +358,29 @@ const BlockhashStatus = union(enum) {
     /// Successfully generated vote tx with blockhash
     blockhash: Hash,
 
-    pub const DEFAULT = BlockhashStatus{.uninitialized = {}};
+    pub const DEFAULT = BlockhashStatus{ .uninitialized = {} };
+};
+
+// pub const TowerError = union(enum) {
+//     // TODO add io err
+//     io_error,
+//     // TODO add bincode
+//     serialize_error,
+//     invalid_signature,
+//     wrong_tower: []const u8,
+//     too_old_tower: struct { Slot, Slot },
+//     fatally_inconsistent: []const u8,
+//     hard_fork: Slot,
+// };
+
+pub const TowerError = error{
+    IoError,
+    SerializeError,
+    InvalidSignature,
+    WrongTower,
+    TooOldTower,
+    FatallyInconsistent,
+    HardFork,
 };
 
 pub const Tower = struct {
@@ -363,15 +485,15 @@ pub const Tower = struct {
         self: *Tower,
         new_vote_tx_blockhash: Hash,
     ) void {
-        self.last_vote_tx_blockhash = BlockhashStatus{ .blockhash = new_vote_tx_blockhash};
+        self.last_vote_tx_blockhash = BlockhashStatus{ .blockhash = new_vote_tx_blockhash };
     }
 
     pub fn markLastVoteTxBlockhashNonVoting(self: *Tower) void {
-        self.last_vote_tx_blockhash = BlockhashStatus{.non_voting = {}};
+        self.last_vote_tx_blockhash = BlockhashStatus{ .non_voting = {} };
     }
 
     pub fn markLastVoteTxBlockhashHotSpare(self: *Tower) void {
-        self.last_vote_tx_blockhash = BlockhashStatus{.hot_spare = {}};
+        self.last_vote_tx_blockhash = BlockhashStatus{ .hot_spare = {} };
     }
 
     pub fn recordBankVote(self: *Tower, bank: *const Bank) ?Slot {
@@ -430,12 +552,12 @@ pub const Tower = struct {
             }
         }
 
-        const old_root = self.root();
+        const old_root = self.getRoot();
 
         try self.vote_state.processNextVoteSlot(vote_slot);
         try self.updateLastVoteFromVoteState(vote_hash, enable_tower_sync_ix, block_id);
 
-        const new_root = self.root();
+        const new_root = self.getRoot();
 
         if (old_root != new_root) {
             return new_root;
@@ -483,7 +605,7 @@ pub const Tower = struct {
     // which establishes the origin of trust (i.e. root) whether booting from genesis (slot 0) or
     // snapshot (slot N). In other words, there should be no possibility a Tower doesn't have
     // root, unlike young vote accounts.
-    pub fn root(self: *const Tower) Slot {
+    pub fn getRoot(self: *const Tower) Slot {
         // TODO this is an unwrap in agave. Guess this is fine?
         return self.vote_state.root_slot.?;
     }
@@ -516,7 +638,7 @@ pub const Tower = struct {
         self: *const Tower,
         allocator: std.mem.Allocator,
         slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, void),
+        ancestors: *const SortedSet(Slot),
     ) !bool {
         if (!self.isRecent(slot)) {
             return true;
@@ -554,62 +676,415 @@ pub const Tower = struct {
         candidate_slot: Slot,
         last_voted_slot: Slot,
         switch_slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
-        last_vote_ancestors: *const std.AutoHashMap(Slot, void),
+        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        last_vote_ancestors: *const SortedSet(Slot),
     ) ?bool {
-        _ = self;
-        _ = candidate_slot;
-        _ = last_voted_slot;
-        _ = switch_slot;
-        _ = ancestors;
-        _ = last_vote_ancestors;
-        @panic("unimplimented");
+
+        // Ignore if the `candidate_slot` is a descendant of the `last_voted_slot`, since we do not
+        // want to count votes on the same fork.
+        if (Tower.isDescendantSlot(
+            candidate_slot,
+            last_voted_slot,
+            ancestors,
+        ) orelse return null) {
+            return false;
+        }
+
+        if (last_vote_ancestors.count() == 0) {
+            // If `last_vote_ancestors` is empty, this means we must have a last vote that is stray. If the `last_voted_slot`
+            // is stray, it must be descended from some earlier root than the latest root (the anchor at startup).
+            // The above check also guarentees that the candidate slot is not a descendant of this stray last vote.
+            //
+            // This gives us a fork graph:
+            //     / ------------- stray `last_voted_slot`
+            // old root
+            //     \- latest root (anchor) - ... - candidate slot
+            //                                \- switch slot
+            //
+            // Thus the common acnestor of `last_voted_slot` and `candidate_slot` is `old_root`, which the `switch_slot`
+            // descends from. Thus it is safe to use `candidate_slot` in the switching proof.
+            //
+            // Note: the calling function should have already panicked if we do not have ancestors and the last vote is not stray.
+            std.debug.assert(self.isStrayLastVote());
+            return true;
+        }
+
+        // Only consider forks that split at the common_ancestor of `switch_slot` and `last_voted_slot` or earlier.
+        // This is to prevent situations like this from being included in the switching proof:
+        //
+        //         /-- `last_voted_slot`
+        //     /--Y
+        //    X    \-- `candidate_slot`
+        //     \-- `switch_slot`
+        //
+        // The common ancestor of `last_voted_slot` and `switch_slot` is `X`. Votes for the `candidate_slot`
+        // should not count towards the switch proof since `candidate_slot` is "on the same fork" as `last_voted_slot`
+        // in relation to `switch_slot`.
+        // However these candidate slots should be allowed:
+        //
+        //             /-- Y -- `last_voted_slot`
+        //    V - W - X
+        //        \    \-- `candidate_slot` -- `switch_slot`
+        //         \    \-- `candidate_slot`
+        //          \-- `candidate_slot`
+        //
+        // As the `candidate_slot`s forked off from `X` or earlier.
+        //
+        // To differentiate, we check the common ancestor of `last_voted_slot` and `candidate_slot`.
+        // If the `switch_slot` descends from this ancestor, then the vote for `candidate_slot` can be included.
+        if (Tower.greatestCommonAncestor(ancestors, candidate_slot, last_voted_slot)) |ancestor| {
+            return Tower.isDescendantSlot(switch_slot, ancestor, ancestors);
+        }
+
+        return null;
     }
 
-    fn make_check_switch_threshold_decision(
+    pub fn makeCheckSwitchThresholdDecision(
         self: *const Tower,
+        allocator: std.mem.Allocator,
         switch_slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
-        descendants: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
+        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        descendants: *const std.AutoHashMap(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const VoteAccountsHashMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         heaviest_subtree_fork_choice: *const HeaviestSubtreeForkChoice,
-    ) SwitchForkDecision {
-        _ = self;
-        _ = switch_slot;
-        _ = ancestors;
-        _ = descendants;
-        _ = progress;
-        _ = total_stake;
-        _ = epoch_vote_accounts;
-        _ = latest_validator_votes_for_frozen_banks;
-        _ = heaviest_subtree_fork_choice;
-        @panic("unimplimented");
+    ) !SwitchForkDecision {
+        const last_voted = self.lastVotedSlotHash() orelse return SwitchForkDecision.same_fork;
+        const last_voted_slot = last_voted.slot;
+        const last_voted_hash = last_voted.hash;
+        const root = self.getRoot();
+
+        // `heaviest_subtree_fork_choice` entries are not cleaned by duplicate block purging/rollback logic,
+        // so this is safe to check here. We return here if the last voted slot was rolled back/purged due to
+        // being a duplicate because `ancestors`/`descendants`/`progress` structures may be missing this slot due
+        // to duplicate purging. This would cause many of the `unwrap()` checks below to fail.
+        //
+        // TODO: Handle if the last vote is on a dupe, and then we restart. The dupe won't be in
+        // heaviest_subtree_fork_choice, so `heaviest_subtree_fork_choice.latest_invalid_ancestor()` will return
+        // None, but the last vote will be persisted in tower.
+        const switch_hash = progress.getHash(switch_slot).?;
+        if (heaviest_subtree_fork_choice.latestDuplicateAncestor(
+            SlotAndHash{ .slot = last_voted_slot, .hash = last_voted_hash },
+        )) |latest_duplicate_ancestor| {
+            // We're rolling back because one of the ancestors of the last vote was a duplicate. In this
+            // case, it's acceptable if the switch candidate is one of ancestors of the previous vote,
+            // just fail the switch check because there's no point in voting on an ancestor. ReplayStage
+            // should then have a special case continue building an alternate fork from this ancestor, NOT
+            // the `last_voted_slot`. This is in contrast to usual SwitchFailure where ReplayStage continues to build blocks
+            // on latest vote. See `ReplayStage::select_vote_and_reset_forks()` for more details.
+            if (heaviest_subtree_fork_choice.isStrictAncestor(&.{
+                .slot = switch_slot,
+                .hash = switch_hash,
+            }, &.{
+                .slot = last_voted_slot,
+                .hash = last_voted_hash,
+            })) {
+                return SwitchForkDecision{
+                    .failed_switch_duplicate_rollback = latest_duplicate_ancestor,
+                };
+            } else {
+                const is_switch = if (progress.getHash(last_voted_slot)) |current_slot_hash|
+                    !current_slot_hash.eql(last_voted_hash)
+                else
+                    true;
+
+                if (is_switch) {
+                    // Our last vote slot was purged because it was on a duplicate fork, don't continue below
+                    // where checks may panic. We allow a freebie vote here that may violate switching
+                    // thresholds
+                    // TODO: Properly handle this case
+                    return SwitchForkDecision{ .switch_proof = Hash.ZEROES };
+                }
+            }
+        }
+
+        const last_vote_ancestors = (ancestors.get(last_voted_slot)) orelse blk: {
+            if (self.isStrayLastVote()) {
+                // Unless last vote is stray and stale, ancestors.get(last_voted_slot) must
+                // return Some(_), justifying to panic! here.
+                // Also, adjust_lockouts_after_replay() correctly makes last_voted_slot None,
+                // if all saved votes are ancestors of replayed_root_slot. So this code shouldn't be
+                // touched in that case as well.
+                // In other words, except being stray, all other slots have been voted on while
+                // this validator has been running, so we must be able to fetch ancestors for
+                // all of them.
+                // --
+                // This condition (stale stray last vote) shouldn't occur under normal validator
+                // operation, indicating something unusual happened.
+                // This condition could be introduced by manual ledger mishandling,
+                // validator SEGV, OS/HW crash, or plain No Free Space FS error.
+
+                // However, returning empty ancestors as a fallback here shouldn't result in
+                // slashing by itself (Note that we couldn't fully preclude any kind of slashing if
+                // the failure was OS or HW level).
+
+                // Firstly, lockout is ensured elsewhere.
+
+                // Also, there is no risk of optimistic conf. violation. Although empty ancestors
+                // could result in incorrect (= more than actual) locked_out_stake and
+                // false-positive SwitchProof later in this function, there should be no such a
+                // heavier fork candidate, first of all, if the last vote (or any of its
+                // unavailable ancestors) were already optimistically confirmed.
+                // The only exception is that other validator is already violating it...
+
+                if (self.isFirstSwitchCheck() and switch_slot < last_voted_slot) {
+                    // `switch < last` is needed not to warn! this message just because of using
+                    // newer snapshots on validator restart
+                    // TODO replicate the logs
+                }
+                break :blk SortedSet(u64).init(allocator);
+            } else @panic("TODO");
+        };
+
+        // TODO can error handling be improved here
+        const switch_slot_ancestors = ancestors.get(switch_slot).?;
+
+        if (switch_slot == last_voted_slot or switch_slot_ancestors.contains(last_voted_slot)) {
+            // If the `switch_slot is a descendant of the last vote,
+            // no switching proof is necessary
+            return SwitchForkDecision{ .same_fork = {} };
+        }
+
+        if (last_vote_ancestors.contains(switch_slot)) {
+            if (self.isStrayLastVote()) {
+                // This peculiar corner handling is needed mainly for a tower which is newer than
+                // blockstore. (Yeah, we tolerate it for ease of maintaining validator by operators)
+                // This condition could be introduced by manual ledger mishandling,
+                // validator SEGV, OS/HW crash, or plain No Free Space FS error.
+
+                // When we're in this clause, it basically means validator is badly running
+                // with a future tower while replaying past slots, especially problematic is
+                // last_voted_slot.
+                // So, don't re-vote on it by returning pseudo FailedSwitchThreshold, otherwise
+                // there would be slashing because of double vote on one of last_vote_ancestors.
+                // (Well, needless to say, re-creating the duplicate block must be handled properly
+                // at the banking stage: https://github.com/solana-labs/solana/issues/8232)
+                //
+                // To be specific, the replay stage is tricked into a false perception where
+                // last_vote_ancestors is AVAILABLE for descendant-of-`switch_slot`,  stale, and
+                // stray slots (which should always be empty_ancestors).
+                //
+                // This is covered by test_future_tower_* in local_cluster
+                return SwitchForkDecision{ .failed_switch_threshold = .{ 0, total_stake } };
+            } else {
+                @panic("TODO add message");
+            }
+        }
+
+        // By this point, we know the `switch_slot` is on a different fork
+        // (is neither an ancestor nor descendant of `last_vote`), so a
+        // switching proof is necessary
+        const switch_proof = Hash.ZEROES;
+        var locked_out_stake: u64 = 0;
+        var locked_out_vote_accounts = SortedSet(Pubkey).init(allocator);
+        var iterator = descendants.iterator();
+        while (iterator.next()) |descendant| {
+            const candidate_slot = descendant.key_ptr.*;
+            var candidate_descendants = descendant.value_ptr.*;
+            // 1) Don't consider any banks that haven't been frozen yet
+            //    because the needed stats are unavailable
+            // 2) Only consider lockouts at the latest `frozen` bank
+            //    on each fork, as that bank will contain all the
+            //    lockout intervals for ancestors on that fork as well.
+            // 3) Don't consider lockouts on the `last_vote` itself
+            // 4) Don't consider lockouts on any descendants of
+            //    `last_vote`
+            // 5) Don't consider any banks before the root because
+            //    all lockouts must be ancestors of `last_vote`
+            const is_progress_computed = if (progress.getForkStats(candidate_slot)) |stats|
+                stats.computed
+            else
+                false;
+
+            // If any of the descendants have the `computed` flag set, then there must be a more
+            // recent frozen bank on this fork to use, so we can ignore this one. Otherwise,
+            // even if this bank has descendants, if they have not yet been frozen / stats computed,
+            // then use this bank as a representative for the fork.
+            const is_descendant_computed = if (!is_progress_computed) blk: {
+                break :blk for (candidate_descendants.items()) |d| {
+                    if (progress.getForkStats(d)) |stats|
+                        break stats.computed
+                    else
+                        break false;
+                } else false;
+            } else is_progress_computed;
+
+            const is_candidate_eq_last_voted_slot = if (!is_descendant_computed)
+                (candidate_slot == last_voted_slot)
+            else
+                is_descendant_computed;
+
+            const is_candidate_less_eq_root = if (!is_candidate_eq_last_voted_slot)
+                (candidate_slot <= root)
+            else
+                is_candidate_eq_last_voted_slot;
+
+            const is_valid_switch = if (!is_candidate_less_eq_root)
+                self.isValidSwitchingProofVote(
+                    candidate_slot,
+                    last_voted_slot,
+                    switch_slot,
+                    ancestors,
+                    &last_vote_ancestors,
+                ).?
+            else
+                is_candidate_less_eq_root;
+
+            if (!is_valid_switch) {
+                continue;
+            }
+
+            // By the time we reach here, any ancestors of the `last_vote`,
+            // should have been filtered out, as they all have a descendant,
+            // namely the `last_vote` itself.
+            std.debug.assert(!last_vote_ancestors.contains(candidate_slot));
+            // Evaluate which vote accounts in the bank are locked out
+            // in the interval candidate_slot..last_vote, which means
+            // finding any lockout intervals in the `lockout_intervals` tree
+            // for this bank that contain `last_vote`.
+
+            var lockout_intervals = progress
+                .progress_map
+                .get(candidate_slot).?
+                .fork_stats
+                .lockout_intervals;
+
+            // Find any locked out intervals for vote accounts in this bank with
+            // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
+            // `last_vote` on another fork.
+            _, const intervals_keyed_by_end = lockout_intervals.range(last_voted_slot, null);
+            for (intervals_keyed_by_end) |interval_keyed_by_end| {
+                for (interval_keyed_by_end.items) |vote_account| {
+                    if (locked_out_vote_accounts.contains(vote_account.pubkey)) {
+                        continue;
+                    }
+                    // Only count lockouts on slots that are:
+                    // 1) Not ancestors of `last_vote`, meaning being on different fork
+                    // 2) Not from before the current root as we can't determine if
+                    // anything before the root was an ancestor of `last_vote` or not
+                    if (!last_vote_ancestors.contains(vote_account.slot) and (
+                    // Given a `lockout_interval_start` < root that appears in a
+                    // bank for a `candidate_slot`, it must be that `lockout_interval_start`
+                    // is an ancestor of the current root, because `candidate_slot` is a
+                    // descendant of the current root
+                        vote_account.slot > root))
+                    {
+                        const stake =
+                            if (epoch_vote_accounts.get(vote_account.pubkey)) |staked_account|
+                            staked_account.stake
+                        else
+                            0;
+                        locked_out_stake += stake;
+
+                        if (@as(f64, @floatFromInt(locked_out_stake)) / @as(
+                            f64,
+                            @floatFromInt(total_stake),
+                        ) > SWITCH_FORK_THRESHOLD) {
+                            return SwitchForkDecision{ .switch_proof = switch_proof };
+                        }
+                        try locked_out_vote_accounts.put(vote_account.pubkey);
+                    }
+                }
+            }
+        }
+        // Check the latest votes for potentially gossip votes that haven't landed yet
+        var gossip_votes_iter = latest_validator_votes_for_frozen_banks
+            .max_gossip_frozen_votes
+            .iterator();
+
+        while (gossip_votes_iter.next()) |entry| {
+            const vote_account_pubkey = entry.key_ptr.*;
+            const candidate_latest_frozen_vote = entry.value_ptr.*.slot;
+
+            if (locked_out_vote_accounts.contains(vote_account_pubkey)) {
+                continue;
+            }
+
+            if (candidate_latest_frozen_vote > last_voted_slot) {
+                // Because `candidate_latest_frozen_vote` is the last vote made by some validator
+                // in the cluster for a frozen bank `B` observed through gossip, we may have cleared
+                // that frozen bank `B` because we `set_root(root)` for a `root` on a different fork,
+                // like so:
+                //
+                //    |----------X ------candidate_latest_frozen_vote (frozen)
+                // old root
+                //    |----------new root ----last_voted_slot
+                //
+                // In most cases, because `last_voted_slot` must be a descendant of `root`, then
+                // if `candidate_latest_frozen_vote` is not found in the ancestors/descendants map (recall these
+                // directly reflect the state of BankForks), this implies that `B` was pruned from BankForks
+                // because it was on a different fork than `last_voted_slot`, and thus this vote for `candidate_latest_frozen_vote`
+                // should be safe to count towards the switching proof:
+                //
+                // However, there is also the possibility that `last_voted_slot` is a stray, in which
+                // case we cannot make this conclusion as we do not know the ancestors/descendants
+                // of strays. Hence we err on the side of caution here and ignore this vote. This
+                // is ok because validators voting on different unrooted forks should eventually vote
+                // on some descendant of the root, at which time they can be included in switching proofs.
+                const is_valid = self.isValidSwitchingProofVote(
+                    candidate_latest_frozen_vote,
+                    last_voted_slot,
+                    switch_slot,
+                    ancestors,
+                    &last_vote_ancestors,
+                ) orelse false;
+
+                if (is_valid) {
+                    const stake_entry = epoch_vote_accounts.get(vote_account_pubkey);
+                    const stake = if (stake_entry) |entry_stake| entry_stake.stake else 0;
+                    locked_out_stake += stake;
+
+                    const stake_ratio = @as(f64, @floatFromInt(locked_out_stake)) /
+                        @as(f64, @floatFromInt(total_stake));
+                    if (stake_ratio > SWITCH_FORK_THRESHOLD) {
+                        return SwitchForkDecision{
+                            .switch_proof = switch_proof,
+                        };
+                    }
+
+                    locked_out_vote_accounts.put(vote_account_pubkey) catch unreachable;
+                }
+            }
+        }
+        // We have not detected sufficient lockout past the last voted slot to generate
+        // a switching proof
+        return SwitchForkDecision{ .failed_switch_threshold = .{ locked_out_stake, total_stake } };
     }
 
     pub fn checkSwitchThreshold(
         self: *Tower,
+        allocator: std.mem.Allocator,
         switch_slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
-        descendants: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
+        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        descendants: *const std.AutoHashMap(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const VoteAccountsHashMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         heaviest_subtree_fork_choice: *const HeaviestSubtreeForkChoice,
-    ) SwitchForkDecision {
-        _ = self;
-        _ = switch_slot;
-        _ = ancestors;
-        _ = descendants;
-        _ = progress;
-        _ = total_stake;
-        _ = epoch_vote_accounts;
-        _ = latest_validator_votes_for_frozen_banks;
-        _ = heaviest_subtree_fork_choice;
-        @panic("unimplimented");
+    ) !SwitchForkDecision {
+        const decision = try self.makeCheckSwitchThresholdDecision(
+            allocator,
+            switch_slot,
+            ancestors,
+            descendants,
+            progress,
+            total_stake,
+            epoch_vote_accounts,
+            latest_validator_votes_for_frozen_banks,
+            heaviest_subtree_fork_choice,
+        );
+
+        if (self.last_switch_threshold_check) |last_check| {
+            if (switch_slot != last_check[0] and !std.meta.eql(decision, last_check[1])) {
+                // TODO log
+                self.last_switch_threshold_check = .{ switch_slot, decision };
+            }
+        }
+
+        return decision;
     }
 
     fn isFirstSwitchCheck(self: *const Tower) bool {
@@ -617,19 +1092,50 @@ pub const Tower = struct {
     }
 
     pub fn checkVoteStakeThresholds(
-        self: *const Tower,
+        self: *Tower,
+        allocator: std.mem.Allocator,
         slot: Slot,
         voted_stakes: *const VotedStakes,
         total_stake: Stake,
-    ) []ThresholdDecision {
-        _ = self;
-        _ = slot;
-        _ = voted_stakes;
-        _ = total_stake;
-        @panic("unimplimented");
+    ) !std.ArrayList(ThresholdDecision) {
+        var threshold_decisions = std.ArrayList(ThresholdDecision).init(allocator);
+        // Generate the vote state assuming this vote is included.
+        //
+        var vote_state = try self.vote_state.clone(allocator);
+        try vote_state.processNextVoteSlot(allocator, slot);
+
+        // Assemble all the vote thresholds and depths to check.
+        const vote_thresholds_and_depths = [_]struct { depth: usize, size: f64 }{
+            // The following two checks are log only and are currently being used for experimentation
+            // purposes. We wish to impose a shallow threshold check to prevent the frequent 8 deep
+            // lockouts seen multiple times a day. We check both the 4th and 5th deep here to collect
+            // metrics to determine the right depth and threshold percentage to set in the future.
+            .{ .depth = VOTE_THRESHOLD_DEPTH_SHALLOW, .size = SWITCH_FORK_THRESHOLD },
+            .{ .depth = VOTE_THRESHOLD_DEPTH_SHALLOW + 1, .size = SWITCH_FORK_THRESHOLD },
+            .{ .depth = self.threshold_depth, .size = self.threshold_size },
+        };
+
+        // Check one by one and add any failures to be returned
+        for (vote_thresholds_and_depths) |threshold| {
+            const vote_threshold = Tower.checkVoteStakeThreshold(
+                vote_state.nthRecentLockout(threshold.depth),
+                self.vote_state.votes.items,
+                threshold.depth,
+                threshold.size,
+                slot,
+                voted_stakes,
+                total_stake,
+            );
+
+            if (std.mem.eql(u8, @tagName(vote_threshold), "failed_threshold")) {
+                try threshold_decisions.append(vote_threshold);
+            }
+        }
+
+        return threshold_decisions;
     }
 
-    fn votedSlots(self: *const Tower, allocator: std.mem.Allocator) []Slot {
+    fn votedSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
         var slots = try std.ArrayList(Slot).initCapacity(
             allocator,
             self.vote_state.votes.items.len,
@@ -637,26 +1143,88 @@ pub const Tower = struct {
         errdefer slots.deinit();
 
         for (self.vote_state.votes.items) |lockout| {
-            try slots.append(lockout.slot());
+            try slots.append(lockout.slot);
         }
 
         return slots.toOwnedSlice();
     }
 
     pub fn isStrayLastVote(self: *const Tower) bool {
-        _ = self;
-        @panic("unimplimented");
+        return (self.stray_restored_slot != null and
+            self.stray_restored_slot == self.lastVotedSlot());
     }
 
+    // TODO Add logging
+    ///  The tower root can be older/newer if the validator booted from a newer/older snapshot, so
+    /// tower lockouts may need adjustment
     pub fn adjustLockoutsAfterReplay(
-        self: Tower,
+        self: *Tower,
+        allocator: std.mem.Allocator,
         replayed_root: Slot,
         slot_history: *const SlotHistory,
     ) !Tower {
-        _ = self;
-        _ = replayed_root;
-        _ = slot_history;
-        @panic("unimplimented");
+        // sanity assertions for roots
+        const tower_root = self.getRoot();
+
+        std.debug.assert(slot_history.check(replayed_root) == Check.found);
+
+        std.debug.assert(
+            self.last_vote.eql(&VoteTransaction{
+                .vote_state_update = try VoteStateUpdate.default(allocator),
+            }) and
+                self.vote_state.votes.items.len == 0 or
+                (self.last_vote.eql(&VoteTransaction{
+                .tower_sync = try TowerSync.default(allocator),
+            }) and
+                self.vote_state.votes.items.len == 0) or
+                (self.vote_state.votes.items.len > 0),
+        );
+
+        if (self.lastVotedSlot()) |last_voted_slot| {
+            if (tower_root <= replayed_root) {
+                // Normally, we goes into this clause with possible help of
+                // reconcile_blockstore_roots_with_external_source()
+                if (slot_history.check(last_voted_slot) == Check.too_old) {
+                    // We could try hard to anchor with other older votes, but opt to simplify the
+                    // following logic
+                    // TODO error to enum
+                    return TowerError.TooOldTower;
+                }
+
+                try self.adjustLockoutsWithSlotHistory(
+                    slot_history,
+                );
+                self.initializeRoot(replayed_root);
+            } else {
+                // Let's pass-through adjust_lockouts_with_slot_history just for sanitization,
+                // using a synthesized SlotHistory.
+                var warped_slot_history = try slot_history.clone(allocator);
+                defer warped_slot_history.deinit();
+                // Blockstore doesn't have the tower_root slot because of
+                // (replayed_root < tower_root) in this else clause, meaning the tower is from
+                // the future from the view of blockstore.
+                // Pretend the blockstore has the future tower_root to anchor exactly with that
+                // slot by adding tower_root to a slot history. The added slot will be newer
+                // than all slots in the slot history (remember tower_root > replayed_root),
+                // satisfying the slot history invariant.
+                // Thus, the whole process will be safe as well because tower_root exists
+                // within both tower and slot history, guaranteeing the success of adjustment
+                // and retaining all of future votes correctly while sanitizing.
+                warped_slot_history.add(tower_root);
+
+                try self.adjustLockoutsWithSlotHistory(&warped_slot_history);
+                // don't update root; future tower's root should be kept across validator
+                // restarts to continue to show the scary messages at restarts until the next
+                // voting.
+            }
+        } else {
+            // This else clause is for newly created tower.
+            // initialize_lockouts_from_bank() should ensure the following invariant,
+            // otherwise we're screwing something up.
+            std.debug.assert(tower_root == replayed_root);
+        }
+
+        return self.*;
     }
 
     fn adjustLockoutsWithSlotHistory(
@@ -683,17 +1251,19 @@ pub const Tower = struct {
 
     fn initializeLockouts(
         self: *Tower,
-        should_retain: anytype,
+        should_retain: fn (Lockout) ?bool,
     ) void {
-        _ = self;
-        _ = should_retain;
-        @panic("unimplimented");
+        for (self.vote_state.votes, 0..) |vote, i| {
+            if (!should_retain(vote)) {
+                self.vote_state.votes.orderedRemove(i);
+            }
+        }
     }
 
-    fn initialize_root(self: *Tower, fork_root: Slot) void {
-        _ = self;
-        _ = fork_root;
-        @panic("unimplimented");
+    // Updating root is needed to correctly restore from newly-saved tower for the next
+    // boot
+    fn initializeRoot(self: *Tower, root_slot: Slot) void {
+        self.vote_state.root_slot = root_slot;
     }
 
     pub fn save(
@@ -715,9 +1285,8 @@ pub const Tower = struct {
         total_stake: Stake,
     ) bool {
         if (voted_stakes.get(slot)) |stake| {
-            return (
-              @as(f64, @floatFromInt(stake)) / @as(f64,  @floatFromInt(total_stake))
-            ) > DUPLICATE_THRESHOLD;
+            return (@as(f64, @floatFromInt(stake)) / @as(f64, @floatFromInt(total_stake))) >
+                DUPLICATE_THRESHOLD;
         } else {
             return false;
         }
@@ -736,7 +1305,7 @@ pub const Tower = struct {
         vote_account_pubkey: *const Pubkey,
         bank_slot: Slot,
         vote_accounts: *const VoteAccountsHashMap,
-        ancestors: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
+        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
         get_frozen_hash: fn (Slot) ?Hash,
         latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
     ) ComputedBankState {
@@ -764,23 +1333,46 @@ pub const Tower = struct {
     fn isDescendantSlot(
         maybe_descendant: Slot,
         slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
+        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
     ) ?bool {
         return if (ancestors.get(maybe_descendant)) |candidate_slot_ancestors|
             candidate_slot_ancestors.contains(slot)
         else
-            1000;
+            null;
     }
 
+    /// Returns `Some(gca)` where `gca` is the greatest (by slot number)
+    /// common ancestor of both `slot_a` and `slot_b`.
+    ///
+    /// Returns `None` if:
+    /// * `slot_a` is not in `ancestors`
+    /// * `slot_b` is not in `ancestors`
+    /// * There is no common ancestor of slot_a and slot_b in `ancestors`
     fn greatestCommonAncestor(
-        ancestors: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
+        ancestors: *const std.AutoHashMap(
+            Slot,
+            SortedSet(Slot),
+        ),
         slot_a: Slot,
         slot_b: Slot,
     ) ?Slot {
-        _ = ancestors;
-        _ = slot_a;
-        _ = slot_b;
-        @panic("unimplimented");
+        var ancestors_a = ancestors.get(slot_a) orelse return null;
+        var ancestors_b = ancestors.get(slot_b) orelse return null;
+
+        var max_slot: ?Slot = null;
+
+        for (ancestors_a.items()) |slot| {
+            for (ancestors_b.items()) |other_slot| {
+                if (slot == other_slot and
+                    (max_slot == null or
+                    slot > max_slot.?))
+                {
+                    max_slot = slot;
+                }
+            }
+        }
+
+        return max_slot;
     }
 
     // Optimistically skip the stake check if casting a vote would not increase
@@ -795,19 +1387,8 @@ pub const Tower = struct {
         tower_before_applying_vote: anytype,
         threshold_vote: *const Lockout,
     ) bool {
-        const IteratorType = @TypeOf(tower_before_applying_vote);
-        comptime {
-            if (!@hasDecl(IteratorType, "next")) {
-                @compileError("Parameter must be an iterator (must have next() method)");
-            }
-            const NextReturnType = @typeInfo(@TypeOf(IteratorType.next)).Fn.return_type.?;
-            if (NextReturnType != Lockout) {
-                @compileError("Iterator must produce Lockout items");
-            }
-        }
-
-        for (tower_before_applying_vote.next()) |old_vote| {
-            if (old_vote.slot() == threshold_vote.slot and
+        for (tower_before_applying_vote) |old_vote| {
+            if (old_vote.slot == threshold_vote.slot and
                 old_vote.confirmation_count == threshold_vote.confirmation_count)
             {
                 return true;
@@ -817,38 +1398,57 @@ pub const Tower = struct {
     }
 
     fn checkVoteStakeThreshold(
-        threshold_vote: ?*const Lockout,
+        threshold: ?*const Lockout,
         tower_before_applying_vote: anytype,
         threshold_depth: usize,
         threshold_size: f64,
-        slot: Slot,
+        _: Slot, // TODO add logging. only used in log in Agave
         voted_stakes: *const std.AutoHashMap(Slot, u64),
         total_stake: u64,
     ) ThresholdDecision {
-        _ = threshold_vote;
-        _ = tower_before_applying_vote;
-        _ = threshold_depth;
-        _ = threshold_size;
-        _ = slot;
-        _ = voted_stakes;
-        _ = total_stake;
-        @panic("unimplimented");
+        const threshold_vote = threshold orelse {
+            // Tower isn't that deep.
+            return ThresholdDecision{ .passed_threshold = {} };
+        };
+
+        const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
+            // We haven't seen any votes on this fork yet, so no stake
+            return ThresholdDecision{
+                .failed_threshold = .{ @as(u64, threshold_depth), 0 },
+            };
+        };
+
+        const lockout = @as(f64, @floatFromInt(fork_stake)) / @as(
+            f64,
+            @floatFromInt(total_stake),
+        );
+
+        if (Tower.optimisticallyBypassVoteStakeThresholdCheck(
+            tower_before_applying_vote,
+            threshold_vote,
+        ) or lockout > threshold_size) {
+            return ThresholdDecision{ .passed_threshold = {} };
+        }
+
+        return ThresholdDecision{
+            .failed_threshold = .{ @as(u64, threshold_depth), 0 },
+        };
     }
 
     pub fn populateAncestorVotedStakes(
-        voted_stakes: *std.AutoHashMap(Slot, void),
+        voted_stakes: *SortedSet(Slot),
         vote_slots: []const Slot,
-        ancestors: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
+        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
     ) !void {
         // If there's no ancestors, that means this slot must be from before the current root,
         // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
         // this slot
         for (vote_slots) |vote_slot| {
-            if (ancestors.get(vote_slot)) |slot_ancestors| {
-                _ = try voted_stakes.getOrPutValue(vote_slot, {});
-                var iter = slot_ancestors.keyIterator();
-                while (iter.next()) |slot| {
-                    _ = try voted_stakes.getOrPutValue(slot.*, {});
+            if (ancestors.get(vote_slot)) |maybe_slot_ancestors| {
+                var slot_ancestors = maybe_slot_ancestors;
+                try voted_stakes.put(vote_slot);
+                for (slot_ancestors.items()) |slot| {
+                    _ = try voted_stakes.put(slot);
                 }
             }
         }
@@ -858,7 +1458,7 @@ pub const Tower = struct {
         voted_stakes: *VotedStakes,
         voted_slot: Slot,
         voted_stake: u64,
-        ancestors: *const std.AutoHashMap(Slot, std.AutoHashMap(Slot, void)),
+        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
     ) void {
         // If there's no ancestors, that means this slot must be from
         // before the current root, so ignore this slot
