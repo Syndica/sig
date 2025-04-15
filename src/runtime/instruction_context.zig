@@ -75,6 +75,7 @@ pub const InstructionContext = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L229
     pub fn getSysvarWithAccountCheck(
         self: *const InstructionContext,
+        allocator: std.mem.Allocator,
         comptime T: type,
         index_in_instruction: u16,
     ) InstructionError!T {
@@ -84,7 +85,7 @@ pub const InstructionContext = struct {
         if (!T.ID.equals(&account_meta.pubkey))
             return InstructionError.InvalidArgument;
 
-        return self.tc.sc.sysvar_cache.get(T);
+        return self.tc.sc.sysvar_cache.get(allocator, T);
     }
 
     pub fn getAccountKeyByIndexUnchecked(self: *const InstructionContext, index: u16) Pubkey {

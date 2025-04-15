@@ -37,11 +37,18 @@ pub const EpochContext = struct {
 };
 
 pub const SlotContext = struct {
+    /// Allocator
+    allocator: std.mem.Allocator,
+
     /// Epoch Context
     ec: *const EpochContext,
 
     /// Sysvar Cache
     sysvar_cache: SysvarCache,
+
+    pub fn deinit(self: SlotContext) void {
+        self.sysvar_cache.deinit(self.allocator);
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136

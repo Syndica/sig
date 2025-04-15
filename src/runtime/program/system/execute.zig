@@ -202,7 +202,11 @@ fn executeAdvanceNonceAccount(
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    const recent_blockhashes = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
+    const recent_blockhashes = try ic.getSysvarWithAccountCheck(
+        allocator,
+        RecentBlockhashes,
+        1,
+    );
     if (recent_blockhashes.isEmpty()) {
         try ic.tc.log("Advance nonce account: recent blockhash list is empty", .{});
         ic.tc.custom_error = @intFromEnum(SystemProgramError.NonceNoRecentBlockhashes);
@@ -221,9 +225,17 @@ fn executeWithdrawNonceAccount(
     try ic.ixn_info.checkNumberOfAccounts(2);
 
     // TODO: Is this sysvar call required for consensus despite being unused?
-    _ = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
+    _ = try ic.getSysvarWithAccountCheck(
+        allocator,
+        RecentBlockhashes,
+        2,
+    );
 
-    const rent = try ic.getSysvarWithAccountCheck(Rent, 3);
+    const rent = try ic.getSysvarWithAccountCheck(
+        allocator,
+        Rent,
+        3,
+    );
 
     return withdrawNonceAccount(allocator, ic, lamports, rent);
 }
@@ -239,14 +251,22 @@ fn executeInitializeNonceAccount(
     var account = try ic.borrowInstructionAccount(0);
     defer account.release();
 
-    const recent_blockhashes = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 1);
+    const recent_blockhashes = try ic.getSysvarWithAccountCheck(
+        allocator,
+        RecentBlockhashes,
+        1,
+    );
     if (recent_blockhashes.isEmpty()) {
         try ic.tc.log("Initialize nonce account: recent blockhash list is empty", .{});
         ic.tc.custom_error = @intFromEnum(SystemProgramError.NonceNoRecentBlockhashes);
         return InstructionError.Custom;
     }
 
-    const rent = try ic.getSysvarWithAccountCheck(Rent, 2);
+    const rent = try ic.getSysvarWithAccountCheck(
+        allocator,
+        Rent,
+        2,
+    );
 
     try initializeNonceAccount(
         allocator,

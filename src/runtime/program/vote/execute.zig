@@ -174,6 +174,7 @@ fn executeIntializeAccount(
     commission: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
     const rent = try ic.getSysvarWithAccountCheck(
+        allocator,
         Rent,
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.rent_sysvar),
     );
@@ -184,6 +185,7 @@ fn executeIntializeAccount(
     }
 
     const clock = try ic.getSysvarWithAccountCheck(
+        allocator,
         Clock,
         @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.clock_sysvar),
     );
@@ -252,6 +254,7 @@ fn executeAuthorize(
     vote_authorize: VoteAuthorize,
 ) (error{OutOfMemory} || InstructionError)!void {
     const clock = try ic.getSysvarWithAccountCheck(
+        allocator,
         Clock,
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
@@ -384,7 +387,11 @@ fn authorizeWithSeed(
     signer_index: u8,
     clock_index: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
-    const clock = try ic.getSysvarWithAccountCheck(Clock, clock_index);
+    const clock = try ic.getSysvarWithAccountCheck(
+        allocator,
+        Clock,
+        clock_index,
+    );
 
     const signer_meta = ic.ixn_info.getAccountMetaAtIndex(signer_index) orelse
         return InstructionError.NotEnoughAccountKeys;
@@ -464,6 +471,7 @@ fn executeAuthorizeChecked(
     }
 
     const clock = try ic.getSysvarWithAccountCheck(
+        allocator,
         Clock,
         @intFromEnum(vote_instruction.VoteAuthorize.AccountIndex.clock_sysvar),
     );
@@ -547,8 +555,8 @@ fn executeUpdateCommission(
         ic,
         vote_account,
         commission,
-        try ic.sc.sysvar_cache.get(EpochSchedule),
-        try ic.sc.sysvar_cache.get(Clock),
+        try ic.sc.sysvar_cache.get(allocator, EpochSchedule),
+        try ic.sc.sysvar_cache.get(allocator, Clock),
     );
 }
 
@@ -653,8 +661,8 @@ fn executeWithdraw(
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(2);
-    const rent = try ic.sc.sysvar_cache.get(Rent);
-    const clock = try ic.sc.sysvar_cache.get(Clock);
+    const rent = try ic.sc.sysvar_cache.get(allocator, Rent);
+    const clock = try ic.sc.sysvar_cache.get(allocator, Clock);
 
     vote_account.release();
 
@@ -756,10 +764,12 @@ fn executeProcessVoteWithAccount(
     }
 
     const slot_hashes = try ic.getSysvarWithAccountCheck(
+        allocator,
         SlotHashes,
         @intFromEnum(vote_instruction.Vote.AccountIndex.slot_sysvar),
     );
     const clock = try ic.getSysvarWithAccountCheck(
+        allocator,
         Clock,
         @intFromEnum(vote_instruction.Vote.AccountIndex.clock_sysvar),
     );
@@ -838,8 +848,8 @@ fn executeUpdateVoteState(
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try ic.sc.sysvar_cache.get(SlotHashes);
-    const clock = try ic.sc.sysvar_cache.get(Clock);
+    const slot_hashes = try ic.sc.sysvar_cache.get(allocator, SlotHashes);
+    const clock = try ic.sc.sysvar_cache.get(allocator, Clock);
 
     try voteStateUpdate(
         allocator,
@@ -896,8 +906,8 @@ fn executeTowerSync(
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try ic.sc.sysvar_cache.get(SlotHashes);
-    const clock = try ic.sc.sysvar_cache.get(Clock);
+    const slot_hashes = try ic.sc.sysvar_cache.get(allocator, SlotHashes);
+    const clock = try ic.sc.sysvar_cache.get(allocator, Clock);
 
     try towerSync(
         allocator,

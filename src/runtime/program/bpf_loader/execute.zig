@@ -228,10 +228,12 @@ pub fn executeV3DeployWithMaxDataLen(
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
 
     const rent = try ic.getSysvarWithAccountCheck(
+        allocator,
         sysvar.Rent,
         @intFromEnum(AccountIndex.rent),
     );
     const clock = try ic.getSysvarWithAccountCheck(
+        allocator,
         sysvar.Clock,
         @intFromEnum(AccountIndex.clock),
     );
@@ -463,7 +465,7 @@ pub fn executeV3DeployWithMaxDataLen(
         } });
         try program_account.setExecutable(
             true,
-            try ic.sc.sysvar_cache.get(sysvar.Rent),
+            try ic.sc.sysvar_cache.get(allocator, sysvar.Rent),
         );
     }
 
@@ -482,10 +484,12 @@ pub fn executeV3Upgrade(
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.program_data));
 
     const rent = try ic.getSysvarWithAccountCheck(
+        allocator,
         sysvar.Rent,
         @intFromEnum(AccountIndex.rent),
     );
     const clock = try ic.getSysvarWithAccountCheck(
+        allocator,
         sysvar.Clock,
         @intFromEnum(AccountIndex.clock),
     );
@@ -949,7 +953,7 @@ pub fn executeV3Close(
                 return InstructionError.IncorrectProgramId;
             }
 
-            var clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+            var clock = try ic.sc.sysvar_cache.get(allocator, sysvar.Clock);
             if (clock.slot == data.slot) {
                 try ic.tc.log("Program was deployed in this block already", .{});
                 return InstructionError.InvalidArgument;
@@ -972,7 +976,7 @@ pub fn executeV3Close(
                     program_account_released = true;
                     try commonCloseAccount(ic, authority_address);
 
-                    clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+                    clock = try ic.sc.sysvar_cache.get(allocator, sysvar.Clock);
                     // TODO: This depends on program cache which isn't implemented yet.
                     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
                 },
@@ -1105,7 +1109,7 @@ pub fn executeV3ExtendProgram(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.sc.sysvar_cache.get(allocator, sysvar.Clock);
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
@@ -1134,7 +1138,7 @@ pub fn executeV3ExtendProgram(
     const required_payment = blk: {
         const balance = programdata.account.lamports;
         // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-        const rent = try ic.sc.sysvar_cache.get(sysvar.Rent);
+        const rent = try ic.sc.sysvar_cache.get(allocator, sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
     };
@@ -1224,7 +1228,7 @@ pub fn executeV3Migrate(
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.sc.sysvar_cache.get(allocator, sysvar.Clock);
 
     // Verify ProgramData account.
     const progdata_info = info: {

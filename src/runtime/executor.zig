@@ -400,6 +400,7 @@ test "pushInstruction" {
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
         tc.deinit();
     }
@@ -490,6 +491,7 @@ test "processNextInstruction" {
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
         tc.deinit();
     }
@@ -558,6 +560,7 @@ test "popInstruction" {
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
         tc.deinit();
     }
@@ -644,6 +647,7 @@ test "prepareCpiInstructionInfo" {
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
         tc.deinit();
     }
@@ -799,6 +803,7 @@ test "sumAccountLamports" {
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
         tc.deinit();
     }

@@ -120,7 +120,7 @@ fn createLookupTable(
     };
 
     const derivation_slot = blk: {
-        const slot_hashes = try ic.sc.sysvar_cache.get(sysvar.SlotHashes);
+        const slot_hashes = try ic.sc.sysvar_cache.get(allocator, sysvar.SlotHashes);
 
         if (slot_hashes.get(untrusted_recent_slot)) |_| {
             break :blk untrusted_recent_slot;
@@ -155,7 +155,7 @@ fn createLookupTable(
         return; // success
     }
 
-    const rent = try ic.sc.sysvar_cache.get(sysvar.Rent);
+    const rent = try ic.sc.sysvar_cache.get(allocator, sysvar.Rent);
     const required_lamports = @max(
         rent.minimumBalance(LOOKUP_TABLE_META_SIZE),
         1,
@@ -369,7 +369,7 @@ fn extendLookupTable(
             return error.InvalidInstructionData;
         }
 
-        const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+        const clock = try ic.sc.sysvar_cache.get(allocator, sysvar.Clock);
         if (clock.slot != lookup_table.meta.last_extended_slot) {
             lookup_table.meta.last_extended_slot = clock.slot;
             lookup_table.meta.last_extended_slot_start_index = std.math.cast(
@@ -411,7 +411,7 @@ fn extendLookupTable(
         break :blk .{ lookup_table_account.account.lamports, new_table_data_len };
     };
 
-    const rent = try ic.sc.sysvar_cache.get(sysvar.Rent);
+    const rent = try ic.sc.sysvar_cache.get(allocator, sysvar.Rent);
     const required_lamports = @max(rent.minimumBalance(new_table_data_len), 1) -|
         lookup_table_lamports;
 
@@ -502,7 +502,7 @@ fn deactivateLookupTable(
         return error.InvalidArgument;
     }
 
-    const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.sc.sysvar_cache.get(allocator, sysvar.Clock);
 
     var lookup_table_meta = lookup_table.meta;
     lookup_table_meta.deactivation_slot = clock.slot;
@@ -578,8 +578,8 @@ fn closeLookupTable(
             return error.Immutable;
         }
 
-        const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
-        const slot_hashes = try ic.sc.sysvar_cache.get(sysvar.SlotHashes);
+        const clock = try ic.sc.sysvar_cache.get(allocator, sysvar.Clock);
+        const slot_hashes = try ic.sc.sysvar_cache.get(allocator, sysvar.SlotHashes);
 
         switch (lookup_table.meta.status(clock.slot, slot_hashes)) {
             .Activated => {
@@ -750,7 +750,7 @@ test "address-lookup-table create" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -856,7 +856,7 @@ test "address-lookup-table freeze" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -966,7 +966,7 @@ test "address-lookup-table close" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -1074,7 +1074,7 @@ test "address-lookup-table deactivate" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -1198,7 +1198,7 @@ test "address-lookup-table extend" {
             .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
         };
 
-        const sysvar_cache = runtime.SysvarCache{
+        const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
             .slot_hashes = runtime.sysvar.SlotHashes{
                 .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},

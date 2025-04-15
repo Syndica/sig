@@ -1,3 +1,4 @@
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -10,13 +11,17 @@ pub const RecentBlockhashes = struct {
     /// entry holds the most recent blockhash.
     entries: []const Entry,
 
-    pub const ID =
-        Pubkey.parseBase58String("SysvarRecentB1ockHashes11111111111111111111") catch unreachable;
-
     pub const Entry = struct {
         blockhash: Hash,
         fee_calculator: Fees.FeeCalculator,
     };
+
+    pub const ID =
+        Pubkey.parseBase58String("SysvarRecentB1ockHashes11111111111111111111") catch unreachable;
+
+    pub fn deinit(self: RecentBlockhashes, allocator: std.mem.Allocator) void {
+        allocator.free(self.entries);
+    }
 
     pub fn isEmpty(self: RecentBlockhashes) bool {
         return self.entries.len == 0;
