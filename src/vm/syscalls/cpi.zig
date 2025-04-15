@@ -285,7 +285,7 @@ const CallerAccount = struct {
     vm_data_addr: u64,
     ref_to_len_in_vm: VmValue(u64),
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L119
+    /// Parses out a CallerAccount from an AccountInfoRust that lives in VM host memory.
     fn fromAccountInfoRust(
         ic: *const InstructionContext,
         memory_map: *const MemoryMap,
@@ -293,7 +293,7 @@ const CallerAccount = struct {
         account_info: *const AccountInfoRust,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
-        _ = _vm_addr; // unused
+        _ = _vm_addr; // unused, but have same signature as fromAccountInfoC().
 
         const direct_mapping = ic.ec.feature_set.active.contains(
             features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
@@ -317,7 +317,7 @@ const CallerAccount = struct {
         // account_info points to host memory. The addresses used internally are
         // in vm space so they need to be translated.
         const lamports: *u64 = blk: {
-            // NOTE: Models the RefCell as_ptr() access here
+            // Models the RefCell as_ptr() access here
             // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L151
             const lamports_addr: u64 = @intFromPtr(account_info.lamports_addr.deref().asPtr());
 
@@ -358,8 +358,7 @@ const CallerAccount = struct {
         );
 
         const serialized, const vm_data_addr, const ref_to_len = blk: {
-            // NOTE: trying to model the ptr stuff going on here:
-            // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L183
+            // See above on lamports regarding Rc(RefCell) pointer accessing.
             const data_ptr: u64 = @intFromPtr(account_info.data.deref().asPtr());
 
             if (direct_mapping and data_ptr >= MM_INPUT_START) {
@@ -384,7 +383,6 @@ const CallerAccount = struct {
                 );
             }
 
-            // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/syscalls/cpi.rs#L195-L200
             try ic.tc.consumeCompute(std.math.divFloor(
                 u64,
                 data.len,
@@ -451,7 +449,7 @@ const CallerAccount = struct {
         };
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L264
+    /// Parses out a CallerAccount from an AccountInfoC that lives in VM host memory.
     fn fromAccountInfoC(
         ic: *const InstructionContext,
         memory_map: *const MemoryMap,
@@ -514,7 +512,7 @@ const CallerAccount = struct {
         ) catch std.math.maxInt(u64));
 
         const serialized_data: []u8 = if (direct_mapping) ser: {
-            // See comment in CallerAccount.fromAccountInfo()
+            // See comment in CallerAccount.fromAccountInfoRust()
             break :ser &.{}; // &mut []
         } else try translateSlice(
             u8,
@@ -671,7 +669,9 @@ fn updateCalleeAccount(
 const TranslatedAccount = struct { index_in_caller: u64, caller_account: ?CallerAccount };
 const TranslatedAccounts = std.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
 
-/// Implements SyscallInvokeSigned::translate_accounts for both AccountInfo & SolAccountInfo.
+/// Implements SyscallInvokeSigned::translate_accounts for both AccountInfoRust & AccountInfoC.
+/// Reads the AccountInfos from VM and converting them into CallerAccounts + metadata index.
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L498
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L725
 fn translateAccounts(
@@ -685,7 +685,6 @@ fn translateAccounts(
     account_metas: []const InstructionInfo.AccountMeta,
 ) !TranslatedAccounts {
     // translate_account_infos():
-    // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L805
 
     const direct_mapping = ic.ec.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
@@ -710,7 +709,6 @@ fn translateAccounts(
     );
 
     // check_account_infos():
-    // [agave] https://github.com/anza-xyz/agave/blob/master/https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L1018/bpf_loader/src/syscalls/cpi.rs#L1018
     if (ic.ec.feature_set.active.contains(features.LOOSEN_CPI_SIZE_RESTRICTION)) {
         const max_cpi_account_infos: u64 = if (ic.ec.feature_set.active.contains(
             features.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
@@ -731,7 +729,6 @@ fn translateAccounts(
     }
 
     // translate_and_update_accounts():
-    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L853
 
     var accounts: TranslatedAccounts = .{};
     try accounts.append(.{
@@ -826,6 +823,8 @@ fn translateAccounts(
     return accounts;
 }
 
+/// Converts a StableInstruction type in VM memory (depending on AccountInfoType) into Instruction.
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L438
 /// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L650
 fn translateInstruction(
@@ -881,7 +880,6 @@ fn translateInstruction(
     );
 
     // check_instruction_size():
-    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L980
     if (loosen_cpi_size_restriction) {
         // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L19
         const MAX_CPI_INSTRUCTION_DATA_LEN = 10 * 1024;
@@ -917,7 +915,8 @@ fn translateInstruction(
     errdefer allocator.free(accounts);
 
     for (account_metas, 0..) |account_meta, i| {
-        // NOTE: checks for bools to be 0 or 1, but why is this volatile?
+        // Check if the u8 which holds the bools is valid (contains 0 or 1).
+        // Uses volatile to prevent the compiler from seeing that it comes from bool & assuming 0/1.
         // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L482
         if (@as(*const volatile u8, @ptrCast(&account_meta.is_signer)).* > 1 or
             @as(*const volatile u8, @ptrCast(&account_meta.is_writable)).* > 1)
@@ -952,6 +951,10 @@ fn translateInstruction(
 // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L81
 const MAX_SIGNERS = 16;
 
+/// Reads a slice of seed slices from the VM and converts them into program address Pubkeys.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L520
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L747
 fn translateSigners(
     ic: *const InstructionContext,
     memory_map: *const MemoryMap,
@@ -1003,7 +1006,7 @@ fn translateSigners(
 
         signers.appendAssumeCapacity(pubkey_utils.createProgramAddress(
             seeds.slice(),
-            &.{}, // NOTE: no bump seeds AFAIK
+            &.{}, // no bump seeds AFAIK
             program_id,
         ) catch return SyscallError.BadSeeds);
     }
