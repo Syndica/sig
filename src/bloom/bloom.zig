@@ -77,12 +77,16 @@ pub const Bloom = struct {
     }
 
     pub fn hashAtIndex(bytes: []const u8, hash_index: u64) u64 {
-        var hasher = FnvHasher.initWithOffset(hash_index);
-        hasher.update(bytes);
-        return hasher.final();
+        return FnvHasher.hashWithOffset(bytes, hash_index);
     }
 
-    pub fn initRandom(alloc: std.mem.Allocator, random: std.Random, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
+    pub fn initRandom(
+        alloc: std.mem.Allocator,
+        random: std.Random,
+        num_items: usize,
+        false_rate: f64,
+        max_bits: usize,
+    ) error{OutOfMemory}!Self {
         const n_items_f: f64 = @floatFromInt(num_items);
         const m = Bloom.numBits(n_items_f, false_rate);
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
@@ -135,9 +139,9 @@ test "serializes/deserializes correctly" {
     const bloom = Bloom.init(testing.allocator, 0, null);
 
     var buf: [10000]u8 = undefined;
-    const out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    const out = try bincode.writeToSlice(buf[0..], bloom, .{});
 
-    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
     defer bincode.free(testing.allocator, deserialized);
 
     // allocate some memory to make sure were cleaning up too
@@ -152,9 +156,9 @@ test "serializes/deserializes correctly with set bits" {
     defer bloom.deinit();
 
     var buf: [10000]u8 = undefined;
-    const out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    const out = try bincode.writeToSlice(buf[0..], bloom, .{});
 
-    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
     defer deserialized.deinit();
 
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
@@ -172,7 +176,11 @@ test "serialized bytes equal rust (one key)" {
     var buf: [10000]u8 = undefined;
     var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
-    const rust_bytes = .{ 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+    const rust_bytes = .{
+        1, 0, 0, 0,   0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0,
+        0, 0, 0, 0,   0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+    };
 
     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
 }
@@ -200,7 +208,13 @@ test "serialized bytes equal rust (multiple keys)" {
     // bloom.add(&[3, 4]);
     // println!("{:?}", bincode::serialize(&bloom).unwrap());
 
-    const rust_bytes = .{ 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66, 16, 32, 0, 128, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0 };
+    const rust_bytes = .{
+        3,  0,  0, 0,   0, 0,  0, 0, 1, 0, 0, 0, 0, 0, 0,  0, 2, 0,
+        0,  0,  0, 0,   0, 0,  3, 0, 0, 0, 0, 0, 0, 0, 1,  2, 0, 0,
+        0,  0,  0, 0,   0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66,
+        16, 32, 0, 128, 0, 0,  0, 0, 0, 0, 0, 6, 0, 0, 0,  0, 0, 0,
+        0,
+    };
 
     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
 }
