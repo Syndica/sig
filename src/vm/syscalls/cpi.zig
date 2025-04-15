@@ -876,7 +876,7 @@ fn translateInstruction(
         else => unreachable,
     };
 
-    const loosen_cpi_size_restriction = ic.tc.feature_set.active.contains(
+    const loosen_cpi_size_restriction = ic.ec.feature_set.active.contains(
         features.LOOSEN_CPI_SIZE_RESTRICTION,
     );
 
