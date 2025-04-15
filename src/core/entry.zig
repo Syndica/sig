@@ -1,8 +1,10 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
 
+const Allocator = std.mem.Allocator;
 const Hash = sig.core.hash.Hash;
 const Transaction = sig.core.transaction.Transaction;
+const Signature = sig.core.Signature;
 
 pub const Entry = struct {
     /// The number of hashes since the previous Entry ID.
@@ -16,6 +18,8 @@ pub const Entry = struct {
     /// pushed back into this list to ensure deterministic interpretation of the ledger.
     transactions: std.ArrayListUnmanaged(Transaction),
 
+    pub const slice = entry_slice;
+
     pub fn isTick(self: Entry) bool {
         return self.transactions.items.len == 0;
     }
@@ -25,6 +29,214 @@ pub const Entry = struct {
         allocator.free(self.transactions.allocatedSlice());
     }
 };
+
+/// analogous to agave's [impl EntrySlice for [Entry]](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L632)
+pub const entry_slice = struct {
+    /// analogous to [tick_count](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L904)
+    pub fn tickCount(entries: []const Entry) u64 {
+        var tick_count: u64 = 0;
+        for (entries) |entry| {
+            tick_count += entry.isTick();
+        }
+        return tick_count;
+    }
+
+    /// analogous to agave's [verify_tick_hash_count](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L880)
+    pub fn verifyTickHashCount(
+        logger: anytype,
+        entries: []const Entry,
+        tick_hash_count: *u64,
+        hashes_per_tick: u64,
+    ) bool {
+        // When hashes_per_tick is 0, hashing is disabled.
+        if (hashes_per_tick == 0) {
+            return true;
+        }
+
+        for (entries) |entry| {
+            tick_hash_count.* = tick_hash_count +| entry.num_hashes;
+            if (entry.isTick()) {
+                if (tick_hash_count.* != hashes_per_tick) {
+                    logger.warn().logf(
+                        "invalid tick hash count!: entry: {:#?}, " ++
+                            "tick_hash_count: {}, hashes_per_tick: {}",
+                        .{ entry, tick_hash_count, hashes_per_tick },
+                    );
+                    return false;
+                }
+                tick_hash_count.* = 0;
+            }
+        }
+
+        return tick_hash_count.* < hashes_per_tick;
+    }
+};
+
+/// Verifies entries asynchronously in a thread pool by reproducing the poh
+/// chain in parallel and aggregating the results.
+///
+/// TODO: use SIMDs or GPU to vastly increase parallelism
+pub const AsyncEntryVerifier = struct {
+    allocator: Allocator,
+    thread_pool: sig.utils.thread.HomogeneousThreadPool(Task),
+    preallocated_nodes: []const std.ArrayListUnmanaged(Hash),
+    max_tasks: usize,
+    running: bool,
+
+    const Task = struct {
+        allocator: Allocator,
+        preallocated_nodes: *std.ArrayListUnmanaged(Hash),
+        initial_hash: Hash,
+        entries: []const Entry,
+
+        pub fn run(self: *Task) bool {
+            return verifyPoh(self.allocator, self.preallocated_nodes, self.initial_hash, self.entries);
+        }
+    };
+
+    pub fn init(allocator: Allocator, num_threads: u32) Allocator.Error!AsyncEntryVerifier {
+        const preallocated_nodes = try allocator.alloc(std.ArrayListUnmanaged(Hash), num_threads);
+        for (preallocated_nodes) |pn| pn = .{};
+        return .{
+            .allocator = allocator,
+            .thread_pool = try sig.utils.thread.HomogeneousThreadPool(Task)
+                .init(allocator, num_threads, num_threads),
+            .preallocated_nodes = preallocated_nodes,
+            .max_tasks = num_threads,
+        };
+    }
+
+    pub fn deinit(self: AsyncEntryVerifier) void {
+        self.thread_pool.deinit();
+        self.allocator.free(self.preallocated_nodes);
+    }
+
+    /// Schedule verification tasks into the thread pool.
+    /// Call `finish` to get the result.
+    pub fn start(self: *AsyncEntryVerifier, initial_hash: Hash, entries: []const Entry) void {
+        std.debug.assert(!self.running);
+        self.running = true;
+        if (entries.len == 0) return true;
+        const num_tasks = @min(self.max_tasks, entries.len);
+        const entries_per_task = entries.len / num_tasks;
+        var batch_initial_hash = initial_hash;
+        for (0..num_tasks) |i| {
+            const end = if (i == num_tasks + 1) entries.len else i * entries_per_task;
+            self.thread_pool.schedule(.{
+                .allocator = self.allocator,
+                .preallocated_nodes = &self.preallocated_nodes[i],
+                .initial_hash = batch_initial_hash,
+                .entries = entries[i..end],
+            });
+            batch_initial_hash = entries[end - 1];
+        }
+    }
+
+    /// Block until all verification tasks are complete, and return the result.
+    pub fn finish(self: *AsyncEntryVerifier) Allocator.Error!bool {
+        defer self.running = false;
+        const results = try self.thread_pool.join();
+        defer results.deinit();
+        for (results.items) |result| {
+            if (!try result) return false;
+        }
+        return true;
+    }
+};
+
+/// Simple PoH validation that validates the hash of every entry in sequence.
+pub fn verifyPoh(
+    allocator: Allocator,
+    preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
+    initial_hash: Hash,
+    entries: []const Entry,
+) bool {
+    var current_hash = initial_hash;
+
+    for (entries) |entry| {
+        if (entry.num_hashes == 0) continue;
+
+        for (1..entry.num_hashes) |_| {
+            current_hash = Hash.generateSha256Hash(&current_hash.data);
+        }
+
+        if (entry.transactions) |transactions| {
+            const mixin = hashTransactions(allocator, preallocated_nodes, transactions);
+            current_hash = current_hash.extendAndHash(&mixin.data);
+        } else {
+            current_hash = Hash.generateSha256Hash(&current_hash.data);
+        }
+
+        if (!current_hash.eql(entry.hash)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/// Hash a group of transactions (typically extracted from an Entry) as a merkle
+/// tree and return the root node.
+///
+/// Optionally accepts a pointer to a list of hashes for reuse across calls to
+/// minimize the number of allocations when hashing large numbers of entries.
+///
+/// Based on these agave functions for conformance:
+/// - [hash_transactions](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
+/// - [MerkleTree::new](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/merkle-tree/src/merkle_tree.rs#L98)
+fn hashTransactions(
+    allocator: std.mem.Allocator,
+    preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
+    transactions: []const Transaction,
+) Allocator.Error!Hash {
+    const LEAF_PREFIX: []const u8 = &.{0};
+    const INTERMEDIATE_PREFIX: []const u8 = &.{1};
+
+    var num_signatures: usize = 0;
+    for (transactions) |tx| num_signatures += tx.signatures.len;
+    if (num_signatures == 0) return Hash.ZEROES;
+
+    var owned_nodes = std.ArrayListUnmanaged(Hash){};
+    defer owned_nodes.deinit(allocator);
+    const nodes = if (preallocated_nodes) |pn| pn else &owned_nodes;
+    const capacity = @log2(num_signatures) + 2 * num_signatures + 1;
+    nodes.clearRetainingCapacity();
+    try nodes.ensureTotalCapacity(allocator, capacity);
+
+    for (transactions) |tx| for (tx.signatures) |signature| {
+        const hash = Hash.hashv(LEAF_PREFIX, &signature.data);
+        try nodes.appendAssumeCapacity(hash);
+    };
+
+    var level_len = nextLevelLen(num_signatures);
+    var level_start = num_signatures;
+    var prev_level_len = num_signatures;
+    var prev_level_start = 0;
+    while (level_len > 0) {
+        for (0..level_len) |i| {
+            const prev_level_idx = 2 * i;
+            const lsib = &nodes.items[prev_level_start + prev_level_idx];
+            const rsib = if (prev_level_idx + 1 < prev_level_len)
+                &nodes.items[prev_level_start + prev_level_idx + 1]
+            else
+                // Duplicate last entry if the level length is odd
+                &nodes.items[prev_level_start + prev_level_idx];
+
+            const hash = Hash.hashv(INTERMEDIATE_PREFIX, lsib, rsib);
+            try nodes.appendAssumeCapacity(hash);
+        }
+        prev_level_start = level_start;
+        prev_level_len = level_len;
+        level_start += level_len;
+        level_len = nextLevelLen(level_len);
+    }
+
+    return nodes.getLast();
+}
+
+fn nextLevelLen(level_len: usize) usize {
+    return if (level_len == 1) 0 else (level_len + 1) / 2;
+}
 
 test "Entry serialization and deserialization" {
     const entry = test_entry.as_struct;

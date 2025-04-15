@@ -47,6 +47,12 @@ pub const Hash = extern struct {
         return .{ .data = hasher.finalResult() };
     }
 
+    pub fn hashv(vals: []const []const u8) Hash {
+        var hasher = Sha256.init(.{});
+        for (vals) |val| hasher.update(val);
+        return .{ .data = hasher.finalResult() };
+    }
+
     pub fn eql(self: Hash, other: Hash) bool {
         const xx: @Vector(SIZE, u8) = self.data;
         const yy: @Vector(SIZE, u8) = other.data;

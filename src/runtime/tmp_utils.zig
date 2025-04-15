@@ -3,4 +3,4 @@
 
 const sig = @import("../sig.zig");
 
-pub const hashv = sig.ledger.shred.hashv;
+pub const hashv = sig.core.Hash.hashv;
