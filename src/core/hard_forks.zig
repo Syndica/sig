@@ -6,7 +6,7 @@ const expectEqualSlices = std.testing.expectEqualSlices;
 pub const HardForks = struct {
     forks: std.ArrayListUnmanaged(Fork) = .{},
 
-    pub const Fork = struct { slot: Slot, count: usize };
+    pub const Fork = extern struct { slot: Slot, count: u64 };
 
     pub fn register(self: *HardForks, allocator: std.mem.Allocator, new_slot: Slot) !void {
         const maybe_index: ?u64 = for (self.forks.items, 0..) |hard_fork, index| {
