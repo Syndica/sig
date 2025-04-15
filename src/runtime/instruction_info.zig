@@ -109,14 +109,14 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        var lfbs = limitedFixedBufferStream(
-            []const u8,
-            self.instruction_data,
+        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
+            self.instruction_data.len,
             Transaction.MAX_BYTES,
-        );
-        return bincode.read(allocator, T, lfbs.reader(), .{}) catch {
+        )]);
+        const data = bincode.read(allocator, T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
+        return data;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
@@ -127,46 +127,3 @@ pub const InstructionInfo = struct {
         if (self.account_metas.len < minimum_accounts) return InstructionError.NotEnoughAccountKeys;
     }
 };
-
-/// Custom limited fixed buffer stream to support limited deserialization of instructions
-pub fn limitedFixedBufferStream(
-    comptime Buffer: type,
-    buffer: Buffer,
-    limit: usize,
-) LimitedFixedBufferStream(Buffer) {
-    return .{
-        .buffer = buffer,
-        .pos = 0,
-        .limit = limit,
-    };
-}
-
-pub fn LimitedFixedBufferStream(comptime Buffer: type) type {
-    return struct {
-        /// `Buffer` is either a `[]u8` or `[]const u8`.
-        buffer: Buffer,
-        pos: usize,
-        limit: usize,
-
-        pub const ReadError = error{LimitBreach};
-
-        pub const Reader = std.io.Reader(*Self, ReadError, read);
-
-        const Self = @This();
-
-        pub fn reader(self: *Self) Reader {
-            return .{ .context = self };
-        }
-
-        pub fn read(self: *Self, dest: []u8) ReadError!usize {
-            const size = @min(dest.len, self.buffer.len - self.pos);
-            const end = self.pos + size;
-            if (end > self.limit) return error.LimitBreach;
-
-            @memcpy(dest[0..size], self.buffer[self.pos..end]);
-            self.pos = end;
-
-            return size;
-        }
-    };
-}

@@ -167,6 +167,7 @@ pub fn executeV3Write(
     offset: u32,
     bytes: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
+    std.debug.print("bytes.len={}\n", .{bytes.len});
     const AccountIndex = bpf_loader_program.v3.instruction.Write.AccountIndex;
     try ic.ixn_info.checkNumberOfAccounts(2);
 
