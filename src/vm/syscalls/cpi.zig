@@ -1014,6 +1014,164 @@ fn translateSigners(
     return signers;
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1573
+fn accountDataRegion(
+    memory_map: *const MemoryMap,
+    vm_data_addr: u64,
+    original_data_len: usize,
+) !(?*const memory.Region) {
+    @compileError("TODO");
+}
+
+fn accountReallocRegion(
+    memory_map: *const MemoryMap,
+    vm_data_addr: u64,
+    original_data_len: usize,
+    is_loader_deprecated: bool,
+) !(?*const memory.Region) {
+    @compileError("TODO");
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1321
+fn updateCallerAccount(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    memory_map: *const MemoryMap,
+    caller_account: CallerAccount,
+    callee_account: *BorrowedAccount,
+    is_loader_deprecated: bool,
+    direct_mapping: bool,
+) !void {
+
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1080
+fn cpiCommon(
+    allocator: std.mem.Allocator,
+    ic: *const InstructionContext,
+    memory_map: *const MemoryMap,
+    comptime AccountInfoType: type,
+    instruction_addr: u64,
+    account_infos_addr: u64,
+    account_infos_len: u64,
+    signers_seeds_addr: u64,
+    signers_seeds_len: u64,
+) !u64 {
+    try ic.tc.consumeCompute(ic.tc.compute_budget.invoke_units);
+
+    // TODO:
+    // if (ic.???.execute_time) |timer| {
+    //      timer.stop();
+    //      ic.???.timings.execute_us += timer.asMicros(); 
+    // }
+
+    const instruction = try translateInstruction(
+        allocator,
+        ic,
+        memory_map,
+        AccountInfoType,
+        instruction_addr,
+    );
+    defer allocator.free(instruction.accounts);
+
+    const signers = try translateSigners(
+        ic,
+        memory_map,
+        signers_seeds_addr,
+        signers_seeds_len,
+        ic.ixn_info.program_meta.pubkey,
+    );
+
+    const is_loader_deprecated = blk: {
+        const account = ic.tc.getAccountAtIndex(ic.ixn_info.program_meta.index_in_transaction).?;
+        break :blk account.account.owner.equals(&bpf_loader_program.v1.ID);
+    };
+
+    const info = try sig.runtime.executor.prepareCpiInstructionInfo(
+        ic.tc,
+        instruction,
+        signers.slice(),
+    );
+
+    // TODO check_authorized_program(ic, instruction):
+    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1054
+    
+    var accounts = try translateAccounts(
+        allocator,
+        ic,
+        memory_map,
+        is_loader_deprecated,
+        AccountInfoType,
+        account_infos_addr,
+        account_infos_len,
+        info.account_metas.slice(),
+    );
+
+    // Process the callee instruction. 
+    // Doesn't call `executeNativeCpiInstruction` as info already setup.
+    try sig.runtime.executor.executeInstruction(allocator, ic.tc, info);
+
+    // CPI Exit.
+    // Synchronize the callee's account changes so the caller can see them.
+     const direct_mapping = ic.ec.feature_set.active.contains(
+        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    );
+
+    if (direct_mapping) {
+        // Update all perms at once before doing account data updates. This
+        // isn't strictly required as agave forbids updates to an account to touch
+        // other accounts, but since agave did have bugs around this in the past,
+        // it's better to be safe than sorry.
+        for (accounts.slice()) |acc| {
+            const caller_account: CallerAccount = acc.caller_account orelse continue;
+            const callee_account = try ic.borrowInstructionAccount(acc.index_in_caller);
+            defer callee_account.release();
+            
+            // update_caller_account_perms:
+            // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1276
+            
+            if (try accountDataRegion(
+                memory_map,
+                caller_account.vm_data_addr,
+                caller_account.original_data_len,
+            )) |region| {
+                try region.state.set(accountDataRegionMemoryState(callee_account));
+            }
+
+            if (try accountReallocRegion(
+                memory_map,
+                caller_account.vm_data_addr,
+                caller_account.original_data_len,
+                is_loader_deprecated,
+            )) |region| {
+                try region.state.set(
+                    if (callee_account.checkDataIsMutable() == null) .mutable else .constant,
+                );
+            }
+        }
+    }
+
+    for (accounts.slice()) |acc| {
+        const caller_account: CallerAccount = acc.caller_account orelse continue;
+        var callee_account = try ic.borrowInstructionAccount(acc.index_in_caller);
+        defer callee_account.release();
+
+        try updateCallerAccount(
+            allocator,
+            ic,
+            memory_map,
+            caller_account,
+            &callee_account,
+            is_loader_deprecated,
+            direct_mapping,
+        );
+    }
+
+    // TODO: ic.execute_time = 
+}
+
+
+
 const TestContext = struct {
     ec: *EpochContext,
     sc: *SlotContext,
