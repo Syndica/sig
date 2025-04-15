@@ -6,10 +6,18 @@ const sig = @import("../sig.zig");
 
 const AutoHashMap = std.AutoHashMap;
 
+const BankForks = sig.consensus.unimplemented.BankForks;
+const ReplayStage = sig.consensus.unimplemented.ReplayStage;
+const ProgressMap = sig.consensus.unimplemented.ProgressMap;
+
 const TowerStorage = sig.consensus.tower_storage.TowerStorage;
+const SavedTower = sig.consensus.tower_storage.SavedTower;
+const SavedTowerVersion = sig.consensus.tower_storage.SavedTowerVersions;
 const BlockTimestamp = sig.runtime.program.vote_program.state.BlockTimestamp;
 const Lockout = sig.runtime.program.vote_program.state.Lockout;
 const Vote = sig.runtime.program.vote_program.state.Vote;
+const VoteStateVersions = sig.runtime.program.vote_program.state.VoteStateVersions;
+const VoteState = sig.runtime.program.vote_program.state.VoteState;
 const VoteError = sig.runtime.program.vote_program.VoteError;
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -23,6 +31,7 @@ const Bank = sig.accounts_db.Bank;
 const SortedMap = sig.utils.collections.SortedMap;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SortedSet = sig.utils.collections.SortedSet;
+const Account = sig.core.Account;
 
 const UnixTimestamp = i64;
 
@@ -189,14 +198,6 @@ pub const SlotHistory = struct {
     }
 };
 
-pub const ForkStats = struct {
-    computed: bool,
-    lockout_intervals: LockoutIntervals,
-};
-
-pub const ForkProgress = struct {
-    fork_stats: ForkStats,
-};
 // TODO Needs to be implemented and moved out of the tower.zig
 pub const LatestValidatorVotesForFrozenBanks = struct {
     max_gossip_frozen_votes: std.AutoHashMap(Pubkey, struct { slot: Slot, hashes: []Hash }),
@@ -214,15 +215,6 @@ pub const LatestValidatorVotesForFrozenBanks = struct {
     }
 };
 pub const VoteAccount = struct {};
-pub const ProgressMap = struct {
-    progress_map: std.AutoHashMap(Slot, ForkProgress),
-    pub fn getHash(_: ProgressMap, _: Slot) ?Hash {
-        @panic("Unimplemented");
-    }
-    pub fn getForkStats(_: ProgressMap, _: Slot) ?ForkStats {
-        @panic("Unimplemented");
-    }
-};
 
 pub const StakedAccount = struct { stake: u64, account: VoteAccount };
 
@@ -437,25 +429,45 @@ pub const Tower = struct {
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
         bank: *const Bank,
-    ) Tower {
-        _ = allocator;
-        _ = node_pubkey;
-        _ = vote_account_pubkey;
-        _ = fork_root;
-        _ = bank;
-        @panic("unimplimented");
+    ) !Tower {
+        var tower = try Tower.default(allocator);
+        tower.node_pubkey = node_pubkey.*;
+        try tower.initializeLockoutsFromBank(
+            allocator,
+            vote_account_pubkey,
+            fork_root,
+            bank,
+        );
+        return tower;
     }
 
     pub fn newFromBankforks(
         allocator: std.mem.Allocator,
-        // bank_forks: *const BankForks,
+        bank_forks: *const BankForks,
         node_pubkey: *const Pubkey,
         vote_account: *const Pubkey,
-    ) Tower {
-        _ = allocator;
-        _ = node_pubkey;
-        _ = vote_account;
-        @panic("unimplimented");
+    ) !Tower {
+        const root_bank = bank_forks.rootBank();
+        _, const heaviest_subtree_fork_choice = ReplayStage.initializeProgressAndForkChoice(
+            &root_bank,
+            // TODO
+            std.ArrayList(Bank).fromOwnedSlice(allocator, bank_forks.frozenBanks().inner.values()),
+            node_pubkey,
+            vote_account,
+            std.ArrayList(SlotAndHash).init(allocator),
+        );
+
+        const fork_root = root_bank.bank_fields.slot;
+        const heaviest = heaviest_subtree_fork_choice.heaviestOverallSlot();
+        const heaviest_bank = bank_forks.getWithCheckedHash(heaviest).?;
+
+        return Tower.init(
+            allocator,
+            node_pubkey,
+            vote_account,
+            fork_root,
+            &heaviest_bank,
+        );
     }
 
     pub fn towerSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
@@ -508,10 +520,26 @@ pub const Tower = struct {
         self.last_vote_tx_blockhash = BlockhashStatus{ .hot_spare = {} };
     }
 
-    pub fn recordBankVote(self: *Tower, bank: *const Bank) ?Slot {
-        _ = self;
-        _ = bank;
-        @panic("unimplimented");
+    pub fn recordBankVote(
+        self: *Tower,
+        allocator: std.mem.Allocator,
+        bank: *const Bank,
+    ) !?Slot {
+        // Returns the new root if one is made after applying a vote for the given bank to
+        // `self.vote_state`
+        //
+        // TODO add block_id to bank fields
+        const block_id = Hash.ZEROES;
+        // TODO expose feature set on Bank
+        const is_enable_tower_active = true;
+
+        return try self.recordBankVoteAndUpdateLockouts(
+            allocator,
+            bank.bank_fields.slot,
+            bank.bank_fields.hash,
+            is_enable_tower_active,
+            block_id,
+        );
     }
 
     pub fn updateLastVoteFromVoteState(
@@ -548,11 +576,12 @@ pub const Tower = struct {
 
     fn recordBankVoteAndUpdateLockouts(
         self: *Tower,
+        allocator: std.mem.Allocator,
         vote_slot: Slot,
         vote_hash: Hash,
         enable_tower_sync_ix: bool,
         block_id: Hash,
-    ) ?Slot {
+    ) !?Slot {
         if (self.vote_state.lastVotedSlot()) |last_voted_sot| {
             if (vote_slot <= last_voted_sot) {
                 // TODO Can we improve things here and not be 1:1 even with erros
@@ -566,8 +595,8 @@ pub const Tower = struct {
 
         const old_root = self.getRoot();
 
-        try self.vote_state.processNextVoteSlot(vote_slot);
-        try self.updateLastVoteFromVoteState(vote_hash, enable_tower_sync_ix, block_id);
+        try self.vote_state.processNextVoteSlot(allocator, vote_slot);
+        try self.updateLastVoteFromVoteState(allocator, vote_hash, enable_tower_sync_ix, block_id);
 
         const new_root = self.getRoot();
 
@@ -1364,15 +1393,52 @@ pub const Tower = struct {
 
     fn initializeLockoutsFromBank(
         self: *Tower,
+        allocator: std.mem.Allocator,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
         bank: *const Bank,
-    ) void {
-        _ = self;
-        _ = vote_account_pubkey;
-        _ = fork_root;
-        _ = bank;
-        @panic("unimplimented");
+    ) !void {
+        const vote_account = bank.accounts_db.getAccount(vote_account_pubkey) catch {
+            self.initializeRoot(fork_root);
+            return;
+        };
+
+        const vote_state = try stateFromAccount(
+            allocator,
+            &vote_account,
+            vote_account_pubkey,
+        );
+
+        var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
+            allocator,
+            vote_state.votes.items.len,
+        );
+        for (vote_state.votes.items) |landed| {
+            try lockouts.append(
+                allocator,
+                Lockout{
+                    .slot = landed.lockout.slot,
+                    .confirmation_count = landed.lockout.confirmation_count,
+                },
+            );
+        }
+        self.vote_state = TowerVoteState{
+            .votes = lockouts,
+            .root_slot = vote_state.root_slot,
+        };
+        self.initializeRoot(fork_root);
+
+        var flags = try std.DynamicBitSetUnmanaged.initEmpty(
+            allocator,
+            self.vote_state.votes.items.len,
+        );
+        defer flags.deinit(allocator);
+
+        for (self.vote_state.votes.items, 0..) |vote, i| {
+            flags.setValue(i, vote.slot > fork_root);
+        }
+
+        self.initializeLockouts(flags);
     }
 
     // TODO Revisit the closure pattern
@@ -1412,10 +1478,8 @@ pub const Tower = struct {
         tower_storage: *const TowerStorage,
         node_keypair: *const KeyPair,
     ) !void {
-        _ = self;
-        _ = tower_storage;
-        _ = node_keypair;
-        @panic("unimplimented");
+        const saved_tower = try SavedTower.init(self, node_keypair);
+        try tower_storage.store(&SavedTowerVersion{ .current = saved_tower });
     }
 
     // Static methods
@@ -1437,9 +1501,7 @@ pub const Tower = struct {
         tower_storage: *const TowerStorage,
         node_pubkey: *const Pubkey,
     ) !Tower {
-        _ = tower_storage;
-        _ = node_pubkey;
-        @panic("unimplimented");
+        return try tower_storage.load(node_pubkey);
     }
 
     pub fn collectVoteLockouts(
@@ -1574,12 +1636,35 @@ pub const Tower = struct {
     }
 
     pub fn lastVotedSlotInBank(
+        allocator: std.mem.Allocator,
         bank: *const Bank,
         vote_account_pubkey: *const Pubkey,
     ) ?Slot {
-        _ = bank;
-        _ = vote_account_pubkey;
-        @panic("unimplimented");
+        const vote_account = bank.accounts_db.getAccount(vote_account_pubkey) catch return null;
+        const vote_state = stateFromAccount(
+            allocator,
+            &vote_account,
+            vote_account_pubkey,
+        ) catch return null;
+        return vote_state.lastVotedSlot();
+    }
+
+    fn stateFromAccount(
+        allocator: std.mem.Allocator,
+        vote_account: *const Account,
+        vote_account_pubkey: *const Pubkey,
+    ) !VoteState {
+        const data = std.ArrayList(u8).init(allocator);
+        const buf = data.items;
+        // TODO Not sure if this is the way to get the data from the vote account. Review.
+        _ = vote_account.writeToBuf(vote_account_pubkey, buf);
+        const versioned_state = try sig.bincode.readFromSlice(
+            allocator,
+            VoteStateVersions,
+            buf,
+            .{},
+        );
+        return try versioned_state.convertToCurrent(allocator);
     }
 
     /// Checks if `maybe_descendant` is a descendant of `slot`.
