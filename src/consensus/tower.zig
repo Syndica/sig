@@ -9,16 +9,17 @@ const AutoHashMap = std.AutoHashMap;
 const BankForks = sig.consensus.unimplemented.BankForks;
 const ReplayStage = sig.consensus.unimplemented.ReplayStage;
 const ProgressMap = sig.consensus.unimplemented.ProgressMap;
-const VoteTransaction = sig.consensus.unimplemented.VoteTransaction;
-const Check = sig.consensus.unimplemented.Check;
-const SlotHistory = sig.consensus.unimplemented.SlotHistory;
+
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
 const VoteAccountsHashMap = sig.consensus.unimplemented.VoteAccountsHashMap;
 const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
 const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
-const TowerVoteState = sig.consensus.unimplemented.TowerVoteState;
+const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 
+const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
+
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const SavedTower = sig.consensus.tower_storage.SavedTower;
 const SavedTowerVersion = sig.consensus.tower_storage.SavedTowerVersions;
@@ -943,7 +944,7 @@ pub const Tower = struct {
         // sanity assertions for roots
         const tower_root = self.getRoot();
 
-        std.debug.assert(slot_history.check(replayed_root) == Check.found);
+        std.debug.assert(slot_history.check(replayed_root) == .found);
 
         std.debug.assert(
             self.last_vote.eql(&VoteTransaction{
@@ -961,7 +962,7 @@ pub const Tower = struct {
             if (tower_root <= replayed_root) {
                 // Normally, we goes into this clause with possible help of
                 // reconcile_blockstore_roots_with_external_source()
-                if (slot_history.check(last_voted_slot) == Check.too_old) {
+                if (slot_history.check(last_voted_slot) == .too_old) {
                     // We could try hard to anchor with other older votes, but opt to simplify the
                     // following logic
                     // TODO error to enum
@@ -976,8 +977,12 @@ pub const Tower = struct {
             } else {
                 // Let's pass-through adjust_lockouts_with_slot_history just for sanitization,
                 // using a synthesized SlotHistory.
-                var warped_slot_history = try slot_history.clone(allocator);
-                defer warped_slot_history.deinit();
+                var warped_slot_history = SlotHistory{
+                    .bits = try slot_history.bits.clone(allocator),
+                    .next_slot = slot_history.next_slot,
+                };
+
+                defer warped_slot_history.deinit(allocator);
                 // Blockstore doesn't have the tower_root slot because of
                 // (replayed_root < tower_root) in this else clause, meaning the tower is from
                 // the future from the view of blockstore.
@@ -1035,25 +1040,25 @@ pub const Tower = struct {
         while (iter.next()) |slot_in_tower| {
             const check = slot_history.check(slot_in_tower);
 
-            if (maybe_anchored_slot == null and check == Check.found) {
+            if (maybe_anchored_slot == null and check == .found) {
                 maybe_anchored_slot = slot_in_tower;
-            } else if (maybe_anchored_slot != null and check == Check.not_found) {
+            } else if (maybe_anchored_slot != null and check == .not_found) {
                 // this can't happen unless we're fed with bogus snapshot
                 // TODO Agave returns error with data.
                 return TowerError.FatallyInconsistent;
             }
 
-            if (still_in_future and check != Check.future) {
+            if (still_in_future and check != .future) {
                 still_in_future = false;
-            } else if (!still_in_future and check == Check.future) {
+            } else if (!still_in_future and check == .future) {
                 // really odd cases: bad ordered votes?
                 // TODO Agave returns error with data.
                 return TowerError.FatallyInconsistent;
             }
 
-            if (!past_outside_history and check == Check.too_old) {
+            if (!past_outside_history and check == .too_old) {
                 past_outside_history = true;
-            } else if (past_outside_history and check != Check.too_old) {
+            } else if (past_outside_history and check != .too_old) {
                 // really odd cases: bad ordered votes?
                 // TODO Agave returns error with data.
                 return TowerError.FatallyInconsistent;

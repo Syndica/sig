@@ -26,6 +26,26 @@ pub const SlotHistory = struct {
         sig.bincode.free(allocator, self);
     }
 
+    pub fn add(self: *SlotHistory, slot: u64) void {
+        if (slot > self.next_slot and
+            slot - self.next_slot >= MAX_ENTRIES)
+        {
+            // Wrapped past current history,
+            // clear entire bitvec.
+            const full_blocks = @as(usize, MAX_ENTRIES) / 64;
+            for (0..full_blocks) |i| {
+                self.bits.unset(i);
+            }
+        } else {
+            for (self.next_slot..slot) |skipped| {
+                self.bits.unset(skipped % MAX_ENTRIES);
+            }
+        }
+
+        self.bits.set(slot % MAX_ENTRIES);
+        self.next_slot = slot + 1;
+    }
+
     pub fn check(self: *const SlotHistory, slot: Slot) SlotCheckResult {
         if (slot > self.newest()) {
             return SlotCheckResult.future;
