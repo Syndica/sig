@@ -10,13 +10,11 @@ const Pubkey = sig.core.Pubkey;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SortedMap = sig.utils.collections.SortedMap;
 
-const tower = sig.consensus.tower;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 
-pub const SWITCH_FORK_THRESHOLD = tower.SWITCH_FORK_THRESHOLD;
-
-pub const MAX_ENTRIES = tower.MAX_ENTRIES;
-pub const DUPLICATE_LIVENESS_THRESHOLD = tower.DUPLICATE_LIVENESS_THRESHOLD;
+const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 // TODO DUPLICATE_THRESHOLD is defined in replay stage in Agave
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
