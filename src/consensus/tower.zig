@@ -33,6 +33,8 @@ const VoteStateUpdate = sig.runtime.program.vote_program.state.VoteStateUpdate;
 const VoteStateVersions = sig.runtime.program.vote_program.state.VoteStateVersions;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
+const Logger = sig.trace.Logger;
+const ScopedLogger = sig.trace.ScopedLogger;
 
 const UnixTimestamp = i64;
 
@@ -117,6 +119,7 @@ pub const TowerError = error{
 };
 
 pub const Tower = struct {
+    logger: ScopedLogger(@typeName(Self)),
     node_pubkey: Pubkey,
     threshold_depth: usize,
     threshold_size: f64,
@@ -138,8 +141,11 @@ pub const Tower = struct {
     stray_restored_slot: ?Slot,
     last_switch_threshold_check: ?struct { Slot, SwitchForkDecision },
 
+    const Self = @This();
+
     pub fn default(allocator: std.mem.Allocator) !Tower {
         return Tower{
+            .logger = .noop,
             .node_pubkey = Pubkey.ZEROES,
             .threshold_depth = 0,
             .threshold_size = 0,
@@ -154,12 +160,14 @@ pub const Tower = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        logger: Logger,
         node_pubkey: *const Pubkey,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
         bank: *const Bank,
     ) !Tower {
         var tower = try Tower.default(allocator);
+        tower.logger = logger.withScope(@typeName(Self));
         tower.node_pubkey = node_pubkey.*;
         try tower.initializeLockoutsFromBank(
             allocator,
@@ -172,6 +180,7 @@ pub const Tower = struct {
 
     pub fn newFromBankforks(
         allocator: std.mem.Allocator,
+        logger: Logger,
         bank_forks: *const BankForks,
         node_pubkey: *const Pubkey,
         vote_account: *const Pubkey,
@@ -187,10 +196,19 @@ pub const Tower = struct {
 
         const fork_root = root_bank.bank_fields.slot;
         const heaviest = heaviest_subtree_fork_choice.heaviestOverallSlot();
-        const heaviest_bank = bank_forks.getWithCheckedHash(heaviest).?;
+        const heaviest_bank = bank_forks.getWithCheckedHash(heaviest) orelse {
+            logger.withScope(@typeName(Tower))
+                .err()
+                .log(
+                \\The best overall slot must be one of `frozen_banks`
+                \\which all exist in bank_forks
+            );
+            return error.InvalidBank;
+        };
 
         return Tower.init(
             allocator,
+            logger,
             node_pubkey,
             vote_account,
             fork_root,
@@ -220,10 +238,16 @@ pub const Tower = struct {
             // the Timestamp Oracle.
             last_vote_timestamp +| 1
         else
+            // If the previous vote did not send a timestamp due to clock error,
+            // use the last good timestamp + 1
             self.last_timestamp.timestamp +| 1;
 
         if (self.last_vote.lastVotedSlot()) |last_voted_slot| {
             if (heaviest_slot_on_same_fork <= last_voted_slot) {
+                self.logger.warn().logf(
+                    \\Trying to refresh timestamp for vote on
+                    \\{} using smaller heaviest bank {}
+                , .{ last_voted_slot, heaviest_slot_on_same_fork });
                 return;
             }
             self.last_timestamp = BlockTimestamp{
@@ -232,7 +256,10 @@ pub const Tower = struct {
             };
             self.last_vote.setTimestamp(timestamp);
         } else {
-            // TODO Agave logs here
+            self.logger.warn().logf(
+                \\Trying to refresh timestamp for last vote on heaviest bank on same fork {},
+                \\but there is no vote to refresh
+            , .{heaviest_slot_on_same_fork});
         }
     }
 
@@ -359,7 +386,7 @@ pub const Tower = struct {
                 };
                 return timestamp;
             } else {
-                // Agave just logs here
+                // TODO Collect metrics
             }
         }
         return null;
@@ -594,7 +621,10 @@ pub const Tower = struct {
                 if (self.isFirstSwitchCheck() and switch_slot < last_voted_slot) {
                     // `switch < last` is needed not to warn! this message just because of using
                     // newer snapshots on validator restart
-                    // TODO replicate the logs
+                    self.logger.warn().logf(
+                        \\bank_forks doesn't have corresponding data for the stray restored last vote({}),
+                        \\meaning some inconsistency between saved tower and ledger.
+                    , .{last_voted_slot});
                 }
                 break :blk SortedSet(u64).init(allocator);
             } else @panic("TODO");
@@ -841,7 +871,10 @@ pub const Tower = struct {
 
         if (self.last_switch_threshold_check) |last_check| {
             if (switch_slot != last_check[0] and !std.meta.eql(decision, last_check[1])) {
-                // TODO log
+                self.logger.trace().logf("new switch threshold check: slot {}: {any}", .{
+                    switch_slot,
+                    decision,
+                });
                 self.last_switch_threshold_check = .{ switch_slot, decision };
             }
         }
@@ -880,6 +913,7 @@ pub const Tower = struct {
         // Check one by one and add any failures to be returned
         for (vote_thresholds_and_depths) |threshold| {
             const vote_threshold = Tower.checkVoteStakeThreshold(
+                self.logger,
                 vote_state.nthRecentLockout(threshold.depth),
                 self.vote_state.votes.items,
                 threshold.depth,
@@ -916,7 +950,6 @@ pub const Tower = struct {
             self.stray_restored_slot == self.lastVotedSlot());
     }
 
-    // TODO Add logging
     ///  The tower root can be older/newer if the validator booted from a newer/older snapshot, so
     /// tower lockouts may need adjustment
     pub fn adjustLockoutsAfterReplay(
@@ -927,7 +960,15 @@ pub const Tower = struct {
     ) !Tower {
         // sanity assertions for roots
         const tower_root = try self.getRoot();
-
+        self.logger.info().logf(
+            \\adjusting lockouts (after replay up to {}):
+            \\{any} tower root: {} replayed root: {}
+        , .{
+            replayed_root,
+            try self.votedSlots(allocator),
+            tower_root,
+            replayed_root,
+        });
         std.debug.assert(slot_history.check(replayed_root) == .found);
 
         std.debug.assert(
@@ -959,6 +1000,15 @@ pub const Tower = struct {
                 );
                 self.initializeRoot(replayed_root);
             } else {
+                // This should never occur under normal operation.
+                // While this validator's voting is suspended this way,
+                // suspended_decision_due_to_major_unsynced_ledger() will be also touched.
+
+                self.logger.err().logf(
+                    \\For some reason, we're REPROCESSING slots which has already been voted and
+                    \\ROOTED by us; VOTING will be SUSPENDED UNTIL {}!
+                , .{last_voted_slot});
+
                 // Let's pass-through adjust_lockouts_with_slot_history just for sanitization,
                 // using a synthesized SlotHistory.
                 var warped_slot_history = SlotHistory{
@@ -1231,6 +1281,7 @@ pub const Tower = struct {
 
     pub fn collectVoteLockouts(
         allocator: std.mem.Allocator,
+        logger: Logger,
         vote_account_pubkey: *const Pubkey,
         bank_slot: Slot,
         vote_accounts: *const VoteAccountsHashMap,
@@ -1260,7 +1311,13 @@ pub const Tower = struct {
                 continue;
             }
 
-            var vote_state = try stateFromAccount(allocator, vote_account, vote_account_pubkey);
+            logger.trace().logf(
+                "{} {} with stake {}",
+                .{ vote_account_pubkey, key, voted_stake },
+            );
+
+            var vote_state = TowerVoteState.fromAccount(&vote_account);
+
             for (vote_state.votes) |vote| {
                 const interval = try lockout_intervals
                     .getOrPut(vote.lastLockedOutSlot());
@@ -1272,7 +1329,10 @@ pub const Tower = struct {
 
             if (key.equals(vote_account_pubkey)) {
                 my_latest_landed_vote = if (vote_state.nthRecentLockout(0)) |l| l.slot() else null;
-                // TODO log
+                logger.debug().logf("vote state {any}", vote_state);
+                const observed_slot = if (vote_state.nthRecentLockout(0)) |l| l.slot else 0;
+
+                logger.debug().logf("observed slot {any}", .{observed_slot});
             }
             const start_root = vote_state.root_slot;
 
@@ -1295,6 +1355,7 @@ pub const Tower = struct {
             if (start_root != vote_state.root_slot) {
                 if (start_root) |root| {
                     const vote = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
+                    logger.trace().logf("ROOT: {}", .{vote.slot});
                     try vote_slots.put(vote.slot());
                 }
             }
@@ -1462,15 +1523,16 @@ pub const Tower = struct {
     }
 
     fn checkVoteStakeThreshold(
-        threshold: ?*const Lockout,
+        logger: ScopedLogger(@typeName(Tower)),
+        maybe_threshold_vote: ?*const Lockout,
         tower_before_applying_vote: anytype,
         threshold_depth: usize,
         threshold_size: f64,
-        _: Slot, // TODO add logging. only used in log in Agave
+        slot: Slot,
         voted_stakes: *const std.AutoHashMap(Slot, u64),
         total_stake: u64,
     ) ThresholdDecision {
-        const threshold_vote = threshold orelse {
+        const threshold_vote = maybe_threshold_vote orelse {
             // Tower isn't that deep.
             return ThresholdDecision{ .passed_threshold = {} };
         };
@@ -1485,6 +1547,19 @@ pub const Tower = struct {
         const lockout = @as(f64, @floatFromInt(fork_stake)) / @as(
             f64,
             @floatFromInt(total_stake),
+        );
+
+        logger.trace().logf(
+            \\fork_stake slot: {}, threshold_vote slot: {}, lockout: {} fork_stake:
+            \\{} total_stake: {}
+        ,
+            .{
+                slot,
+                threshold_vote.slot,
+                lockout,
+                fork_stake,
+                total_stake,
+            },
         );
 
         if (Tower.optimisticallyBypassVoteStakeThresholdCheck(
