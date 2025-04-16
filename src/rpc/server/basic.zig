@@ -426,27 +426,21 @@ fn handleRpcRequest(
 
             const data_handle: AccountDataHandle, //
             const facts: Facts //
-            = blk: {
-                const data_handle: sig.accounts_db.buffer_pool.AccountDataHandle, //
-                const facts: Facts //
-                = switch (account) {
-                    .file => |aif| .{ aif.data, .{
-                        .executable = aif.executable().*,
-                        .lamports = aif.lamports().*,
-                        .owner = aif.owner().*,
-                        .rent_epoch = aif.rent_epoch().*,
-                        .space = aif.data.len(),
-                    } },
-                    .unrooted_map => |um| .{ um.data, .{
-                        .executable = um.executable,
-                        .lamports = um.lamports,
-                        .owner = um.owner,
-                        .rent_epoch = um.rent_epoch,
-                        .space = um.data.len(),
-                    } },
-                };
-
-                break :blk .{ data_handle, facts };
+            = switch (account) {
+                .file => |aif| .{ aif.data, .{
+                    .executable = aif.executable().*,
+                    .lamports = aif.lamports().*,
+                    .owner = aif.owner().*,
+                    .rent_epoch = aif.rent_epoch().*,
+                    .space = aif.data.len(),
+                } },
+                .unrooted_map => |um| .{ um.data, .{
+                    .executable = um.executable,
+                    .lamports = um.lamports,
+                    .owner = um.owner,
+                    .rent_epoch = um.rent_epoch,
+                    .space = um.data.len(),
+                } },
             };
 
             const account_data_base64 = blk: {
