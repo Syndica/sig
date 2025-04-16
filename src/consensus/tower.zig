@@ -2,42 +2,37 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const AutoHashMap = std.AutoHashMap;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
+const Account = sig.core.Account;
+const Bank = sig.accounts_db.Bank;
 const BankForks = sig.consensus.unimplemented.BankForks;
-const ReplayStage = sig.consensus.unimplemented.ReplayStage;
-const ProgressMap = sig.consensus.unimplemented.ProgressMap;
-
+const BlockTimestamp = sig.runtime.program.vote_program.state.BlockTimestamp;
+const Hash = sig.core.Hash;
+const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
-const VoteAccountsHashMap = sig.consensus.unimplemented.VoteAccountsHashMap;
+const Lockout = sig.runtime.program.vote_program.state.Lockout;
 const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
-const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
-const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
-
-const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
-
-const SlotHistory = sig.runtime.sysvar.SlotHistory;
-const TowerStorage = sig.consensus.tower_storage.TowerStorage;
+const ProgressMap = sig.consensus.unimplemented.ProgressMap;
+const Pubkey = sig.core.Pubkey;
+const ReplayStage = sig.consensus.unimplemented.ReplayStage;
 const SavedTower = sig.consensus.tower_storage.SavedTower;
 const SavedTowerVersion = sig.consensus.tower_storage.SavedTowerVersions;
-const BlockTimestamp = sig.runtime.program.vote_program.state.BlockTimestamp;
-const Lockout = sig.runtime.program.vote_program.state.Lockout;
-const Vote = sig.runtime.program.vote_program.state.Vote;
-const VoteStateVersions = sig.runtime.program.vote_program.state.VoteStateVersions;
-const VoteState = sig.runtime.program.vote_program.state.VoteState;
-const VoteError = sig.runtime.program.vote_program.VoteError;
-const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
-const VoteStateUpdate = sig.runtime.program.vote_program.state.VoteStateUpdate;
-const TowerSync = sig.runtime.program.vote_program.state.TowerSync;
-const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
-const Bank = sig.accounts_db.Bank;
-const SortedMap = sig.utils.collections.SortedMap;
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
-const Account = sig.core.Account;
+const TowerStorage = sig.consensus.tower_storage.TowerStorage;
+const TowerSync = sig.runtime.program.vote_program.state.TowerSync;
+const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
+const Vote = sig.runtime.program.vote_program.state.Vote;
+const VoteAccountsHashMap = sig.consensus.unimplemented.VoteAccountsHashMap;
+const VoteState = sig.runtime.program.vote_program.state.VoteState;
+const VoteStateUpdate = sig.runtime.program.vote_program.state.VoteStateUpdate;
+const VoteStateVersions = sig.runtime.program.vote_program.state.VoteStateVersions;
+const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
+const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
 
 const UnixTimestamp = i64;
 
@@ -567,7 +562,7 @@ pub const Tower = struct {
             }
         }
 
-        const last_vote_ancestors = (ancestors.get(last_voted_slot)) orelse blk: {
+        const last_vote_ancestors = ancestors.get(last_voted_slot) orelse blk: {
             if (self.isStrayLastVote()) {
                 // Unless last vote is stray and stale, ancestors.get(last_voted_slot) must
                 // return Some(_), justifying to panic! here.
