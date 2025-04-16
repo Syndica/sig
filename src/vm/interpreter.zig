@@ -1,15 +1,15 @@
 const std = @import("std");
-const lib = @import("lib.zig");
-const sbpf = @import("sbpf.zig");
-const memory = @import("memory.zig");
-const syscalls = @import("syscalls.zig");
-const transaction_context = @import("../runtime/transaction_context.zig");
+const sig = @import("../sig.zig");
+
+const sbpf = sig.vm.sbpf;
+const memory = sig.vm.memory;
+const syscalls = sig.vm.syscalls;
 
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
-const Executable = lib.Executable;
-const BuiltinProgram = lib.BuiltinProgram;
-const TransactionContext = transaction_context.TransactionContext;
+const Executable = sig.vm.Executable;
+const BuiltinProgram = sig.vm.BuiltinProgram;
+const TransactionContext = sig.runtime.TransactionContext;
 
 pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
 
