@@ -98,4 +98,8 @@ pub const StakedAccount = struct { stake: u64, account: VoteAccount };
 const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
 pub const VoteAccountsHashMap = std.AutoHashMap(Pubkey, StakedAccount);
 pub const ExpirationSlot = Slot;
-pub const LockoutIntervals = SortedMap(ExpirationSlot, std.ArrayList(VotedSlotAndPubkey));
+const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
+    ExpirationSlot,
+    std.ArrayList(VotedSlotAndPubkey),
+);
+pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
