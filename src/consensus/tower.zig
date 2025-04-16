@@ -178,6 +178,11 @@ pub const Tower = struct {
         return tower;
     }
 
+    pub fn deinit(self: *Tower, allocator: std.mem.Allocator) void {
+        self.vote_state.deinit(allocator);
+        self.last_vote.deinit(allocator);
+    }
+
     pub fn newFromBankforks(
         allocator: std.mem.Allocator,
         logger: Logger,
@@ -1612,3 +1617,45 @@ pub const Tower = struct {
         }
     }
 };
+
+test "tower: check vote threshold without votes" {
+    var tower = try createTestTower(std.testing.allocator, 4, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
+    defer stakes.deinit();
+
+    for (0..(MAX_LOCKOUT_HISTORY + 1)) |i| {
+        try stakes.put(i, 1);
+        _ = try tower.recordBankVoteAndUpdateLockouts(
+            std.testing.allocator,
+            i,
+            Hash.ZEROES,
+            true,
+            Hash.ZEROES,
+        );
+    }
+
+    const result = try tower.checkVoteStakeThresholds(
+        std.testing.allocator,
+        MAX_LOCKOUT_HISTORY + 1,
+        &stakes,
+        2,
+    );
+    try std.testing.expect(result.items.len != 0);
+}
+
+const builtin = @import("builtin");
+fn createTestTower(
+    allocator: std.mem.Allocator,
+    threshold_depth: usize,
+    threshold_size: f64,
+) !Tower {
+    if (!builtin.is_test) {
+        @panic("createTestTower should only be used in test");
+    }
+    var tower = try Tower.default(allocator);
+    tower.threshold_depth = threshold_depth;
+    tower.threshold_size = threshold_size;
+    return tower;
+}

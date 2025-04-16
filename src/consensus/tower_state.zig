@@ -18,6 +18,10 @@ pub const TowerVoteState = struct {
         };
     }
 
+    pub fn deinit(self: *TowerVoteState, allocator: std.mem.Allocator) void {
+        self.votes.deinit(allocator);
+    }
+
     pub fn fromAccount(account: *const Account) TowerVoteState {
         _ = account;
         @panic("Unimplemented");
