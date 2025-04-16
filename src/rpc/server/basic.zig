@@ -43,50 +43,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
             .logf("Receive head error: {s}", .{@errorName(err)});
         return;
     };
-    const head_info = requests.HeadInfo.parseFromStdHead(request.head) catch |err| switch (err) {
-        error.RequestTargetTooLong => {
-            logger.err().field("conn", conn.address).logf(
-                "Request target was too long: '{}'",
-                .{std.zig.fmtEscapes(request.head.target)},
-            );
-            return;
-        },
-        error.UnexpectedTransferEncoding => {
-            if (request.head.content_length == null) {
-                logger.err().field("conn", conn.address).log("Request missing Content-Length");
-                request.respond("", .{
-                    .status = .length_required,
-                    .keep_alive = false,
-                }) catch |e| switch (e) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-            } else {
-                logger.err().field("conn", conn.address).log("Transfer-Encoding & Content-Length");
-                request.respond("", .{
-                    .status = .bad_request,
-                    .keep_alive = false,
-                }) catch |e| switch (e) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-            }
-            return;
-        },
-        error.RequestContentTypeUnrecognized => {
-            logger.err().field("conn", conn.address).log(
-                "Request content type unrecognized",
-            );
-            request.respond("", .{
-                .status = .not_acceptable,
-                .keep_alive = false,
-            }) catch |e| switch (e) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
-            return;
-        },
-    };
+    const head_info = try parseAndHandleHead(&request, logger) orelse return;
 
     logger.debug().field("conn", conn.address).logf(
         "Responding to request: {} {s}",
@@ -94,206 +51,30 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
     );
 
     switch (head_info.method) {
-        .HEAD, .GET => switch (requests.getRequestTargetResolve(
-            logger.unscoped(),
-            request.head.target,
-            &server_ctx.accountsdb.latest_snapshot_gen_info,
-        )) {
-            inline .full_snapshot, .inc_snapshot => |pair| {
-                const snap_info, var full_info_lg = pair;
-                defer full_info_lg.unlock();
+        .HEAD, .GET => try handleGetOrHead(server_ctx, &request, logger),
+        .POST => try handlePost(server_ctx, &request, logger, head_info),
+        else => try respondSimpleErrorStatusBody(&request, logger, .not_found, ""),
+    }
+}
 
-                const archive_name_bounded = snap_info.snapshotArchiveName();
-                const archive_name = archive_name_bounded.constSlice();
-
-                const archive_file = server_ctx.accountsdb.snapshot_dir.openFile(
-                    archive_name,
-                    .{},
-                ) catch |err| {
-                    switch (err) {
-                        error.FileNotFound => {
-                            std.debug.print("not found: {s}\n", .{sig.utils.fmt.tryRealPath(
-                                server_ctx.accountsdb.snapshot_dir,
-                                archive_name,
-                            )});
-                        },
-                        else => {},
-                    }
-                    return error.SystemIoError;
-                };
-                defer archive_file.close();
-
-                const archive_len = archive_file.getEndPos() catch
-                    return error.SystemIoError;
-
-                var send_buffer: [4096]u8 = undefined;
-                var response = request.respondStreaming(.{
-                    .send_buffer = &send_buffer,
-                    .content_length = archive_len,
-                    .respond_options = .{},
-                });
-                // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
-                response.flush() catch |err| switch (err) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-
-                if (!response.elide_body) {
-                    // use a length which is still a multiple of 2, greater than the send_buffer length,
-                    // in order to almost always force the http server method to flush, instead of
-                    // pointlessly copying data into the send buffer.
-                    const read_buffer_len = comptime std.mem.alignForward(
-                        usize,
-                        send_buffer.len + 1,
-                        2,
-                    );
-
-                    while (true) {
-                        var read_buffer: [read_buffer_len]u8 = undefined;
-                        const file_data_len =
-                            archive_file.read(&read_buffer) catch |err| switch (err) {
-                            error.ConnectionResetByPeer,
-                            error.ConnectionTimedOut,
-                            => return,
-                            else => return error.SystemIoError,
-                        };
-                        if (file_data_len == 0) break;
-                        const file_data = read_buffer[0..file_data_len];
-                        response.writeAll(file_data) catch |err| switch (err) {
-                            error.ConnectionResetByPeer => return,
-                            else => return error.SystemIoError,
-                        };
-                    }
-                } else {
-                    std.debug.assert(response.transfer_encoding.content_length == archive_len);
-                    // NOTE: in order to avoid needing to actually spend time writing the response body,
-                    // just trick the API into thinking we already wrote the entire thing by setting this
-                    // to 0.
-                    response.transfer_encoding.content_length = 0;
-                }
-
-                response.end() catch |err| switch (err) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-                return;
-            },
-
-            .health => {
-                request.respond("unknown", .{
-                    .status = .ok,
-                    .keep_alive = false,
-                }) catch |err| switch (err) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-                return;
-            },
-
-            .genesis_file => {
-                logger.err()
-                    .field("conn", conn.address)
-                    .logf("Attempt to get our genesis file", .{});
-                request.respond("Genesis file get is not yet implemented", .{
-                    .status = .service_unavailable,
-                    .keep_alive = false,
-                }) catch |err| switch (err) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-                return;
-            },
-
-            .not_found => {},
-        },
-        .POST => {
-            if (head_info.content_type != .@"application/json") {
-                request.respond("", .{
-                    .status = .not_acceptable,
-                    .keep_alive = false,
-                }) catch |err| switch (err) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-                return;
-            }
-
-            const req_reader = sig.utils.io.narrowAnyReader(
-                // make the server handle the 100-continue in case there is one
-                request.reader() catch |err| switch (err) {
-                    error.HttpExpectationFailed => return,
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                },
-                std.http.Server.Request.ReadError,
-            );
-
-            const content_len = head_info.content_len orelse {
-                request.respond("", .{
-                    .status = .length_required,
-                    .keep_alive = false,
-                }) catch |err| switch (err) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-                return;
-            };
-
-            if (content_len > requests.MAX_REQUEST_BODY_SIZE) {
-                request.respond("", .{
-                    .status = .payload_too_large,
-                    .keep_alive = false,
-                }) catch |err| switch (err) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
-                return;
-            }
-
-            const content_body = try server_ctx.allocator.alloc(u8, content_len);
-            defer server_ctx.allocator.free(content_body);
-            req_reader.readNoEof(content_body) catch |err| switch (err) {
-                error.EndOfStream,
-                error.HttpChunkInvalid,
-                error.HttpHeadersOversize,
-                => {
-                    request.respond("", .{
-                        .status = .bad_request,
-                        .keep_alive = false,
-                    }) catch |e| switch (e) {
-                        error.ConnectionResetByPeer => return,
-                        else => return error.SystemIoError,
-                    };
-                    return;
-                },
-
-                error.OperationAborted,
-                error.ConnectionResetByPeer,
-                error.ConnectionTimedOut,
-                => |e| {
-                    logger.err()
-                        .field("conn", conn.address)
-                        .logf("{s}", .{@errorName(e)});
-                    return;
-                },
-
-                else => return error.SystemIoError,
-            };
-
-            try handleRpcRequest(server_ctx, &request, content_body);
-            return;
-        },
-        else => {},
+fn respondSimpleErrorStatusBody(
+    request: *std.http.Server.Request,
+    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+    status: std.http.Status,
+    body: []const u8,
+) !void {
+    switch (status.class()) {
+        .client_error, .server_error => {},
+        else => unreachable,
     }
 
-    // fallthrough to 404 Not Found
-
+    const conn = request.server.connection;
     logger.err().field("conn", conn.address).logf(
         "Unrecognized request '{} {s}'",
         .{ requests.httpMethodFmt(request.head.method), request.head.target },
     );
-    request.respond("", .{
-        .status = .not_found,
+    request.respond(body, .{
+        .status = status,
         .keep_alive = false,
     }) catch |e| switch (e) {
         error.ConnectionResetByPeer => return,
@@ -301,9 +82,220 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
     };
 }
 
+fn parseAndHandleHead(
+    request: *std.http.Server.Request,
+    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+) !?requests.HeadInfo {
+    const conn = request.server.connection;
+    return requests.HeadInfo.parseFromStdHead(request.head) catch |err| switch (err) {
+        error.RequestTargetTooLong => {
+            logger.err().field("conn", conn.address).logf(
+                "Request target was too long: '{}'",
+                .{std.zig.fmtEscapes(request.head.target)},
+            );
+            return null;
+        },
+        error.UnexpectedTransferEncoding => {
+            if (request.head.content_length == null) {
+                logger.err().field("conn", conn.address).log("Request missing Content-Length");
+                try respondSimpleErrorStatusBody(request, logger, .length_required, "");
+            } else {
+                logger.err().field("conn", conn.address).log("Transfer-Encoding & Content-Length");
+                try respondSimpleErrorStatusBody(request, logger, .bad_request, "");
+            }
+            return null;
+        },
+        error.RequestContentTypeUnrecognized => {
+            logger.err().field("conn", conn.address).log(
+                "Request content type unrecognized",
+            );
+            try respondSimpleErrorStatusBody(request, logger, .not_acceptable, "");
+            return null;
+        },
+    };
+}
+
+fn handleGetOrHead(
+    server_ctx: *server.Context,
+    request: *std.http.Server.Request,
+    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+) !void {
+    const conn = request.server.connection;
+    switch (requests.getRequestTargetResolve(
+        logger.unscoped(),
+        request.head.target,
+        &server_ctx.accountsdb.latest_snapshot_gen_info,
+    )) {
+        inline .full_snapshot, .inc_snapshot => |pair| {
+            const snap_info, var full_info_lg = pair;
+            defer full_info_lg.unlock();
+
+            const archive_name_bounded = snap_info.snapshotArchiveName();
+            const archive_name = archive_name_bounded.constSlice();
+
+            const archive_file = server_ctx.accountsdb.snapshot_dir.openFile(
+                archive_name,
+                .{},
+            ) catch |err| {
+                switch (err) {
+                    error.FileNotFound => {
+                        std.debug.print("not found: {s}\n", .{sig.utils.fmt.tryRealPath(
+                            server_ctx.accountsdb.snapshot_dir,
+                            archive_name,
+                        )});
+                    },
+                    else => {},
+                }
+                return error.SystemIoError;
+            };
+            defer archive_file.close();
+
+            const archive_len = archive_file.getEndPos() catch
+                return error.SystemIoError;
+
+            var send_buffer: [4096]u8 = undefined;
+            var response = request.respondStreaming(.{
+                .send_buffer = &send_buffer,
+                .content_length = archive_len,
+                .respond_options = .{},
+            });
+            // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
+            response.flush() catch |err| switch (err) {
+                error.ConnectionResetByPeer => return,
+                else => return error.SystemIoError,
+            };
+
+            if (!response.elide_body) {
+                // use a length which is still a multiple of 2, greater than the send_buffer length,
+                // in order to almost always force the http server method to flush, instead of
+                // pointlessly copying data into the send buffer.
+                const read_buffer_len = comptime std.mem.alignForward(
+                    usize,
+                    send_buffer.len + 1,
+                    2,
+                );
+
+                while (true) {
+                    var read_buffer: [read_buffer_len]u8 = undefined;
+                    const file_data_len =
+                        archive_file.read(&read_buffer) catch |err| switch (err) {
+                        error.ConnectionResetByPeer,
+                        error.ConnectionTimedOut,
+                        => return,
+                        else => return error.SystemIoError,
+                    };
+                    if (file_data_len == 0) break;
+                    const file_data = read_buffer[0..file_data_len];
+                    response.writeAll(file_data) catch |err| switch (err) {
+                        error.ConnectionResetByPeer => return,
+                        else => return error.SystemIoError,
+                    };
+                }
+            } else {
+                std.debug.assert(response.transfer_encoding.content_length == archive_len);
+                // NOTE: in order to avoid needing to actually spend time writing the response body,
+                // just trick the API into thinking we already wrote the entire thing by setting this
+                // to 0.
+                response.transfer_encoding.content_length = 0;
+            }
+
+            response.end() catch |err| switch (err) {
+                error.ConnectionResetByPeer => return,
+                else => return error.SystemIoError,
+            };
+            return;
+        },
+
+        .health => {
+            request.respond("unknown", .{
+                .status = .ok,
+                .keep_alive = false,
+            }) catch |err| switch (err) {
+                error.ConnectionResetByPeer => return,
+                else => return error.SystemIoError,
+            };
+            return;
+        },
+
+        .genesis_file => {
+            logger.err()
+                .field("conn", conn.address)
+                .logf("Attempt to get our genesis file", .{});
+            try respondSimpleErrorStatusBody(request, logger, .service_unavailable,
+                \\Genesis file get is not yet implemented
+            );
+            return;
+        },
+
+        .not_found => {},
+    }
+
+    try respondSimpleErrorStatusBody(request, logger, .not_found, "");
+}
+
+fn handlePost(
+    server_ctx: *server.Context,
+    request: *std.http.Server.Request,
+    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
+    head_info: requests.HeadInfo,
+) !void {
+    const conn = request.server.connection;
+    if (head_info.content_type != .@"application/json") {
+        try respondSimpleErrorStatusBody(request, logger, .not_acceptable, "");
+        return;
+    }
+
+    const req_reader = sig.utils.io.narrowAnyReader(
+        // make the server handle the 100-continue in case there is one
+        request.reader() catch |err| switch (err) {
+            error.HttpExpectationFailed => return,
+            error.ConnectionResetByPeer => return,
+            else => return error.SystemIoError,
+        },
+        std.http.Server.Request.ReadError,
+    );
+
+    const content_len = head_info.content_len orelse {
+        try respondSimpleErrorStatusBody(request, logger, .length_required, "");
+        return;
+    };
+
+    if (content_len > requests.MAX_REQUEST_BODY_SIZE) {
+        try respondSimpleErrorStatusBody(request, logger, .payload_too_large, "");
+        return;
+    }
+
+    const content_body = try server_ctx.allocator.alloc(u8, content_len);
+    defer server_ctx.allocator.free(content_body);
+    req_reader.readNoEof(content_body) catch |err| switch (err) {
+        error.EndOfStream,
+        error.HttpChunkInvalid,
+        error.HttpHeadersOversize,
+        => {
+            try respondSimpleErrorStatusBody(request, logger, .bad_request, "");
+            return;
+        },
+
+        error.OperationAborted,
+        error.ConnectionResetByPeer,
+        error.ConnectionTimedOut,
+        => |e| {
+            logger.err()
+                .field("conn", conn.address)
+                .logf("{s}", .{@errorName(e)});
+            return;
+        },
+
+        else => return error.SystemIoError,
+    };
+
+    try handleRpcRequest(server_ctx, request, logger, content_body);
+}
+
 fn handleRpcRequest(
     server_ctx: *server.Context,
     request: *std.http.Server.Request,
+    logger: sig.trace.ScopedLogger(LOGGER_SCOPE),
     content_body: []const u8,
 ) !void {
     var json_arena_state = std.heap.ArenaAllocator.init(server_ctx.allocator);
@@ -405,13 +397,7 @@ fn handleRpcRequest(
                 config.minContextSlot orelse null,
                 null,
             ) catch return error.AccountsDbError) orelse {
-                request.respond("", .{
-                    .status = .range_not_satisfiable,
-                    .keep_alive = false,
-                }) catch |err| switch (err) {
-                    error.ConnectionResetByPeer => return,
-                    else => return error.SystemIoError,
-                };
+                try respondSimpleErrorStatusBody(request, logger, .range_not_satisfiable, "");
                 return;
             };
             defer account_lg.unlock();
@@ -501,13 +487,7 @@ fn handleRpcRequest(
             return;
         },
         else => {
-            request.respond("", .{
-                .status = .not_implemented,
-                .keep_alive = false,
-            }) catch |err| switch (err) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
+            try respondSimpleErrorStatusBody(request, logger, .not_implemented, "");
             return;
         },
     }
