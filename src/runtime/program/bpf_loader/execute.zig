@@ -1438,9 +1438,6 @@ pub fn deployProgram(
     const source = try allocator.dupe(u8, data);
     defer allocator.free(source);
 
-    try tc.log("Source[0..4] = {any}", .{source[0..4]});
-    try tc.log("elf.MAGIC = {any}", .{std.elf.MAGIC});
-
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L133-L143
     var executable = vm.Executable.fromBytes(
         allocator,

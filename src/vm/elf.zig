@@ -898,16 +898,6 @@ pub const Elf = struct {
         config: Config,
         loader: *BuiltinProgram,
     ) !Elf {
-        var maybe_prev_vaddr: ?elf.Elf64_Addr = null;
-        for (headers.phdrs) |phdr| {
-            if (phdr.p_type != elf.PT_LOAD) continue;
-            if (maybe_prev_vaddr) |prev_addr| if (phdr.p_vaddr < prev_addr)
-                return error.InvalidProgramHeader;
-            const offset = try std.math.add(u64, phdr.p_offset, phdr.p_filesz);
-            if (offset > bytes.len) return error.OutOfBounds;
-            maybe_prev_vaddr = phdr.p_vaddr;
-        }
-
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
         const offset = headers.header.e_entry -| text_section.sh_addr;
