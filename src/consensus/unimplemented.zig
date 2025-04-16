@@ -63,7 +63,7 @@ pub const ProgressMap = struct {
 pub const ReplayStage = struct {
     pub fn initializeProgressAndForkChoice(
         root_bank: *const Bank,
-        frozen_banks: std.ArrayList(Bank),
+        frozen_banks: *const []Bank,
         my_pubkey: *const Pubkey,
         vote_account: *const Pubkey,
         duplicate_slot_hashes: std.ArrayList(SlotAndHash),
