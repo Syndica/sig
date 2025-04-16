@@ -1,6 +1,3 @@
-// TODO
-// - Use sortedset
-//
 const std = @import("std");
 const sig = @import("../sig.zig");
 
@@ -187,8 +184,7 @@ pub const Tower = struct {
         const root_bank = bank_forks.rootBank();
         _, const heaviest_subtree_fork_choice = ReplayStage.initializeProgressAndForkChoice(
             &root_bank,
-            // TODO
-            std.ArrayList(Bank).fromOwnedSlice(allocator, bank_forks.frozenBanks().inner.values()),
+            &bank_forks.frozenBanks().inner.values(),
             node_pubkey,
             vote_account,
             std.ArrayList(SlotAndHash).init(allocator),
@@ -208,12 +204,15 @@ pub const Tower = struct {
     }
 
     pub fn towerSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
-        // TODO avoid this array list?
-        var slots = std.ArrayList(Slot).init(allocator);
+        var slots = std.ArrayListUnmanaged(Slot){};
+        try slots.ensureTotalCapacity(
+            allocator,
+            self.vote_state.votes.items.len,
+        );
         for (self.vote_state.votes.items) |vote| {
-            try slots.append(vote.slot);
+            slots.appendAssumeCapacity(vote.slot);
         }
-        return slots.toOwnedSlice();
+        return slots.toOwnedSlice(allocator);
     }
 
     pub fn refreshLastVoteTimestamp(
@@ -321,21 +320,16 @@ pub const Tower = struct {
     ) !?Slot {
         if (self.vote_state.lastVotedSlot()) |last_voted_sot| {
             if (vote_slot <= last_voted_sot) {
-                // TODO Can we improve things here and not be 1:1 even with erros
-                // as the native programs?
-                std.debug.panic(
-                    "Error while recording vote {} {} in local tower {}",
-                    .{ vote_slot, vote_hash, VoteError.vote_too_old },
-                );
+                return error.VoteTooOld;
             }
         }
 
-        const old_root = self.getRoot();
+        const old_root = try self.getRoot();
 
         try self.vote_state.processNextVoteSlot(allocator, vote_slot);
         try self.updateLastVoteFromVoteState(allocator, vote_hash, enable_tower_sync_ix, block_id);
 
-        const new_root = self.getRoot();
+        const new_root = try self.getRoot();
 
         if (old_root != new_root) {
             return new_root;
@@ -383,8 +377,8 @@ pub const Tower = struct {
     // which establishes the origin of trust (i.e. root) whether booting from genesis (slot 0) or
     // snapshot (slot N). In other words, there should be no possibility a Tower doesn't have
     // root, unlike young vote accounts.
-    pub fn getRoot(self: *const Tower) Slot {
-        // TODO this is an unwrap in agave. Guess this is fine?
+    pub fn getRoot(self: *const Tower) !Slot {
+        if (self.vote_state.root_slot == null) return error.RootSlotMissing;
         return self.vote_state.root_slot.?;
     }
 
@@ -532,16 +526,12 @@ pub const Tower = struct {
         const last_voted = self.lastVotedSlotHash() orelse return SwitchForkDecision.same_fork;
         const last_voted_slot = last_voted.slot;
         const last_voted_hash = last_voted.hash;
-        const root = self.getRoot();
+        const root = try self.getRoot();
 
         // `heaviest_subtree_fork_choice` entries are not cleaned by duplicate block purging/rollback logic,
         // so this is safe to check here. We return here if the last voted slot was rolled back/purged due to
         // being a duplicate because `ancestors`/`descendants`/`progress` structures may be missing this slot due
         // to duplicate purging. This would cause many of the `unwrap()` checks below to fail.
-        //
-        // TODO: Handle if the last vote is on a dupe, and then we restart. The dupe won't be in
-        // heaviest_subtree_fork_choice, so `heaviest_subtree_fork_choice.latest_invalid_ancestor()` will return
-        // None, but the last vote will be persisted in tower.
         const switch_hash = progress.getHash(switch_slot).?;
         if (heaviest_subtree_fork_choice.latestDuplicateAncestor(
             SlotAndHash{ .slot = last_voted_slot, .hash = last_voted_hash },
@@ -572,7 +562,6 @@ pub const Tower = struct {
                     // Our last vote slot was purged because it was on a duplicate fork, don't continue below
                     // where checks may panic. We allow a freebie vote here that may violate switching
                     // thresholds
-                    // TODO: Properly handle this case
                     return SwitchForkDecision{ .switch_proof = Hash.ZEROES };
                 }
             }
@@ -942,7 +931,7 @@ pub const Tower = struct {
         slot_history: *const SlotHistory,
     ) !Tower {
         // sanity assertions for roots
-        const tower_root = self.getRoot();
+        const tower_root = try self.getRoot();
 
         std.debug.assert(slot_history.check(replayed_root) == .found);
 
@@ -1016,7 +1005,7 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         slot_history: *const SlotHistory,
     ) !void {
-        const tower_root = self.getRoot();
+        const tower_root = try self.getRoot();
         // retained slots will be consisted only from divergent slots
         var retain_flags_for_each_vote_in_reverse = try std.ArrayList(bool).initCapacity(
             allocator,
@@ -1271,13 +1260,12 @@ pub const Tower = struct {
         while (vote_accounts_iter.next()) |entry| {
             const key = entry.key_ptr.*;
             const voted_stake = entry.value_ptr.*.stake;
+            const vote_account = entry.value_ptr.*.account;
             if (voted_stake == 0) {
                 continue;
             }
 
-            // TODO create TowerVoteState from
-            // pub const LockoutIntervals = SortedMap(ExpirationSlot, std.ArrayList(VotedSlotAndPubkey));
-            var vote_state = TowerVoteState{};
+            var vote_state = try stateFromAccount(allocator, vote_account, vote_account_pubkey);
             for (vote_state.votes) |vote| {
                 const interval = try lockout_intervals
                     .getOrPut(vote.lastLockedOutSlot());
