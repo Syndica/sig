@@ -116,20 +116,20 @@ pub const BorrowedAccount = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L800
     pub fn addLamports(self: *BorrowedAccount, lamports: u64) InstructionError!void {
-        self.account.lamports = std.math.add(
+        try self.setLamports(std.math.add(
             u64,
             self.account.lamports,
             lamports,
-        ) catch return InstructionError.ArithmeticOverflow;
+        ) catch return InstructionError.ArithmeticOverflow);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L808
     pub fn subtractLamports(self: *BorrowedAccount, lamports: u64) InstructionError!void {
-        self.account.lamports = std.math.sub(
+        try self.setLamports(std.math.sub(
             u64,
             self.account.lamports,
             lamports,
-        ) catch return InstructionError.ArithmeticOverflow;
+        ) catch return InstructionError.ArithmeticOverflow);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L817

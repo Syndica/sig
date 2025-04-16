@@ -1,5 +1,7 @@
 const sig = @import("../../../sig.zig");
 
+const bincode = sig.bincode;
+
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
@@ -61,6 +63,10 @@ pub const Instruction = union(enum) {
 
         /// Owner program account address
         owner: Pubkey,
+
+        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
+            .deserializer = bincode.readUtf8String,
+        };
     },
 
     /// Consumes a stored nonce, replacing it with a successor
@@ -134,6 +140,10 @@ pub const Instruction = union(enum) {
 
         /// Owner program account
         owner: Pubkey,
+
+        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
+            .deserializer = bincode.readUtf8String,
+        };
     },
 
     /// Assign account to a program based on a seed
@@ -150,6 +160,10 @@ pub const Instruction = union(enum) {
 
         /// Owner program account
         owner: Pubkey,
+
+        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
+            .deserializer = bincode.readUtf8String,
+        };
     },
 
     /// Transfer lamports from a derived address
@@ -167,6 +181,10 @@ pub const Instruction = union(enum) {
 
         /// Owner to use to derive the funding account address
         from_owner: Pubkey,
+
+        pub const @"!bincode-config:from_seed": bincode.FieldConfig([]const u8) = .{
+            .deserializer = bincode.readUtf8String,
+        };
     },
 
     /// One-time idempotent upgrade of legacy nonce versions in order to bump
