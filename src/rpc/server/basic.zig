@@ -432,27 +432,11 @@ fn handleRpcRequest(
             const account_data_base64 = blk: {
                 var account_data_base64: std.ArrayListUnmanaged(u8) = .{};
                 defer account_data_base64.deinit(server_ctx.allocator);
-                const account_data_base64_writer =
-                    account_data_base64.writer(server_ctx.allocator);
-
-                const acc_data_handle = if (config.dataSlice) |ds|
-                    // TODO: handle potental integer overflow properly here
-                    data_handle.slice(@intCast(ds.offset), @intCast(ds.offset + ds.length))
-                else
-                    data_handle;
-
-                var b64_enc_stream = sig.utils.base64.EncodingStream.init(
-                    std.base64.standard.Encoder,
+                try base64EncodeAccount(
+                    account_data_base64.writer(server_ctx.allocator),
+                    data_handle,
+                    config.dataSlice,
                 );
-                const b64_enc_writer_ctx =
-                    b64_enc_stream.writerCtx(account_data_base64_writer);
-
-                var frame_iter = acc_data_handle.iterator();
-                while (frame_iter.nextFrame()) |frame_bytes| {
-                    try b64_enc_writer_ctx.writer().writeAll(frame_bytes);
-                }
-                try b64_enc_writer_ctx.flush();
-
                 break :blk try account_data_base64.toOwnedSlice(server_ctx.allocator);
             };
             defer server_ctx.allocator.free(account_data_base64);
@@ -518,6 +502,31 @@ fn writeJsonResponse(
     var json_writer = std.json.writeStream(resp_writer, json_stringify_opts);
     try json_writer.write(json_value);
     try response.end();
+}
+
+fn base64EncodeAccount(
+    writer: anytype,
+    data_handle: AccountDataHandle,
+    data_slice: ?rpc.methods.common.DataSlice,
+) !void {
+    const acc_data_handle = if (data_slice) |ds|
+        // TODO: handle potental integer overflow properly here
+        data_handle.slice(
+            @intCast(ds.offset),
+            @intCast(ds.offset + ds.length),
+        )
+    else
+        data_handle;
+
+    var b64_enc_stream = sig.utils.base64.EncodingStream.init(std.base64.standard.Encoder);
+    const b64_enc_writer_ctx = b64_enc_stream.writerCtx(writer);
+    const b64_enc_writer = b64_enc_writer_ctx.writer();
+
+    var frame_iter = acc_data_handle.iterator();
+    while (frame_iter.nextFrame()) |frame_bytes| {
+        try b64_enc_writer.writeAll(frame_bytes);
+    }
+    try b64_enc_writer_ctx.flush();
 }
 
 const HttpResponseWriter = sig.utils.io.NarrowAnyWriter(std.http.Server.Response.WriteError);
