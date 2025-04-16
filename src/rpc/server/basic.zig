@@ -139,7 +139,7 @@ fn handleGetOrHead(
             ) catch |err| {
                 switch (err) {
                     error.FileNotFound => {
-                        std.debug.print("not found: {s}\n", .{sig.utils.fmt.tryRealPath(
+                        logger.err().logf("not found: {s}\n", .{sig.utils.fmt.tryRealPath(
                             server_ctx.accountsdb.snapshot_dir,
                             archive_name,
                         )});
