@@ -1020,7 +1020,13 @@ fn accountDataRegion(
     vm_data_addr: u64,
     original_data_len: usize,
 ) !(?*const memory.Region) {
-    @compileError("TODO");
+    if (original_data_len == 0) {
+        return null;
+    }
+
+    const region = try memory_map.region(.constant, vm_data_addr);
+    std.debug.assert(region.vm_addr_start == vm_data_addr);
+    return region;
 }
 
 fn accountReallocRegion(
@@ -1029,20 +1035,79 @@ fn accountReallocRegion(
     original_data_len: usize,
     is_loader_deprecated: bool,
 ) !(?*const memory.Region) {
-    @compileError("TODO");
+    if (is_loader_deprecated) {
+        return null;
+    }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/master/transaction-context/src/lib.rs#L47
+    const MAX_PERMITTED_DATA_INCREASE = 1024 * 10;
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/2819a100f2d0a176d4ec9fd085ac233abf77e206/program-entrypoint/src/lib.rs#L359
+    const BPF_ALIGN_OF_U128 = 8;
+
+    const addr = vm_data_addr +| original_data_len;
+    const region = try memory_map.region(.constant, addr);
+    std.debug.assert(region.vm_addr_start == addr);
+    std.debug.assert(
+        region.constSlice().len >= MAX_PERMITTED_DATA_INCREASE and
+        region.constSlice().len < MAX_PERMITTED_DATA_INCREASE +| BPF_ALIGN_OF_U128,
+    );
+    return region;
 }
 
+/// Update the given account after executing CPI.
+///
+/// caller_account and callee_account describe to the same account. At CPI exit
+/// callee_account might include changes the callee has made to the account
+/// after executing.
+///
+/// This method updates caller_account so the CPI caller can see the callee's
+/// changes.
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1321
 fn updateCallerAccount(
     allocator: std.mem.Allocator,
-    ic: *InstructionContext,
+    ic: *const InstructionContext,
     memory_map: *const MemoryMap,
     caller_account: CallerAccount,
     callee_account: *BorrowedAccount,
     is_loader_deprecated: bool,
     direct_mapping: bool,
 ) !void {
+    caller_account.lamports.* = callee_account.account.lamports;
+    caller_account.owner.* = callee_account.account.owner;
 
+    var zero_all_mapped_spare_capacity = false;
+    if (direct_mapping) {
+        if (try accountDataRegion(
+            memory_map,
+            caller_account.vm_data_addr,
+            caller_account.original_data_len,
+        )) |region| {
+            // Since each instruction account is directly mapped in a memory region with a *fixed*
+            // length, upon returning from CPI we must ensure that the current capacity is at least
+            // the original length (what is mapped in memory), so that the account's memory region
+            // never points to an invalid address.
+            //
+            // Note that the capacity can be smaller than the original length only if the account is
+            // reallocated using the AccountSharedData API directly (deprecated) or using
+            // BorrowedAccount.setDataFromSlice(), which implements an optimization to avoid an
+            // extra allocation.
+            const min_size = caller_account.original_data_len;
+            if (callee_account.constAccountData().len < min_size) {
+                try callee_account.account.resize(allocator, min_size);
+                zero_all_mapped_spare_capacity = true;
+            }
+
+            // If an account's data pointer has changed we must update the corresponding
+            // MemoryRegion in the caller's address space. Address spaces are fixed so we don't need
+            // to update the MemoryRegion's length.
+            const callee_ptr = callee_account.constAccountData().ptr;
+            if (region.constSlice().ptr != callee_ptr) {
+                region.host_addr = callee_ptr;
+                zero_all_mapped_spare_capacity = true;
+            }
+        }
+    }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1080
