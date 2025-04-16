@@ -840,7 +840,7 @@ fn translateInstruction(
         else => @compileError("invalid AccountInfo type"),
     };
 
-    const ix = try translateType(
+    const stable_instruction = try translateType(
         InstructionType,
         .constant,
         memory_map,
@@ -851,25 +851,25 @@ fn translateInstruction(
         AccountMetaType,
         .constant,
         memory_map,
-        ix.accounts_addr,
-        ix.accounts_len,
+        stable_instruction.accounts_addr,
+        stable_instruction.accounts_len,
         ic.getCheckAligned(),
     );
     const data = try translateSlice(
         u8,
         .constant,
         memory_map,
-        ix.data_addr,
-        ix.data_len,
+        stable_instruction.data_addr,
+        stable_instruction.data_len,
         ic.getCheckAligned(),
     );
     const program_id = switch (AccountInfoType) {
-        AccountInfoRust => ix.program_id,
+        AccountInfoRust => stable_instruction.program_id,
         AccountInfoC => (try translateType(
             Pubkey,
             .constant,
             memory_map,
-            ix.program_id_addr,
+            stable_instruction.program_id_addr,
             ic.getCheckAligned(),
         )).*,
         else => unreachable,
