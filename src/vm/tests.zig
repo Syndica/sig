@@ -2463,7 +2463,7 @@ test "struct func pointer sbpfv0" {
 test "data section" {
     // [ 6] .data             PROGBITS        0000000000000250 000250 000004 00  WA  0   0  4
     try expectEqual(
-        error.WritableSectionsNotSupported,
+        error.WritableSectionNotSupported,
         testElfWithSyscalls(
             .{ .maximum_version = .v0 },
             sig.ELF_DATA_DIR ++ "data_section_sbpfv0.so",
@@ -2476,7 +2476,7 @@ test "data section" {
 test "bss section" {
     // [ 6] .bss              NOBITS          0000000000000250 000250 000004 00  WA  0   0  4
     try expectEqual(
-        error.WritableSectionsNotSupported,
+        error.WritableSectionNotSupported,
         testElfWithSyscalls(
             .{ .maximum_version = .v0 },
             sig.ELF_DATA_DIR ++ "bss_section_sbpfv0.so",

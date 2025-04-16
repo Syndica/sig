@@ -1,9 +1,12 @@
 const std = @import("std");
-const sbpf = @import("sbpf.zig");
-const Elf = @import("elf.zig").Elf;
-const memory = @import("memory.zig");
-const syscalls = @import("syscalls.zig");
+const sig = @import("../sig.zig");
 
+const sbpf = sig.vm.sbpf;
+const memory = sig.vm.memory;
+const syscalls = sig.vm.syscalls;
+
+const Elf = sig.vm.elf.Elf;
+const ElfError = sig.vm.elf.ElfError;
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
 
@@ -823,7 +826,7 @@ pub fn Registry(T: type) type {
             key: u64,
             name: []const u8,
             value: T,
-        ) !void {
+        ) (error{OutOfMemory} || ElfError)!void {
             const gop = try self.map.getOrPut(allocator, key);
             if (gop.found_existing) {
                 if (gop.value_ptr.value != value) {
@@ -852,7 +855,7 @@ pub fn Registry(T: type) type {
             hash_symbol_name: bool,
             name: []const u8,
             value: T,
-        ) !u64 {
+        ) (error{OutOfMemory} || ElfError)!u64 {
             const hash = if (std.mem.eql(u8, name, "entrypoint"))
                 sbpf.hashSymbolName(name)
             else
