@@ -750,7 +750,7 @@ test "address-lookup-table create" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -856,7 +856,7 @@ test "address-lookup-table freeze" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -966,7 +966,7 @@ test "address-lookup-table close" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -1074,7 +1074,7 @@ test "address-lookup-table deactivate" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -1206,7 +1206,7 @@ test "address-lookup-table extend" {
             .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
         };
 
-        const sysvar_cache = runtime.SysvarCache{
+        const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
             .slot_hashes = runtime.sysvar.SlotHashes{
                 .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},

@@ -258,7 +258,6 @@ fn executeWithdrawNonceAccount(
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(2);
 
-    // TODO: Is this sysvar call required for consensus despite being unused?
     _ = try ic.getSysvarWithAccountCheck(RecentBlockhashes, 2);
 
     const rent = try ic.getSysvarWithAccountCheck(Rent, 3);

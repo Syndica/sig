@@ -77,6 +77,7 @@ pub fn expectProgramExecuteResult(
         }
         initial_ec.deinit();
         allocator.destroy(initial_ec);
+        initial_sc.deinit();
         allocator.destroy(initial_sc);
         initial_tc.deinit();
     }
@@ -92,6 +93,7 @@ pub fn expectProgramExecuteResult(
     defer {
         expected_ec.deinit();
         allocator.destroy(expected_ec);
+        expected_sc.deinit();
         allocator.destroy(expected_sc);
         expected_tc.deinit();
     }

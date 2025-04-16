@@ -74,6 +74,7 @@ fn testAsmWithMemory(
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
     }
     var vm = try Vm.init(
@@ -1907,6 +1908,7 @@ test "pqr" {
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
     }
     const max_int = std.math.maxInt(u64);
@@ -2058,6 +2060,7 @@ test "pqr divide by zero" {
         defer {
             ec.deinit();
             allocator.destroy(ec);
+            sc.deinit();
             allocator.destroy(sc);
         }
 
@@ -2340,6 +2343,7 @@ pub fn testElfWithSyscalls(
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
     }
     var vm = try Vm.init(

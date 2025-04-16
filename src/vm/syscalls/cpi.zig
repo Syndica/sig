@@ -1046,6 +1046,7 @@ const TestContext = struct {
         errdefer {
             ec.deinit();
             allocator.destroy(ec);
+            sc.deinit();
             allocator.destroy(sc);
             tc.deinit();
         }
