@@ -105,13 +105,16 @@ pub fn main() !void {
         .allocator = gpa,
         .feature_set = FeatureSet.EMPTY,
     };
+    defer ec.deinit();
 
     const sc = SlotContext{
+        .allocator = gpa,
         .ec = &ec,
         .sysvar_cache = .{},
     };
+    defer sc.deinit();
 
-    var context: TransactionContext = .{
+    var tc: TransactionContext = .{
         .allocator = gpa,
         .ec = &ec,
         .sc = &sc,
@@ -127,13 +130,15 @@ pub fn main() !void {
         .prev_lamports_per_signature = 0,
         .compute_budget = ComputeBudget.default(1_400_000),
     };
+    defer tc.deinit();
+
     var vm = try Vm.init(
         gpa,
         &executable,
         m,
         &loader,
         stack_memory.len,
-        &context,
+        &tc,
     );
     defer vm.deinit();
     const result, const instruction_count = vm.run();
