@@ -38,11 +38,11 @@ const UnixTimestamp = i64;
 
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
 const VOTE_THRESHOLD_DEPTH_SHALLOW: usize = 4;
-pub const VOTE_THRESHOLD_DEPTH: usize = 8;
-pub const SWITCH_FORK_THRESHOLD: f64 = 0.38;
-pub const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
-pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
-pub const DUPLICATE_THRESHOLD = sig.consensus.unimplemented.DUPLICATE_THRESHOLD;
+const VOTE_THRESHOLD_DEPTH: usize = 8;
+const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
+const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+const DUPLICATE_THRESHOLD = sig.consensus.unimplemented.DUPLICATE_THRESHOLD;
 
 const SwitchForkDecision = union(enum) {
     switch_proof: Hash,
