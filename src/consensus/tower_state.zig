@@ -45,7 +45,7 @@ pub const TowerVoteState = struct {
     }
 
     pub fn nthRecentLockout(self: *const TowerVoteState, position: usize) ?*const Lockout {
-        const pos = std.math.add(usize, self.votes.items.len, position +| 1) catch
+        const pos = std.math.sub(usize, self.votes.items.len, (position +| 1)) catch
             return null;
         return &self.votes.items[pos];
     }

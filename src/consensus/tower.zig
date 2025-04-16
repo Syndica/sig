@@ -144,7 +144,7 @@ pub const Tower = struct {
     const Self = @This();
 
     pub fn default(allocator: std.mem.Allocator) !Tower {
-        return Tower{
+        var tower = Tower{
             .logger = .noop,
             .node_pubkey = Pubkey.ZEROES,
             .threshold_depth = 0,
@@ -156,6 +156,9 @@ pub const Tower = struct {
             .stray_restored_slot = null,
             .last_switch_threshold_check = null,
         };
+        // VoteState::root_slot is ensured to be Some in Tower
+        tower.vote_state.root_slot = 0;
+        return tower;
     }
 
     pub fn init(
@@ -179,8 +182,9 @@ pub const Tower = struct {
     }
 
     pub fn deinit(self: *Tower, allocator: std.mem.Allocator) void {
-        self.vote_state.deinit(allocator);
         self.last_vote.deinit(allocator);
+        self.vote_state.deinit(allocator);
+        // self.last_vote.deinit(allocator);
     }
 
     pub fn newFromBankforks(
@@ -334,6 +338,14 @@ pub const Tower = struct {
             0;
 
         new_vote.setTimestamp(self.maybeTimestamp(last_voted_slot));
+
+        // Free previous lockouts if they exist
+        switch (self.last_vote) {
+            .tower_sync => |*args| args.lockouts.deinit(allocator),
+            .vote_state_update => |*args| args.lockouts.deinit(allocator),
+            else => {},
+        }
+
         self.last_vote = new_vote;
     }
 
@@ -902,6 +914,7 @@ pub const Tower = struct {
         // Generate the vote state assuming this vote is included.
         //
         var vote_state = try self.vote_state.clone(allocator);
+        defer vote_state.deinit(allocator);
         try vote_state.processNextVoteSlot(allocator, slot);
 
         // Assemble all the vote thresholds and depths to check.
@@ -1642,6 +1655,7 @@ test "tower: check vote threshold without votes" {
         &stakes,
         2,
     );
+    defer result.deinit();
     try std.testing.expect(result.items.len != 0);
 }
 
