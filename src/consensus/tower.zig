@@ -909,8 +909,10 @@ pub const Tower = struct {
         slot: Slot,
         voted_stakes: *const VotedStakes,
         total_stake: Stake,
-    ) !std.ArrayList(ThresholdDecision) {
-        var threshold_decisions = std.ArrayList(ThresholdDecision).init(allocator);
+    ) ![]const ThresholdDecision {
+        const threshold_size = 3;
+        var threshold_decisions: [threshold_size]ThresholdDecision = undefined;
+
         // Generate the vote state assuming this vote is included.
         //
         var vote_state = try self.vote_state.clone(allocator);
@@ -918,7 +920,7 @@ pub const Tower = struct {
         try vote_state.processNextVoteSlot(allocator, slot);
 
         // Assemble all the vote thresholds and depths to check.
-        const vote_thresholds_and_depths = [_]struct { depth: usize, size: f64 }{
+        const vote_thresholds_and_depths = [threshold_size]struct { depth: usize, size: f64 }{
             // The following two checks are log only and are currently being used for experimentation
             // purposes. We wish to impose a shallow threshold check to prevent the frequent 8 deep
             // lockouts seen multiple times a day. We check both the 4th and 5th deep here to collect
@@ -929,6 +931,7 @@ pub const Tower = struct {
         };
 
         // Check one by one and add any failures to be returned
+        var index: usize = 0;
         for (vote_thresholds_and_depths) |threshold| {
             const vote_threshold = Tower.checkVoteStakeThreshold(
                 self.logger,
@@ -942,11 +945,12 @@ pub const Tower = struct {
             );
 
             if (std.mem.eql(u8, @tagName(vote_threshold), "failed_threshold")) {
-                try threshold_decisions.append(vote_threshold);
+                threshold_decisions[index] = vote_threshold;
+                index += 1;
             }
         }
 
-        return threshold_decisions;
+        return allocator.dupe(ThresholdDecision, threshold_decisions[0..index]);
     }
 
     fn votedSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
@@ -1655,8 +1659,8 @@ test "tower: check vote threshold without votes" {
         &stakes,
         2,
     );
-    defer result.deinit();
-    try std.testing.expect(result.items.len != 0);
+    std.testing.allocator.free(result);
+    try std.testing.expect(result.len != 0);
 }
 
 const builtin = @import("builtin");
