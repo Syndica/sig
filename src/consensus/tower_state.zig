@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 
 const Slot = sig.core.Slot;
 const Lockout = sig.runtime.program.vote_program.state.Lockout;
+const Account = sig.core.Account;
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
 
 pub const TowerVoteState = struct {
@@ -15,6 +16,11 @@ pub const TowerVoteState = struct {
             .votes = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
             .root_slot = null,
         };
+    }
+
+    pub fn fromAccount(account: *const Account) TowerVoteState {
+        _ = account;
+        @panic("Unimplemented");
     }
 
     pub fn lastLockout(self: *const TowerVoteState) ?*const Lockout {
