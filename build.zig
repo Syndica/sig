@@ -159,10 +159,6 @@ pub fn build(b: *Build) !void {
     });
     const tracy_mod = tracy_dep.module("tracy");
 
-    if (config.enable_tracy) {
-        tracy_mod.linkLibrary(tracy_dep.artifact("tracy"));
-        tracy_mod.link_libcpp = true;
-    }
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
