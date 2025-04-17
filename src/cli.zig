@@ -29,13 +29,14 @@
 //! controlled by the parser.
 //!
 //! ## Optional Arguments, Required Arguments, Default Values
-//! All arguments must have a default value, but may be treated as "required" by
-//! the application by using an optional type with a default value of `null`,
-//! and issue an error if the argument posseses this value.
+//! The library has no concept of a "required" argument in and of itself, because
+//! all arguments must have a default value.
 //!
-//! `null` is not a specifiable value for an optional on the command line itself,
-//! meaning if the value is `null`, the application can know for certain that the
-//! argument was not specified at all.
+//! An application may itself make an argument "required" by using an optional
+//! type with a default value of `null`, and issue an error if the argument posseses
+//! this value, because `null` is not a valid/specifiable value for an optional on the
+//! command line, meaning if the value is `null`, the application can know for certain
+//! that the argument was not specified at all.
 //!
 //! ## List Arguments
 //! List arguments are inherently "optional", in the sense that they are not allowed
