@@ -154,10 +154,21 @@ pub const GetAccountInfo = struct {
             space: u64,
 
             pub const Data = union(enum) {
-                base64: []const u8,
                 encoded: struct { []const u8, Encoding },
                 // TODO: this should be a json value/map, test cases can't compare that though
                 jsonParsed: noreturn,
+
+                /// This field is only set when the request object asked for `jsonParsed` encoding,
+                /// and the server couldn't find a parser, therefore falling back to simply returning
+                /// the account data in base64 encoding directly as a string.
+                ///
+                /// [Solana documentation REF](https://solana.com/docs/rpc/http/getaccountinfo):
+                /// In the drop-down documentation for the encoding field:
+                /// > * `jsonParsed` encoding attempts to use program-specific state parsers to
+                /// return more human-readable and explicit account state data.
+                /// > * If `jsonParsed` is requested but a parser cannot be found, the field falls
+                /// back to base64 encoding, detectable when the data field is type string.
+                json_parsed_base64_fallback: []const u8,
 
                 pub fn jsonStringify(
                     self: Data,
@@ -165,9 +176,9 @@ pub const GetAccountInfo = struct {
                     jw: anytype,
                 ) @TypeOf(jw.*).Error!void {
                     switch (self) {
-                        .base64 => |str| try jw.write(str),
                         .encoded => |pair| try jw.write(pair),
                         .jsonParsed => |map| try jw.write(map),
+                        .json_parsed_base64_fallback => |str| try jw.write(str),
                     }
                 }
 
@@ -177,12 +188,6 @@ pub const GetAccountInfo = struct {
                     options: std.json.ParseOptions,
                 ) std.json.ParseError(@TypeOf(source.*))!Data {
                     return switch (try source.peekNextTokenType()) {
-                        .string => .{ .base64 = try std.json.innerParse(
-                            []const u8,
-                            allocator,
-                            source,
-                            options,
-                        ) },
                         .array_begin => .{ .encoded = try std.json.innerParse(
                             struct { []const u8, Encoding },
                             allocator,
@@ -198,6 +203,12 @@ pub const GetAccountInfo = struct {
                                 source,
                                 options,
                             ) },
+                        .string => .{ .json_parsed_base64_fallback = try std.json.innerParse(
+                            []const u8,
+                            allocator,
+                            source,
+                            options,
+                        ) },
                         .array_end, .object_end => error.UnexpectedToken,
                         else => {
                             try source.skipValue();

@@ -70,7 +70,7 @@ test GetAccountInfo {
         .{ .result = .{
             .context = .{ .apiVersion = "2.1.6", .slot = 309275280 },
             .value = .{
-                .data = .{ .base64 = "" },
+                .data = .{ .json_parsed_base64_fallback = "" },
                 .executable = false,
                 .lamports = 963849100,
                 .owner = try Pubkey.parseBase58String("11111111111111111111111111111111"),
