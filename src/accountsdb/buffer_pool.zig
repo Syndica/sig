@@ -111,6 +111,10 @@ pub const BufferPool = struct {
     pub const ReadIoUringError = FrameManager.GetError || IoUringError;
     pub const ReadError = if (USE_IO_URING) ReadIoUringError else ReadBlockingError;
 
+    /// The number of bytes required to store the FrameRefs of any account read.
+    pub const MAX_READ_BYTES_ALLOCATED = (MAX_PERMITTED_DATA_LENGTH / FRAME_SIZE + 2) *
+        @sizeOf(FrameRef);
+
     pub fn init(
         allocator: std.mem.Allocator,
         num_frames: u32,

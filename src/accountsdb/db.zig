@@ -2339,15 +2339,22 @@ pub const AccountsDB = struct {
 
             try file_map.put(self.allocator, account_file.id, account_file.*);
 
+            var buffer_pool_frame_buf: [BufferPool.MAX_READ_BYTES_ALLOCATED]u8 = undefined;
+            var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+            const frame_allocator = fba.allocator();
+
             // we update the bank hash stats while locking the file map to avoid
             // reading accounts from the file map and getting inaccurate/stale
             // bank hash stats.
             var account_iter = account_file.iterator(
-                self.allocator,
+                frame_allocator,
                 &self.buffer_pool,
             );
             while (try account_iter.next()) |account_in_file| {
-                defer account_in_file.deinit(self.allocator);
+                defer {
+                    account_in_file.deinit(frame_allocator);
+                    fba.reset();
+                }
 
                 const bhs, var bhs_lg = try self.getOrInitBankHashStats(account_file.slot);
                 defer bhs_lg.unlock();
@@ -3171,16 +3178,24 @@ pub fn indexAndValidateAccountFile(
         return error.ShardCountMismatch;
     }
 
+    var buffer_pool_frame_buf: [BufferPool.MAX_READ_BYTES_ALLOCATED]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+    const frame_allocator = fba.allocator();
+
     while (true) {
         const account = accounts_file.readAccount(
-            allocator,
+            frame_allocator,
             buffer_pool,
             offset,
         ) catch |err| switch (err) {
             error.EOF => break,
             else => |e| return e,
         };
-        defer account.deinit(allocator);
+
+        defer {
+            account.deinit(frame_allocator);
+            fba.reset();
+        }
 
         try account.validate();
 
