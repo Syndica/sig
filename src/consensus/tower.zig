@@ -2252,6 +2252,123 @@ test "tower: recent votes exact" {
     try voteAndCheckRecent(5);
 }
 
+test "tower: maybe timestamp" {
+    var tower = try Tower.default(std.testing.allocator);
+    try std.testing.expect(tower.maybeTimestamp(0) != null);
+    try std.testing.expect(tower.maybeTimestamp(1) != null);
+    // Refuse to timestamp an older slot
+    try std.testing.expect(tower.maybeTimestamp(0) == null);
+    // Refuse to timestamp the same slot twice
+    try std.testing.expect(tower.maybeTimestamp(1) == null);
+
+    // Move last_timestamp into the past
+    tower.last_timestamp.timestamp -= 1;
+    // slot 2 gets a timestamp
+    try std.testing.expect(tower.maybeTimestamp(2) != null);
+
+    // Move last_timestamp well into the future
+    tower.last_timestamp.timestamp += 1_000_000;
+    // slot 3 gets no timestamp
+    try std.testing.expect(tower.maybeTimestamp(3) == null);
+}
+
+test "tower: refresh last vote timestamp" {
+    var tower = try Tower.default(std.testing.allocator);
+
+    // Tower has no vote or timestamp
+    tower.last_vote.setTimestamp(null);
+    tower.refreshLastVoteTimestamp(5);
+    try std.testing.expectEqual(null, tower.last_vote.timestamp());
+    try std.testing.expectEqual(0, tower.last_timestamp.slot);
+    try std.testing.expectEqual(0, tower.last_timestamp.timestamp);
+
+    {
+        // Tower has vote no timestamp, but is greater than heaviest_bank
+        var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
+            std.testing.allocator,
+            3,
+        );
+        defer expected_slots.deinit(std.testing.allocator);
+        var lockouts = [_]Lockout{
+            Lockout{ .slot = 0, .confirmation_count = 3 },
+            Lockout{ .slot = 1, .confirmation_count = 2 },
+            Lockout{ .slot = 6, .confirmation_count = 1 },
+        };
+        try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+        tower.last_vote = VoteTransaction{
+            .tower_sync = TowerSync{
+                .lockouts = expected_slots,
+                .root = null,
+                .hash = Hash.ZEROES,
+                .timestamp = null,
+                .block_id = Hash.ZEROES,
+            },
+        };
+        try std.testing.expectEqual(null, tower.last_vote.timestamp());
+        tower.refreshLastVoteTimestamp(5);
+        try std.testing.expectEqual(null, tower.last_vote.timestamp());
+        try std.testing.expectEqual(0, tower.last_timestamp.slot);
+        try std.testing.expectEqual(0, tower.last_timestamp.timestamp);
+    }
+
+    // Tower has vote with no timestamp
+    {
+        var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
+            std.testing.allocator,
+            3,
+        );
+        defer expected_slots.deinit(std.testing.allocator);
+        var lockouts = [_]Lockout{
+            Lockout{ .slot = 0, .confirmation_count = 3 },
+            Lockout{ .slot = 1, .confirmation_count = 2 },
+            Lockout{ .slot = 2, .confirmation_count = 1 },
+        };
+        try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+        tower.last_vote = VoteTransaction{
+            .tower_sync = TowerSync{
+                .lockouts = expected_slots,
+                .root = null,
+                .hash = Hash.ZEROES,
+                .timestamp = null,
+                .block_id = Hash.ZEROES,
+            },
+        };
+        try std.testing.expectEqual(null, tower.last_vote.timestamp());
+        tower.refreshLastVoteTimestamp(5);
+        try std.testing.expectEqual(1, tower.last_vote.timestamp());
+        try std.testing.expectEqual(2, tower.last_timestamp.slot);
+        try std.testing.expectEqual(1, tower.last_timestamp.timestamp);
+    }
+
+    // Vote has timestamp
+    {
+        var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
+            std.testing.allocator,
+            3,
+        );
+        defer expected_slots.deinit(std.testing.allocator);
+        var lockouts = [_]Lockout{
+            Lockout{ .slot = 0, .confirmation_count = 3 },
+            Lockout{ .slot = 1, .confirmation_count = 2 },
+            Lockout{ .slot = 2, .confirmation_count = 1 },
+        };
+        try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+        tower.last_vote = VoteTransaction{
+            .tower_sync = TowerSync{
+                .lockouts = expected_slots,
+                .root = null,
+                .hash = Hash.ZEROES,
+                .timestamp = null,
+                .block_id = Hash.ZEROES,
+            },
+        };
+        tower.refreshLastVoteTimestamp(5);
+        try std.testing.expectEqual(2, tower.last_vote.timestamp());
+        try std.testing.expectEqual(2, tower.last_timestamp.slot);
+        try std.testing.expectEqual(2, tower.last_timestamp.timestamp);
+    }
+}
+
 const builtin = @import("builtin");
 fn createTestTower(
     allocator: std.mem.Allocator,

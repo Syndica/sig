@@ -40,12 +40,22 @@ pub const VoteTransaction = union(enum) {
 
     pub fn lastVotedSlot(self: *const VoteTransaction) ?Slot {
         return switch (self.*) {
-            .vote => |args| args.slots[args.slots.len - 1],
-            .vote_state_update => |args| args.lockouts.items[args.lockouts.items.len - 1].slot,
-            .compact_vote_state_update => |args| args.lockouts.items[
-                args.lockouts.items.len - 1
-            ].slot,
-            .tower_sync => |args| args.lockouts.items[args.lockouts.items.len - 1].slot,
+            .vote => |args| if (args.slots.len == 0)
+                null
+            else
+                args.slots[args.slots.len - 1],
+            .vote_state_update => |args| if (args.lockouts.items.len == 0)
+                null
+            else
+                args.lockouts.items[args.lockouts.items.len - 1].slot,
+            .compact_vote_state_update => |args| if (args.lockouts.items.len == 0)
+                null
+            else
+                args.lockouts.items[args.lockouts.items.len - 1].slot,
+            .tower_sync => |args| if (args.lockouts.items.len == 0)
+                null
+            else
+                args.lockouts.items[args.lockouts.items.len - 1].slot,
         };
     }
 
