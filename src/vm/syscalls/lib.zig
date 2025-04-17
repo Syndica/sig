@@ -441,7 +441,7 @@ pub fn panic(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap)
     return error.SyscallAbort;
 }
 
-test "poseidon" {
+test poseidon {
     try sig.vm.tests.testElfWithSyscalls(
         .{},
         sig.ELF_DATA_DIR ++ "poseidon_test.so",
