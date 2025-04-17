@@ -789,6 +789,7 @@ pub const ReferenceAllocator = union(Tag) {
                 var dir = disk.dma.dir;
                 dir.close();
                 disk.ptr_allocator.destroy(disk.dma);
+                disk.ptr_allocator.destroy(disk.tracing);
             },
             .ram => {},
             .parent => {},
