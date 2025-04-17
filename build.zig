@@ -227,8 +227,6 @@ pub fn build(b: *Build) !void {
     }
     try addInstallAndRun(b, sig_step, sig_exe, config);
 
-    sig_exe.linkSystemLibrary("sysprof-capture-4");
-
     // unit tests
     const unit_tests_exe = b.addTest(.{
         .root_source_file = b.path("src/tests.zig"),
