@@ -22,7 +22,9 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub const ExecuteContextsParams = struct {
     // Epoch context
-    feature_set: []const FeatureParams = &.{},
+    feature_set: []const FeatureParams = &.{
+        .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+    },
 
     // Slot Context
     sysvar_cache: SysvarCacheParams = .{},

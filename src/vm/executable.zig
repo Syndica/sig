@@ -953,11 +953,11 @@ pub const Config = struct {
     optimize_rodata: bool = true,
     /// Use aligned memory mapping
     aligned_memory_mapping: bool = true,
-    /// Allowed [SBPFVersion]s
-    minimum_version: sbpf.Version = .v0,
     /// Enables gaps in VM address space between the stack frames
     enable_stack_frame_gaps: bool = true,
 
+    /// Allowed [SBPFVersion]s
+    minimum_version: sbpf.Version = .v0,
     maximum_version: sbpf.Version = .v3,
 
     pub fn stackSize(config: Config) u64 {

@@ -24,8 +24,10 @@ pub fn execute(
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
 
+        const feature_set = &ic.ec.feature_set.active;
+
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!ic.ec.feature_set.active.contains(
+        if (!feature_set.contains(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !program_account.account.executable)
@@ -46,6 +48,23 @@ pub fn execute(
         };
         errdefer syscalls.deinit(allocator);
 
+        // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L357-L374
+        const min_sbpf_version: vm.sbpf.Version = if (!feature_set.contains(
+            features.DISABLE_SBPF_V0_EXECUTION,
+        ) or feature_set.contains(
+            features.REENABLE_SBPF_V0_EXECUTION,
+        )) .v0 else .v3;
+
+        const max_sbpf_version: vm.sbpf.Version = if (feature_set.contains(
+            features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION,
+        )) .v3 else if (feature_set.contains(
+            features.ENABLE_SBPF_V2_DEPLOYMENT_AND_EXECUTION,
+        )) .v2 else if (feature_set.contains(
+            features.ENABLE_SBPF_V1_DEPLOYMENT_AND_EXECUTION,
+        )) .v1 else .v0;
+
+        std.debug.assert(max_sbpf_version.gte(min_sbpf_version));
+
         // Clone required to prevent modification of underlying account elf
         const source = try allocator.dupe(u8, program_account.account.data);
         errdefer allocator.free(source);
@@ -56,8 +75,13 @@ pub fn execute(
             source,
             &syscalls,
             .{
+                .max_call_depth = ic.tc.compute_budget.max_call_depth,
+                .stack_frame_size = ic.tc.compute_budget.stack_frame_size,
+                .enable_address_translation = true,
                 .enable_stack_frame_gaps = !direct_mapping,
                 .aligned_memory_mapping = !direct_mapping,
+                .minimum_version = min_sbpf_version,
+                .maximum_version = max_sbpf_version,
             },
         ) catch |err| {
             try ic.tc.log("{s}", .{@errorName(err)});
@@ -208,8 +232,8 @@ pub fn initVm(
         0;
     try mm_regions_array.appendSlice(&.{
         executable.getProgramRegion(),
-        vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START),
-        vm.memory.Region.initGapped(.mutable, heap, vm.memory.HEAP_START, stack_gap),
+        vm.memory.Region.initGapped(.mutable, stack, vm.memory.STACK_START, stack_gap),
+        vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START),
     });
     try mm_regions_array.appendSlice(regions);
     const mm_regions = try mm_regions_array.toOwnedSlice();
