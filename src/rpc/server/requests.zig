@@ -34,23 +34,14 @@ pub const HeadInfo = struct {
     target: TargetBoundedStr,
     content_len: ?u64,
     content_type: ?ContentType,
-    transfer_encoding: std.http.TransferEncoding,
     content_encoding: std.http.ContentEncoding,
 
     const StdHead = std.http.Server.Request.Head;
 
-    pub const ParseError = StdHead.ParseError || ParseFromStdHeadError;
-
-    pub fn parse(head_bytes: []const u8) ParseError!HeadInfo {
-        const parsed_head = try StdHead.parse(head_bytes);
-        // at the time of writing, this always holds true for the result of `Head.parse`.
-        std.debug.assert(parsed_head.compression == .none);
-        return try parseFromStdHead(parsed_head);
-    }
-
     pub const ParseFromStdHeadError = error{
         RequestTargetTooLong,
         RequestContentTypeUnrecognized,
+        UnexpectedTransferEncoding,
     };
 
     pub fn parseFromStdHead(std_head: StdHead) ParseFromStdHeadError!HeadInfo {
@@ -68,12 +59,15 @@ pub const HeadInfo = struct {
                 return error.RequestContentTypeUnrecognized;
         };
 
+        if (std_head.transfer_encoding != .none) {
+            return error.UnexpectedTransferEncoding;
+        }
+
         return .{
             .method = std_head.method,
             .target = target,
             .content_len = std_head.content_length,
             .content_type = content_type,
-            .transfer_encoding = std_head.transfer_encoding,
             .content_encoding = std_head.transfer_compression,
         };
     }

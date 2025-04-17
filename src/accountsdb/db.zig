@@ -325,6 +325,62 @@ pub const AccountsDB = struct {
         return collapsed_manifest;
     }
 
+    /// easier to use load function
+    pub fn loadFromSnapshotAndValidate(
+        self: *Self,
+        params: struct {
+            /// needs to be a thread-safe allocator
+            allocator: std.mem.Allocator,
+            /// Must have been allocated with `self.allocator`.
+            full_inc_manifest: FullAndIncrementalManifest,
+            n_threads: u32,
+            accounts_per_file_estimate: u64,
+        },
+    ) !SnapshotManifest {
+        const allocator = params.allocator;
+        const full_inc_manifest = params.full_inc_manifest;
+        const n_threads = params.n_threads;
+        const accounts_per_file_estimate = params.accounts_per_file_estimate;
+
+        const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
+        errdefer collapsed_manifest.deinit(self.allocator);
+
+        {
+            var load_timer = try sig.time.Timer.start();
+            try self.loadFromSnapshot(
+                collapsed_manifest.accounts_db_fields,
+                n_threads,
+                allocator,
+                accounts_per_file_estimate,
+            );
+            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
+        }
+
+        {
+            const full_man = full_inc_manifest.full;
+            const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
+                inc.bank_extra.snapshot_persistence
+            else
+                null;
+
+            var validate_timer = try sig.time.Timer.start();
+            try self.validateLoadFromSnapshot(.{
+                .full_slot = full_man.bank_fields.slot,
+                .expected_full = .{
+                    .accounts_hash = full_man.accounts_db_fields.bank_hash_info.accounts_hash,
+                    .capitalization = full_man.bank_fields.capitalization,
+                },
+                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
+                    .accounts_hash = inc_persistence.incremental_hash,
+                    .capitalization = inc_persistence.incremental_capitalization,
+                } else null,
+            });
+            self.logger.info().logf("validateLoadFromSnapshot: total time: {s}", .{validate_timer.read()});
+        }
+
+        return collapsed_manifest;
+    }
+
     pub fn saveStateForFastload(
         self: *Self,
     ) !void {
@@ -2262,6 +2318,22 @@ pub const AccountsDB = struct {
         return try self.getAccountFromRefWithReadLock(max_ref);
     }
 
+    pub fn getSlotAndAccountInSlotRangeWithReadLock(
+        self: *Self,
+        pubkey: *const Pubkey,
+        min_slot: ?Slot,
+        max_slot: ?Slot,
+    ) GetAccountError!?struct { AccountInCacheOrFile, Slot, AccountInCacheOrFileLock } {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, max_slot) orelse
+            return null;
+        const account, const account_lg = try self.getAccountFromRefWithReadLock(max_ref);
+        return .{ account, max_ref.slot, account_lg };
+    }
+
     pub const GetTypeFromAccountError = GetAccountError || error{DeserializationError};
     pub fn getTypeFromAccount(
         self: *Self,
@@ -3873,7 +3945,8 @@ test "purge accounts in cache works" {
     try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     for (0..n_accounts) |i| {
-        _, var lg = accounts_db.account_index.pubkey_ref_map.getRead(&pubkeys[i]) orelse return error.TestUnexpectedNull;
+        _, var lg = accounts_db.account_index.pubkey_ref_map.getRead(&pubkeys[i]) orelse
+            return error.TestUnexpectedNull;
         lg.unlock();
     }
 
