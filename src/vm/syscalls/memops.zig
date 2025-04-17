@@ -74,7 +74,8 @@ const MemoryChunkIterator = struct {
                         account_index -|= 1;
                         self.account_index = account_index;
                     } else {
-                        region_is_account = (account.original_data_len != 0 and region.vm_addr_start == account_addr)
+                        region_is_account = (account.original_data_len != 0 and
+                            region.vm_addr_start == account_addr)
                         // Unaligned programs don't have a resize area.
                         or (self.resize_area and region.vm_addr_start == resize_addr);
                         break;
@@ -84,7 +85,8 @@ const MemoryChunkIterator = struct {
                         account_index +|= 1;
                         self.account_index = account_index;
                     } else {
-                        region_is_account = (account.original_data_len != 0 and region.vm_addr_start == account_addr)
+                        region_is_account = (account.original_data_len != 0 and
+                            region.vm_addr_start == account_addr)
                         // Unaligned programs don't have a resize area.
                         or (self.resize_area and region.vm_addr_start == resize_addr);
                         break;

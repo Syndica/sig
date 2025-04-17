@@ -396,7 +396,8 @@ test "basic direct mapping" {
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
             .lamports = 1_234_456,
-            .owner = program_id, // needs to be the program_id so that we have permission to mutate it
+            // needs to be the program_id so that we have permission to mutate it
+            .owner = program_id,
             .executable = false,
             .rent_epoch = 25,
             .data = &.{ 0xAA, 0xBB, 0xCC },
@@ -415,7 +416,8 @@ test "basic direct mapping" {
         .{
             .pubkey = accounts[1].pubkey,
             .lamports = 1_234_456,
-            .owner = program_id, // needs to be the program_id so that we have permission to mutate it
+            // needs to be the program_id so that we have permission to mutate it
+            .owner = program_id,
             .executable = false,
             .rent_epoch = 25,
             .data = &.{ 10, 20, 30 }, // NOTE: this changed in the program
