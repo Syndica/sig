@@ -47,5 +47,9 @@
             .url = "git+https://github.com/Syndica/secp256k1-zig#82bbb3a5bf16c39330d69fa8699cf1b4b7f7f316",
             .hash = "1220f7a062a9df740338610beb50a4af1a8a089e47ef01339b220f42626bc16494fd",
         },
+        .tracy = .{
+            .url = "git+https://github.com/Sobeston/zig-tracy/#f625efc712377207414086bf087e32a7b317f7d3",
+            .hash = "1220698a07d20b0b325625f240d504ab8cc575223cb16321dd5cdc45f32566789ca6",
+        },
     },
 }

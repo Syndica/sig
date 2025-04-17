@@ -16,6 +16,7 @@ pub const Config = struct {
     ssh_workdir: []const u8,
     no_network_tests: bool,
     has_side_effects: bool,
+    enable_tracy: bool,
 
     pub fn fromBuild(b: *Build) !Config {
         var self = Config{
@@ -68,8 +69,7 @@ pub const Config = struct {
                 "ssh-workdir",
                 "When using ssh-host, this configures the working " ++
                     "directory where executables will run (default: sig).",
-            ) orelse
-                "sig",
+            ) orelse "sig",
             .no_network_tests = b.option(
                 bool,
                 "no-network-tests",
@@ -79,6 +79,11 @@ pub const Config = struct {
                 bool,
                 "side-effects",
                 "Disables caching of the run step",
+            ) orelse false,
+            .enable_tracy = b.option(
+                bool,
+                "enable-tracy",
+                "Enables tracy",
             ) orelse false,
         };
 
@@ -147,6 +152,13 @@ pub fn build(b: *Build) !void {
     const pretty_table_dep = b.dependency("prettytable", dep_opts);
     const pretty_table_mod = pretty_table_dep.module("prettytable");
 
+    const tracy_dep = b.dependency("tracy", .{
+        .target = config.target,
+        .optimize = config.optimize,
+        .tracy_enable = config.enable_tracy,
+    });
+    const tracy_mod = tracy_dep.module("tracy");
+
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
@@ -202,11 +214,20 @@ pub fn build(b: *Build) !void {
     sig_exe.root_module.addImport("secp256k1", secp256k1_mod);
     sig_exe.root_module.addImport("ssl", ssl_mod);
     sig_exe.root_module.addImport("xev", xev_mod);
+    sig_exe.root_module.addImport("tracy", tracy_mod);
+
+    if (config.enable_tracy) {
+        sig_exe.root_module.linkLibrary(tracy_dep.artifact("tracy"));
+        sig_exe.root_module.link_libcpp = true;
+    }
+
     switch (config.blockstore_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
     try addInstallAndRun(b, sig_step, sig_exe, config);
+
+    sig_exe.linkSystemLibrary("sysprof-capture-4");
 
     // unit tests
     const unit_tests_exe = b.addTest(.{
