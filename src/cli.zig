@@ -19,39 +19,39 @@
 //! }
 //! ```
 //!
-//! # Options
-//! A given command may accept zero or more options, named arguments that may
+//! # Arguments
+//! A given command may accept zero or more arguments, named arguments that may
 //! also be specified via an alias that is unique to it (per subcommand).
-//! An option may be of type bool, int, string, enum, and an optional xor
+//! An argument may be of type bool, int, string, enum, and an optional xor
 //! list of any of the former primitives.
 //!
-//! Note: the `-h, --help` option cannot be used by the programmer, it is
+//! Note: the `-h, --help` argument cannot be used by the programmer, it is
 //! controlled by the parser.
 //!
-//! ## Optional Options, Required Options, Default Values
-//! All options must have a default value, but may be treated as "required" by
+//! ## Optional Arguments, Required Arguments, Default Values
+//! All arguments must have a default value, but may be treated as "required" by
 //! the application by using an optional type with a default value of `null`,
-//! and issue an error if the option posseses this value.
+//! and issue an error if the argument posseses this value.
 //!
 //! `null` is not a specifiable value for an optional on the command line itself,
 //! meaning if the value is `null`, the application can know for certain that the
-//! option was not specified at all.
+//! argument was not specified at all.
 //!
-//! ## List Options
-//! List options are inherently "optional", in the sense that they are not allowed
+//! ## List Arguments
+//! List arguments are inherently "optional", in the sense that they are not allowed
 //! to have a non-empty default value, and will always default to an empty value
 //! if no values are specified. For this reason, a list cannot be optional, because
-//! whether or not the option was specified can be detected by whether or not the
+//! whether or not the argument was specified can be detected by whether or not the
 //! list is empty.
 //!
-//! Syntactically, lists are specified as a repeating series of the option.
+//! Syntactically, lists are specified as a repeating series of the argument.
 //! Example: `foo --bar 1 --bar 2 --bar 3 --bar 4`, would parse to a command
-//! where the option `bar` is equal to `&.{ 1, 2, 3, 4 }`.
+//! where the argument `bar` is equal to `&.{ 1, 2, 3, 4 }`.
 //!
-//! ## Positional Options
-//! A positional option is only allowed if there is no subcommand, and vice versa.
-//! They are specified before named options, and not after; for example:
-//! `foo file/path --opt=a`, but not `foo --opt=a file/path`.
+//! ## Positional Arguments
+//! A positional argument is only allowed if there is no subcommand, and vice versa.
+//! They are specified before named arguments, and not after; for example:
+//! `foo file/path --arg=a`, but not `foo --arg=a file/path`.
 
 const std = @import("std");
 
@@ -61,8 +61,8 @@ const std = @import("std");
 ///
 /// The input `S` must be a struct type where each field is one of the following:
 /// * A union where each tag represents a subcommand.
-/// * A struct where each field is an option.
-/// * A simple value which is assigned to an option.
+/// * A struct where each field is an argument.
+/// * A simple value which is assigned to an argument.
 ///
 /// Up to one union field is allowed, because at most one subcommand field is permitted,
 /// which is what a union represents (each tag of the union is a subcommand name).
@@ -70,8 +70,8 @@ const std = @import("std");
 /// The `sub: SubInfo` field is a struct with all of the same fields as the input struct `S`,
 /// except:
 /// * each union field type is replaced with `CommandInfo(FieldType)`.
-/// * each struct field type is replaced with `OptionInfoGroup(FieldType)`.
-/// * each normal field type is replaced with `OptionInfo(FieldType)`.
+/// * each struct field type is replaced with `ArgumentInfoGroup(FieldType)`.
+/// * each normal field type is replaced with `ArgumentInfo(FieldType)`.
 ///
 /// NOTE: each subcommand field must be optional, such that its absence in the command line
 /// can be represented as `null`, allowing the calling code to take appropriate action for
@@ -97,7 +97,7 @@ pub fn CommandInfo(comptime S: type) type {
         sub: SubInfo,
 
         pub const Cmd = S;
-        pub const SubInfo = computeCmdAndOptBasicInfo(S, null).SubInfo;
+        pub const SubInfo = computeCmdAndArgBasicInfo(S, null).SubInfo;
     };
 }
 
@@ -115,17 +115,17 @@ pub const CommandHelp = struct {
     long: ?[]const u8,
 };
 
-/// This struct describes everything related to a given option within the scope of a (sub)command.
+/// This struct describes everything related to a given argument within the scope of a (sub)command.
 ///
 /// Similar to `CommandInfo`, it can be instantiated directly at the site of usage, or it can
-/// be pre-declared, which allows re-using the option info in multiple sub-commands.
-pub fn OptionInfo(comptime Opt: type) type {
+/// be pre-declared, which allows re-using the argument info in multiple sub-commands.
+pub fn ArgumentInfo(comptime Arg: type) type {
     return struct {
-        /// A named option will be specifiable as `--{name_override orelse field_name}(=<value>)?`,
+        /// A named argument will be specifiable as `--{name_override orelse field_name}(=<value>)?`,
         /// irrespective of position within the scope of the (sub)command.
         ///
-        /// A positional option will be specifiable as `{<value>}`, with respect to the position
-        /// it is declared relative to other positional options within the scope of the (sub)command.
+        /// A positional argument will be specifiable as `{<value>}`, with respect to the position
+        /// it is declared relative to other positional arguments within the scope of the (sub)command.
         kind: enum { named, positional },
 
         /// Used to override the name displayed on the command line, or null
@@ -136,27 +136,27 @@ pub fn OptionInfo(comptime Opt: type) type {
         /// is used in the help message.
         name_override: ?[]const u8,
 
-        /// The alias associated with this option, or `.none`.
-        alias: OptionAlias,
+        /// The alias associated with this argument, or `.none`.
+        alias: ArgumentAlias,
 
-        /// Default value to use for this value.
-        default_value: Option,
+        /// Default value to use for this argument.
+        default_value: Argument,
 
         /// Options describing how the value(s) should be parsed.
-        /// For `Opt = []const T` & `Opt = ?T`, applies to `T`,
+        /// For `Arg = []const T` & `Arg = ?T`, applies to `T`,
         /// except for `T = []const u8`, which would always be
         /// interpeted as a string.
         config: Config,
 
-        /// The help information associated with this option.
+        /// The help information associated with this argument.
         help: []const u8,
 
-        pub const Option = Opt;
-        pub const Config = OptionConfig(Option);
+        pub const Argument = Arg;
+        pub const Config = ArgumentConfig(Argument);
 
         comptime {
-            if (!isOptionInfo(@This())) @compileError(
-                "isOptionInfo has gone out of sync with " ++ @typeName(@This()),
+            if (!isArgumentInfo(@This())) @compileError(
+                "isArgumentInfo has gone out of sync with " ++ @typeName(@This()),
             );
         }
     };
@@ -176,7 +176,7 @@ pub const BytesConfig = enum {
 
 /// Exhaustive enum representing a single alphabetic character,
 /// aside from the letter 'h' (`[A-Za-gi-z]`).
-pub const OptionAlias = enum(u7) {
+pub const ArgumentAlias = enum(u7) {
     none = 0,
     // zig fmt: off
     a = 'a', A = 'A',
@@ -215,15 +215,15 @@ pub const OptionAlias = enum(u7) {
 };
 
 /// Returns a struct with all the same fields as input struct `S`, but where each
-/// field is of type `OptionInfo(FieldType)`.
+/// field is of type `ArgumentInfo(FieldType)`.
 ///
-/// Certain groups of options may appear together repeatedly across subcommands;
+/// Certain groups of arguments may appear together repeatedly across subcommands;
 /// for this reason, struct fields in the struct passed to `CommandInfo` are described
 /// using this type, allowing re-use of those struct types across subcommands.
 ///
-/// Each of the option infos in the struct are embedded into the parent pool of
-/// options; an error is issued if any name or alias collisions occur.
-pub fn OptionInfoGroup(comptime S: type) type {
+/// Each of the argument infos in the struct are embedded into the parent pool of
+/// arguments; an error is issued if any name or alias collisions occur.
+pub fn ArgumentInfoGroup(comptime S: type) type {
     const Type = std.builtin.Type;
     const s_info = @typeInfo(S).Struct;
 
@@ -233,12 +233,12 @@ pub fn OptionInfoGroup(comptime S: type) type {
             (@typeInfo(s_field.type) == .Optional and
             @typeInfo(@typeInfo(s_field.type).Optional.child) == .Union))
         {
-            @compileError("The subcommand field cannot be part of an option group");
+            @compileError("The subcommand field cannot be part of an argument group");
         }
 
         new_s_field.* = .{
             .name = s_field.name,
-            .type = OptionInfo(s_field.type),
+            .type = ArgumentInfo(s_field.type),
             .default_value = null,
             .is_comptime = false,
             .alignment = 0,
@@ -256,20 +256,20 @@ pub fn OptionInfoGroup(comptime S: type) type {
 
 pub const ParseCmdError = error{
     /// Unrecognized `--{name}`.
-    UnrecognizedOptionName,
+    UnrecognizedArgumentName,
     /// Unrecognized `-{c}`.
-    UnrecognizedOptionAlias,
+    UnrecognizedArgumentAlias,
     /// Unexpected positional in command with no subcommand and not expecting positionals.
     UnexpectedPositional,
     /// Unrecognized command string.
     UnrecognizedCommand,
-} || ParseOptionKeyMaybeValStrError ||
-    ParseSingleOptValueError ||
+} || ParseArgumentKeyMaybeValStrError ||
+    ParseSingleArgValueError ||
     std.mem.Allocator.Error ||
     std.os.windows.SetConsoleTextAttributeError; // for the TTY for the help message
 
 pub fn Parser(
-    /// Must be a struct type containing zero or more option fields, and optionally
+    /// Must be a struct type containing zero or more argument fields, and optionally
     /// one sub-command field which is an optional tagged union, wherein each
     /// member is a sub-command struct following the same description as this one,
     /// recursively.
@@ -404,12 +404,12 @@ test "TestCmd" {
             },
         };
 
-        // structs can be used to share options across commands
+        // structs can be used to share arguments across commands
         const Shared = struct {
             fizz: u32,
             buzz: []const u64,
 
-            const opt_info: OptionInfoGroup(@This()) = .{
+            const arg_info: ArgumentInfoGroup(@This()) = .{
                 .fizz = .{
                     .kind = .named,
                     .name_override = null,
@@ -445,7 +445,7 @@ test "TestCmd" {
                             .sub = .{},
                         },
                     },
-                    .shared = Shared.opt_info,
+                    .shared = Shared.arg_info,
                 },
             };
         };
@@ -470,7 +470,7 @@ test "TestCmd" {
                         .config = .string,
                         .help = "Input file",
                     },
-                    .shared = Shared.opt_info,
+                    .shared = Shared.arg_info,
                     .gossip_port = .{
                         .kind = .named,
                         .name_override = null,
@@ -507,7 +507,7 @@ test "TestCmd" {
                         .alias = .none,
                         .default_value = null,
                         .config = {},
-                        .help = "A single option",
+                        .help = "A single argument",
                     },
                 },
             };
@@ -706,7 +706,7 @@ test "TestCmd" {
         \\Run RPC
         \\
         \\OPTIONS:
-        \\      --single   A single option
+        \\      --single   A single argument
         \\  -h, --help     Prints help information
         \\
     );
@@ -714,24 +714,24 @@ test "TestCmd" {
 
 // -- IMPLEMENTATION DETAILS -- //
 
-inline fn isOptionInfo(comptime T: type) bool {
+inline fn isArgumentInfo(comptime T: type) bool {
     comptime {
         if (@typeInfo(T) != .Struct) return false;
-        if (!@hasDecl(T, "Option")) return false;
-        if (@TypeOf(&T.Option) != *const type) return false;
-        return OptionInfo(T.Option) == T;
+        if (!@hasDecl(T, "Argument")) return false;
+        if (@TypeOf(&T.Argument) != *const type) return false;
+        return ArgumentInfo(T.Argument) == T;
     }
 }
 
-fn OptionConfig(comptime Opt: type) type {
-    return switch (@typeInfo(Opt)) {
+fn ArgumentConfig(comptime Arg: type) type {
+    return switch (@typeInfo(Arg)) {
         .Pointer => |p_info| blk: {
             if (p_info.size != .Slice) {
-                @compileError("Cannot have non-slice pointer options");
+                @compileError("Cannot have non-slice pointer arguments");
             }
 
             if (p_info.child == u8) break :blk BytesConfig;
-            const SubConfig = OptionConfig(p_info.child);
+            const SubConfig = ArgumentConfig(p_info.child);
 
             // []const []const u8 is always a list of strings
             if (SubConfig == BytesConfig) break :blk BytesConfig.StringOnly;
@@ -741,16 +741,16 @@ fn OptionConfig(comptime Opt: type) type {
         .Optional => |o_info| blk: {
             switch (@typeInfo(o_info.child)) {
                 .Optional => {
-                    @compileError("Cannot have optional optional options");
+                    @compileError("Cannot have optional optional arguments");
                 },
                 .Pointer => |p_info| if (p_info.size == .Slice and p_info.child != u8) {
-                    @compileError("Cannot have optional list options;" ++
+                    @compileError("Cannot have optional list arguments;" ++
                         " an unspecified list is simply empty");
                 },
                 else => {},
             }
 
-            const SubConfig = OptionConfig(o_info.child);
+            const SubConfig = ArgumentConfig(o_info.child);
 
             // ?[]const u8 is always an optional string
             if (SubConfig == BytesConfig) break :blk BytesConfig.StringOnly;
@@ -758,14 +758,14 @@ fn OptionConfig(comptime Opt: type) type {
             break :blk SubConfig;
         },
         .Int, .Enum, .Bool => void,
-        else => @compileError("Unexpected option type: " ++ @typeName(Opt)),
+        else => @compileError("Unexpected argument type: " ++ @typeName(Arg)),
     };
 }
 
 const ALIAS_TABLE_IDX_BASE = 'A';
 const MAX_ALIAS_TABLE_LEN = 'z' + 1 - 'A';
 
-const OptStructIndex = struct {
+const ArgStructIndex = struct {
     index: usize,
     sub: ?usize,
 };
@@ -787,48 +787,48 @@ fn CmdHelper(
         else => unreachable,
     };
 
-    const cmd_and_opt_basic_info = computeCmdAndOptBasicInfo(Cmd, maybe_parent_name);
-    const option_count = cmd_and_opt_basic_info.option_count;
-    const maybe_sub_cmd_s_field_index = cmd_and_opt_basic_info.maybe_sub_cmd_s_field_index;
+    const cmd_and_arg_basic_info = computeCmdAndArgBasicInfo(Cmd, maybe_parent_name);
+    const argument_count = cmd_and_arg_basic_info.argument_count;
+    const maybe_sub_cmd_s_field_index = cmd_and_arg_basic_info.maybe_sub_cmd_s_field_index;
 
-    const OptEnumInt = std.math.IntFittingRange(
+    const ArgEnumInt = std.math.IntFittingRange(
         0,
         // TODO: this is a hack to get around the troubles with `u0` enums being weird in 0.13
-        @max(1, option_count -| 1),
+        @max(1, argument_count -| 1),
     );
-    const OptEnumIntPlusOne = std.math.IntFittingRange(0, option_count);
-    const alias_table_sentinel: OptEnumIntPlusOne = option_count;
+    const ArgEnumIntPlusOne = std.math.IntFittingRange(0, argument_count);
+    const alias_table_sentinel: ArgEnumIntPlusOne = argument_count;
 
-    const OptEnum: type, //
-    const opt_enum_to_field_map: []const OptStructIndex, //
-    const positional_set: []const OptStructIndex, //
-    // WIP table that will be used to construct a final table for mapping aliases to options
-    const alias_table_wip: [MAX_ALIAS_TABLE_LEN]OptEnumIntPlusOne, //
+    const ArgEnum: type, //
+    const arg_enum_to_field_map: []const ArgStructIndex, //
+    const positional_set: []const ArgStructIndex, //
+    // WIP table that will be used to construct a final table for mapping aliases to arguments
+    const alias_table_wip: [MAX_ALIAS_TABLE_LEN]ArgEnumIntPlusOne, //
     // partially default-initialised result
     const default_init: Cmd //
     = mappings_and_init: {
-        var opt_enum_fields: []const Type.EnumField = &.{};
-        var opt_enum_to_field_map: []const OptStructIndex = &.{};
-        var positional_set: []const OptStructIndex = &.{};
+        var arg_enum_fields: []const Type.EnumField = &.{};
+        var arg_enum_to_field_map: []const ArgStructIndex = &.{};
+        var positional_set: []const ArgStructIndex = &.{};
 
-        var alias_table_wip = [_]OptEnumIntPlusOne{alias_table_sentinel} ** MAX_ALIAS_TABLE_LEN;
+        var alias_table_wip = [_]ArgEnumIntPlusOne{alias_table_sentinel} ** MAX_ALIAS_TABLE_LEN;
 
         var default_init: Cmd = undefined;
 
-        const computeOptFieldInfo = struct {
-            /// shared logic for each option field, and each option group field.
-            fn computeOptFieldInfo(
+        const computeArgFieldInfo = struct {
+            /// shared logic for each argument field, and each argument group field.
+            fn computeArgFieldInfo(
                 //
                 comptime field_name: []const u8,
                 comptime FieldType: type,
-                comptime opt_info: OptionInfo(FieldType),
+                comptime arg_info: ArgumentInfo(FieldType),
 
                 //
-                comptime opt_enum_fields_ptr: *@TypeOf(opt_enum_fields),
+                comptime arg_enum_fields_ptr: *@TypeOf(arg_enum_fields),
 
                 //
-                comptime opt_struct_index: OptStructIndex,
-                comptime opt_enum_to_field_map_ptr: *@TypeOf(opt_enum_to_field_map),
+                comptime arg_struct_index: ArgStructIndex,
+                comptime arg_enum_to_field_map_ptr: *@TypeOf(arg_enum_to_field_map),
                 comptime positional_set_ptr: *@TypeOf(positional_set),
 
                 //
@@ -837,48 +837,48 @@ fn CmdHelper(
                 //
                 comptime alias_table_wip_ptr: *@TypeOf(alias_table_wip),
             ) void {
-                const opt_enum_field_name = (opt_info.name_override orelse field_name) ++ "";
-                if (constEql(opt_enum_field_name, "help")) @compileError(
-                    "Cannot use reserved option name " ++ parent_prefix ++ "help",
+                const arg_enum_field_name = (arg_info.name_override orelse field_name) ++ "";
+                if (constEql(arg_enum_field_name, "help")) @compileError(
+                    "Cannot use reserved argument name " ++ parent_prefix ++ "help",
                 );
 
                 const is_slice = switch (@typeInfo(FieldType)) {
                     .Pointer => |ptr_info| switch (ptr_info.size) {
-                        .Slice => ptr_info.child != u8 or opt_info.config == .list,
+                        .Slice => ptr_info.child != u8 or arg_info.config == .list,
                         else => false,
                     },
                     else => false,
                 };
 
-                switch (opt_info.kind) {
+                switch (arg_info.kind) {
                     .named => {
-                        const opt_enum_field_idx = opt_enum_fields_ptr.len;
-                        opt_enum_fields_ptr.* = opt_enum_fields_ptr.* ++ .{.{
-                            .name = opt_enum_field_name,
-                            .value = opt_enum_field_idx,
+                        const arg_enum_field_idx = arg_enum_fields_ptr.len;
+                        arg_enum_fields_ptr.* = arg_enum_fields_ptr.* ++ .{.{
+                            .name = arg_enum_field_name,
+                            .value = arg_enum_field_idx,
                         }};
 
-                        if (opt_info.alias != .none) {
-                            const idx = @intFromEnum(opt_info.alias) - ALIAS_TABLE_IDX_BASE;
-                            alias_table_wip_ptr[idx] = opt_enum_field_idx;
+                        if (arg_info.alias != .none) {
+                            const idx = @intFromEnum(arg_info.alias) - ALIAS_TABLE_IDX_BASE;
+                            alias_table_wip_ptr[idx] = arg_enum_field_idx;
                         }
 
-                        opt_enum_to_field_map_ptr.* =
-                            opt_enum_to_field_map_ptr.* ++ .{opt_struct_index};
+                        arg_enum_to_field_map_ptr.* =
+                            arg_enum_to_field_map_ptr.* ++ .{arg_struct_index};
                     },
                     .positional => {
                         if (is_slice) @compileError(
-                            "Option " ++ parent_prefix ++ field_name ++
+                            "Argument " ++ parent_prefix ++ field_name ++
                                 " cannot be both a list and a positional.",
                         );
 
-                        if (opt_info.alias != .none) @compileError(
-                            "Option " ++ parent_prefix ++ field_name ++ " cannot have an alias, " ++
-                                "since it's not named, it's " ++ @tagName(opt_info.kind),
+                        if (arg_info.alias != .none) @compileError(
+                            "Argument " ++ parent_prefix ++ field_name ++ " cannot have an alias, " ++
+                                "since it's not named, it's " ++ @tagName(arg_info.kind),
                         );
 
                         positional_set_ptr.* =
-                            positional_set_ptr.* ++ .{opt_struct_index};
+                            positional_set_ptr.* ++ .{arg_struct_index};
                     },
                 }
 
@@ -887,7 +887,7 @@ fn CmdHelper(
                     @field(default_init_ptr, field_name) = &.{};
                 }
 
-                const default_value = opt_info.default_value;
+                const default_value = arg_info.default_value;
                 @field(default_init_ptr, field_name) = default_value;
 
                 if (is_slice and default_value.len != 0 and
@@ -896,7 +896,7 @@ fn CmdHelper(
                         parent_prefix ++ field_name,
                 );
             }
-        }.computeOptFieldInfo;
+        }.computeArgFieldInfo;
 
         @setEvalBranchQuota(cmd_fields.len * 3 + 1);
         for (cmd_fields, 0..) |s_field, s_field_i| {
@@ -907,17 +907,17 @@ fn CmdHelper(
                 continue;
             }
 
-            const maybe_opt_info = @field(cmd_info.sub, s_field.name);
-            if (isOptionInfo(@TypeOf(maybe_opt_info))) {
-                computeOptFieldInfo(
+            const maybe_arg_info = @field(cmd_info.sub, s_field.name);
+            if (isArgumentInfo(@TypeOf(maybe_arg_info))) {
+                computeArgFieldInfo(
                     s_field.name,
                     s_field.type,
-                    maybe_opt_info,
+                    maybe_arg_info,
 
-                    &opt_enum_fields,
+                    &arg_enum_fields,
 
                     .{ .index = s_field_i, .sub = null },
-                    &opt_enum_to_field_map,
+                    &arg_enum_to_field_map,
                     &positional_set,
 
                     &default_init,
@@ -927,19 +927,19 @@ fn CmdHelper(
                 continue;
             }
 
-            // handle `OptionInfoGroup`
+            // handle `ArgumentInfoGroup`
             const s_sub_info = @typeInfo(s_field.type).Struct;
             @setEvalBranchQuota(cmd_fields.len * 3 + 1 + s_sub_info.fields.len * 2 + 1);
             for (s_sub_info.fields, 0..) |s_sub_field, s_sub_field_i| {
-                computeOptFieldInfo(
+                computeArgFieldInfo(
                     s_sub_field.name,
                     s_sub_field.type,
-                    @field(maybe_opt_info, s_sub_field.name),
+                    @field(maybe_arg_info, s_sub_field.name),
 
-                    &opt_enum_fields,
+                    &arg_enum_fields,
 
                     .{ .index = s_field_i, .sub = s_sub_field_i },
-                    &opt_enum_to_field_map,
+                    &arg_enum_to_field_map,
                     &positional_set,
 
                     &@field(default_init, s_field.name),
@@ -970,22 +970,22 @@ fn CmdHelper(
             };
         }
 
-        const OptEnum = @Type(.{ .Enum = .{
-            .tag_type = OptEnumInt,
-            .fields = opt_enum_fields,
+        const ArgEnum = @Type(.{ .Enum = .{
+            .tag_type = ArgEnumInt,
+            .fields = arg_enum_fields,
             .decls = &.{},
             .is_exhaustive = true,
         } });
 
         break :mappings_and_init .{
-            OptEnum,
-            opt_enum_to_field_map,
+            ArgEnum,
+            arg_enum_to_field_map,
             positional_set,
             alias_table_wip,
             default_init,
         };
     };
-    const opt_enum_fields = @typeInfo(OptEnum).Enum.fields;
+    const arg_enum_fields = @typeInfo(ArgEnum).Enum.fields;
 
     // create the subcommand list once at comptime
     // so that we don't have to do two inline loops
@@ -1024,10 +1024,10 @@ fn CmdHelper(
     const alias_table_len: usize, //
     const alias_table_has_holes: bool //
     = alias_info: {
-        if (opt_enum_fields.len == 0) break :alias_info .{ 0, false };
+        if (arg_enum_fields.len == 0) break :alias_info .{ 0, false };
 
-        const OptEnumIntVec = @Vector(MAX_ALIAS_TABLE_LEN, OptEnumIntPlusOne);
-        const sentinel_vec: OptEnumIntVec = @splat(alias_table_sentinel);
+        const ArgEnumIntVec = @Vector(MAX_ALIAS_TABLE_LEN, ArgEnumIntPlusOne);
+        const sentinel_vec: ArgEnumIntVec = @splat(alias_table_sentinel);
         const used_aliases_mask_vec = alias_table_wip != sentinel_vec;
 
         const UsedAliasesBits = @Type(.{ .Int = .{
@@ -1045,25 +1045,18 @@ fn CmdHelper(
         };
     };
 
-    const alias_table: [alias_table_len]OptEnumIntPlusOne = alias_table_wip[0..alias_table_len].*;
+    const alias_table: [alias_table_len]ArgEnumIntPlusOne = alias_table_wip[0..alias_table_len].*;
 
     return struct {
         fn freeImpl(allocator: std.mem.Allocator, args: Cmd) void {
-            freeOptions(allocator, args);
+            freeArguments(allocator, args);
             const sub_cmd_s_field_index = maybe_sub_cmd_s_field_index orelse return;
 
             const sub_cmd_s_field_info = cmd_fields[sub_cmd_s_field_index];
             const sub_cmd_s_field_name = sub_cmd_s_field_info.name;
-            const CmdMaybeUnion = sub_cmd_s_field_info.type;
-
             const sub_cmd_info_map = @field(cmd_info.sub, sub_cmd_s_field_name);
-            const is_optional_cmd = @typeInfo(CmdMaybeUnion) == .Optional;
-
             const maybe_cmd_field_value = @field(args, sub_cmd_s_field_name);
-            const cmd_field_value = if (is_optional_cmd)
-                maybe_cmd_field_value orelse return
-            else
-                maybe_cmd_field_value;
+            const cmd_field_value = maybe_cmd_field_value orelse return;
 
             switch (cmd_field_value) {
                 inline else => |payload, itag| {
@@ -1077,9 +1070,9 @@ fn CmdHelper(
             }
         }
 
-        fn freeOptions(allocator: std.mem.Allocator, partial_args: Cmd) void {
-            @setEvalBranchQuota(opt_enum_to_field_map.len * 8 + 1);
-            inline for (opt_enum_to_field_map) |s_field_idx| {
+        fn freeArguments(allocator: std.mem.Allocator, partial_args: Cmd) void {
+            @setEvalBranchQuota(arg_enum_to_field_map.len * 8 + 1);
+            inline for (arg_enum_to_field_map) |s_field_idx| {
                 const s_field = cmd_fields[s_field_idx.index];
                 const maybe_target_field = @field(partial_args, s_field.name);
                 const target_field = blk: {
@@ -1108,7 +1101,7 @@ fn CmdHelper(
             args_iter: *ArgsIter,
         ) (ParseCmdError || @TypeOf(help_writer).Error)!?Cmd {
             var result: Cmd = default_init;
-            errdefer freeOptions(allocator, result);
+            errdefer freeArguments(allocator, result);
 
             var positional_count: std.math.IntFittingRange(0, positional_set.len) = 0;
 
@@ -1119,10 +1112,10 @@ fn CmdHelper(
             } = while (args_iter.next()) |arg| {
                 if (arg.len == 0) continue;
 
-                parse_opt: {
+                parse_arg: {
                     const key, //
                     const maybe_value //
-                    = try parseOptionKeyMaybeValStr(arg) orelse break :parse_opt;
+                    = try parseArgumentKeyMaybeValStr(arg) orelse break :parse_arg;
 
                     // prevent trying to parse any more positionals
                     positional_count = positional_set.len;
@@ -1141,17 +1134,17 @@ fn CmdHelper(
                         break .help;
                     }
 
-                    const opt_tag: OptEnum = switch (key) {
-                        .short => |alias| optionTagFromAlias(alias) orelse
-                            return error.UnrecognizedOptionAlias,
-                        .long => |name| optionTagFromName(name) orelse
-                            return error.UnrecognizedOptionName,
+                    const arg_tag: ArgEnum = switch (key) {
+                        .short => |alias| argumentTagFromAlias(alias) orelse
+                            return error.UnrecognizedArgumentAlias,
+                        .long => |name| argumentTagFromName(name) orelse
+                            return error.UnrecognizedArgumentName,
                     };
 
-                    switch (opt_tag) {
+                    switch (arg_tag) {
                         inline else => |itag| {
-                            const s_field_idx = opt_enum_to_field_map[@intFromEnum(itag)];
-                            try parseOptValueMaybeScanIntoResult(
+                            const s_field_idx = arg_enum_to_field_map[@intFromEnum(itag)];
+                            try parseArgValueMaybeScanIntoResult(
                                 allocator,
                                 s_field_idx,
                                 &result,
@@ -1171,7 +1164,7 @@ fn CmdHelper(
                             const s_field_idx = positional_set[positional_i];
 
                             const args_iter_index_guard = args_iter.index;
-                            try parseOptValueMaybeScanIntoResult(
+                            try parseArgValueMaybeScanIntoResult(
                                 allocator,
                                 s_field_idx,
                                 &result,
@@ -1246,7 +1239,7 @@ fn CmdHelper(
 
             switch (parse_result) {
                 .help => {
-                    freeOptions(allocator, result);
+                    freeArguments(allocator, result);
                     return null;
                 },
                 .subcmd_set => comptime std.debug.assert(maybe_sub_cmd_s_field_index != null),
@@ -1260,57 +1253,57 @@ fn CmdHelper(
             return result;
         }
 
-        fn parseOptValueMaybeScanIntoResult(
+        fn parseArgValueMaybeScanIntoResult(
             allocator: std.mem.Allocator,
-            comptime s_field_idx: OptStructIndex,
+            comptime s_field_idx: ArgStructIndex,
             result: *Cmd,
             maybe_value: ?[]const u8,
             args_iter: *ArgsIter,
         ) !void {
             const s_field = cmd_fields[s_field_idx.index];
             const s_field_ptr = &@field(result, s_field.name);
-            const maybe_opt_info = @field(cmd_info.sub, s_field.name);
+            const maybe_arg_info = @field(cmd_info.sub, s_field.name);
 
-            const opt_name, const opt_ptr, const opt_info = opt: {
-                const s_sub_field_idx = s_field_idx.sub orelse break :opt .{
+            const arg_name, const arg_ptr, const arg_info = arg: {
+                const s_sub_field_idx = s_field_idx.sub orelse break :arg .{
                     s_field.name,
                     s_field_ptr,
-                    maybe_opt_info,
+                    maybe_arg_info,
                 };
                 const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
                 const s_sub_field = s_sub_fields[s_sub_field_idx];
                 const s_sub_field_ptr = &@field(s_field_ptr, s_sub_field.name);
-                break :opt .{
+                break :arg .{
                     s_sub_field.name,
                     s_sub_field_ptr,
-                    @field(maybe_opt_info, s_sub_field.name),
+                    @field(maybe_arg_info, s_sub_field.name),
                 };
             };
 
-            const Opt = @TypeOf(opt_ptr.*);
-            const is_list, const ValueType = switch (@typeInfo(Opt)) {
+            const Arg = @TypeOf(arg_ptr.*);
+            const is_list, const ValueType = switch (@typeInfo(Arg)) {
                 .Pointer => |ptr_info| blk: {
                     const is_list = ptr_info.size == .Slice and
-                        (ptr_info.child != u8 or opt_info.config == .list);
-                    const ListElem = if (is_list) ptr_info.child else Opt;
+                        (ptr_info.child != u8 or arg_info.config == .list);
+                    const ListElem = if (is_list) ptr_info.child else Arg;
                     break :blk .{ is_list, ListElem };
                 },
-                else => .{ false, Opt },
+                else => .{ false, Arg },
             };
-            const parsed_value = try parseSingleOptValueMaybeScan(
-                opt_name,
+            const parsed_value = try parseSingleArgValueMaybeScan(
+                arg_name,
                 ValueType,
                 maybe_value,
                 args_iter,
             );
             if (!is_list) {
-                opt_ptr.* = parsed_value;
+                arg_ptr.* = parsed_value;
             } else {
-                opt_ptr.* = try allocator.realloc(
-                    @constCast(opt_ptr.*),
-                    opt_ptr.len + 1,
+                arg_ptr.* = try allocator.realloc(
+                    @constCast(arg_ptr.*),
+                    arg_ptr.len + 1,
                 );
-                @constCast(&opt_ptr.*[opt_ptr.len - 1]).* = parsed_value;
+                @constCast(&arg_ptr.*[arg_ptr.len - 1]).* = parsed_value;
             }
         }
 
@@ -1336,28 +1329,28 @@ fn CmdHelper(
             @setEvalBranchQuota(positional_set.len * 8 + 1);
             inline for (positional_set) |s_field_idx| {
                 const s_field = cmd_fields[s_field_idx.index];
-                const maybe_opt_info = @field(cmd_info.sub, s_field.name);
-                const opt_name = blk: {
+                const maybe_arg_info = @field(cmd_info.sub, s_field.name);
+                const arg_name = blk: {
                     const s_sub_field_idx = s_field_idx.sub orelse {
-                        const opt_info: OptionInfo(s_field.type) = maybe_opt_info;
+                        const arg_info: ArgumentInfo(s_field.type) = maybe_arg_info;
                         break :blk comptimeReplaceScalar(
-                            opt_info.name_override orelse s_field.name,
+                            arg_info.name_override orelse s_field.name,
                             '_',
                             '-',
                         );
                     };
                     const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
                     const s_sub_field = s_sub_fields[s_sub_field_idx];
-                    const opt_info: OptionInfo(s_sub_field.type) =
-                        @field(maybe_opt_info, s_sub_field.name);
+                    const arg_info: ArgumentInfo(s_sub_field.type) =
+                        @field(maybe_arg_info, s_sub_field.name);
                     break :blk comptimeReplaceScalar(
-                        opt_info.name_override orelse s_sub_field.name,
+                        arg_info.name_override orelse s_sub_field.name,
                         '_',
                         '-',
                     );
                 };
 
-                try writer.writeAll("[" ++ opt_name ++ "] ");
+                try writer.writeAll("[" ++ arg_name ++ "] ");
             }
 
             try writer.writeAll("[OPTIONS]");
@@ -1414,9 +1407,9 @@ fn CmdHelper(
 
             const name_alias_base_width: u64, //
             const default_value_base_width: ?u64 //
-            = try writeOptionsHelp(.no_color, std.io.null_writer, 0, null);
+            = try writeArgumentsHelp(.no_color, std.io.null_writer, 0, null);
 
-            _ = try writeOptionsHelp(
+            _ = try writeArgumentsHelp(
                 tty_config,
                 writer,
                 name_alias_base_width,
@@ -1424,7 +1417,7 @@ fn CmdHelper(
             );
         }
 
-        fn writeOptionsHelp(
+        fn writeArgumentsHelp(
             tty_config: std.io.tty.Config,
             writer: anytype,
             name_alias_base_width: u64,
@@ -1433,37 +1426,37 @@ fn CmdHelper(
             u64, // max_name_alias_width
             ?u64, // max_default_value_width
         } {
-            const help_option_alias_name = "-h, --help";
+            const help_argument_alias_name = "-h, --help";
 
-            var max_name_alias_width: u64 = @max(help_option_alias_name.len, name_alias_base_width);
+            var max_name_alias_width: u64 = @max(help_argument_alias_name.len, name_alias_base_width);
             var max_default_value_width: ?u64 = null;
 
             @setEvalBranchQuota(positional_set.len * 8 + 1);
             inline for (positional_set, 0..) |s_field_idx, i| {
                 const s_field = cmd_fields[s_field_idx.index];
-                const maybe_opt_info = @field(cmd_info.sub, s_field.name);
-                const opt_info, const opt_name = blk: {
+                const maybe_arg_info = @field(cmd_info.sub, s_field.name);
+                const arg_info, const arg_name = blk: {
                     const s_sub_field_idx = s_field_idx.sub orelse {
-                        const opt_info: OptionInfo(s_field.type) = maybe_opt_info;
-                        break :blk .{ opt_info, opt_info.name_override orelse s_field.name };
+                        const arg_info: ArgumentInfo(s_field.type) = maybe_arg_info;
+                        break :blk .{ arg_info, arg_info.name_override orelse s_field.name };
                     };
                     const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
                     const s_sub_field = s_sub_fields[s_sub_field_idx];
-                    const opt_info: OptionInfo(s_sub_field.type) =
-                        @field(maybe_opt_info, s_sub_field.name);
-                    break :blk .{ opt_info, opt_info.name_override orelse s_sub_field.name };
+                    const arg_info: ArgumentInfo(s_sub_field.type) =
+                        @field(maybe_arg_info, s_sub_field.name);
+                    break :blk .{ arg_info, arg_info.name_override orelse s_sub_field.name };
                 };
 
-                const multiline_help = std.mem.indexOfScalar(u8, opt_info.help, '\n') != null;
+                const multiline_help = std.mem.indexOfScalar(u8, arg_info.help, '\n') != null;
 
                 try tty_config.setColor(writer, .green);
                 if (multiline_help) try writer.writeByte('\n');
                 try writer.writeByte('\n');
                 try writer.writeByteNTimes(' ', 2);
 
-                // write option alias & name
+                // write argument alias & name
                 var cw = std.io.countingWriter(writer);
-                try writeOptionNameWithDefault(null, opt_name, cw.writer());
+                try writeArgumentNameWithDefault(null, arg_name, cw.writer());
                 max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
 
                 // write padding
@@ -1475,7 +1468,7 @@ fn CmdHelper(
 
                 // maybe write default value
                 cw.bytes_written = 0;
-                if (try renderOptionDefaultValue(opt_info.default_value, cw.writer())) {
+                if (try renderArgumentDefaultValue(arg_info.default_value, cw.writer())) {
                     max_default_value_width = @max(
                         max_default_value_width orelse 0,
                         cw.bytes_written,
@@ -1491,24 +1484,24 @@ fn CmdHelper(
                 // write help description and newline
                 const indent = 2 + name_alias_base_width + 2 +
                     if (default_value_base_width) |base_width| (base_width + 3) else 1;
-                try writeIndentedText(writer, indent, opt_info.help);
+                try writeIndentedText(writer, indent, arg_info.help);
                 if (multiline_help and i != positional_set.len - 1) try writer.writeByte('\n');
             }
 
             if (positional_set.len != 0) try writer.writeByte('\n');
 
-            @setEvalBranchQuota(opt_enum_to_field_map.len * 8 + 1);
-            inline for (opt_enum_to_field_map, 0..opt_enum_fields.len) |s_field_idx, e_int| {
-                const opt_tag: OptEnum = @enumFromInt(e_int);
+            @setEvalBranchQuota(arg_enum_to_field_map.len * 8 + 1);
+            inline for (arg_enum_to_field_map, 0..arg_enum_fields.len) |s_field_idx, e_int| {
+                const arg_tag: ArgEnum = @enumFromInt(e_int);
                 const s_field = cmd_fields[s_field_idx.index];
-                const maybe_opt_info = @field(cmd_info.sub, s_field.name);
-                const opt_info = if (s_field_idx.sub) |s_sub_field_idx| blk: {
+                const maybe_arg_info = @field(cmd_info.sub, s_field.name);
+                const arg_info = if (s_field_idx.sub) |s_sub_field_idx| blk: {
                     const s_sub_fields = @typeInfo(s_field.type).Struct.fields;
                     const s_sub_field = s_sub_fields[s_sub_field_idx];
-                    break :blk @field(maybe_opt_info, s_sub_field.name);
-                } else @as(OptionInfo(s_field.type), maybe_opt_info);
+                    break :blk @field(maybe_arg_info, s_sub_field.name);
+                } else @as(ArgumentInfo(s_field.type), maybe_arg_info);
 
-                const multiline_help = std.mem.indexOfScalar(u8, opt_info.help, '\n') != null;
+                const multiline_help = std.mem.indexOfScalar(u8, arg_info.help, '\n') != null;
 
                 // write indent and separating newlines
                 try tty_config.setColor(writer, .green);
@@ -1516,11 +1509,11 @@ fn CmdHelper(
                 try writer.writeByte('\n');
                 try writer.writeByteNTimes(' ', 2);
 
-                // write option alias & name
+                // write argument alias & name
                 var cw = std.io.countingWriter(writer);
-                try writeOptionNameWithDefault(
-                    opt_info.alias,
-                    @tagName(opt_tag),
+                try writeArgumentNameWithDefault(
+                    arg_info.alias,
+                    @tagName(arg_tag),
                     cw.writer(),
                 );
                 max_name_alias_width = @max(max_name_alias_width, cw.bytes_written);
@@ -1534,7 +1527,7 @@ fn CmdHelper(
 
                 // maybe write default value
                 cw.bytes_written = 0;
-                if (try renderOptionDefaultValue(opt_info.default_value, cw.writer())) {
+                if (try renderArgumentDefaultValue(arg_info.default_value, cw.writer())) {
                     max_default_value_width = @max(
                         max_default_value_width orelse 0,
                         cw.bytes_written,
@@ -1550,7 +1543,7 @@ fn CmdHelper(
                 // write help description and newline
                 const indent = 2 + name_alias_base_width + 2 +
                     if (default_value_base_width) |base_width| (base_width + 3) else 1;
-                try writeIndentedText(writer, indent, opt_info.help);
+                try writeIndentedText(writer, indent, arg_info.help);
                 if (multiline_help) try writer.writeByte('\n');
             }
 
@@ -1558,10 +1551,10 @@ fn CmdHelper(
             try writer.writeByte('\n');
             try writer.writeByteNTimes(' ', 2);
 
-            try writer.writeAll(help_option_alias_name);
+            try writer.writeAll(help_argument_alias_name);
             const padding1 =
-                @max(help_option_alias_name.len, name_alias_base_width) -
-                help_option_alias_name.len + 3 -
+                @max(help_argument_alias_name.len, name_alias_base_width) -
+                help_argument_alias_name.len + 3 -
                 @intFromBool(default_value_base_width != null);
             const padding2 = if (default_value_base_width) |base_width| base_width + 3 else 0;
 
@@ -1576,7 +1569,7 @@ fn CmdHelper(
             };
         }
 
-        inline fn optionTagFromAlias(alias: u8) ?OptEnum {
+        inline fn argumentTagFromAlias(alias: u8) ?ArgEnum {
             if (alias_table.len == 0) return null;
 
             if (alias < ALIAS_TABLE_IDX_BASE) return null;
@@ -1587,21 +1580,21 @@ fn CmdHelper(
             return @enumFromInt(value);
         }
 
-        inline fn optionTagFromName(name: []const u8) ?OptEnum {
-            if (opt_enum_fields.len == 0) return null;
-            return enumFromStringAfterReplacingScalarInTag(name, OptEnum, '_', '-');
+        inline fn argumentTagFromName(name: []const u8) ?ArgEnum {
+            if (arg_enum_fields.len == 0) return null;
+            return enumFromStringAfterReplacingScalarInTag(name, ArgEnum, '_', '-');
         }
     };
 }
 
-/// compute the sub-info struct and some basic facts about the option fields
+/// compute the sub-info struct and some basic facts about the argument fields
 /// that don't require the sub-info to be defined.
-fn computeCmdAndOptBasicInfo(
+fn computeCmdAndArgBasicInfo(
     comptime T: type,
     comptime maybe_parent_name: ?[]const u8,
 ) struct {
     SubInfo: type,
-    option_count: usize,
+    argument_count: usize,
     maybe_sub_cmd_s_field_index: ?usize,
 } {
     const parent_name = maybe_parent_name orelse "root";
@@ -1612,7 +1605,7 @@ fn computeCmdAndOptBasicInfo(
         else => unreachable,
     };
 
-    var opt_count: usize = 0;
+    var arg_count: usize = 0;
     var fields: [s_info.fields.len]std.builtin.Type.StructField = undefined;
     var maybe_sub_cmd_s_field_index: ?usize = null;
 
@@ -1639,19 +1632,19 @@ fn computeCmdAndOptBasicInfo(
                     s_info.fields.len * 2 + 1 +
                         sub_u_info.fields.len * 2 + 1,
                 );
-                break :sub_infos UnionOptDescSubMap(UnwrappedStructFieldType);
+                break :sub_infos UnionArgDescSubMap(UnwrappedStructFieldType);
             },
             .Struct => |s_sub_info| sub_map: {
-                opt_count += s_sub_info.fields.len;
+                arg_count += s_sub_info.fields.len;
                 @setEvalBranchQuota(
                     s_info.fields.len * 2 + 1 +
                         s_sub_info.fields.len * 2 + 1,
                 );
-                break :sub_map OptionInfoGroup(UnwrappedStructFieldType);
+                break :sub_map ArgumentInfoGroup(UnwrappedStructFieldType);
             },
-            else => opt_info: {
-                opt_count += 1;
-                break :opt_info OptionInfo(UnwrappedStructFieldType);
+            else => arg_info: {
+                arg_count += 1;
+                break :arg_info ArgumentInfo(UnwrappedStructFieldType);
             },
         };
 
@@ -1673,12 +1666,12 @@ fn computeCmdAndOptBasicInfo(
     } });
     return .{
         .SubInfo = SubInfo,
-        .option_count = opt_count,
+        .argument_count = arg_count,
         .maybe_sub_cmd_s_field_index = maybe_sub_cmd_s_field_index,
     };
 }
 
-fn UnionOptDescSubMap(comptime U: type) type {
+fn UnionArgDescSubMap(comptime U: type) type {
     const sub_u_info = @typeInfo(U).Union;
     var new_s_fields: [sub_u_info.fields.len]std.builtin.Type.StructField = undefined;
 
@@ -1717,12 +1710,12 @@ const ArgsIter = struct {
     }
 };
 
-const OptionKeyNameOrAlias = union(enum) {
+const ArgumentKeyNameOrAlias = union(enum) {
     short: u8,
     long: []const u8,
 };
 
-const ParseOptionKeyMaybeValStrError = error{
+const ParseArgumentKeyMaybeValStrError = error{
     UnexpectedSingleDash,
     AliasMissingEql,
     MissingValueAfterEqual,
@@ -1731,17 +1724,17 @@ const ParseOptionKeyMaybeValStrError = error{
 
 /// Parses `-{c}`, `--{name}`, optionally followed by `={value}`.
 /// Returns null if `arg[0] != '-'`.
-fn parseOptionKeyMaybeValStr(
+fn parseArgumentKeyMaybeValStr(
     arg: []const u8,
-) ParseOptionKeyMaybeValStrError!?struct {
-    OptionKeyNameOrAlias,
+) ParseArgumentKeyMaybeValStrError!?struct {
+    ArgumentKeyNameOrAlias,
     ?[]const u8,
 } {
     if (arg[0] != '-') return null;
     if (arg.len == 1) return error.UnexpectedSingleDash;
 
     if (arg[1] != '-') { // '-{c}'
-        const key: OptionKeyNameOrAlias = .{ .short = arg[1] };
+        const key: ArgumentKeyNameOrAlias = .{ .short = arg[1] };
         if (arg.len == 2) return .{ key, null };
         if (arg[2] != '=') return error.AliasMissingEql;
         if (arg.len == 3) return error.MissingValueAfterEqual;
@@ -1751,37 +1744,37 @@ fn parseOptionKeyMaybeValStr(
     if (arg.len == 2) return error.UnexpectedDoubleDash;
 
     const maybe_eql_idx = std.mem.indexOfScalarPos(u8, arg, 2, '=');
-    const opt_name_str = arg[2 .. maybe_eql_idx orelse arg.len];
-    const key: OptionKeyNameOrAlias = .{ .long = opt_name_str };
+    const arg_name_str = arg[2 .. maybe_eql_idx orelse arg.len];
+    const key: ArgumentKeyNameOrAlias = .{ .long = arg_name_str };
 
     const maybe_val = if (maybe_eql_idx) |eql_idx| arg[eql_idx + 1 ..] else null;
     if (maybe_val) |val| if (val.len == 0) return error.MissingValueAfterEqual;
     return .{ key, maybe_val };
 }
 
-fn parseSingleOptValueMaybeScan(
-    comptime option_name: []const u8,
+fn parseSingleArgValueMaybeScan(
+    comptime argument_name: []const u8,
     comptime T: type,
     maybe_value: ?[]const u8,
     args_iter: *ArgsIter,
-) ParseSingleOptValueError!T {
-    return parseSingleOptValue(option_name, T, maybe_value) catch |err| switch (err) {
-        error.MissingValue => parseSingleOptValue(option_name, T, args_iter.next()),
+) ParseSingleArgValueError!T {
+    return parseSingleArgValue(argument_name, T, maybe_value) catch |err| switch (err) {
+        error.MissingValue => parseSingleArgValue(argument_name, T, args_iter.next()),
         else => |e| return e,
     };
 }
 
-const ParseSingleOptValueError = error{
+const ParseSingleArgValueError = error{
     UnexpectedValueForFlag,
     MissingValue,
     InvalidValue,
 };
 
-fn parseSingleOptValue(
-    comptime option_name: []const u8,
+fn parseSingleArgValue(
+    comptime arg_name: []const u8,
     comptime T: type,
     maybe_value: ?[]const u8,
-) ParseSingleOptValueError!T {
+) ParseSingleArgValueError!T {
     if (T == []const u8) {
         return maybe_value orelse return error.MissingValue;
     }
@@ -1810,26 +1803,26 @@ fn parseSingleOptValue(
             };
         },
         .Optional => |optional| if (@typeInfo(optional.child) != .Optional) {
-            return try parseSingleOptValue(option_name, optional.child, maybe_value);
+            return try parseSingleArgValue(arg_name, optional.child, maybe_value);
         },
         else => {},
     }
 
-    @compileError("Unexpected option type: " ++ option_name ++ ": " ++ @typeName(T));
+    @compileError("Unexpected argument type: " ++ arg_name ++ ": " ++ @typeName(T));
 }
 
 /// Writes `"-?, --{name}"`, or `"    --{name}"`.
 /// Replaces all '_' in `name` with '-'.
-fn writeOptionNameWithDefault(
+fn writeArgumentNameWithDefault(
     /// Null for positionals
-    maybe_opt_alias: ?OptionAlias,
-    opt_name: []const u8,
+    maybe_arg_alias: ?ArgumentAlias,
+    arg_name: []const u8,
     /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
     writer: anytype,
 ) @TypeOf(writer).Error!void {
-    if (maybe_opt_alias) |opt_alias| {
-        if (opt_alias != .none) {
-            try writer.print("-{c}, ", .{@intFromEnum(opt_alias)});
+    if (maybe_arg_alias) |arg_alias| {
+        if (arg_alias != .none) {
+            try writer.print("-{c}, ", .{@intFromEnum(arg_alias)});
         } else {
             try writer.writeByteNTimes(' ', 4);
         }
@@ -1839,19 +1832,19 @@ fn writeOptionNameWithDefault(
     }
 
     var start_idx: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, opt_name, start_idx, '_')) |end_idx| {
+    while (std.mem.indexOfScalarPos(u8, arg_name, start_idx, '_')) |end_idx| {
         defer start_idx = end_idx + 1;
-        try writer.writeAll(opt_name[start_idx..end_idx]);
+        try writer.writeAll(arg_name[start_idx..end_idx]);
         try writer.writeByte('-');
     }
-    try writer.writeAll(opt_name[start_idx..]);
-    if (maybe_opt_alias == null) {
+    try writer.writeAll(arg_name[start_idx..]);
+    if (maybe_arg_alias == null) {
         try writer.writeByte(']');
     }
 }
 
 /// Returns true only if the value was rendered.
-inline fn renderOptionDefaultValue(
+inline fn renderArgumentDefaultValue(
     comptime default_value: anytype,
     /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
     writer: anytype,
@@ -1865,7 +1858,7 @@ inline fn renderOptionDefaultValue(
         .Int => .{ default_value, "d" },
         .Optional => |optional| {
             if (@typeInfo(optional.child) == .Optional) return false;
-            return renderOptionDefaultValue(default_value orelse return false, writer);
+            return renderArgumentDefaultValue(default_value orelse return false, writer);
         },
         else => return false,
     };
