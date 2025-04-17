@@ -421,7 +421,7 @@ test "basic direct mapping" {
             .owner = program_id,
             .executable = false,
             .rent_epoch = 25,
-            .data = &.{ 0xAA, 0xBB, 0xCC },
+            .data = &(.{0xFF} ** 7),
         },
     };
 
@@ -441,7 +441,7 @@ test "basic direct mapping" {
             .owner = program_id,
             .executable = false,
             .rent_epoch = 25,
-            .data = &.{ 10, 20, 30 }, // NOTE: this changed in the program
+            .data = &.{ 10, 20, 30, 40, 40, 0xFF, 0xFF }, // NOTE: this changed in the program
         },
     };
 
@@ -458,7 +458,7 @@ test "basic direct mapping" {
         },
         .{
             .accounts = accounts,
-            .compute_meter = 69,
+            .compute_meter = 106,
             .feature_set = &.{
                 .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
                 .{ .pubkey = features.BPF_ACCOUNT_DATA_DIRECT_MAPPING },

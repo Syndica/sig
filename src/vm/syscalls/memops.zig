@@ -1,15 +1,12 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const lib = @import("../lib.zig");
-const memory = @import("../memory.zig");
-const syscalls = @import("../syscalls.zig");
-const interpreter = @import("../interpreter.zig");
-const transaction_context = @import("../../runtime/transaction_context.zig");
 
+const memory = sig.vm.memory;
+const syscalls = sig.vm.syscalls;
+const RegisterMap = sig.vm.interpreter.RegisterMap;
 const Error = syscalls.Error;
-const MemoryMap = lib.memory.MemoryMap;
-const RegisterMap = interpreter.RegisterMap;
-const TransactionContext = transaction_context.TransactionContext;
+const MemoryMap = sig.vm.memory.MemoryMap;
+const TransactionContext = sig.runtime.transaction_context.TransactionContext;
 const features = sig.runtime.features;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 

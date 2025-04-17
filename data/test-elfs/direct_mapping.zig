@@ -7,8 +7,34 @@ const memcpy: *align(1) const fn (
     len: usize,
 ) void = @ptrFromInt(0x717cc4a3);
 
+/// hashed as `sol_memset_`
+const memset: *align(1) const fn (
+    dst: [*]u8,
+    c: u8,
+    len: usize,
+) void = @ptrFromInt(0x3770fb22);
+
+/// hashed as `sol_memcmp_`
+const memcmp: *align(1) const fn (
+    a: [*]const u8,
+    b: [*]const u8,
+    len: usize,
+    result: *i32,
+) void = @ptrFromInt(0x5fdcde31);
+
 // hashed as `sol_log_`
-const log: *align(1) const fn (msg: [*]const u8, len: u64) void = @ptrFromInt(0x207559BD);
+const log: *align(1) const fn (
+    msg: [*]const u8,
+    len: u64,
+) void = @ptrFromInt(0x207559bd);
+
+// hashed as `sol_panic_`
+const panic: *const fn (
+    [*]const u8,
+    u64,
+    u64,
+    u64,
+) noreturn = @ptrFromInt(0x686093bb);
 
 const Pubkey = extern struct {
     hash: [32]u8,
@@ -82,6 +108,16 @@ fn sol_deserialize(input_ptr: [*]u8) Params {
 
 export fn entrypoint(input: [*]u8) i32 {
     const info = sol_deserialize(input);
-    memcpy(info.ka[0].data, &.{ 10, 20, 30 }, info.ka[0].data_len);
+
+    // [10, 20, 30, ...]
+    memcpy(info.ka[0].data, &.{ 10, 20, 30 }, 3);
+    // [10, 20, 30, 40, 40, ...]
+    memset(info.ka[0].data[3..], 40, 2);
+
+    var result: i32 = 0;
+    memcmp(info.ka[0].data, &.{ 10, 20, 30, 40, 40, 0xFF, 0xFF }, info.ka[0].data_len, &result);
+    if (result != 0) {
+        panic("failed!", 0, 0, 0);
+    }
     return 0;
 }
