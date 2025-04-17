@@ -80,7 +80,7 @@ pub const ReplayStage = struct {
 
 pub const LatestValidatorVotesForFrozenBanks = struct {
     max_gossip_frozen_votes: std.AutoHashMap(Pubkey, struct { slot: Slot, hashes: []Hash }),
-    pub fn checkAndVote(
+    pub fn checkAddVote(
         self: *LatestValidatorVotesForFrozenBanks,
         vote_pubkey: Pubkey,
         frozend_hash: ?Hash,
