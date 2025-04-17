@@ -874,8 +874,10 @@ fn CmdHelper(
                         );
 
                         if (arg_info.alias != .none) @compileError(
-                            "Argument " ++ parent_prefix ++ field_name ++ " cannot have an alias, " ++
-                                "since it's not named, it's " ++ @tagName(arg_info.kind),
+                            "Argument " ++
+                                parent_prefix ++ field_name ++
+                                " cannot have an alias, " ++
+                                "since it's not named, it's positional",
                         );
 
                         positional_set_ptr.* =
@@ -1429,7 +1431,10 @@ fn CmdHelper(
         } {
             const help_argument_alias_name = "-h, --help";
 
-            var max_name_alias_width: u64 = @max(help_argument_alias_name.len, name_alias_base_width);
+            var max_name_alias_width: u64 = @max(
+                help_argument_alias_name.len,
+                name_alias_base_width,
+            );
             var max_default_value_width: ?u64 = null;
 
             @setEvalBranchQuota(positional_set.len * 8 + 1);
