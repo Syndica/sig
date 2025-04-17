@@ -49,7 +49,7 @@ test ShredVersion {
     try std.testing.expect(shred_version_one == 1);
 
     var hard_forks: HardForks = .{};
-    defer _ = hard_forks.deinit(allocator);
+    defer hard_forks.deinit(allocator);
 
     const shred_version_two = ShredVersion.computeShredVersion(Hash.ZEROES, hard_forks);
     try std.testing.expect(shred_version_two == 1);
