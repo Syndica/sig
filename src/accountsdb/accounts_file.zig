@@ -681,7 +681,7 @@ test "core.accounts_file: verify accounts file" {
     var accounts_file = try AccountFile.init(file, file_info, 10);
     defer accounts_file.deinit();
 
-    _ = try accounts_file.validate(std.testing.allocator, &bp);
+    _ = try accounts_file.validate(&bp);
 
     const account = try accounts_file.readAccount(std.testing.allocator, &bp, 0);
     defer account.deinit(std.testing.allocator);

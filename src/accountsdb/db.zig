@@ -170,6 +170,8 @@ pub const AccountsDB = struct {
         number_of_index_shards: usize,
         /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
         buffer_pool_frames: u32 = 2 * 1024 * 1024,
+        /// For supplying your own ReferenceAllocator. Required for index_allocation = .parent.
+        injected_ref_allocator: ?*sig.accounts_db.index.ReferenceAllocator = null,
     };
 
     pub fn init(params: InitParams) !Self {
@@ -177,7 +179,9 @@ pub const AccountsDB = struct {
         const index_config: AccountIndex.AllocatorConfig = switch (params.index_allocation) {
             .disk => .{ .disk = .{ .accountsdb_dir = params.snapshot_dir } },
             .ram => .{ .ram = .{ .allocator = params.allocator } },
+            .parent => .{ .parent = params.injected_ref_allocator orelse return error.InvalidArgument },
         };
+
         var account_index = try AccountIndex.init(
             params.allocator,
             params.logger,
@@ -477,7 +481,8 @@ pub const AccountsDB = struct {
 
                 .logger = .noop, // dont spam the logs with init information (we set it after)
                 .gossip_view = null, // loading threads would never need to generate a snapshot, therefore it doesn't need a view into gossip.
-                .index_allocation = .ram, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
+                .index_allocation = .parent, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
+                .injected_ref_allocator = &parent.account_index.reference_allocator,
             });
 
             loading_thread.logger = parent.logger;

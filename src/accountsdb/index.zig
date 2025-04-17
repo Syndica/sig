@@ -76,6 +76,7 @@ pub const AccountIndex = struct {
         pub const Tag = ReferenceAllocator.Tag;
         ram: struct { allocator: std.mem.Allocator },
         disk: struct { accountsdb_dir: std.fs.Dir },
+        parent: *ReferenceAllocator,
     };
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
 
@@ -104,6 +105,7 @@ pub const AccountIndex = struct {
                     .{sig.utils.fmt.tryRealPath(index_dir, ".")},
                 );
 
+                // reviewer's note: looks like we leak this + is there a point in allocating?
                 const disk_allocator = try allocator.create(DiskMemoryAllocator);
                 errdefer allocator.destroy(disk_allocator);
                 disk_allocator.* = .{
@@ -111,10 +113,25 @@ pub const AccountIndex = struct {
                     .logger = logger.withScope(@typeName(DiskMemoryAllocator)),
                 };
 
-                break :blk .{ .disk = .{
-                    .dma = disk_allocator,
-                    .ptr_allocator = allocator,
-                } };
+                // same as above
+                const tracing_disk_allocator = try allocator.create(tracy.TracingAllocator);
+                errdefer allocator.destroy(tracing_disk_allocator);
+                tracing_disk_allocator.* = .{
+                    .parent_allocator = disk_allocator.allocator(),
+                    .pool_name = "index",
+                };
+
+                break :blk .{
+                    .disk = .{
+                        .dma = disk_allocator,
+                        .ptr_allocator = allocator,
+                        .tracing = tracing_disk_allocator,
+                    },
+                };
+            },
+            .parent => |parent| blk: {
+                logger.info().log("using parent's reference allocator for account index");
+                break :blk .{ .parent = parent };
             },
         };
         errdefer reference_allocator.deinit();
@@ -132,7 +149,7 @@ pub const AccountIndex = struct {
         return .{
             .allocator = allocator,
             .logger = logger,
-            .pubkey_ref_map = try ShardedPubkeyRefMap.init(allocator, number_of_shards),
+            .pubkey_ref_map = try ShardedPubkeyRefMap.init(reference_allocator.get(), number_of_shards),
             .slot_reference_map = RwMux(SlotRefMap).init(SlotRefMap.init(allocator)),
             .reference_allocator = reference_allocator,
             .reference_manager = reference_manager,
@@ -733,19 +750,25 @@ pub const PubkeyShardCalculator = struct {
 };
 
 pub const ReferenceAllocator = union(Tag) {
-    pub const Tag = enum { ram, disk };
-    /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
-    ram: std.mem.Allocator,
-    disk: struct {
+    pub const Tag = enum { ram, disk, parent };
+    pub const Disk = struct {
         dma: *DiskMemoryAllocator,
+        tracing: *tracy.TracingAllocator,
         // used for deinit() purposes
         ptr_allocator: std.mem.Allocator,
-    },
+    };
+
+    /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
+    ram: std.mem.Allocator,
+    disk: Disk,
+    /// used for loading threads to access the parent's
+    parent: *ReferenceAllocator,
 
     pub fn get(self: ReferenceAllocator) std.mem.Allocator {
         return switch (self) {
-            .disk => self.disk.dma.allocator(),
+            .disk => self.disk.tracing.allocator(),
             .ram => self.ram,
+            .parent => self.parent.get(),
         };
     }
 
@@ -757,6 +780,7 @@ pub const ReferenceAllocator = union(Tag) {
                 disk.ptr_allocator.destroy(disk.dma);
             },
             .ram => {},
+            .parent => {},
         }
     }
 };
