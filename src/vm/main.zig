@@ -119,6 +119,7 @@ pub fn main() !void {
         .ec = &ec,
         .sc = &sc,
         .accounts = &.{},
+        .account_metas = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
         .accounts_resize_delta = 0,

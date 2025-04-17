@@ -395,11 +395,30 @@ test "basic direct mapping" {
         },
         .{
             .pubkey = Pubkey.initRandom(prng.random()),
-            .lamports = 0,
-            .owner = program_id,
+            .lamports = 1_234_456,
+            .owner = program_id, // needs to be the program_id so that we have permission to mutate it
             .executable = false,
+            .rent_epoch = 25,
+            .data = &.{ 0xAA, 0xBB, 0xCC },
+        },
+    };
+
+    const after_accounts: []const AccountParams = &.{
+        .{
+            .pubkey = program_id,
+            .lamports = 1_000_000_000,
+            .owner = program.bpf_loader_program.v3.ID,
+            .executable = true,
             .rent_epoch = 0,
-            .data = &.{ 0, 0, 0 },
+            .data = program_bytes,
+        },
+        .{
+            .pubkey = accounts[1].pubkey,
+            .lamports = 1_234_456,
+            .owner = program_id, // needs to be the program_id so that we have permission to mutate it
+            .executable = false,
+            .rent_epoch = 25,
+            .data = &.{ 10, 20, 30 }, // NOTE: this changed in the program
         },
     };
 
@@ -407,16 +426,22 @@ test "basic direct mapping" {
         allocator,
         program_id,
         &[_]u8{},
-        &.{},
+        &.{
+            .{
+                .index_in_transaction = 1,
+                .is_signer = false,
+                .is_writable = true,
+            },
+        },
         .{
             .accounts = accounts,
-            .compute_meter = 34,
+            .compute_meter = 69,
             .feature_set = &.{
                 .{ .pubkey = features.BPF_ACCOUNT_DATA_DIRECT_MAPPING },
             },
         },
         .{
-            .accounts = accounts,
+            .accounts = after_accounts,
         },
         .{},
     );

@@ -67,7 +67,7 @@ pub const TransactionContext = struct {
     account_metas: std.BoundedArray(
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
-    ) = .{},
+    ),
 
     /// Instruction stack
     instruction_stack: InstructionStack,

@@ -75,8 +75,9 @@ pub fn execute(
     // TODO: jit
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
-    const parameter_bytes, const regions, const accounts_metadata =
-        try serialize.serializeParameters(
+    const parameter_bytes, //
+    const regions, //
+    const accounts_metadata = try serialize.serializeParameters(
         allocator,
         ic,
         !direct_mapping,
@@ -84,8 +85,10 @@ pub fn execute(
     defer {
         allocator.free(parameter_bytes);
         allocator.free(regions);
-        allocator.free(accounts_metadata);
     }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/lib.rs#L278-L282
+    ic.tc.account_metas = accounts_metadata;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1604-L1617
     // TODO: save account addresses for access violation errors resolution
@@ -132,24 +135,20 @@ pub fn execute(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1658-L1731
-    const execute_error: ?InstructionError = blk: {
-        switch (result) {
-            .ok => |status| if (status != 0) {
-                // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
-                std.debug.print(
-                    "Program {} failed: {}\n",
-                    .{ ic.ixn_info.program_meta.pubkey, status },
-                );
-                @panic("sbpf error handling not implemented!");
-            } else {
-                break :blk null;
-            },
-            .err => |sbpf_err| {
-                // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1663-L1730
-                std.debug.print("Sbpf error: {}\n", .{sbpf_err});
-                @panic("sbpf error handling not implemented!");
-            },
-        }
+    const execute_error: ?InstructionError = switch (result) {
+        .ok => |status| if (status != 0) {
+            // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
+            std.debug.print(
+                "Program {} failed: {}\n",
+                .{ ic.ixn_info.program_meta.pubkey, status },
+            );
+            @panic("sbpf error handling not implemented!");
+        } else null,
+        .err => |sbpf_err| {
+            // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1663-L1730
+            std.debug.print("Sbpf error: {}\n", .{sbpf_err});
+            @panic("sbpf error handling not implemented!");
+        },
     };
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1750-L1756
@@ -159,7 +158,7 @@ pub fn execute(
             ic,
             !direct_mapping,
             parameter_bytes,
-            accounts_metadata,
+            accounts_metadata.constSlice(),
         )
     else
         execute_error;
