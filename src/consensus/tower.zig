@@ -2059,6 +2059,199 @@ test "tower: check vote threshold above threshold" {
     try std.testing.expectEqual(0, result.len);
 }
 
+test "tower: check vote thresholds above thresholds" {
+    var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
+    defer stakes.deinit();
+
+    try stakes.put(0, 3);
+    try stakes.put(VOTE_THRESHOLD_DEPTH_SHALLOW, 2);
+    try stakes.put(VOTE_THRESHOLD_DEPTH_SHALLOW - 1, 2);
+
+    for (0..VOTE_THRESHOLD_DEPTH) |i| {
+        _ = try tower.recordBankVoteAndUpdateLockouts(
+            std.testing.allocator,
+            i,
+            Hash.ZEROES,
+            true,
+            Hash.ZEROES,
+        );
+    }
+
+    const result = try tower.checkVoteStakeThresholds(
+        std.testing.allocator,
+        VOTE_THRESHOLD_DEPTH,
+        &stakes,
+        4,
+    );
+
+    std.testing.allocator.free(result);
+    try std.testing.expectEqual(0, result.len);
+}
+
+test "tower: check vote threshold deep below threshold" {
+    var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
+    defer stakes.deinit();
+
+    try stakes.put(0, 6);
+    try stakes.put(VOTE_THRESHOLD_DEPTH_SHALLOW, 4);
+
+    for (0..VOTE_THRESHOLD_DEPTH) |i| {
+        _ = try tower.recordBankVoteAndUpdateLockouts(
+            std.testing.allocator,
+            i,
+            Hash.ZEROES,
+            true,
+            Hash.ZEROES,
+        );
+    }
+
+    const result = try tower.checkVoteStakeThresholds(
+        std.testing.allocator,
+        VOTE_THRESHOLD_DEPTH,
+        &stakes,
+        10,
+    );
+
+    std.testing.allocator.free(result);
+    try std.testing.expect(result.len != 0);
+}
+
+test "tower: check vote threshold shallow below threshold" {
+    var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
+    defer stakes.deinit();
+
+    try stakes.put(0, 7);
+    try stakes.put(VOTE_THRESHOLD_DEPTH_SHALLOW, 1);
+
+    for (0..VOTE_THRESHOLD_DEPTH) |i| {
+        _ = try tower.recordBankVoteAndUpdateLockouts(
+            std.testing.allocator,
+            i,
+            Hash.ZEROES,
+            true,
+            Hash.ZEROES,
+        );
+    }
+
+    const result = try tower.checkVoteStakeThresholds(
+        std.testing.allocator,
+        VOTE_THRESHOLD_DEPTH,
+        &stakes,
+        10,
+    );
+
+    std.testing.allocator.free(result);
+    try std.testing.expect(result.len != 0);
+}
+
+test "tower: check vote threshold above threshold after pop" {
+    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
+    defer stakes.deinit();
+
+    try stakes.put(0, 2);
+
+    for (0..3) |i| {
+        _ = try tower.recordBankVoteAndUpdateLockouts(
+            std.testing.allocator,
+            i,
+            Hash.ZEROES,
+            true,
+            Hash.ZEROES,
+        );
+    }
+
+    const result = try tower.checkVoteStakeThresholds(
+        std.testing.allocator,
+        6,
+        &stakes,
+        2,
+    );
+
+    std.testing.allocator.free(result);
+    try std.testing.expectEqual(0, result.len);
+}
+
+test "tower: check vote threshold above threshold no stake" {
+    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
+    defer stakes.deinit();
+
+    _ = try tower.recordBankVoteAndUpdateLockouts(
+        std.testing.allocator,
+        0,
+        Hash.ZEROES,
+        true,
+        Hash.ZEROES,
+    );
+
+    const result = try tower.checkVoteStakeThresholds(
+        std.testing.allocator,
+        1,
+        &stakes,
+        2,
+    );
+
+    std.testing.allocator.free(result);
+    try std.testing.expect(result.len != 0);
+}
+
+test "tower: check vote threshold lockouts not updated" {
+    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
+    defer stakes.deinit();
+
+    try stakes.put(0, 1);
+    try stakes.put(1, 2);
+
+    for (0..3) |i| {
+        _ = try tower.recordBankVoteAndUpdateLockouts(
+            std.testing.allocator,
+            i,
+            Hash.ZEROES,
+            true,
+            Hash.ZEROES,
+        );
+    }
+
+    const result = try tower.checkVoteStakeThresholds(
+        std.testing.allocator,
+        6,
+        &stakes,
+        2,
+    );
+
+    std.testing.allocator.free(result);
+    try std.testing.expect(result.len == 0);
+}
+
+test "tower: recent votes full" {
+    try voteAndCheckRecent(MAX_LOCKOUT_HISTORY);
+}
+
+test "tower: recent votes empty" {
+    try voteAndCheckRecent(0);
+}
+
+test "tower: recent votes exact" {
+    try voteAndCheckRecent(5);
+}
+
 const builtin = @import("builtin");
 fn createTestTower(
     allocator: std.mem.Allocator,
@@ -2090,4 +2283,56 @@ fn isSlotConfirmed(
     } else {
         return false;
     }
+}
+
+fn voteAndCheckRecent(num_votes: usize) !void {
+    if (!builtin.is_test) {
+        @panic("voteAndCheckRecent should only be used in test");
+    }
+    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    defer tower.deinit(std.testing.allocator);
+
+    var slots = std.ArrayList(Lockout).init(std.testing.allocator);
+    defer slots.deinit();
+
+    if (num_votes > 0) {
+        for (0..num_votes) |i| {
+            try slots.append(Lockout{
+                .slot = i,
+                .confirmation_count = @intCast(num_votes - i),
+            });
+        }
+    }
+
+    var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
+        std.testing.allocator,
+        slots.items.len,
+    );
+    defer expected_slots.deinit(std.testing.allocator);
+    try expected_slots.appendSlice(std.testing.allocator, slots.items);
+
+    var expected = TowerSync{
+        .lockouts = expected_slots,
+        .root = if (num_votes > 0) 0 else null,
+        .timestamp = null,
+        .hash = Hash.ZEROES,
+        .block_id = Hash.ZEROES,
+    };
+
+    for (0..num_votes) |i| {
+        _ = try tower.recordBankVoteAndUpdateLockouts(
+            std.testing.allocator,
+            i,
+            Hash.ZEROES,
+            true,
+            Hash.ZEROES,
+        );
+    }
+
+    expected.timestamp = tower.last_vote.timestamp();
+
+    try std.testing.expectEqualDeep(
+        expected.lockouts.items,
+        tower.last_vote.tower_sync.lockouts.items,
+    );
 }
