@@ -64,8 +64,14 @@ pub const VotedSlot = Slot;
 pub const VotedStakes = AutoHashMap(Slot, Stake);
 
 const ComputedBankState = struct {
+    /// Maps each validator (by their Pubkey) to the amount of stake they have voted
+    /// with on this fork. Helps determine who has already committed to this
+    /// fork and how much total stake that represents.
     voted_stakes: VotedStakes,
+    /// Represents the total active stake in the network.
     total_stake: Stake,
+    /// The sum of stake from all validators who have voted on the
+    /// fork leading up to the current bank (slot).
     fork_stake: Stake,
     // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
     // keyed by end of the range
@@ -349,6 +355,8 @@ pub const Tower = struct {
         self.last_vote = new_vote;
     }
 
+    /// Used inside the validator to simulate making a vote for a bank before
+    /// it sends a vote transaction on-chain.
     fn recordBankVoteAndUpdateLockouts(
         self: *Tower,
         allocator: std.mem.Allocator,
@@ -445,6 +453,7 @@ pub const Tower = struct {
         return false;
     }
 
+    /// Use to check if a vote can be casted for this slot without violating previous lockouts
     pub fn isLockedOut(
         self: *const Tower,
         allocator: std.mem.Allocator,
@@ -465,7 +474,10 @@ pub const Tower = struct {
         try vote_state.processNextVoteSlot(allocator, slot);
 
         for (vote_state.votes.items) |vote| {
-            if (slot != vote.slot and !ancestors.contains(vote.slot)) {
+            if (slot != vote.slot and
+                // This means the validator is trying to vote on a fork incompatible with previous votes.
+                !ancestors.contains(vote.slot))
+            {
                 return true;
             }
         }
@@ -479,9 +491,19 @@ pub const Tower = struct {
             }
         }
 
+        // Not locked out, vote safe to be casted.
         return false;
     }
 
+    /// Provides proof that enough validators voted for this new branch,
+    /// so it's safe to switch to it.
+    ///
+    /// Checks if a vote for `candidate_slot` is usable in a switching proof
+    /// from `last_voted_slot` to `switch_slot`.
+    ///
+    /// We assume `candidate_slot` is not an ancestor of `last_voted_slot`.
+    ///
+    /// Returns None if `candidate_slot` or `switch_slot` is not present in `ancestors`
     fn isValidSwitchingProofVote(
         self: *const Tower,
         candidate_slot: Slot,
@@ -1314,7 +1336,7 @@ pub const Tower = struct {
         var vote_slots = SortedSet(Slot).init(allocator);
         defer vote_slots.deinit();
 
-        var voted_stakes = SortedSet(Slot, u64).init(allocator);
+        var voted_stakes = std.AutoArrayHashMap(Slot, u64).init(allocator);
         defer voted_stakes.deinit();
 
         var total_stake: u64 = 0;
@@ -1329,6 +1351,7 @@ pub const Tower = struct {
             const key = entry.key_ptr.*;
             const voted_stake = entry.value_ptr.*.stake;
             const vote_account = entry.value_ptr.*.account;
+            // Skip accounts with no stake.
             if (voted_stake == 0) {
                 continue;
             }
@@ -1340,7 +1363,7 @@ pub const Tower = struct {
 
             var vote_state = TowerVoteState.fromAccount(&vote_account);
 
-            for (vote_state.votes) |vote| {
+            for (vote_state.votes.items) |vote| {
                 const interval = try lockout_intervals
                     .getOrPut(vote.lastLockedOutSlot());
                 if (!interval.found_existing) {
@@ -1349,6 +1372,7 @@ pub const Tower = struct {
                 try interval.value_ptr.*.append(.{ .slot = vote.slot, .pubkey = key });
             }
 
+            // Vote account for this validator
             if (key.equals(vote_account_pubkey)) {
                 my_latest_landed_vote = if (vote_state.nthRecentLockout(0)) |l| l.slot() else null;
                 logger.debug().logf("vote state {any}", vote_state);
@@ -1368,6 +1392,7 @@ pub const Tower = struct {
                 );
             }
 
+            // Simulate next vote and extract vote slots using the provided bank slot.
             vote_state.processNextVoteSlot(bank_slot);
 
             for (vote_state.votes.items) |vote| {
