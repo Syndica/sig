@@ -154,8 +154,10 @@ pub fn build(b: *Build) !void {
 
     const tracy_dep = b.dependency("tracy", .{
         .target = config.target,
-        .optimize = config.optimize,
+        // needed to avoid ubsan killing tracy with system tracing on (Illegal Instruction)
+        .optimize = .ReleaseFast,
         .tracy_enable = config.enable_tracy,
+        .tracy_no_system_tracing = false,
     });
     const tracy_mod = tracy_dep.module("tracy");
 
