@@ -1,7 +1,5 @@
 const std = @import("std");
 const Slot = @import("time.zig").Slot;
-const expectEqual = std.testing.expectEqual;
-const expectEqualSlices = std.testing.expectEqualSlices;
 
 pub const HardForks = struct {
     forks: std.ArrayListUnmanaged(Fork) = .{},
@@ -58,18 +56,38 @@ test HardForks {
     try hard_forks.register(allocator, 10);
     try hard_forks.register(allocator, 20);
 
-    try expectEqual(10, hard_forks.forks.items[0].slot);
-    try expectEqual(1, hard_forks.forks.items[1].count);
-    try expectEqual(20, hard_forks.forks.items[1].slot);
-    try expectEqual(1, hard_forks.forks.items[1].count);
+    try std.testing.expectEqual(10, hard_forks.forks.items[0].slot);
+    try std.testing.expectEqual(1, hard_forks.forks.items[1].count);
+    try std.testing.expectEqual(20, hard_forks.forks.items[1].slot);
+    try std.testing.expectEqual(1, hard_forks.forks.items[1].count);
 
-    try expectEqual(null, hard_forks.getHashData(9, 0));
+    try std.testing.expectEqual(null, hard_forks.getHashData(9, 0));
 
-    try expectEqualSlices(u8, &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, &hard_forks.getHashData(10, 0).?);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 1, 0, 0, 0, 0, 0, 0, 0 },
+        &hard_forks.getHashData(10, 0).?,
+    );
 
-    try expectEqualSlices(u8, &.{ 2, 0, 0, 0, 0, 0, 0, 0 }, &hard_forks.getHashData(20, 0).?);
-    try expectEqualSlices(u8, &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, &hard_forks.getHashData(20, 10).?);
-    try expectEqualSlices(u8, &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, &hard_forks.getHashData(20, 11).?);
-    try expectEqualSlices(u8, &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, &hard_forks.getHashData(21, 11).?);
-    try expectEqual(null, hard_forks.getHashData(21, 20));
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 2, 0, 0, 0, 0, 0, 0, 0 },
+        &hard_forks.getHashData(20, 0).?,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 1, 0, 0, 0, 0, 0, 0, 0 },
+        &hard_forks.getHashData(20, 10).?,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 1, 0, 0, 0, 0, 0, 0, 0 },
+        &hard_forks.getHashData(20, 11).?,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 1, 0, 0, 0, 0, 0, 0, 0 },
+        &hard_forks.getHashData(21, 11).?,
+    );
+    try std.testing.expectEqual(null, hard_forks.getHashData(21, 20));
 }
