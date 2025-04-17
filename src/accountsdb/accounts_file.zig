@@ -1,6 +1,7 @@
 //! includes the main struct for reading + validating account files
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const Account = sig.core.account.Account;
 const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
@@ -575,6 +576,13 @@ pub const AccountFile = struct {
         start_index_ptr: *usize,
         length: usize,
     ) !AccountDataHandle {
+        const maybe_zone = if (length > 2048)
+            tracy.initZone(@src(), .{ .name = "accountsdb AccountFile.getSlice (>2048 bytes)" })
+        else
+            null;
+        defer if (maybe_zone) |zone| zone.deinit();
+        if (maybe_zone) |zone| zone.value(length);
+
         const start_index = start_index_ptr.*;
         const result = @addWithOverflow(start_index, length);
         const end_index = result[0];

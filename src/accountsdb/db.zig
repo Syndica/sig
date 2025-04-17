@@ -4,6 +4,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const zstd = @import("zstd");
+const tracy = @import("tracy");
 
 const sysvar = sig.runtime.sysvar;
 const snapgen = sig.accounts_db.snapshots.generate;
@@ -178,6 +179,9 @@ pub const AccountsDB = struct {
     };
 
     pub fn init(params: InitParams) !Self {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb init" });
+        defer zone.deinit();
+
         // init index
         const index_config: AccountIndex.AllocatorConfig = switch (params.index_allocation) {
             .disk => .{ .disk = .{ .accountsdb_dir = params.snapshot_dir } },
@@ -233,6 +237,9 @@ pub const AccountsDB = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinit" });
+        defer zone.deinit();
+
         self.account_index.deinit();
         self.buffer_pool.deinit(self.allocator);
 
@@ -280,6 +287,9 @@ pub const AccountsDB = struct {
         should_fastload: bool,
         save_index: bool,
     ) !SnapshotManifest {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadWithDefaults" });
+        defer zone.deinit();
+
         const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
         errdefer collapsed_manifest.deinit(self.allocator);
 
@@ -391,6 +401,9 @@ pub const AccountsDB = struct {
     pub fn saveStateForFastload(
         self: *Self,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb fastsaveStateForFastloadload" });
+        defer zone.deinit();
+
         self.logger.info().log("running saveStateForFastload...");
         var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
         defer fastload_dir.close();
@@ -402,6 +415,9 @@ pub const AccountsDB = struct {
         dir: std.fs.Dir,
         snapshot_manifest: AccountsDbFields,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb fastload" });
+        defer zone.deinit();
+
         self.logger.info().log("running fastload...");
 
         var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
@@ -458,6 +474,9 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadFromSnapshot" });
+        defer zone.deinit();
+
         self.logger.info().log("running loadFromSnapshot...");
 
         // used to read account files
@@ -528,6 +547,9 @@ pub const AccountsDB = struct {
         loading_threads: []AccountsDB,
         parent: *AccountsDB,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb initLoadingThreads" });
+        defer zone.deinit();
+
         @memset(loading_threads, undefined);
 
         for (loading_threads, 0..) |*loading_thread, init_count| {
@@ -563,6 +585,9 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         loading_threads: []AccountsDB,
     ) void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinitLoadingThreads" });
+        defer zone.deinit();
+
         for (loading_threads) |*loading_thread| {
             // NOTE: deinit hashmap, dont close the files
             const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
@@ -582,6 +607,9 @@ pub const AccountsDB = struct {
         accounts_per_file_estimate: u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadAndVerifyAccountsFilesMultiThread" });
+        defer zone.deinit();
+
         const thread_db = &loading_threads[task.thread_id];
         try thread_db.loadAndVerifyAccountsFiles(
             accounts_dir,
@@ -605,6 +633,9 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadAndVerifyAccountsFiles" });
+        defer zone.deinit();
+
         // NOTE: we can hold this lock for the entire function
         // because nothing else should be access the filemap
         // while loading from a snapshot
@@ -770,28 +801,43 @@ pub const AccountsDB = struct {
             });
         }
 
-        // allocate enough memory
-        try self.account_index.pubkey_ref_map.ensureTotalCapacity(shard_counts);
+        {
+            const pubkey_ref_map_zone = tracy.initZone(@src(), .{
+                .name = "accountsdb loadAndVerifyAccountsFiles pubkey_ref_map.ensureTotalCapacity",
+            });
+            defer pubkey_ref_map_zone.deinit();
+
+            // allocate enough memory
+            try self.account_index.pubkey_ref_map.ensureTotalCapacity(shard_counts);
+        }
 
         // PERF: can probs be faster if you sort the pubkeys first, and then you know
         // it will always be a search for a free spot, and not search for a match
-        timer.reset();
-        for (references_buf[0..n_accounts_total], 0..) |*ref, ref_count| {
-            _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
-                ref,
-                ref_global_index + ref_count,
-            );
 
-            if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
-                printTimeEstimate(
-                    self.logger,
-                    &timer,
-                    n_accounts_total,
-                    ref_count,
-                    "building index",
-                    "thread0",
+        {
+            const index_build_zone = tracy.initZone(@src(), .{
+                .name = "accountsdb loadAndVerifyAccountsFiles building index",
+            });
+            defer index_build_zone.deinit();
+
+            timer.reset();
+            for (references_buf[0..n_accounts_total], 0..) |*ref, ref_count| {
+                _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
+                    ref,
+                    ref_global_index + ref_count,
                 );
-                progress_timer.reset();
+
+                if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
+                    printTimeEstimate(
+                        self.logger,
+                        &timer,
+                        n_accounts_total,
+                        ref_count,
+                        "building index",
+                        "thread0",
+                    );
+                    progress_timer.reset();
+                }
             }
         }
     }
@@ -803,6 +849,9 @@ pub const AccountsDB = struct {
         thread_dbs: []AccountsDB,
         n_threads: usize,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb mergeMultipleDBs" });
+        defer zone.deinit();
+
         self.logger.info().logf("[{d} threads]: running mergeMultipleDBs...", .{n_threads});
 
         try spawnThreadTasks(self.allocator, mergeThreadIndexesMultiThread, .{
@@ -877,6 +926,9 @@ pub const AccountsDB = struct {
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb mergeThreadIndexesMultiThread" });
+        defer zone.deinit();
+
         const shard_start_index = task.start_index;
         const shard_end_index = task.end_index;
 
@@ -960,6 +1012,9 @@ pub const AccountsDB = struct {
         self: *Self,
         config: AccountHashesConfig,
     ) !struct { Hash, u64 } {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb computeAccountHashesAndLamports" });
+        defer zone.deinit();
+
         var timer = try sig.time.Timer.start();
         // TODO: make cli arg
         const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
@@ -1046,6 +1101,9 @@ pub const AccountsDB = struct {
         self: *Self,
         params: ValidateLoadFromSnapshotParams,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb validateLoadFromSnapshot" });
+        defer zone.deinit();
+
         const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, var latest_snapshot_info_lg = self.latest_snapshot_gen_info.writeWithLock();
         defer latest_snapshot_info_lg.unlock();
 
@@ -1156,6 +1214,9 @@ pub const AccountsDB = struct {
         total_lamports: []u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getHashesFromIndexMultiThread" });
+        defer zone.deinit();
+
         try getHashesFromIndex(
             self,
             config,
@@ -1178,6 +1239,9 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getHashesFromIndex" });
+        defer zone.deinit();
+
         var total_n_pubkeys: usize = 0;
         for (shards) |*shard_rw| {
             const shard, var shard_lg = shard_rw.readWithLock();
@@ -1325,6 +1389,9 @@ pub const AccountsDB = struct {
         self: *Self,
         config: ManagerLoopConfig,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb runManagerLoop" });
+        defer zone.deinit();
+
         const exit = config.exit;
         const slots_per_full_snapshot = config.slots_per_full_snapshot;
         const slots_per_incremental_snapshot = config.slots_per_incremental_snapshot;
@@ -1364,6 +1431,8 @@ pub const AccountsDB = struct {
         defer tmp_bank_fields.deinit(self.allocator);
 
         while (!exit.load(.acquire)) {
+            tracy.frameMarkNamed("manager loop");
+
             defer {
                 const elapsed = timer.lap();
                 if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
@@ -1502,6 +1571,9 @@ pub const AccountsDB = struct {
     /// as the data field ([]u8) for each account.
     /// Returns the unclean file id.
     pub fn flushSlot(self: *Self, slot: Slot) !FileId {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb flushSlot" });
+        defer zone.deinit();
+
         var timer = try sig.time.Timer.start();
 
         defer self.metrics.number_files_flushed.inc();
@@ -1629,6 +1701,9 @@ pub const AccountsDB = struct {
         num_zero_lamports: usize,
         num_old_states: usize,
     } {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb cleanAccountFiles" });
+        defer zone.deinit();
+
         var timer = try sig.time.Timer.start();
 
         const number_of_files = unclean_account_files.len;
@@ -1783,6 +1858,9 @@ pub const AccountsDB = struct {
         self: *Self,
         delete_account_files: []const FileId,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deleteAccountFiles" });
+        defer zone.deinit();
+
         const number_of_files = delete_account_files.len;
         defer {
             self.metrics.number_files_deleted.add(number_of_files);
@@ -1867,6 +1945,9 @@ pub const AccountsDB = struct {
         shrink_account_files: []const FileId,
         delete_account_files: *std.AutoArrayHashMap(FileId, void),
     ) !struct { num_accounts_deleted: usize } {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
+        defer zone.deinit();
+
         var timer = try sig.time.Timer.start();
 
         const number_of_files = shrink_account_files.len;
@@ -2578,6 +2659,9 @@ pub const AccountsDB = struct {
     /// Returns a pointer to the bank hash stats for the given slot, and a lock guard on the
     /// bank hash stats map, which should be unlocked after mutating the bank hash stats.
     fn getOrInitBankHashStats(self: *Self, slot: Slot) !struct { *BankHashStats, RwMux(BankHashStatsMap).WLockGuard } {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getOrInitBankHashStats" });
+        defer zone.deinit();
+
         const bank_hash_stats, var bank_hash_stats_lg = self.bank_hash_stats.writeWithLock();
         errdefer bank_hash_stats_lg.unlock();
 
@@ -3250,6 +3334,9 @@ pub fn indexAndValidateAccountFile(
     account_refs: *ArrayListUnmanaged(AccountRef),
     geyser_storage: ?*GeyserTmpStorage,
 ) ValidateAccountFileError!void {
+    const zone = tracy.initZone(@src(), .{ .name = "accountsdb AccountIndex.indexAndValidateAccountFile" });
+    defer zone.deinit();
+
     var offset: usize = 0;
     var number_of_accounts: usize = 0;
 
