@@ -70,6 +70,7 @@ pub const Vm = struct {
 
     pub fn deinit(self: *Vm) void {
         self.call_frames.deinit(self.allocator);
+        self.memory_map.deinit(self.allocator);
     }
 
     pub fn run(self: *Vm) struct { Result, u64 } {

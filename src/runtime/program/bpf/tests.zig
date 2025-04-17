@@ -2,8 +2,9 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const program = sig.runtime.program;
-
+const features = sig.runtime.features;
 const Pubkey = sig.core.Pubkey;
+const AccountParams = sig.runtime.testing.ExecuteContextsParams.AccountParams;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
@@ -369,4 +370,54 @@ test "program_init_vm_not_enough_compute" {
     );
 
     try std.testing.expectError(error.ProgramEnvironmentSetupFailure, result);
+}
+
+test "basic direct mapping" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const program_bytes = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "direct_mapping.so",
+        MAX_FILE_BYTES,
+    );
+    defer allocator.free(program_bytes);
+
+    const accounts: []const AccountParams = &.{
+        .{
+            .pubkey = program_id,
+            .lamports = 1_000_000_000,
+            .owner = program.bpf_loader_program.v3.ID,
+            .executable = true,
+            .rent_epoch = 0,
+            .data = program_bytes,
+        },
+        .{
+            .pubkey = Pubkey.initRandom(prng.random()),
+            .lamports = 0,
+            .owner = program_id,
+            .executable = false,
+            .rent_epoch = 0,
+            .data = &.{ 0, 0, 0 },
+        },
+    };
+
+    try expectProgramExecuteResult(
+        allocator,
+        program_id,
+        &[_]u8{},
+        &.{},
+        .{
+            .accounts = accounts,
+            .compute_meter = 34,
+            .feature_set = &.{
+                .{ .pubkey = features.BPF_ACCOUNT_DATA_DIRECT_MAPPING },
+            },
+        },
+        .{
+            .accounts = accounts,
+        },
+        .{},
+    );
 }

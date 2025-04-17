@@ -125,11 +125,9 @@ pub fn main() !void {
         .return_data = .{},
         .custom_error = null,
         .log_collector = null,
-        .sysvar_cache = .{},
         .compute_meter = cmd.limit,
-        .feature_set = FeatureSet.EMPTY,
-        .lamports_per_signature = 0,
-        .last_blockhash = Hash.ZEROES,
+        .prev_blockhash = Hash.ZEROES,
+        .prev_lamports_per_signature = 0,
         .compute_budget = ComputeBudget.default(1_400_000),
     };
     defer tc.deinit();

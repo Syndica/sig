@@ -14,6 +14,12 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
+    const direct_mapping = ic.ec.feature_set.active.contains(
+        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    );
+
     var executable, var syscalls, const source = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
@@ -49,7 +55,10 @@ pub fn execute(
             allocator,
             source,
             &syscalls,
-            .{},
+            .{
+                .enable_stack_frame_gaps = !direct_mapping,
+                .aligned_memory_mapping = !direct_mapping,
+            },
         ) catch |err| {
             try ic.tc.log("{s}", .{@errorName(err)});
             return InstructionError.InvalidAccountData;
@@ -64,11 +73,6 @@ pub fn execute(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1583-L1584
     // TODO: jit
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.ec.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
-    );
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
     const parameter_bytes, const regions, const accounts_metadata =
@@ -211,6 +215,7 @@ pub fn initVm(
         executable.version,
         executable.config,
     );
+    errdefer memory_map.deinit(allocator);
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L280-L285
     // TODO: Set syscall context
@@ -224,7 +229,6 @@ pub fn initVm(
         stack.len,
         tc,
     );
-    errdefer sbpf_vm.deinit();
 
     return .{
         sbpf_vm,

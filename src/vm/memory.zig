@@ -78,6 +78,19 @@ pub const MemoryMap = union(enum) {
             .unaligned => |unaligned| unaligned.vmap(state, vm_addr, len),
         };
     }
+
+    pub fn mapRegion(
+        self: MemoryMap,
+        comptime state: MemoryState,
+        reg: Region,
+        vm_addr: u64,
+        len: u64,
+    ) AccessError!state.Slice() {
+        return switch (self) {
+            .aligned => |aligned| aligned.mapRegion(state, reg, vm_addr, len),
+            .unaligned => |unaligned| unaligned.mapRegion(state, reg, vm_addr, len),
+        };
+    }
 };
 
 // better name?
@@ -164,6 +177,7 @@ pub const Region = struct {
     }
 
     fn regionsOverlap(sorted_regions: []const Region) bool {
+        if (sorted_regions.len < 2) return false;
         var iter = std.mem.window(Region, sorted_regions, 2, 1);
 
         while (iter.next()) |region_pair| {
@@ -224,6 +238,16 @@ pub const AlignedMemoryMap = struct {
         len: u64,
     ) AccessError!state.Slice() {
         const reg = try self.findRegion(vm_addr);
+        return self.mapRegion(state, reg, vm_addr, len);
+    }
+
+    fn mapRegion(
+        self: *const AlignedMemoryMap,
+        comptime state: MemoryState,
+        reg: Region,
+        vm_addr: u64,
+        len: u64,
+    ) AccessError!state.Slice() {
         return reg.translate(state, vm_addr, len) orelse
             return accessViolation(vm_addr, self.version, self.config);
     }
@@ -362,7 +386,17 @@ const UnalignedMemoryMap = struct {
         len: u64,
     ) AccessError!access_type.Slice() {
         const reg = try self.findRegion(vm_addr);
-        return reg.translate(access_type, vm_addr, len) orelse
+        return self.mapRegion(access_type, reg, vm_addr, len);
+    }
+
+    fn mapRegion(
+        self: *const UnalignedMemoryMap,
+        comptime state: MemoryState,
+        reg: Region,
+        vm_addr: u64,
+        len: u64,
+    ) AccessError!state.Slice() {
+        return reg.translate(state, vm_addr, len) orelse
             return accessViolation(vm_addr, self.version, self.config);
     }
 };
@@ -554,4 +588,15 @@ test "unaligned region" {
     try expectEqual(&mem2, (try map.region(.constant, INPUT_START + 4)).hostSlice(.constant));
     try expectEqual(&mem2, (try map.region(.constant, INPUT_START + 7)).hostSlice(.constant));
     try expectError(error.AccessViolation, map.region(.constant, INPUT_START + 8));
+}
+
+test "empty unaligned memory map" {
+    const allocator = std.testing.failing_allocator;
+    var mmap = try MemoryMap.init(
+        allocator,
+        &.{},
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer mmap.deinit(allocator);
 }

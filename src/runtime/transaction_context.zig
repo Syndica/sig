@@ -17,6 +17,7 @@ const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const ComputeBudget = sig.runtime.ComputeBudget;
+const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
@@ -63,6 +64,10 @@ pub const TransactionContext = struct {
 
     /// Transaction accounts
     accounts: []TransactionContextAccount,
+    account_metas: std.BoundedArray(
+        SerializedAccountMetadata,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ) = .{},
 
     /// Instruction stack
     instruction_stack: InstructionStack,
