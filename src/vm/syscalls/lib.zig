@@ -1,22 +1,17 @@
-const std = @import("std");
 const phash = @import("poseidon");
-const sig = @import("../sig.zig");
-const lib = @import("lib.zig");
-const interpreter = @import("interpreter.zig");
-const transaction_context = @import("../runtime/transaction_context.zig");
+const std = @import("std");
+const sig = @import("../../sig.zig");
 
 const features = sig.runtime.features;
 
 const Pubkey = sig.core.Pubkey;
-const MemoryMap = lib.memory.MemoryMap;
-const BuiltinProgram = lib.BuiltinProgram;
+const MemoryMap = sig.vm.memory.MemoryMap;
+const RegisterMap = sig.vm.interpreter.RegisterMap;
+const BuiltinProgram = sig.vm.BuiltinProgram;
 const FeatureSet = sig.runtime.features.FeatureSet;
-const RegisterMap = interpreter.RegisterMap;
-const TransactionContext = transaction_context.TransactionContext;
-const TransactionReturnData = transaction_context.TransactionReturnData;
+const TransactionContext = sig.runtime.TransactionContext;
+const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionError = sig.core.instruction.InstructionError;
-
-const testElfWithSyscalls = @import("tests.zig").testElfWithSyscalls;
 
 pub const Error = error{
     OutOfMemory,
@@ -447,7 +442,7 @@ pub fn panic(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap)
 }
 
 test poseidon {
-    try testElfWithSyscalls(
+    try sig.vm.tests.testElfWithSyscalls(
         .{},
         sig.ELF_DATA_DIR ++ "poseidon_test.so",
         &.{
