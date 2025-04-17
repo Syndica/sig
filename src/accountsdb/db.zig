@@ -3842,10 +3842,7 @@ test "flushing slots works" {
     const file_id = file_map.keys()[0];
 
     const account_file = file_map.getPtr(file_id).?;
-    account_file.number_of_accounts = try account_file.validate(
-        allocator,
-        &bp,
-    );
+    account_file.number_of_accounts = try account_file.validate(&bp);
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
     try std.testing.expect(unclean_account_files.items.len == 1);
@@ -4817,6 +4814,7 @@ pub const BenchmarkAccountsDB = struct {
 
         const write_time = timer_blk: {
             switch (bench_args.accounts) {
+                .parent => @panic("invalid bench arg"),
                 .ram => {
                     const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
                     const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));

@@ -113,19 +113,10 @@ pub const AccountIndex = struct {
                     .logger = logger.withScope(@typeName(DiskMemoryAllocator)),
                 };
 
-                // same as above
-                const tracing_disk_allocator = try allocator.create(tracy.TracingAllocator);
-                errdefer allocator.destroy(tracing_disk_allocator);
-                tracing_disk_allocator.* = .{
-                    .parent_allocator = disk_allocator.allocator(),
-                    .pool_name = "index",
-                };
-
                 break :blk .{
                     .disk = .{
                         .dma = disk_allocator,
                         .ptr_allocator = allocator,
-                        .tracing = tracing_disk_allocator,
                     },
                 };
             },
@@ -753,7 +744,6 @@ pub const ReferenceAllocator = union(Tag) {
     pub const Tag = enum { ram, disk, parent };
     pub const Disk = struct {
         dma: *DiskMemoryAllocator,
-        tracing: *tracy.TracingAllocator,
         // used for deinit() purposes
         ptr_allocator: std.mem.Allocator,
     };
@@ -766,7 +756,7 @@ pub const ReferenceAllocator = union(Tag) {
 
     pub fn get(self: ReferenceAllocator) std.mem.Allocator {
         return switch (self) {
-            .disk => self.disk.tracing.allocator(),
+            .disk => self.disk.dma.allocator(),
             .ram => self.ram,
             .parent => self.parent.get(),
         };
