@@ -171,8 +171,8 @@ pub fn build(b: *Build) !void {
     sig_mod.addImport("secp256k1", secp256k1_mod);
     sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
-
     sig_mod.addImport("poseidon", poseidon_mod);
+    sig_mod.addImport("tracy", tracy_mod);
 
     switch (config.blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
@@ -250,6 +250,7 @@ pub fn build(b: *Build) !void {
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     unit_tests_exe.root_module.addImport("poseidon", poseidon_mod);
     unit_tests_exe.root_module.addImport("secp256k1", secp256k1_mod);
+    unit_tests_exe.root_module.addImport("tracy", tracy_mod);
 
     switch (config.blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -277,6 +278,8 @@ pub fn build(b: *Build) !void {
     fuzz_exe.root_module.addImport("zig-network", zig_network_mod);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
+    fuzz_exe.root_module.addImport("tracy", tracy_mod);
+
     switch (config.blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -308,6 +311,8 @@ pub fn build(b: *Build) !void {
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
+    benchmark_exe.root_module.addImport("tracy", tracy_mod);
+
     switch (config.blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
