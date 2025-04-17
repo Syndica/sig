@@ -201,10 +201,15 @@ pub fn initVm(
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
     var mm_regions_array = std.ArrayList(vm.memory.Region).init(allocator);
     errdefer mm_regions_array.deinit();
+    const stack_gap: u64 = if (!executable.version.enableDynamicStackFrames() and
+        executable.config.enable_stack_frame_gaps)
+        executable.config.stack_frame_size
+    else
+        0;
     try mm_regions_array.appendSlice(&.{
         executable.getProgramRegion(),
         vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START),
-        vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START),
+        vm.memory.Region.initGapped(.mutable, heap, vm.memory.HEAP_START, stack_gap),
     });
     try mm_regions_array.appendSlice(regions);
     const mm_regions = try mm_regions_array.toOwnedSlice();

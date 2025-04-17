@@ -127,15 +127,31 @@ const HostMemory = union(MemoryState) {
 pub const Region = struct {
     host_memory: HostMemory,
     vm_addr_start: u64,
+    vm_gap_shift: std.math.Log2Int(u64),
     vm_addr_end: u64,
 
     pub fn init(comptime state: MemoryState, slice: state.Slice(), vm_addr: u64) Region {
-        const vm_addr_end = vm_addr +| slice.len;
+        return initGapped(state, slice, vm_addr, 0);
+    }
 
+    pub fn initGapped(
+        comptime state: MemoryState,
+        slice: state.Slice(),
+        vm_addr: u64,
+        vm_gap_size: u64,
+    ) Region {
+        var vm_addr_end: u64 = vm_addr +| slice.len;
+        var vm_gap_shift: u64 = @sizeOf(u64) * 8 - 1;
+        if (vm_gap_size > 0) {
+            vm_addr_end +|= slice.len;
+            vm_gap_shift -|= @clz(vm_gap_size);
+            std.debug.assert(vm_gap_size == @as(u64, 1) << @intCast(vm_gap_shift));
+        }
         return .{
             .host_memory = @unionInit(HostMemory, @tagName(state), slice),
             .vm_addr_start = vm_addr,
             .vm_addr_end = vm_addr_end,
+            .vm_gap_shift = @intCast(vm_gap_shift),
         };
     }
 
@@ -166,7 +182,13 @@ pub const Region = struct {
 
         const host_slice = self.hostSlice(state) orelse return null;
         const begin_offset = vm_addr -| self.vm_addr_start;
-        if (begin_offset +| len <= host_slice.len) return host_slice[begin_offset..][0..len];
+
+        const is_in_gap = @as(u1, @truncate(begin_offset >> self.vm_gap_shift)) != 0;
+        const gap_mask: u64 = ~@as(u64, 0) << self.vm_gap_shift;
+        const gapped_offset = ((begin_offset & gap_mask) >> 1) | (begin_offset & ~gap_mask);
+        const end_offset = gapped_offset +| len;
+
+        if (end_offset <= host_slice.len and !is_in_gap) return host_slice[gapped_offset..][0..len];
 
         return null;
     }
@@ -310,6 +332,7 @@ const UnalignedMemoryMap = struct {
         @memset(etyzinger_regions, .{
             .vm_addr_start = 0,
             .vm_addr_end = 0,
+            .vm_gap_shift = 0,
             .host_memory = .{ .constant = "" },
         });
 
@@ -599,4 +622,25 @@ test "empty unaligned memory map" {
         .{ .aligned_memory_mapping = false },
     );
     defer mmap.deinit(allocator);
+}
+
+test "gapped map" {
+    const allocator = std.testing.allocator;
+    inline for (.{ true, false }) |aligned| {
+        var mem1: [8]u8 = .{0xFF} ** 8;
+        var map = try MemoryMap.init(allocator, &.{
+            Region.init(.constant, &(.{0} ** 8), RODATA_START),
+            Region.initGapped(.mutable, &mem1, STACK_START, 2),
+        }, .v3, .{ .aligned_memory_mapping = aligned });
+        defer map.deinit(allocator);
+
+        for (0..4) |frame| {
+            const address = STACK_START + frame * 4;
+            _ = try map.region(.constant, address);
+            _ = try map.vmap(.constant, address, 2);
+            try expectError(error.AccessViolation, map.vmap(.constant, address + 2, 2));
+            try expectEqualSlices(u8, try map.vmap(.constant, address, 2), &.{ 0xFF, 0xFF });
+            try expectError(error.AccessViolation, map.vmap(.constant, address + 2, 2));
+        }
+    }
 }
