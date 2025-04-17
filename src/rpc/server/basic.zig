@@ -308,34 +308,45 @@ fn handleRpcRequest(
         content_body,
         .{},
     ) catch |err| switch (err) {
-        error.OutOfMemory => |e| return e,
-        error.BufferUnderrun => unreachable,
-        error.MissingField => {
-            writeJsonResponse(request, .{}, .{
-                .jsonrpc = "2.0",
-                .id = null,
-                .@"error" = rpc.response.Error{
-                    .code = .invalid_request,
-                    .message = "Invalid json",
-                },
-            }) catch |e| switch (e) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
-            return;
-        },
-        else => {
-            writeJsonResponse(request, .{}, .{
+        error.BufferUnderrun,
+        => unreachable,
+
+        error.OutOfMemory,
+        error.ValueTooLong,
+        => return error.OutOfMemory,
+
+        error.SyntaxError,
+        error.UnexpectedEndOfInput,
+        error.InvalidCharacter,
+        => {
+            try writeFinalJsonResponse(request, .{}, .{
                 .jsonrpc = "2.0",
                 .id = null,
                 .@"error" = rpc.response.Error{
                     .code = .parse_error,
-                    .message = "Invalid json",
+                    .message = "Parse error",
                 },
-            }) catch |e| switch (e) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
+            });
+            return;
+        },
+
+        error.UnexpectedToken,
+        error.InvalidNumber,
+        error.Overflow,
+        error.InvalidEnumTag,
+        error.DuplicateField,
+        error.UnknownField,
+        error.MissingField,
+        error.LengthMismatch,
+        => {
+            try writeFinalJsonResponse(request, .{}, .{
+                .jsonrpc = "2.0",
+                .id = null,
+                .@"error" = rpc.response.Error{
+                    .code = .invalid_request,
+                    .message = "Invalid Request",
+                },
+            });
             return;
         },
     };
@@ -349,12 +360,11 @@ fn handleRpcRequest(
                 error.OutOfMemory,
                 => |e| return e,
 
-                error.MissingId,
                 error.MissingJsonRpcVersion,
                 error.MissingMethod,
                 error.MissingParams,
                 error.InvalidJsonRpcVersion,
-                => .{ .invalid_request, "Invalid request" },
+                => .{ .invalid_request, "Invalid Request" },
 
                 error.InvalidMethod,
                 => .{ .method_not_found, "Method not found" },
@@ -367,14 +377,11 @@ fn handleRpcRequest(
                 .code = code,
                 .message = message,
             };
-            writeJsonResponse(request, .{}, .{
+            try writeFinalJsonResponse(request, .{}, .{
                 .jsonrpc = "2.0",
                 .id = diag.err.id orelse .null,
                 .@"error" = err_obj,
-            }) catch |e| switch (e) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
+            });
             return;
         };
         break :json result;
@@ -459,15 +466,11 @@ fn handleRpcRequest(
                 },
             };
 
-            writeJsonResponse(request, .{}, .{
+            try writeFinalJsonResponse(request, .{}, .{
                 .jsonrpc = "2.0",
                 .id = rpc_request.id,
                 .result = response_result,
-            }) catch |err| switch (err) {
-                error.ConnectionResetByPeer => return,
-                else => return error.SystemIoError,
-            };
-
+            });
             return;
         },
         else => {
@@ -477,11 +480,11 @@ fn handleRpcRequest(
     }
 }
 
-fn writeJsonResponse(
+fn writeFinalJsonResponse(
     request: *std.http.Server.Request,
     http_respond_opts: std.http.Server.Request.RespondOptions,
     json_value: anytype,
-) !void {
+) (std.mem.Allocator.Error || error{SystemIoError})!void {
     const json_stringify_opts: std.json.StringifyOptions = .{};
 
     const content_length = blk: {
@@ -500,8 +503,14 @@ fn writeJsonResponse(
 
     const resp_writer = httpResponseWriter(&response);
     var json_writer = std.json.writeStream(resp_writer, json_stringify_opts);
-    try json_writer.write(json_value);
-    try response.end();
+    json_writer.write(json_value) catch |err| switch (err) {
+        error.ConnectionResetByPeer => return,
+        else => return error.SystemIoError,
+    };
+    response.end() catch |err| switch (err) {
+        error.ConnectionResetByPeer => return,
+        else => return error.SystemIoError,
+    };
 }
 
 fn base64EncodeAccount(

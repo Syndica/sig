@@ -20,7 +20,6 @@ pub const Request = struct {
             error.OutOfMemory,
             => |e| e,
 
-            error.MissingId,
             error.MissingJsonRpcVersion,
             error.MissingMethod,
             error.MissingParams,
@@ -50,10 +49,10 @@ pub const Request = struct {
     }
 
     pub const Dynamic = struct {
-        jsonrpc: MaybeUnsetJson([]const u8) = .unset,
-        id: MaybeUnsetJson(Id) = .unset,
-        method: MaybeUnsetJson([]const u8) = .unset,
-        params: MaybeUnsetJson([]const std.json.Value) = .unset,
+        jsonrpc: ?[]const u8 = null,
+        id: Id,
+        method: ?[]const u8 = null,
+        params: ?[]const std.json.Value = null,
 
         pub const ParseDiagnostic = union {
             ok: void,
@@ -61,9 +60,7 @@ pub const Request = struct {
 
             pub const INIT: ParseDiagnostic = .{ .ok = {} };
 
-            pub const Err = struct {
-                id: ?Id,
-            };
+            pub const Err = struct { id: ?Id };
 
             fn initErr(
                 diag: *ParseDiagnostic,
@@ -76,7 +73,6 @@ pub const Request = struct {
         };
 
         pub const ParseError = error{
-            MissingId,
             MissingJsonRpcVersion,
             MissingMethod,
             MissingParams,
@@ -97,13 +93,12 @@ pub const Request = struct {
             var dummy_diag = ParseDiagnostic.INIT;
             const diag = maybe_diag orelse &dummy_diag;
 
-            const id = self.id.unwrap() orelse
-                return diag.initErr(error.MissingId, .{ .id = null });
-            const jsonrpc = self.jsonrpc.unwrap() orelse
+            const id = self.id;
+            const jsonrpc = self.jsonrpc orelse
                 return diag.initErr(error.MissingJsonRpcVersion, .{ .id = id });
-            const method_str = self.method.unwrap() orelse
+            const method_str = self.method orelse
                 return diag.initErr(error.MissingMethod, .{ .id = id });
-            const params_values = self.params.unwrap() orelse
+            const params_values = self.params orelse
                 return diag.initErr(error.MissingParams, .{ .id = id });
 
             if (!std.mem.eql(u8, jsonrpc, "2.0")) {
@@ -238,32 +233,6 @@ pub fn jsonParseValuesAsParamsArray(
     }
 
     return params;
-}
-
-/// Always parses from json as a `T`. The programmer can use the `unset` tag as a default,
-/// to indicate in the result that the value was not actually assigned.
-fn MaybeUnsetJson(comptime T: type) type {
-    return union(enum) {
-        unset,
-        value: T,
-
-        pub fn unwrap(self: MaybeUnsetJson(T)) ?T {
-            return switch (self) {
-                .unset => null,
-                .value => |value| value,
-            };
-        }
-
-        pub fn jsonParse(
-            allocator: std.mem.Allocator,
-            /// * `std.json.Scanner`
-            /// * `std.json.Reader(...)`
-            source: anytype,
-            options: std.json.ParseOptions,
-        ) std.json.ParseError(@TypeOf(source.*))!MaybeUnsetJson(T) {
-            return .{ .value = try std.json.innerParse(T, allocator, source, options) };
-        }
-    };
 }
 
 test "Request simple" {
@@ -420,7 +389,7 @@ test "Request parse errors" {
     );
 
     try std.testing.expectError(
-        error.UnexpectedToken,
+        error.MissingField,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"method":null}
         , .{}),
@@ -441,7 +410,7 @@ test "Request parse errors" {
     );
 
     try std.testing.expectError(
-        error.UnexpectedToken,
+        error.MissingField,
         std.json.parseFromSliceLeaky(Request, std.testing.allocator,
             \\{"jsonrpc":"2.0","id":null,"method":"foo","params":null}
         , .{}),
