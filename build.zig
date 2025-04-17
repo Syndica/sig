@@ -159,6 +159,10 @@ pub fn build(b: *Build) !void {
     });
     const tracy_mod = tracy_dep.module("tracy");
 
+    if (config.enable_tracy) {
+        tracy_mod.linkLibrary(tracy_dep.artifact("tracy"));
+        tracy_mod.link_libcpp = true;
+    }
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
@@ -215,11 +219,6 @@ pub fn build(b: *Build) !void {
     sig_exe.root_module.addImport("ssl", ssl_mod);
     sig_exe.root_module.addImport("xev", xev_mod);
     sig_exe.root_module.addImport("tracy", tracy_mod);
-
-    if (config.enable_tracy) {
-        sig_exe.root_module.linkLibrary(tracy_dep.artifact("tracy"));
-        sig_exe.root_module.link_libcpp = true;
-    }
 
     switch (config.blockstore_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
