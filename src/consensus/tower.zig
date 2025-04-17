@@ -1360,7 +1360,7 @@ pub const Tower = struct {
 
             // Add the last vote to update the `heaviest_subtree_fork_choice`
             if (vote_state.lastVotedSlot()) |last_landed_voted_slot| {
-                latest_validator_votes_for_frozen_banks.checkAndVote(
+                latest_validator_votes_for_frozen_banks.checkAddVote(
                     key,
                     last_landed_voted_slot,
                     get_frozen_hash(last_landed_voted_slot),
