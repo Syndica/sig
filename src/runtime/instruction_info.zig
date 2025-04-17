@@ -109,11 +109,14 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        const max_len = @min(self.instruction_data.len, Transaction.MAX_BYTES);
-        const buffer = self.instruction_data[0..max_len];
-        return bincode.readFromSlice(allocator, T, buffer, .{}) catch {
+        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
+            self.instruction_data.len,
+            Transaction.MAX_BYTES,
+        )]);
+        const data = bincode.read(allocator, T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
+        return data;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
