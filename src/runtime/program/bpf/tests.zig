@@ -51,6 +51,9 @@ test "hello_world" {
         .{
             .accounts = accounts,
             .compute_meter = 137,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = accounts,
@@ -120,6 +123,9 @@ test "print_account" {
         .{
             .accounts = accounts,
             .compute_meter = 29_105,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = accounts,
@@ -186,6 +192,9 @@ test "fast_copy" {
                 initial_instruction_account,
             },
             .compute_meter = 61,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = &.{
@@ -237,6 +246,9 @@ test "set_return_data" {
         .{
             .accounts = accounts,
             .compute_meter = 141,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = accounts,
@@ -281,6 +293,9 @@ test "program_is_not_executable" {
         .{
             .accounts = accounts,
             .compute_meter = 137,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{},
     );
@@ -318,6 +333,9 @@ test "program_invalid_account_data" {
         .{
             .accounts = accounts,
             .compute_meter = 137,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = accounts,
@@ -364,6 +382,9 @@ test "program_init_vm_not_enough_compute" {
             .accounts = accounts,
             .compute_meter = 7,
             .compute_budget = compute_budget,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{},
         .{},
@@ -439,6 +460,7 @@ test "basic direct mapping" {
             .accounts = accounts,
             .compute_meter = 69,
             .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
                 .{ .pubkey = features.BPF_ACCOUNT_DATA_DIRECT_MAPPING },
             },
         },
