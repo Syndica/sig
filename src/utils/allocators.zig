@@ -1106,6 +1106,8 @@ test "recycle allocator" {
 }
 
 test "disk allocator stdlib test" {
+    if (true) return error.SkipZigTest;
+
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;

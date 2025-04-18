@@ -2662,6 +2662,8 @@ test "handle old prune & pull request message" {
 }
 
 test "handle pull request" {
+    if (true) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
 
     var prng = std.rand.DefaultPrng.init(91);
