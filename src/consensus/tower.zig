@@ -959,15 +959,16 @@ pub const Tower = struct {
         return allocator.dupe(ThresholdDecision, threshold_decisions[0..index]);
     }
 
-    fn votedSlots(self: *const Tower) ![]Slot {
-        // TODO confirm if MAX_LOCKOUT_HISTORY is fine here
-        var slots = try std.BoundedArray(Slot, MAX_LOCKOUT_HISTORY).init(0);
-
+    fn votedSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
+        var slots = try std.ArrayListUnmanaged(Slot).initCapacity(
+            allocator,
+            self.vote_state.votes.items.len,
+        );
         for (self.vote_state.votes.items) |lockout| {
-            try slots.append(lockout.slot);
+            slots.appendAssumeCapacity(lockout.slot);
         }
 
-        return slots.slice();
+        return slots.toOwnedSlice(allocator);
     }
 
     pub fn isStrayLastVote(self: *const Tower) bool {
@@ -985,12 +986,14 @@ pub const Tower = struct {
     ) !void {
         // sanity assertions for roots
         const tower_root = try self.getRoot();
+        const voted_slots = try self.votedSlots(allocator);
+        defer allocator.free(voted_slots);
         self.logger.info().logf(
             \\adjusting lockouts (after replay up to {}):
             \\{any} tower root: {} replayed root: {}
         , .{
             replayed_root,
-            try self.votedSlots(),
+            voted_slots,
             tower_root,
             replayed_root,
         });
@@ -1097,7 +1100,9 @@ pub const Tower = struct {
         var slots_in_tower = std.ArrayList(Slot).init(allocator);
         defer slots_in_tower.deinit();
         try slots_in_tower.append(tower_root);
-        try slots_in_tower.appendSlice(try self.votedSlots());
+        const voted = try self.votedSlots(allocator);
+        defer allocator.free(voted);
+        try slots_in_tower.appendSlice(voted);
 
         // iterate over votes + root (if any) in the newest => oldest order
         // bail out early if bad condition is found
@@ -1199,9 +1204,11 @@ pub const Tower = struct {
         if (self.vote_state.votes.items.len == 0) {
             // we might not have banks for those votes so just reset.
             // That's because the votes may well past replayed_root
+            self.last_vote.deinit(allocator);
             self.last_vote = VoteTransaction{ .vote = Vote.DEFAULT };
         } else {
-            const voted_slots = try self.votedSlots();
+            const voted_slots = try self.votedSlots(allocator);
+            defer allocator.free(voted_slots);
             std.debug.assert(self.lastVotedSlot().? == voted_slots[voted_slots.len - 1]);
             self.stray_restored_slot = self.last_vote.lastVotedSlot();
         }
