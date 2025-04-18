@@ -30,15 +30,13 @@ pub const SlotHistory = struct {
         if (slot > self.next_slot and
             slot - self.next_slot >= MAX_ENTRIES)
         {
-            // Wrapped past current history,
-            // clear entire bitvec.
-            const full_blocks = @as(usize, MAX_ENTRIES) / 64;
-            for (0..full_blocks) |i| {
-                self.bits.unset(i);
-            }
+            const masks_to_clear = (MAX_ENTRIES + @bitSizeOf(u64) - 1) / @bitSizeOf(u64);
+            @memset(self.bits.masks[0..masks_to_clear], 0);
         } else {
-            for (self.next_slot..slot) |skipped| {
-                self.bits.unset(skipped % MAX_ENTRIES);
+            if (self.next_slot <= slot) {
+                for (self.next_slot..slot) |skipped| {
+                    self.bits.unset(skipped % MAX_ENTRIES);
+                }
             }
         }
 
