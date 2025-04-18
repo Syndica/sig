@@ -310,35 +310,32 @@ pub const Tower = struct {
         enable_tower_sync_ix: bool,
         block_id: Hash,
     ) !void {
-        var new_vote = if (enable_tower_sync_ix)
-            VoteTransaction{ .tower_sync = TowerSync{
-                .lockouts = try self.vote_state.votes.clone(allocator),
-                .root = self.vote_state.root_slot,
-                .hash = vote_hash,
-                .timestamp = null,
-                .block_id = block_id,
-            } }
-        else
-            VoteTransaction{ .vote_state_update = VoteStateUpdate{
-                .lockouts = try self.vote_state.votes.clone(allocator),
-                .root = self.vote_state.root_slot,
-                .hash = vote_hash,
-                .timestamp = null,
-            } };
+        var prev_vote = self.last_vote;
+        defer prev_vote.deinit(allocator);
 
-        const last_voted_slot = if (self.lastVotedSlot()) |last_voted_slot|
-            last_voted_slot
-        else
-            0;
+        var new_vote = blk: {
+            const new_lockouts = try self.vote_state.votes.clone(allocator);
+            errdefer new_lockouts.deinit(allocator);
 
+            break :blk if (enable_tower_sync_ix)
+                VoteTransaction{ .tower_sync = TowerSync{
+                    .lockouts = new_lockouts,
+                    .root = self.vote_state.root_slot,
+                    .hash = vote_hash,
+                    .timestamp = null,
+                    .block_id = block_id,
+                } }
+            else
+                VoteTransaction{ .vote_state_update = VoteStateUpdate{
+                    .lockouts = new_lockouts,
+                    .root = self.vote_state.root_slot,
+                    .hash = vote_hash,
+                    .timestamp = null,
+                } };
+        };
+
+        const last_voted_slot = self.lastVotedSlot() orelse 0;
         new_vote.setTimestamp(self.maybeTimestamp(last_voted_slot));
-
-        // Free previous lockouts if they exist
-        switch (self.last_vote) {
-            .tower_sync => |*args| args.lockouts.deinit(allocator),
-            .vote_state_update => |*args| args.lockouts.deinit(allocator),
-            else => {},
-        }
 
         self.last_vote = new_vote;
     }
