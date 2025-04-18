@@ -767,7 +767,7 @@ pub const ForkChoice = struct {
     ///
     /// For example, given the following tree:
     ///
-    ///
+    ///```txt
     /// (0) = root1
     /// ├── (1) = root2
     /// │   ├── (3)
@@ -776,7 +776,7 @@ pub const ForkChoice = struct {
     /// │       └── (7)
     /// └── (2)
     ///     └── (5)
-    ///
+    ///```
     ///
     /// subtreeDiff(root1, root2) = {0, 2, 5}
     fn subtreeDiff(
