@@ -1439,7 +1439,7 @@ const TestContext = struct {
                 .{
                     .pubkey = account_key,
                     .data = account_data,
-                    .owner = bpf_loader_program.v3.ID,
+                    .owner = system_program.ID,
                     .lamports = prng.uintAtMost(u64, 1000),
                 },
                 .{
@@ -1986,7 +1986,6 @@ const TestCallerAccount = struct {
         allocator: std.mem.Allocator,
         lamports: u64,
         owner: Pubkey,
-        vm_addr: u64,
         data: []const u8,
         direct_mapping: bool,
     ) !TestCallerAccount {
@@ -2004,7 +2003,10 @@ const TestCallerAccount = struct {
         }
 
         // Setup regions
-        var regions: std.BoundedArray(memory.Region, 3) = .{};
+        var regions: std.BoundedArray(memory.Region, 6) = .{};
+        try regions.append(memory.Region.init(.constant, &.{}, memory.RODATA_START));
+        try regions.append(memory.Region.init(.constant, &.{}, memory.STACK_START));
+        const vm_addr = memory.HEAP_START;
 
         var region_addr = vm_addr;
         const region_size = @sizeOf(u64) +
@@ -2073,22 +2075,21 @@ test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.init(allocator, prng.random(), "foo");
+    var ctx = try TestContext.init(allocator, prng.random(), &.{});
     defer ctx.deinit(allocator);
     const account = ctx.getAccount();
 
     var ca = try TestCallerAccount.init(
         allocator,
-        1234,
+        1234, // lamports
         account.owner,
-        0xffffffff << 32,
         account.data,
-        false,
+        false, // direct mapping
     );
     defer ca.deinit(allocator);
     var caller_account = ca.getCallerAccount();
 
-    var callee_account = try ctx.ic.borrowInstructionAccount(ctx.getAccount().index);
+    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
     defer callee_account.release();
 
     try callee_account.setLamports(42);
