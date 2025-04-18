@@ -2364,7 +2364,49 @@ test "tower: refresh last vote timestamp" {
     }
 }
 
+test "tower: adjust lockouts after replay future slots" {
+    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    defer tower.deinit(std.testing.allocator);
+
+    for (0..4) |i| {
+        _ = try tower.recordBankVoteAndUpdateLockouts(
+            std.testing.allocator,
+            i,
+            Hash.ZEROES,
+            true,
+            Hash.ZEROES,
+        );
+    }
+
+    var slot_history = try createTestSlotHistory(std.testing.allocator);
+    defer slot_history.bits.deinit(std.testing.allocator);
+
+    slot_history.add(@as(Slot, 0));
+    slot_history.add(@as(Slot, 1));
+
+    const replayed_root_slot: u64 = 1;
+
+    try tower.adjustLockoutsAfterReplay(
+        std.testing.allocator,
+        replayed_root_slot,
+        &slot_history,
+    );
+
+    var expected_votes = [_]Slot{ 2, 3 };
+
+    const voted_slots = try tower.votedSlots(std.testing.allocator);
+    defer std.testing.allocator.free(voted_slots);
+
+    try std.testing.expectEqualSlices(
+        Slot,
+        &expected_votes,
+        voted_slots,
+    );
+    try std.testing.expectEqual(replayed_root_slot, try tower.getRoot());
+}
+
 const builtin = @import("builtin");
+const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 fn createTestTower(
     allocator: std.mem.Allocator,
     threshold_depth: usize,
@@ -2377,6 +2419,20 @@ fn createTestTower(
     tower.threshold_depth = threshold_depth;
     tower.threshold_size = threshold_size;
     return tower;
+}
+
+fn createTestSlotHistory(
+    allocator: std.mem.Allocator,
+) !SlotHistory {
+    if (!builtin.is_test) {
+        @panic("createTestSlotHistory should only be used in test");
+    }
+
+    var bits = try DynamicArrayBitSet(u64).initFull(allocator, MAX_ENTRIES);
+    bits.setRangeValue(.{ .start = 0, .end = MAX_ENTRIES }, false);
+    bits.setValue(0, true);
+
+    return SlotHistory{ .bits = bits, .next_slot = 1 };
 }
 
 fn isSlotConfirmed(
