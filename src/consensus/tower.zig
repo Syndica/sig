@@ -178,7 +178,6 @@ pub const Tower = struct {
     pub fn deinit(self: *Tower, allocator: std.mem.Allocator) void {
         self.last_vote.deinit(allocator);
         self.vote_state.deinit(allocator);
-        // self.last_vote.deinit(allocator);
     }
 
     pub fn newFromBankforks(
@@ -960,18 +959,15 @@ pub const Tower = struct {
         return allocator.dupe(ThresholdDecision, threshold_decisions[0..index]);
     }
 
-    fn votedSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
-        var slots = try std.ArrayList(Slot).initCapacity(
-            allocator,
-            self.vote_state.votes.items.len,
-        );
-        errdefer slots.deinit();
+    fn votedSlots(self: *const Tower) ![]Slot {
+        // TODO confirm if MAX_LOCKOUT_HISTORY is fine here
+        var slots = try std.BoundedArray(Slot, MAX_LOCKOUT_HISTORY).init(0);
 
         for (self.vote_state.votes.items) |lockout| {
             try slots.append(lockout.slot);
         }
 
-        return slots.toOwnedSlice();
+        return slots.slice();
     }
 
     pub fn isStrayLastVote(self: *const Tower) bool {
@@ -994,7 +990,7 @@ pub const Tower = struct {
             \\{any} tower root: {} replayed root: {}
         , .{
             replayed_root,
-            try self.votedSlots(allocator),
+            try self.votedSlots(),
             tower_root,
             replayed_root,
         });
@@ -1102,7 +1098,7 @@ pub const Tower = struct {
         var slots_in_tower = std.ArrayList(Slot).init(allocator);
         defer slots_in_tower.deinit();
         try slots_in_tower.append(tower_root);
-        try slots_in_tower.appendSlice(try self.votedSlots(allocator));
+        try slots_in_tower.appendSlice(try self.votedSlots());
 
         // iterate over votes + root (if any) in the newest => oldest order
         // bail out early if bad condition is found
@@ -1206,7 +1202,7 @@ pub const Tower = struct {
             // That's because the votes may well past replayed_root
             self.last_vote = VoteTransaction{ .vote = Vote.DEFAULT };
         } else {
-            const voted_slots = try self.votedSlots(allocator);
+            const voted_slots = try self.votedSlots();
             std.debug.assert(self.lastVotedSlot().? == voted_slots[voted_slots.len - 1]);
             self.stray_restored_slot = self.last_vote.lastVotedSlot();
         }
