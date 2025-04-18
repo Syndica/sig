@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const trace = @import("lib.zig");
+const tracy = @import("tracy");
 
 const logfmt = trace.logfmt;
 
@@ -97,7 +98,10 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         ) void {
             switch (self) {
                 .noop => {},
-                inline else => |impl| impl.log(scope, level, fields, fmt, args),
+                inline else => |impl| {
+                    tracy.print(fmt, args);
+                    impl.log(scope, level, fields, fmt, args);
+                },
             }
         }
     };

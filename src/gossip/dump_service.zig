@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const base58 = @import("base58");
+const tracy = @import("tracy");
 
 const Allocator = std.mem.Allocator;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
@@ -21,6 +22,9 @@ pub const GossipDumpService = struct {
     const Self = @This();
 
     pub fn run(self: Self) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "gossip GossipDumpService.run" });
+        defer zone.deinit();
+
         defer {
             // this should be the last service in the chain,
             // but we still kick off anything after it just in case

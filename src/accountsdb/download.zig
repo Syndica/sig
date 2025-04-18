@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const GossipService = sig.gossip.GossipService;
 const GossipTable = sig.gossip.GossipTable;
@@ -182,6 +183,9 @@ pub fn downloadSnapshotsFromGossip(
     max_number_of_download_attempts: u64,
     timeout: ?sig.time.Duration,
 ) !struct { std.fs.File, ?std.fs.File } {
+    const zone = tracy.initZone(@src(), .{ .name = "accountsdb downloadSnapshotsFromGossip" });
+    defer zone.deinit();
+
     const logger = logger_.withScope(LOG_SCOPE);
     logger
         .info()
@@ -460,6 +464,9 @@ pub fn getOrDownloadAndUnpackSnapshot(
         download_timeout: ?sig.time.Duration = null,
     },
 ) !struct { FullAndIncrementalManifest, SnapshotFiles } {
+    const zone = tracy.initZone(@src(), .{ .name = "accountsdb getOrDownloadAndUnpackSnapshot" });
+    defer zone.deinit();
+
     const logger = logger_.withScope(LOG_SCOPE);
 
     const force_unpack_snapshot = options.force_unpack_snapshot;

@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const cli = @import("cli");
 const sig = @import("sig.zig");
 const config = @import("config.zig");
+const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Bank = sig.accounts_db.Bank;
@@ -57,9 +58,18 @@ fn GpaOrCAllocator(comptime gpa_config: std.heap.GeneralPurposeAllocatorConfig) 
 }
 
 pub fn main() !void {
+    tracy.setThreadName("Main");
+    tracy.startupProfiler();
+    defer tracy.shutdownProfiler();
+
+    const zone = tracy.initZone(@src(), .{ .name = "main" });
+    defer zone.deinit();
+
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
-    const gpa = gpa_state.allocator();
+
+    var tracing_allocator = tracy.TracingAllocator.initNamed("gpa", gpa_state.allocator());
+    const gpa = tracing_allocator.allocator();
 
     var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
     // defer _ = gossip_gpa_state.deinit();
@@ -951,6 +961,9 @@ fn gossip(
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
+    const zone = tracy.initZone(@src(), .{ .name = "gossip" });
+    defer zone.deinit();
+
     var app_base = try AppBase.init(allocator, cfg);
     errdefer {
         app_base.shutdown();
@@ -980,11 +993,16 @@ fn validator(
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
+    const zone = tracy.initZone(@src(), .{ .name = "validator" });
+    defer zone.deinit();
+
     var app_base = try AppBase.init(allocator, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
+
+    app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
 
     const repair_port: u16 = cfg.shred_network.repair_port;
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
@@ -1690,6 +1708,9 @@ fn startGossip(
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !*GossipService {
+    const zone = tracy.initZone(@src(), .{ .name = "cmd startGossip" });
+    defer zone.deinit();
+
     app_base.logger.info()
         .field("host", app_base.my_ip)
         .field("port", app_base.my_port)
@@ -1783,6 +1804,9 @@ fn loadSnapshot(
     unscoped_logger: Logger,
     options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
+    const zone = tracy.initZone(@src(), .{ .name = "cmd loadSnapshot" });
+    defer zone.deinit();
+
     const logger = unscoped_logger.withScope(@typeName(@This()) ++ "." ++ @src().fn_name);
 
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});

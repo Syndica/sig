@@ -1,7 +1,8 @@
 const std = @import("std");
-const TarOutputHeader = std.tar.output.Header;
-
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
+
+const TarOutputHeader = std.tar.output.Header;
 const ThreadPoolTask = sig.utils.thread.ThreadPoolTask;
 const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
@@ -73,6 +74,9 @@ pub fn parallelUntarToFileSystem(
     n_threads: usize,
     n_files_estimate: ?usize,
 ) !void {
+    const zone = tracy.initZone(@src(), .{ .name = "tar parallelUntarToFileSystem" });
+    defer zone.deinit();
+
     const logger = logger_.withScope(LOG_SCOPE);
     var thread_pool = ThreadPool.init(.{
         .max_threads = @intCast(n_threads),

@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
+const tracy = @import("tracy");
 
 const IoUring = std.os.linux.IoUring;
 const Atomic = std.atomic.Value;
@@ -120,6 +121,9 @@ pub const BufferPool = struct {
         allocator: std.mem.Allocator,
         num_frames: u32,
     ) !BufferPool {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb.BufferPool init" });
+        defer zone.deinit();
+
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
         // Alignment of frames is good for read performance (and necessary if we want to use O_DIRECT.)
