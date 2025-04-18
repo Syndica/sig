@@ -982,7 +982,7 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         replayed_root: Slot,
         slot_history: *const SlotHistory,
-    ) !Tower {
+    ) !void {
         // sanity assertions for roots
         const tower_root = try self.getRoot();
         self.logger.info().logf(
@@ -1072,8 +1072,6 @@ pub const Tower = struct {
             // otherwise we're screwing something up.
             std.debug.assert(tower_root == replayed_root);
         }
-
-        return self.*;
     }
 
     // TODO revisit
