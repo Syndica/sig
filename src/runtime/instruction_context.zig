@@ -16,7 +16,6 @@ const EpochContext = sig.runtime.EpochContext;
 const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
-const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
 /// `InstructionContext` holds all information required to execute a program instruction; excluding an allocator
 /// it is the only argument passed to the program entrypoint function
@@ -37,12 +36,6 @@ pub const InstructionContext = struct {
 
     /// The depth of the instruction on the stack
     depth: u8,
-
-    /// SyscallContext SerializedAccountMetas in the vm
-    vm_accounts: std.BoundedArray(
-        SerializedAccountMetadata,
-        InstructionInfo.MAX_ACCOUNT_METAS,
-    ) = .{},
 
     pub fn deinit(self: *InstructionContext, allocator: std.mem.Allocator) void {
         self.ixn_info.deinit(allocator);

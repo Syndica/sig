@@ -773,7 +773,7 @@ fn translateAccounts(
         };
 
         const serialized_metadata = if (meta.index_in_caller < ic.ixn_info.account_metas.len) blk: {
-            break :blk &ic.vm_accounts.slice()[meta.index_in_caller];
+            break :blk &ic.tc.account_metas.slice()[meta.index_in_caller];
         } else {
             try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
             return InstructionError.MissingAccount;
@@ -1344,7 +1344,7 @@ test "vm.syscalls.cpi: translateAccounts" {
     );
     defer memory_map.deinit(allocator);
 
-    ctx.ic.vm_accounts.appendAssumeCapacity(serialized_metadata);
+    ctx.tc.account_metas.appendAssumeCapacity(serialized_metadata);
 
     // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2554
     const accounts = try translateAccounts(

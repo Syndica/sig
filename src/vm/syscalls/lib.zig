@@ -1,5 +1,6 @@
 const phash = @import("poseidon");
 const std = @import("std");
+const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
 
 const features = sig.runtime.features;
@@ -27,6 +28,7 @@ pub const Error = error{
     Unexpected,
     ComputationalBudgetExceeded,
     ReturnDataTooLarge,
+    InvalidMemoryRegion,
 } || std.fs.File.WriteError || InstructionError;
 
 pub const Syscall = *const fn (
@@ -280,63 +282,9 @@ pub fn logComputeUnits(ctx: *TransactionContext, _: *MemoryMap, _: RegisterMap) 
 }
 
 // memory operators
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L130-L162
-pub fn memset(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    const dst_addr = registers.get(.r1);
-    const scalar = registers.get(.r2);
-    const len = registers.get(.r3);
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L142
-    try consumeMemoryCompute(ctx, len);
-
-    const host_addr = try mmap.vmap(.mutable, dst_addr, len);
-    @memset(host_addr, @truncate(scalar));
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L31-L52
-pub fn memcpy(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    const dst_addr = registers.get(.r1);
-    const src_addr = registers.get(.r2);
-    const len = registers.get(.r3);
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L43
-    try consumeMemoryCompute(ctx, len);
-
-    const dst_host = try mmap.vmap(.mutable, dst_addr, len);
-    const src_host = try mmap.vmap(.constant, src_addr, len);
-    @memcpy(dst_host, src_host);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L72-L128
-pub fn memcmp(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    const a_addr = registers.get(.r1);
-    const b_addr = registers.get(.r2);
-    const n = registers.get(.r3);
-    const cmp_result_addr = registers.get(.r4);
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L84
-    try consumeMemoryCompute(ctx, n);
-
-    const a = try mmap.vmap(.constant, a_addr, n);
-    const b = try mmap.vmap(.constant, b_addr, n);
-    const cmp_result_slice = try mmap.vmap(
-        .mutable,
-        cmp_result_addr,
-        @sizeOf(u32),
-    );
-    const cmp_result: *align(1) u32 = @ptrCast(cmp_result_slice.ptr);
-
-    const result = std.mem.order(u8, a, b);
-    cmp_result.* = @intFromEnum(result);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L8-L15
-fn consumeMemoryCompute(ctx: *TransactionContext, length: u64) !void {
-    const budget = ctx.compute_budget;
-    const cost = @max(budget.mem_op_base_cost, length / budget.cpi_bytes_per_unit);
-    try ctx.consumeCompute(cost);
-}
+pub const memcpy = memops.memcpy;
+pub const memset = memops.memset;
+pub const memcmp = memops.memcmp;
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {

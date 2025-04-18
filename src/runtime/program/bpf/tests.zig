@@ -2,8 +2,9 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const program = sig.runtime.program;
-
+const features = sig.runtime.features;
 const Pubkey = sig.core.Pubkey;
+const AccountParams = sig.runtime.testing.ExecuteContextsParams.AccountParams;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
@@ -50,6 +51,9 @@ test "hello_world" {
         .{
             .accounts = accounts,
             .compute_meter = 137,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = accounts,
@@ -119,6 +123,9 @@ test "print_account" {
         .{
             .accounts = accounts,
             .compute_meter = 29_105,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = accounts,
@@ -185,6 +192,9 @@ test "fast_copy" {
                 initial_instruction_account,
             },
             .compute_meter = 61,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = &.{
@@ -236,6 +246,9 @@ test "set_return_data" {
         .{
             .accounts = accounts,
             .compute_meter = 141,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = accounts,
@@ -280,6 +293,9 @@ test "program_is_not_executable" {
         .{
             .accounts = accounts,
             .compute_meter = 137,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{},
     );
@@ -317,6 +333,9 @@ test "program_invalid_account_data" {
         .{
             .accounts = accounts,
             .compute_meter = 137,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{
             .accounts = accounts,
@@ -363,10 +382,91 @@ test "program_init_vm_not_enough_compute" {
             .accounts = accounts,
             .compute_meter = 7,
             .compute_budget = compute_budget,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+            },
         },
         .{},
         .{},
     );
 
     try std.testing.expectError(error.ProgramEnvironmentSetupFailure, result);
+}
+
+test "basic direct mapping" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const program_bytes = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "direct_mapping.so",
+        MAX_FILE_BYTES,
+    );
+    defer allocator.free(program_bytes);
+
+    const accounts: []const AccountParams = &.{
+        .{
+            .pubkey = program_id,
+            .lamports = 1_000_000_000,
+            .owner = program.bpf_loader_program.v3.ID,
+            .executable = true,
+            .rent_epoch = 0,
+            .data = program_bytes,
+        },
+        .{
+            .pubkey = Pubkey.initRandom(prng.random()),
+            .lamports = 1_234_456,
+            // needs to be the program_id so that we have permission to mutate it
+            .owner = program_id,
+            .executable = false,
+            .rent_epoch = 25,
+            .data = &(.{0xFF} ** 7),
+        },
+    };
+
+    const after_accounts: []const AccountParams = &.{
+        .{
+            .pubkey = program_id,
+            .lamports = 1_000_000_000,
+            .owner = program.bpf_loader_program.v3.ID,
+            .executable = true,
+            .rent_epoch = 0,
+            .data = program_bytes,
+        },
+        .{
+            .pubkey = accounts[1].pubkey,
+            .lamports = 1_234_456,
+            // needs to be the program_id so that we have permission to mutate it
+            .owner = program_id,
+            .executable = false,
+            .rent_epoch = 25,
+            .data = &.{ 10, 20, 30, 40, 40, 0xFF, 0xFF }, // NOTE: this changed in the program
+        },
+    };
+
+    try expectProgramExecuteResult(
+        allocator,
+        program_id,
+        &[_]u8{},
+        &.{
+            .{
+                .index_in_transaction = 1,
+                .is_signer = false,
+                .is_writable = true,
+            },
+        },
+        .{
+            .accounts = accounts,
+            .compute_meter = 106,
+            .feature_set = &.{
+                .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
+                .{ .pubkey = features.BPF_ACCOUNT_DATA_DIRECT_MAPPING },
+            },
+        },
+        .{
+            .accounts = after_accounts,
+        },
+        .{},
+    );
 }

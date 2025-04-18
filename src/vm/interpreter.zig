@@ -70,6 +70,7 @@ pub const Vm = struct {
 
     pub fn deinit(self: *Vm) void {
         self.call_frames.deinit(self.allocator);
+        self.memory_map.deinit(self.allocator);
     }
 
     pub fn run(self: *Vm) struct { Result, u64 } {
@@ -668,7 +669,9 @@ pub const Vm = struct {
         }
 
         if (!self.executable.version.enableDynamicStackFrames()) {
-            self.registers.getPtr(.r10).* += self.executable.config.stack_frame_size;
+            const scale: u64 = if (self.executable.config.enable_stack_frame_gaps) 2 else 1;
+            const stack_frame_size = self.executable.config.stack_frame_size * scale;
+            self.registers.getPtr(.r10).* += stack_frame_size;
         }
     }
 
