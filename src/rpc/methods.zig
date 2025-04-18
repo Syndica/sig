@@ -127,10 +127,17 @@ pub const GetAccountInfo = struct {
     pubkey: Pubkey,
     config: ?Config = null,
 
+    pub const Encoding = enum {
+        base58,
+        base64,
+        @"base64+zstd",
+        jsonParsed,
+    };
+
     pub const Config = struct {
         commitment: ?common.Commitment = null,
         minContextSlot: ?u64 = null,
-        encoding: ?enum { base58, base64, @"base64+zstd", jsonParsed } = null,
+        encoding: ?Encoding = null,
         dataSlice: ?common.DataSlice = null,
     };
 
@@ -139,12 +146,77 @@ pub const GetAccountInfo = struct {
         value: ?Value,
 
         pub const Value = struct {
-            data: []const u8,
+            data: Data,
             executable: bool,
             lamports: u64,
             owner: Pubkey,
             rentEpoch: u64,
             space: u64,
+
+            pub const Data = union(enum) {
+                encoded: struct { []const u8, Encoding },
+                // TODO: this should be a json value/map, test cases can't compare that though
+                jsonParsed: noreturn,
+
+                /// This field is only set when the request object asked for `jsonParsed` encoding,
+                /// and the server couldn't find a parser, therefore falling back to simply returning
+                /// the account data in base64 encoding directly as a string.
+                ///
+                /// [Solana documentation REF](https://solana.com/docs/rpc/http/getaccountinfo):
+                /// In the drop-down documentation for the encoding field:
+                /// > * `jsonParsed` encoding attempts to use program-specific state parsers to
+                /// return more human-readable and explicit account state data.
+                /// > * If `jsonParsed` is requested but a parser cannot be found, the field falls
+                /// back to base64 encoding, detectable when the data field is type string.
+                json_parsed_base64_fallback: []const u8,
+
+                pub fn jsonStringify(
+                    self: Data,
+                    /// `*std.json.WriteStream(...)`
+                    jw: anytype,
+                ) @TypeOf(jw.*).Error!void {
+                    switch (self) {
+                        .encoded => |pair| try jw.write(pair),
+                        .jsonParsed => |map| try jw.write(map),
+                        .json_parsed_base64_fallback => |str| try jw.write(str),
+                    }
+                }
+
+                pub fn jsonParse(
+                    allocator: std.mem.Allocator,
+                    source: anytype,
+                    options: std.json.ParseOptions,
+                ) std.json.ParseError(@TypeOf(source.*))!Data {
+                    return switch (try source.peekNextTokenType()) {
+                        .array_begin => .{ .encoded = try std.json.innerParse(
+                            struct { []const u8, Encoding },
+                            allocator,
+                            source,
+                            options,
+                        ) },
+                        .object_begin => if (true)
+                            std.debug.panic("TODO: implement jsonParsed for GetAccountInfo", .{})
+                        else
+                            .{ .jsonParsed = try std.json.innerParse(
+                                std.json.ArrayHashMap(std.json.Value),
+                                allocator,
+                                source,
+                                options,
+                            ) },
+                        .string => .{ .json_parsed_base64_fallback = try std.json.innerParse(
+                            []const u8,
+                            allocator,
+                            source,
+                            options,
+                        ) },
+                        .array_end, .object_end => error.UnexpectedToken,
+                        else => {
+                            try source.skipValue();
+                            return error.UnexpectedToken;
+                        },
+                    };
+                }
+            };
         };
     };
 };

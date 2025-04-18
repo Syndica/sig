@@ -7,6 +7,7 @@ const Atomic = std.atomic.Value;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 const bincode = sig.bincode;
+const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITTED_DATA_LENGTH;
 
 /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
 pub const FRAME_SIZE = 512;
@@ -110,6 +111,10 @@ pub const BufferPool = struct {
     pub const ReadBlockingError = FrameManager.GetError || std.posix.PReadError;
     pub const ReadIoUringError = FrameManager.GetError || IoUringError;
     pub const ReadError = if (USE_IO_URING) ReadIoUringError else ReadBlockingError;
+
+    /// The number of bytes required to store the FrameRefs of any account read.
+    pub const MAX_READ_BYTES_ALLOCATED = (MAX_PERMITTED_DATA_LENGTH / FRAME_SIZE + 2) *
+        @sizeOf(FrameRef);
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -966,11 +971,11 @@ pub const AccountDataHandle = union(enum) {
         }
     }
 
-    pub fn slice(self: *const AccountDataHandle, start: usize, end: usize) AccountDataHandle {
+    pub fn slice(self: *const AccountDataHandle, start: u32, end: u32) AccountDataHandle {
         return .{ .sub_read = .{
+            .parent = self,
             .end = end,
             .start = start,
-            .self = self,
         } };
     }
 

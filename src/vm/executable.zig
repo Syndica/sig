@@ -1,9 +1,11 @@
 const std = @import("std");
-const sbpf = @import("sbpf.zig");
-const Elf = @import("elf.zig").Elf;
-const memory = @import("memory.zig");
-const syscalls = @import("syscalls.zig");
+const sig = @import("../sig.zig");
 
+const sbpf = sig.vm.sbpf;
+const memory = sig.vm.memory;
+const syscalls = sig.vm.syscalls;
+
+const Elf = sig.vm.elf.Elf;
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
 

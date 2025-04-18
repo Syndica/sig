@@ -161,12 +161,17 @@ pub const AccountsDB = struct {
     };
 
     pub const InitParams = struct {
+        pub const Index = union(AccountIndex.AllocatorConfig.Tag) {
+            ram,
+            disk,
+            parent: *sig.accounts_db.index.ReferenceAllocator,
+        };
         allocator: std.mem.Allocator,
         logger: Logger,
         snapshot_dir: std.fs.Dir,
         geyser_writer: ?*GeyserWriter,
         gossip_view: ?GossipView,
-        index_allocation: AccountIndex.AllocatorConfig.Tag,
+        index_allocation: Index,
         number_of_index_shards: usize,
         /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
         buffer_pool_frames: u32 = 2 * 1024 * 1024,
@@ -177,7 +182,9 @@ pub const AccountsDB = struct {
         const index_config: AccountIndex.AllocatorConfig = switch (params.index_allocation) {
             .disk => .{ .disk = .{ .accountsdb_dir = params.snapshot_dir } },
             .ram => .{ .ram = .{ .allocator = params.allocator } },
+            .parent => |parent| .{ .parent = parent },
         };
+
         var account_index = try AccountIndex.init(
             params.allocator,
             params.logger,
@@ -301,6 +308,62 @@ pub const AccountsDB = struct {
         }
 
         if (validate) {
+            const full_man = full_inc_manifest.full;
+            const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
+                inc.bank_extra.snapshot_persistence
+            else
+                null;
+
+            var validate_timer = try sig.time.Timer.start();
+            try self.validateLoadFromSnapshot(.{
+                .full_slot = full_man.bank_fields.slot,
+                .expected_full = .{
+                    .accounts_hash = full_man.accounts_db_fields.bank_hash_info.accounts_hash,
+                    .capitalization = full_man.bank_fields.capitalization,
+                },
+                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
+                    .accounts_hash = inc_persistence.incremental_hash,
+                    .capitalization = inc_persistence.incremental_capitalization,
+                } else null,
+            });
+            self.logger.info().logf("validateLoadFromSnapshot: total time: {s}", .{validate_timer.read()});
+        }
+
+        return collapsed_manifest;
+    }
+
+    /// easier to use load function
+    pub fn loadFromSnapshotAndValidate(
+        self: *Self,
+        params: struct {
+            /// needs to be a thread-safe allocator
+            allocator: std.mem.Allocator,
+            /// Must have been allocated with `self.allocator`.
+            full_inc_manifest: FullAndIncrementalManifest,
+            n_threads: u32,
+            accounts_per_file_estimate: u64,
+        },
+    ) !SnapshotManifest {
+        const allocator = params.allocator;
+        const full_inc_manifest = params.full_inc_manifest;
+        const n_threads = params.n_threads;
+        const accounts_per_file_estimate = params.accounts_per_file_estimate;
+
+        const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
+        errdefer collapsed_manifest.deinit(self.allocator);
+
+        {
+            var load_timer = try sig.time.Timer.start();
+            try self.loadFromSnapshot(
+                collapsed_manifest.accounts_db_fields,
+                n_threads,
+                allocator,
+                accounts_per_file_estimate,
+            );
+            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
+        }
+
+        {
             const full_man = full_inc_manifest.full;
             const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
                 inc.bank_extra.snapshot_persistence
@@ -477,7 +540,7 @@ pub const AccountsDB = struct {
 
                 .logger = .noop, // dont spam the logs with init information (we set it after)
                 .gossip_view = null, // loading threads would never need to generate a snapshot, therefore it doesn't need a view into gossip.
-                .index_allocation = .ram, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
+                .index_allocation = .{ .parent = &parent.account_index.reference_allocator }, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
             });
 
             loading_thread.logger = parent.logger;
@@ -2262,6 +2325,22 @@ pub const AccountsDB = struct {
         return try self.getAccountFromRefWithReadLock(max_ref);
     }
 
+    pub fn getSlotAndAccountInSlotRangeWithReadLock(
+        self: *Self,
+        pubkey: *const Pubkey,
+        min_slot: ?Slot,
+        max_slot: ?Slot,
+    ) GetAccountError!?struct { AccountInCacheOrFile, Slot, AccountInCacheOrFileLock } {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, max_slot) orelse
+            return null;
+        const account, const account_lg = try self.getAccountFromRefWithReadLock(max_ref);
+        return .{ account, max_ref.slot, account_lg };
+    }
+
     pub const GetTypeFromAccountError = GetAccountError || error{DeserializationError};
     pub fn getTypeFromAccount(
         self: *Self,
@@ -2339,15 +2418,22 @@ pub const AccountsDB = struct {
 
             try file_map.put(self.allocator, account_file.id, account_file.*);
 
+            var buffer_pool_frame_buf: [BufferPool.MAX_READ_BYTES_ALLOCATED]u8 = undefined;
+            var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+            const frame_allocator = fba.allocator();
+
             // we update the bank hash stats while locking the file map to avoid
             // reading accounts from the file map and getting inaccurate/stale
             // bank hash stats.
             var account_iter = account_file.iterator(
-                self.allocator,
+                frame_allocator,
                 &self.buffer_pool,
             );
             while (try account_iter.next()) |account_in_file| {
-                defer account_in_file.deinit(self.allocator);
+                defer {
+                    account_in_file.deinit(frame_allocator);
+                    fba.reset();
+                }
 
                 const bhs, var bhs_lg = try self.getOrInitBankHashStats(account_file.slot);
                 defer bhs_lg.unlock();
@@ -3171,16 +3257,24 @@ pub fn indexAndValidateAccountFile(
         return error.ShardCountMismatch;
     }
 
+    var buffer_pool_frame_buf: [BufferPool.MAX_READ_BYTES_ALLOCATED]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+    const frame_allocator = fba.allocator();
+
     while (true) {
         const account = accounts_file.readAccount(
-            allocator,
+            frame_allocator,
             buffer_pool,
             offset,
         ) catch |err| switch (err) {
             error.EOF => break,
             else => |e| return e,
         };
-        defer account.deinit(allocator);
+
+        defer {
+            account.deinit(frame_allocator);
+            fba.reset();
+        }
 
         try account.validate();
 
@@ -3822,10 +3916,7 @@ test "flushing slots works" {
     const file_id = file_map.keys()[0];
 
     const account_file = file_map.getPtr(file_id).?;
-    account_file.number_of_accounts = try account_file.validate(
-        allocator,
-        &bp,
-    );
+    account_file.number_of_accounts = try account_file.validate(&bp);
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
     try std.testing.expect(unclean_account_files.items.len == 1);
@@ -3873,7 +3964,8 @@ test "purge accounts in cache works" {
     try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     for (0..n_accounts) |i| {
-        _, var lg = accounts_db.account_index.pubkey_ref_map.getRead(&pubkeys[i]) orelse return error.TestUnexpectedNull;
+        _, var lg = accounts_db.account_index.pubkey_ref_map.getRead(&pubkeys[i]) orelse
+            return error.TestUnexpectedNull;
         lg.unlock();
     }
 
@@ -4761,6 +4853,12 @@ pub const BenchmarkAccountsDB = struct {
         var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
+        const index_type: AccountsDB.InitParams.Index = switch (bench_args.index) {
+            .disk => .disk,
+            .ram => .ram,
+            .parent => @panic("invalid benchmark argument"),
+        };
+
         const logger = .noop;
         var accounts_db: AccountsDB = try AccountsDB.init(.{
             .allocator = allocator,
@@ -4768,7 +4866,7 @@ pub const BenchmarkAccountsDB = struct {
             .snapshot_dir = snapshot_dir,
             .geyser_writer = null,
             .gossip_view = null,
-            .index_allocation = bench_args.index,
+            .index_allocation = index_type,
             .number_of_index_shards = 32,
         });
         defer accounts_db.deinit();
@@ -4797,6 +4895,7 @@ pub const BenchmarkAccountsDB = struct {
 
         const write_time = timer_blk: {
             switch (bench_args.accounts) {
+                .parent => @panic("invalid bench arg"),
                 .ram => {
                     const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
                     const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));

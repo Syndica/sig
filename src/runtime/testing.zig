@@ -312,10 +312,16 @@ pub fn expectTransactionContextEqual(
         return error.AccountsLengthMismatch;
 
     for (expected.accounts, 0..) |expected_account, index|
-        try expectTransactionAccountEqual(
+        expectTransactionAccountEqual(
             expected_account,
             actual.accounts[index],
-        );
+        ) catch |err| {
+            std.debug.print(
+                "TransactionContext accounts mismatch at index {}: {}\n",
+                .{ index, err },
+            );
+            return err;
+        };
 
     if (expected.accounts_resize_delta != actual.accounts_resize_delta)
         return error.AccountsResizeDeltaMismatch;
