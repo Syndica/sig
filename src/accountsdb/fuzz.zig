@@ -389,7 +389,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
             defer combined_manifest.deinit(allocator);
 
-            const index_type: AccountsDB.InitParams.Index = switch (accounts_db.account_index.reference_allocator) {
+            const index_type: AccountsDB.InitParams.Index =
+                switch (accounts_db.account_index.reference_allocator) {
                 .disk => .disk,
                 .ram => .ram,
                 .parent => @panic("invalid argument"),
