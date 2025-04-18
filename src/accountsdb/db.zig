@@ -161,17 +161,20 @@ pub const AccountsDB = struct {
     };
 
     pub const InitParams = struct {
+        pub const Index = union(AccountIndex.AllocatorConfig.Tag) {
+            ram,
+            disk,
+            parent: *sig.accounts_db.index.ReferenceAllocator,
+        };
         allocator: std.mem.Allocator,
         logger: Logger,
         snapshot_dir: std.fs.Dir,
         geyser_writer: ?*GeyserWriter,
         gossip_view: ?GossipView,
-        index_allocation: AccountIndex.AllocatorConfig.Tag,
+        index_allocation: Index,
         number_of_index_shards: usize,
         /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
         buffer_pool_frames: u32 = 2 * 1024 * 1024,
-        /// For supplying your own ReferenceAllocator. Required for index_allocation = .parent.
-        injected_ref_allocator: ?*sig.accounts_db.index.ReferenceAllocator = null,
     };
 
     pub fn init(params: InitParams) !Self {
@@ -179,7 +182,7 @@ pub const AccountsDB = struct {
         const index_config: AccountIndex.AllocatorConfig = switch (params.index_allocation) {
             .disk => .{ .disk = .{ .accountsdb_dir = params.snapshot_dir } },
             .ram => .{ .ram = .{ .allocator = params.allocator } },
-            .parent => .{ .parent = params.injected_ref_allocator orelse return error.InvalidArgument },
+            .parent => |parent| .{ .parent = parent },
         };
 
         var account_index = try AccountIndex.init(
@@ -481,8 +484,7 @@ pub const AccountsDB = struct {
 
                 .logger = .noop, // dont spam the logs with init information (we set it after)
                 .gossip_view = null, // loading threads would never need to generate a snapshot, therefore it doesn't need a view into gossip.
-                .index_allocation = .parent, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
-                .injected_ref_allocator = &parent.account_index.reference_allocator,
+                .index_allocation = .{ .parent = &parent.account_index.reference_allocator }, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
             });
 
             loading_thread.logger = parent.logger;
@@ -4778,6 +4780,12 @@ pub const BenchmarkAccountsDB = struct {
         var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
+        const index_type: AccountsDB.InitParams.Index = switch (bench_args.index) {
+            .disk => .disk,
+            .ram => .ram,
+            .parent => @panic("invalid benchmark argument"),
+        };
+
         const logger = .noop;
         var accounts_db: AccountsDB = try AccountsDB.init(.{
             .allocator = allocator,
@@ -4785,7 +4793,7 @@ pub const BenchmarkAccountsDB = struct {
             .snapshot_dir = snapshot_dir,
             .geyser_writer = null,
             .gossip_view = null,
-            .index_allocation = bench_args.index,
+            .index_allocation = index_type,
             .number_of_index_shards = 32,
         });
         defer accounts_db.deinit();

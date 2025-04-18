@@ -389,13 +389,19 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
             defer combined_manifest.deinit(allocator);
 
+            const index_type: AccountsDB.InitParams.Index = switch (accounts_db.account_index.reference_allocator) {
+                .disk => .disk,
+                .ram => .ram,
+                .parent => @panic("invalid argument"),
+            };
+
             var alt_accounts_db = try AccountsDB.init(.{
                 .allocator = allocator,
                 .logger = .noop,
                 .snapshot_dir = alternative_snapshot_dir,
                 .geyser_writer = null,
                 .gossip_view = null,
-                .index_allocation = accounts_db.account_index.reference_allocator,
+                .index_allocation = index_type,
                 .number_of_index_shards = accounts_db.number_of_index_shards,
             });
             defer alt_accounts_db.deinit();
