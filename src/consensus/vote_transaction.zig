@@ -22,7 +22,7 @@ pub const VoteTransaction = union(enum) {
 
     pub fn deinit(self: *VoteTransaction, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .vote => |_| return,
+            .vote => |_| {},
             .vote_state_update => |*args| args.lockouts.deinit(allocator),
             .compact_vote_state_update => |*args| args.lockouts.deinit(allocator),
             .tower_sync => |*args| args.lockouts.deinit(allocator),
