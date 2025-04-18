@@ -1266,28 +1266,17 @@ pub const Tower = struct {
         self.initializeLockouts(flags);
     }
 
-    // TODO Revisit the closure pattern
-    // fn initializeLockouts(
-    //     self: *Tower,
-    //     should_retain: fn (Lockout) ?bool,
-    // ) void {
-    //     for (self.vote_state.votes, 0..) |vote, i| {
-    //         if (!should_retain(vote)) {
-    //             self.vote_state.votes.orderedRemove(i);
-    //         }
-    //     }
-    // }
-
     fn initializeLockouts(
         self: *Tower,
         should_retain: std.DynamicBitSetUnmanaged,
     ) void {
-        var i: usize = 0;
-        while (i < self.vote_state.votes.items.len) {
+        std.debug.assert(should_retain.capacity() >= self.vote_state.votes.items.len);
+
+        var i: usize = self.vote_state.votes.items.len;
+        while (i > 0) {
+            i -= 1;
             if (!should_retain.isSet(i)) {
                 _ = self.vote_state.votes.orderedRemove(i);
-            } else {
-                i += 1;
             }
         }
     }
