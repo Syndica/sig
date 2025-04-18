@@ -105,7 +105,6 @@ pub const AccountIndex = struct {
                     .{sig.utils.fmt.tryRealPath(index_dir, ".")},
                 );
 
-                // reviewer's note: looks like we leak this + is there a point in allocating?
                 const disk_allocator = try allocator.create(DiskMemoryAllocator);
                 errdefer allocator.destroy(disk_allocator);
                 disk_allocator.* = .{
