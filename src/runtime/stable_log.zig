@@ -141,10 +141,10 @@ pub fn programSuccess(tc: *TransactionContext, program_id: Pubkey) !void {
 pub fn programFailure(
     tc: *TransactionContext,
     program_id: Pubkey,
-    err: anytype,
+    err: []const u8,
 ) !void {
     if (tc.log_collector) |*lc| {
-        try lc.log(tc.allocator, "Program {} failed: {}", .{ program_id, err });
+        try lc.log(tc.allocator, "Program {} failed: {s}", .{ program_id, err });
     }
 }
 
@@ -177,7 +177,7 @@ test "stable_log" {
     try programData(&tc, &.{ "data0", "data1" });
     try programReturn(&tc, program_id, "return");
     try programSuccess(&tc, program_id);
-    try programFailure(&tc, program_id, error.Error);
+    try programFailure(&tc, program_id, "error");
 
     const expected: []const []const u8 = &.{
         "Program SigDefau1tPubkey111111111111111111111111111 invoke [0]",

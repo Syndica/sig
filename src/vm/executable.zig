@@ -919,9 +919,10 @@ pub const BuiltinProgram = struct {
     functions: Registry(syscalls.Syscall) = .{},
 
     pub fn deinit(
-        self: *BuiltinProgram,
+        self_: BuiltinProgram,
         allocator: std.mem.Allocator,
     ) void {
+        var self = self_;
         self.functions.deinit(allocator);
     }
 };

@@ -1,4 +1,7 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
+
+const SyscallError = sig.vm.SyscallError;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/compute-budget/src/compute_budget.rs#L11-L119
 pub const ComputeBudget = struct {
@@ -58,17 +61,23 @@ pub const ComputeBudget = struct {
     /// [fd] https://github.com/firedancer-io/firedancer/blob/211dfccc1d84a50191a487a6abffd962f7954179/src/flamenco/vm/syscall/fd_vm_syscall_crypto.c#L238-L245
     ///
     /// Returns the cost of a Poseidon hash syscall for a given input length.
-    pub fn poseidonCost(self: ComputeBudget, len: u64) !u64 {
-        const squared_inputs = try std.math.powi(u64, len, 2);
-        const mul_result = try std.math.mul(
+    pub fn poseidonCost(self: ComputeBudget, len: u64) SyscallError!u64 {
+        const squared_inputs = std.math.powi(u64, len, 2) catch {
+            return SyscallError.ArithmeticOverflow;
+        };
+        const mul_result = std.math.mul(
             u64,
             squared_inputs,
             self.poseidon_cost_coefficient_a,
-        );
-        return try std.math.add(
+        ) catch {
+            return SyscallError.ArithmeticOverflow;
+        };
+        return std.math.add(
             u64,
             mul_result,
             self.poseidon_cost_coefficient_c,
-        );
+        ) catch {
+            return SyscallError.ArithmeticOverflow;
+        };
     }
 };

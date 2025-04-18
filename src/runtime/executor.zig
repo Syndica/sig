@@ -50,7 +50,7 @@ pub fn executeNativeCpiInstruction(
 /// Returns a reference to the pushed instruction context\
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L475
 /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1034-L1035
-fn pushInstruction(
+pub fn pushInstruction(
     tc: *TransactionContext,
     instruction_info_: InstructionInfo,
 ) InstructionError!void {
@@ -169,7 +169,7 @@ fn processNextInstruction(
         ic.tc.instruction_stack.len,
     );
     native_program_fn(allocator, ic) catch |execute_error| {
-        try stable_log.programFailure(ic.tc, program_id, execute_error);
+        try stable_log.programFailure(ic.tc, program_id, @errorName(execute_error));
         return execute_error;
     };
     try stable_log.programSuccess(ic.tc, program_id);
@@ -177,7 +177,7 @@ fn processNextInstruction(
 
 /// Pop an instruction from the instruction stack\
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L290
-fn popInstruction(
+pub fn popInstruction(
     tc: *TransactionContext,
 ) InstructionError!void {
     // TODO: pop syscall context and record trace log
@@ -373,7 +373,7 @@ fn sumAccountLamports(
         lamports = std.math.add(u128, lamports, account.lamports) catch {
             // Effectively unreachable, would required greater
             // than 1.8e19 accounts with max u64 lamports
-            return InstructionError.ArithmeticOverflow;
+            return InstructionError.ProgramArithmeticOverflow;
         };
     }
     return lamports;
