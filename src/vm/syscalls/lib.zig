@@ -5,6 +5,7 @@ const sig = @import("../../sig.zig");
 const cpi = @import("cpi.zig");
 const features = sig.runtime.features;
 
+const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
@@ -14,31 +15,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionError = sig.core.instruction.InstructionError;
 
-pub const Error = error{
-    OutOfMemory,
-    InvalidVirtualAddress,
-    AccessNotMapped,
-    SyscallAbort,
-    AccessViolation,
-    StackAccessViolation,
-    Overflow,
-    Underflow,
-    InvalidLength,
-    NonCanonical,
-    Unexpected,
-    ComputationalBudgetExceeded,
-    ReturnDataTooLarge,
-    BadSeeds,
-    TooManySigners,
-    UnalignedPointer,
-    InvalidPointer,
-    TooManyAccounts,
-    InstructionTooLarge,
-    MaxInstructionDataLenExceeded,
-    MaxInstructionAccountsExceeded,
-    MaxInstructionAccountInfosExceeded,
-    ProgramNotSupported,
-} || std.fs.File.WriteError || InstructionError || sig.vm.memory.RegionError;
+pub const Error = sig.vm.ExecutionError;
 
 pub const Syscall = *const fn (
     *TransactionContext,
@@ -384,15 +361,23 @@ pub fn poseidon(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterM
             @intFromPtr(input.addr),
             input.len,
         );
-        try hasher.append(slice[0..32]);
+        hasher.append(slice[0..32]) catch {
+            // TODO: THIS IS INCORRECT, it is set to temporarily match the error set. Agave
+            // returns sets a custom poseidon error here.
+            return error.OutOfMemory;
+        };
     }
-    const result = try hasher.finish();
+    const result = hasher.finish() catch {
+        // TODO: THIS IS INCORRECT, it is set to temporarily match the error set. Agave
+        // returns sets a custom poseidon error here.
+        return error.OutOfMemory;
+    };
     @memcpy(hash_result, &result);
 }
 
 // special
 pub fn abort(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
-    return error.SyscallAbort;
+    return SyscallError.Abort;
 }
 
 pub fn panic(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
@@ -403,7 +388,7 @@ pub fn panic(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap)
 
     const message = try mmap.vmap(.constant, file, len);
     try ctx.log("panic: {s}", .{message});
-    return error.SyscallAbort;
+    return SyscallError.Abort;
 }
 
 test poseidon {

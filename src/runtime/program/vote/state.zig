@@ -766,7 +766,7 @@ pub const VoteState = struct {
                 false;
 
             if (less_than_last_voted_slot) {
-                i = std.math.add(usize, i, 1) catch return error.ArithmeticOverflow;
+                i = std.math.add(usize, i, 1) catch return InstructionError.ProgramArithmeticOverflow;
                 continue;
             }
 
@@ -774,17 +774,17 @@ pub const VoteState = struct {
             if (recent_vote_slots[i] !=
                 slot_hashes.entries[
                 std.math.sub(usize, j, 1) catch
-                    return error.ArithmeticOverflow
+                    return InstructionError.ProgramArithmeticOverflow
             ][0]) {
                 // Decrement `j` to find newer slots
-                j = std.math.sub(usize, j, 1) catch return error.ArithmeticOverflow;
+                j = std.math.sub(usize, j, 1) catch return InstructionError.ProgramArithmeticOverflow;
                 continue;
             }
 
             // 3) Once the hash for `s` is found, bump `s` to the next slot
             // in `vote_slots` and continue.
-            i = std.math.add(usize, i, 1) catch return error.ArithmeticOverflow;
-            j = std.math.sub(usize, j, 1) catch return error.ArithmeticOverflow;
+            i = std.math.add(usize, i, 1) catch return InstructionError.ProgramArithmeticOverflow;
+            j = std.math.sub(usize, j, 1) catch return InstructionError.ProgramArithmeticOverflow;
         }
 
         if (j == slot_hashes.entries.len) {
@@ -869,7 +869,7 @@ pub const VoteState = struct {
             // than the max number of confirmations this vote has seen
             const confirmation_count = vote.lockout.confirmation_count;
             if (stack_depth > std.math.add(usize, i, confirmation_count) catch
-                return error.ArithmeticOverflow)
+                return InstructionError.ProgramArithmeticOverflow)
             {
                 vote.lockout.confirmation_count +|= 1;
             }
@@ -1137,7 +1137,7 @@ pub const VoteState = struct {
             MAX_LOCKOUT_HISTORY,
         ).init(
             0,
-        ) catch return InstructionError.ArithmeticOverflow;
+        ) catch return InstructionError.ProgramArithmeticOverflow;
         // Note:
         //
         // 1) `proposed_lockouts` is sorted from oldest/smallest vote to newest/largest
@@ -1164,13 +1164,13 @@ pub const VoteState = struct {
                 proposed_lockouts_index > 0 and
                 proposed_vote_slot <= proposed_lockouts.*.items[
                 std.math.sub(usize, proposed_lockouts_index, 1) catch
-                    return error.ArithmeticOverflow
+                    return InstructionError.ProgramArithmeticOverflow
             ].slot) {
                 return VoteError.slots_not_ordered;
             }
             const ancestor_slot = slot_hashes.entries[
                 std.math.sub(usize, slot_hashes_index, 1) catch
-                    return error.ArithmeticOverflow
+                    return InstructionError.ProgramArithmeticOverflow
             ][0];
 
             // Find if this slot in the proposed vote state exists in the SlotHashes history
@@ -1192,7 +1192,7 @@ pub const VoteState = struct {
                             // Then filter it out
                             proposed_lockouts_indices_to_filter.append(
                                 @as(usize, proposed_lockouts_index),
-                            ) catch return InstructionError.ArithmeticOverflow;
+                            ) catch return InstructionError.ProgramArithmeticOverflow;
                         }
                         if (root_to_check) |new_proposed_root| {
                             // 1. Because `root_to_check.is_some()`, then we know that
@@ -1211,7 +1211,7 @@ pub const VoteState = struct {
                                 usize,
                                 proposed_lockouts_index,
                                 1,
-                            ) catch return InstructionError.ArithmeticOverflow;
+                            ) catch return InstructionError.ProgramArithmeticOverflow;
                         }
                         continue;
                     } else {
@@ -1228,7 +1228,7 @@ pub const VoteState = struct {
                 .gt => {
                     // Decrement `slot_hashes_index` to find newer slots in the SlotHashes history
                     slot_hashes_index = std.math.sub(usize, slot_hashes_index, 1) catch
-                        return InstructionError.ArithmeticOverflow;
+                        return InstructionError.ProgramArithmeticOverflow;
                     continue;
                 },
                 .eq => {
@@ -1242,9 +1242,9 @@ pub const VoteState = struct {
                             usize,
                             proposed_lockouts_index,
                             1,
-                        ) catch return InstructionError.ArithmeticOverflow;
+                        ) catch return InstructionError.ProgramArithmeticOverflow;
                         slot_hashes_index = std.math.sub(usize, slot_hashes_index, 1) catch
-                            return InstructionError.ArithmeticOverflow;
+                            return InstructionError.ProgramArithmeticOverflow;
                     }
                 },
             }
@@ -1296,7 +1296,7 @@ pub const VoteState = struct {
                     proposed_lockouts_indices_to_filter.get(filter_votes_index))
                 {
                     filter_votes_index = std.math.add(usize, filter_votes_index, 1) catch
-                        return InstructionError.ArithmeticOverflow;
+                        return InstructionError.ProgramArithmeticOverflow;
                     break :blk false;
                 } else {
                     break :blk true;
@@ -1304,7 +1304,7 @@ pub const VoteState = struct {
             };
 
             proposed_lockouts_index = std.math.add(usize, proposed_lockouts_index, 1) catch
-                return InstructionError.ArithmeticOverflow;
+                return InstructionError.ProgramArithmeticOverflow;
 
             if (!should_retain) {
                 _ = proposed_lockouts.*.orderedRemove(i);
@@ -1431,12 +1431,12 @@ pub const VoteState = struct {
                 if (current_vote.lockout.slot <= proposed_new_root) {
                     earned_credits = std.math.add(u64, earned_credits, self.creditsForVoteAtIndex(
                         current_vote_state_index,
-                    )) catch return InstructionError.ArithmeticOverflow;
+                    )) catch return InstructionError.ProgramArithmeticOverflow;
                     current_vote_state_index = std.math.add(
                         usize,
                         current_vote_state_index,
                         1,
-                    ) catch return InstructionError.ArithmeticOverflow;
+                    ) catch return InstructionError.ProgramArithmeticOverflow;
                     continue;
                 }
                 break;
@@ -1480,7 +1480,7 @@ pub const VoteState = struct {
                         usize,
                         current_vote_state_index,
                         1,
-                    ) catch return InstructionError.ArithmeticOverflow;
+                    ) catch return InstructionError.ProgramArithmeticOverflow;
                 },
                 .eq => {
                     // The new vote state should never have less lockout than
@@ -1499,13 +1499,13 @@ pub const VoteState = struct {
                         current_vote_state_index,
                         1,
                     ) catch
-                        return InstructionError.ArithmeticOverflow;
+                        return InstructionError.ProgramArithmeticOverflow;
                     new_vote_state_index = std.math.add(usize, new_vote_state_index, 1) catch
-                        return InstructionError.ArithmeticOverflow;
+                        return InstructionError.ProgramArithmeticOverflow;
                 },
                 .gt => {
                     new_vote_state_index = std.math.add(usize, new_vote_state_index, 1) catch
-                        return InstructionError.ArithmeticOverflow;
+                        return InstructionError.ProgramArithmeticOverflow;
                 },
             }
         }
