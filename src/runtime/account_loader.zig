@@ -125,7 +125,7 @@ fn loadTransactionAccountsInner(
 
     for (tx.msg.account_keys, 0..) |account_key, account_idx| {
         const is_instruction_account = account_in_instr[account_idx];
-        const is_writeable = tx.msg.isWriteable(account_idx);
+        const is_writable = tx.msg.isWriteable(account_idx);
 
         var account_data_size: usize = 0;
 
@@ -140,7 +140,7 @@ fn loadTransactionAccountsInner(
         // case 2: account is not writeable, not a program account, and may be in loaded program cache.
         //         https://github.com/anza-xyz/agave/pull/3548 > "This "optimization" actually costs us performance"
         if (!is_instruction_account and
-            !is_writeable and
+            !is_writable and
             !disable_account_loader_special_case and
             isMaybeInLoadedProgramCache(account_key))
         {
@@ -162,7 +162,7 @@ fn loadTransactionAccountsInner(
 
         defer retval.accounts[account_idx] = found_shared_account;
         account_data_size += found_shared_account.data.len;
-        if (is_writeable) {
+        if (is_writable) {
             const collected = bank.rentCollector().collectFromExistingAccount(
                 &account_key,
                 &found_shared_account,
@@ -248,10 +248,10 @@ fn constructInstructionsAccount(
     allocator: std.mem.Allocator,
     tx: *const sig.core.Transaction,
 ) !AccountSharedData {
-    const BorrowedInstruction = runtime.sysvar.instruction.BorrowedInstruction;
-    const BorrowedAccountMeta = runtime.sysvar.instruction.BorrowedAccountMeta;
+    const Instruction = sig.core.Instruction;
+    const InstructionAccount = sig.core.instruction.InstructionAccount;
 
-    var decompiled_instructions = try std.ArrayList(BorrowedInstruction).initCapacity(
+    var decompiled_instructions = try std.ArrayList(Instruction).initCapacity(
         allocator,
         tx.msg.instructions.len,
     );
@@ -262,7 +262,7 @@ fn constructInstructionsAccount(
 
     for (tx.msg.instructions) |instruction| {
         const accounts_meta = try allocator.alloc(
-            BorrowedAccountMeta,
+            InstructionAccount,
             instruction.account_indexes.len,
         );
         errdefer comptime unreachable;
@@ -271,7 +271,7 @@ fn constructInstructionsAccount(
             account_meta.* = .{
                 .pubkey = tx.msg.account_keys[account_idx],
                 .is_signer = tx.msg.isSigner(account_idx),
-                .is_writeable = tx.msg.isWriteable(account_idx),
+                .is_writable = tx.msg.isWriteable(account_idx),
             };
         }
 
@@ -451,10 +451,10 @@ test "load accounts rent paid" {
         .data = .{ .unowned_allocation = instruction_data },
         .lamports = 0,
         .executable = true,
-        .owner = runtime.program.bpf_loader_program.v1,
+        .owner = runtime.program.bpf_loader_program.v1.ID,
         .rent_epoch = 0,
     });
-    try bank.accounts.put(allocator, runtime.program.bpf_loader_program.v1, sig.core.Account{
+    try bank.accounts.put(allocator, runtime.program.bpf_loader_program.v1.ID, sig.core.Account{
         .data = .{ .empty = .{ .len = 0 } },
         .lamports = 0,
         .executable = true,

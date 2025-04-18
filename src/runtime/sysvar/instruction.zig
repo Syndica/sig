@@ -1,23 +1,12 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 const Pubkey = sig.core.Pubkey;
-
-pub const BorrowedAccountMeta = struct {
-    pubkey: Pubkey,
-    is_signer: bool,
-    is_writeable: bool,
-};
-
-pub const BorrowedInstruction = struct {
-    program_id: Pubkey,
-    accounts: []const BorrowedAccountMeta,
-    data: []const u8,
-};
+const Instruction = sig.core.Instruction;
 
 // [agave] solana-instructions-sysvar-2.2.1/src/lib.rs:77
 pub const InstructionsSysvarAccountMeta = packed struct(u8) {
     is_signer: bool,
-    is_writeable: bool,
+    is_writable: bool,
     _: u6 = 0, // padding
 };
 
@@ -30,14 +19,14 @@ pub const InstructionsSysvarAccountMeta = packed struct(u8) {
 //
 // Each instruction is then encoded as:
 //   0..2 - num_accounts
-//   2 - meta_byte -> (bit 0 signer, bit 1 is_writeable)
+//   2 - meta_byte -> (bit 0 signer, bit 1 is_writable)
 //   3..35 - pubkey - 32 bytes
 //   35..67 - program_id
 //   67..69 - data len - u16
 //   69..data_len - data
 pub fn serializeInstructions(
     allocator: std.mem.Allocator,
-    instructions: []const BorrowedInstruction,
+    instructions: []const Instruction,
 ) !std.ArrayList(u8) {
     if (instructions.len > std.math.maxInt(u16)) unreachable;
 
@@ -63,7 +52,7 @@ pub fn serializeInstructions(
         for (instruction.accounts) |account_meta| {
             const flags: InstructionsSysvarAccountMeta = .{
                 .is_signer = account_meta.is_signer,
-                .is_writeable = account_meta.is_writeable,
+                .is_writable = account_meta.is_writable,
             };
             try data.append(@bitCast(flags));
             try data.appendSlice(&account_meta.pubkey.data);
@@ -90,32 +79,32 @@ test serializeInstructions {
     const id2 = Pubkey.initRandom(prng.random());
     const id3 = Pubkey.initRandom(prng.random());
 
-    const instructions = [_]BorrowedInstruction{
+    const instructions = [_]Instruction{
         .{
             .program_id = program_id0,
             .accounts = &.{
-                .{ .pubkey = id0, .is_signer = false, .is_writeable = false },
+                .{ .pubkey = id0, .is_signer = false, .is_writable = false },
             },
             .data = &.{0},
         },
         .{
             .program_id = program_id0,
             .accounts = &.{
-                .{ .pubkey = id1, .is_signer = true, .is_writeable = false },
+                .{ .pubkey = id1, .is_signer = true, .is_writable = false },
             },
             .data = &.{0},
         },
         .{
             .program_id = program_id1,
             .accounts = &.{
-                .{ .pubkey = id2, .is_signer = false, .is_writeable = true },
+                .{ .pubkey = id2, .is_signer = false, .is_writable = true },
             },
             .data = &.{0},
         },
         .{
             .program_id = program_id1,
             .accounts = &.{
-                .{ .pubkey = id3, .is_signer = true, .is_writeable = true },
+                .{ .pubkey = id3, .is_signer = true, .is_writable = true },
             },
             .data = &.{0},
         },
