@@ -102,18 +102,6 @@ const BlockhashStatus = union(enum) {
     pub const DEFAULT = BlockhashStatus{ .uninitialized = {} };
 };
 
-// pub const TowerError = union(enum) {
-//     // TODO add io err
-//     io_error,
-//     // TODO add bincode
-//     serialize_error,
-//     invalid_signature,
-//     wrong_tower: []const u8,
-//     too_old_tower: struct { Slot, Slot },
-//     fatally_inconsistent: []const u8,
-//     hard_fork: Slot,
-// };
-
 pub const TowerError = error{
     IoError,
     SerializeError,
@@ -1034,7 +1022,14 @@ pub const Tower = struct {
                 if (slot_history.check(last_voted_slot) == .too_old) {
                     // We could try hard to anchor with other older votes, but opt to simplify the
                     // following logic
-                    // TODO error to enum
+                    self
+                        .logger
+                        .err()
+                        .logf(
+                        "The tower is too old: newest slot in tower ({}) " ++
+                            "<< oldest slot in available history ({})",
+                        .{ last_voted_slot, slot_history.oldest() },
+                    );
                     return TowerError.TooOldTower;
                 }
 
@@ -1122,7 +1117,11 @@ pub const Tower = struct {
                 maybe_anchored_slot = slot_in_tower;
             } else if (maybe_anchored_slot != null and check == .not_found) {
                 // this can't happen unless we're fed with bogus snapshot
-                // TODO Agave returns error with data.
+                self
+                    .logger
+                    .err()
+                    .log("The tower is fatally inconsistent with blockstore." ++
+                    "Possible causes: diverged ancestors");
                 return TowerError.FatallyInconsistent;
             }
 
@@ -1130,7 +1129,7 @@ pub const Tower = struct {
                 still_in_future = false;
             } else if (!still_in_future and check == .future) {
                 // really odd cases: bad ordered votes?
-                // TODO Agave returns error with data.
+                self.logger.err().log("The tower is fatally inconsistent with blockstore");
                 return TowerError.FatallyInconsistent;
             }
 
@@ -1138,7 +1137,11 @@ pub const Tower = struct {
                 past_outside_history = true;
             } else if (past_outside_history and check != .too_old) {
                 // really odd cases: bad ordered votes?
-                // TODO Agave returns error with data.
+                self
+                    .logger
+                    .err()
+                    .log("The tower is fatally inconsistent with blockstore." ++
+                    "Possible causes: not too old once after got too old");
                 return TowerError.FatallyInconsistent;
             }
 
@@ -1162,7 +1165,11 @@ pub const Tower = struct {
         // Check for errors if not anchored
         if (maybe_anchored_slot == null) {
             // this error really shouldn't happen unless ledger/tower is corrupted
-            // TODO Agave returns error with data.
+            self
+                .logger
+                .err()
+                .log("The tower is fatally inconsistent with blockstore." ++
+                "Possible causes: no common slot for rooted tower");
             return TowerError.FatallyInconsistent;
         }
 
