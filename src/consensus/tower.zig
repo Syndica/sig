@@ -996,14 +996,16 @@ pub const Tower = struct {
         });
         std.debug.assert(slot_history.check(replayed_root) == .found);
 
+        var default_vote = try VoteTransaction.default(allocator);
+        defer default_vote.deinit(allocator);
+
+        var default_tower = VoteTransaction{ .tower_sync = try TowerSync.default(allocator) };
+        defer default_tower.deinit(allocator);
+
         std.debug.assert(
-            self.last_vote.eql(&VoteTransaction{
-                .vote_state_update = try VoteStateUpdate.default(allocator),
-            }) and
-                self.vote_state.votes.items.len == 0 or
-                (self.last_vote.eql(&VoteTransaction{
-                .tower_sync = try TowerSync.default(allocator),
-            }) and
+            (self.last_vote.eql(&default_vote) and
+                self.vote_state.votes.items.len == 0) or
+                (self.last_vote.eql(&default_tower) and
                 self.vote_state.votes.items.len == 0) or
                 (self.vote_state.votes.items.len > 0),
         );
@@ -1074,7 +1076,6 @@ pub const Tower = struct {
         }
     }
 
-    // TODO revisit
     fn adjustLockoutsWithSlotHistory(
         self: *Tower,
         allocator: std.mem.Allocator,
