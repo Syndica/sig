@@ -1003,7 +1003,7 @@ fn accountDataRegion(
     memory_map: *const MemoryMap,
     vm_data_addr: u64,
     original_data_len: usize,
-) !(?*const memory.Region) {
+) !(?*memory.Region) {
     if (original_data_len == 0) {
         return null;
     }
@@ -1014,14 +1014,14 @@ fn accountDataRegion(
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/master/transaction-context/src/lib.rs#L47
-const MAX_PERMITTED_DATA_INCREASE = 1024 * 10;
+const MAX_PERMITTED_DATA_INCREASE: usize = 1024 * 10;
 
 fn accountReallocRegion(
     memory_map: *const MemoryMap,
     vm_data_addr: u64,
     original_data_len: usize,
     is_loader_deprecated: bool,
-) !(?*const memory.Region) {
+) !(?*memory.Region) {
     if (is_loader_deprecated) {
         return null;
     }
@@ -1053,7 +1053,7 @@ fn updateCallerAccount(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
     memory_map: *const MemoryMap,
-    caller_account: CallerAccount,
+    caller_account: *CallerAccount,
     callee_account: *BorrowedAccount,
     is_loader_deprecated: bool,
     direct_mapping: bool,
@@ -1088,13 +1088,16 @@ fn updateCallerAccount(
             // to update the MemoryRegion's length.
             const callee_ptr = callee_account.constAccountData().ptr;
             if (region.constSlice().ptr != callee_ptr) {
-                region.host_addr = callee_ptr;
+                region.host_memory = switch (region.host_memory) {
+                    .mutable => .{ .mutable = @constCast(callee_ptr)[0..region.constSlice().len] },
+                    .constant => .{ .constant = callee_ptr[0..region.constSlice().len] },
+                };
                 zero_all_mapped_spare_capacity = true;
             }
         }
     }
 
-    const prev_len = caller_account.ref_to_len_in_vm.get(.constant).*;
+    const prev_len = (try caller_account.ref_to_len_in_vm.get(.constant)).*;
     const post_len = callee_account.constAccountData().len;
     if (prev_len != post_len) {
         const max_increase =
@@ -1148,9 +1151,9 @@ fn updateCallerAccount(
                         is_loader_deprecated,
                     )).?; // unwrap here is fine, we already asserted !is_loader_deprecated
 
-                    const original_state = region.state;
-                    region.state = .mutable;
-                    defer region.state = original_state;
+                    const original = region.host_memory;
+                    region.host_memory = .{ .mutable = @constCast(region.constSlice()) };
+                    defer region.host_memory = original;
 
                     // We need to zero the unused space in the realloc region, starting after the
                     // last byte of the new data which might be > original_data_len.
@@ -1188,7 +1191,7 @@ fn updateCallerAccount(
             );
         }
         // This is the len field in the AccountInfo::data slice.
-        caller_account.ref_to_len_in_vm.get(.mutable).* = post_len;
+        (try caller_account.ref_to_len_in_vm.get(.mutable)).* = post_len;
 
         // This is the len field in the serialized parameters
         const serialized_len_ptr = try translateType(
@@ -1254,9 +1257,9 @@ fn updateCallerAccount(
                     is_loader_deprecated,
                 )).?; // unwrapping here is fine, we asserted !is_loader_deprecated
 
-                const original_state = region.state;
-                region.state = .mutable;
-                defer region.state = original_state;
+                const original = region.host_memory;
+                region.host_memory = .{ .mutable = @constCast(region.constSlice()) };
+                defer region.host_memory = original;
 
                 break :blk try translateSlice(
                     u8,
@@ -1288,7 +1291,7 @@ fn updateCallerAccount(
 fn cpiCommon(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
-    memory_map: *const MemoryMap,
+    memory_map: *MemoryMap,
     comptime AccountInfoType: type,
     instruction_addr: u64,
     account_infos_addr: u64,
@@ -1374,7 +1377,12 @@ fn cpiCommon(
                 caller_account.vm_data_addr,
                 caller_account.original_data_len,
             )) |region| {
-                try region.state.set(Serializer.getAccountDataRegionMemoryState(&callee_account));
+                const shared = false; // TODO: callee_account.account.data is not ref-counted
+                const writable = callee_account.checkDataIsMutable() == null;
+                const data: []u8 = @constCast(region.constSlice());
+
+                region.host_memory =
+                    if (writable and !shared) .{ .mutable = data } else .{ .constant = data };
             }
 
             if (try accountReallocRegion(
@@ -1383,15 +1391,17 @@ fn cpiCommon(
                 caller_account.original_data_len,
                 is_loader_deprecated,
             )) |region| {
-                try region.state.set(
-                    if (callee_account.checkDataIsMutable() == null) .mutable else .constant,
-                );
+                const writable = callee_account.checkDataIsMutable() == null;
+                const data: []u8 = @constCast(region.constSlice());
+                region.host_memory = if (writable) .{ .mutable = data } else .{ .constant = data };
             }
         }
     }
 
     for (accounts.slice()) |acc| {
-        const caller_account: CallerAccount = acc.caller_account orelse continue;
+        if (acc.caller_account == null) continue;
+
+        const caller_account: *CallerAccount = &acc.caller_account.?;
         var callee_account = try ic.borrowInstructionAccount(acc.index_in_caller);
         defer callee_account.release();
 
@@ -1961,32 +1971,122 @@ test "vm.syscalls.cpi: translateSigners" {
     try std.testing.expect(translated_signers.get(0).equals(&derive_key));
 }
 
-fn testCallerAccountContext(
-    allocator: std.mem.Allocator,
-    prng: std.Random,
-    account_data: []const u8,
-    caller_account_info: struct {
+const TestCallerAccount = struct {
+    lamports: u64,
+    owner: Pubkey,
+    vm_addr: u64,
+    account_len: u64,
+    len: u64,
+    regions: []memory.Region,
+    buffer: []u8,
+    direct_mapping: bool,
+    memory_map: MemoryMap,
+
+    fn init(
+        allocator: std.mem.Allocator,
         lamports: u64,
         owner: Pubkey,
         vm_addr: u64,
         data: []const u8,
         direct_mapping: bool,
-    },
-) !struct { TestContext, MemoryMap, CallerAccount } {
-    @compileError("TODO");
-}
+    ) !TestCallerAccount {
+        const size = @sizeOf(u64) +
+            (data.len * @intFromBool(!direct_mapping)) +
+            MAX_PERMITTED_DATA_INCREASE;
+
+        const buffer = try allocator.alloc(u8, size);
+        errdefer allocator.free(buffer);
+
+        // write [len][data if not direct mapping]
+        buffer[0..8].* = @bitCast(@as(u64, data.len));
+        if (!direct_mapping) {
+            @memcpy(buffer[8..][0..data.len], data);
+        }
+
+        // Setup regions
+        var regions: std.BoundedArray(memory.Region, 3) = .{};
+
+        var region_addr = vm_addr;
+        const region_size = @sizeOf(u64) +
+            (data.len + MAX_PERMITTED_DATA_INCREASE) * @intFromBool(!direct_mapping);
+
+        // region for [len][data if not direct mapping]
+        try regions.append(memory.Region.init(.mutable, buffer[0..region_size], region_addr));
+        region_addr += region_size;
+
+        var account_len: usize = buffer.len;
+        if (direct_mapping) {
+            // region for directly mapped data
+            try regions.append(memory.Region.init(.constant, data, region_addr));
+            region_addr += data.len;
+            // region for realloc padding
+            try regions.append(memory.Region.init(.mutable, buffer[@sizeOf(u64)..], region_addr));
+        } else {
+            account_len = @sizeOf(u64) + data.len;
+        }
+
+        const pinned_regions = try allocator.dupe(memory.Region, regions.slice());
+        errdefer allocator.free(pinned_regions);
+
+        return .{
+            .lamports = lamports,
+            .owner = owner,
+            .vm_addr = vm_addr,
+            .account_len = account_len,
+            .len = data.len,
+            .regions = pinned_regions,
+            .buffer = buffer,
+            .direct_mapping = direct_mapping,
+            .memory_map = try MemoryMap.init(
+                allocator,
+                pinned_regions,
+                .v3,
+                .{ .aligned_memory_mapping = false },
+            ),
+        };
+    }
+
+    fn deinit(self: *TestCallerAccount, allocator: std.mem.Allocator) void {
+        self.memory_map.deinit(allocator);
+        allocator.free(self.regions);
+        allocator.free(self.buffer);
+    }
+
+    fn slice(self: *const TestCallerAccount) []const u8 {
+        return self.buffer[@sizeOf(u64)..];
+    }
+
+    fn getCallerAccount(self: *TestCallerAccount) CallerAccount {
+        const data = self.buffer[@sizeOf(u64)..self.account_len];
+        return .{
+            .lamports = &self.lamports,
+            .owner = &self.owner,
+            .original_data_len = self.len,
+            .serialized_data = if (self.direct_mapping) &.{} else data,
+            .vm_data_addr = self.vm_addr + @sizeOf(u64),
+            .ref_to_len_in_vm = .{ .translated = &self.len },
+        };
+    }
+};
 
 test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    const ctx, const memory_map, const caller_account = try testCallerAccountContext(
-        allocator,
-        prng.random(),
-        "instruction data",
-        .{},
-    );
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
     defer ctx.deinit(allocator);
+    const account = ctx.getAccount();
+
+    var ca = try TestCallerAccount.init(
+        allocator,
+        1234,
+        account.owner,
+        0xffffffff << 32,
+        account.data,
+        false,
+    );
+    defer ca.deinit(allocator);
+    var caller_account = ca.getCallerAccount();
 
     var callee_account = try ctx.ic.borrowInstructionAccount(ctx.getAccount().index);
     defer callee_account.release();
@@ -1997,8 +2097,8 @@ test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
     try updateCallerAccount(
         allocator,
         &ctx.ic,
-        &memory_map,
-        caller_account,
+        &ca.memory_map,
+        &caller_account,
         &callee_account,
         false, // is loader account
         false, // direct mapping
