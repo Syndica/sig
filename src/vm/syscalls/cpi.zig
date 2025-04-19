@@ -1995,6 +1995,7 @@ const TestCallerAccount = struct {
 
         const buffer = try allocator.alloc(u8, size);
         errdefer allocator.free(buffer);
+        @memset(buffer, 0);
 
         // write [len][data if not direct mapping]
         buffer[0..8].* = @bitCast(@as(u64, data.len));
@@ -2107,4 +2108,118 @@ test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
 
     try std.testing.expectEqual(caller_account.lamports.*, 42);
     try std.testing.expect(caller_account.owner.equals(&callee_account.account.owner));
+}
+
+test "vm.syscalls.cpi: updateCallerAccount: data" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
+    defer ctx.deinit(allocator);
+    const account = ctx.getAccount();
+
+    var ca = try TestCallerAccount.init(
+        allocator,
+        account.lamports,
+        account.owner,
+        account.data,
+        false, // direct mapping
+    );
+    defer ca.deinit(allocator);
+    var caller_account = ca.getCallerAccount();
+
+    var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
+    defer callee_account.release();
+
+    const len_ptr: *align(1) u64 = @ptrCast(ca.buffer[0..8]);
+    const original_data_len = account.data.len;
+
+    for ([_]struct { []const u8, usize }{
+        .{ "foo", MAX_PERMITTED_DATA_INCREASE + 3 },
+        .{ "foobaz", MAX_PERMITTED_DATA_INCREASE },
+        .{ "foobazbad", MAX_PERMITTED_DATA_INCREASE - 3 },
+    }) |entry| {
+        const new_value, const realloc_size = entry;
+
+        try std.testing.expect(std.mem.eql(
+            u8,
+            caller_account.serialized_data,
+            callee_account.account.data,
+        ));
+
+        // Set to new slice.
+        try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, new_value);
+        try updateCallerAccount(
+            allocator,
+            &ctx.ic,
+            &ca.memory_map,
+            &caller_account,
+            &callee_account,
+            false, // is_loader_deprecated
+            false, // direct_mapping
+        );
+
+        const size = callee_account.account.data.len;
+        try std.testing.expectEqual(size, (try caller_account.ref_to_len_in_vm.get(.constant)).*);
+        try std.testing.expectEqual(size, len_ptr.*);
+        try std.testing.expectEqual(size, caller_account.serialized_data.len);
+        try std.testing.expect(std.mem.eql(
+            u8,
+            callee_account.account.data,
+            caller_account.serialized_data[0..size],
+        ));
+
+        const realloced = ca.slice()[size..];
+        try std.testing.expectEqual(realloced.len, realloc_size);
+        try std.testing.expect(std.mem.allEqual(u8, realloced, 0));
+    }
+
+    // Extend to maximum.
+    try callee_account.setDataLength(
+        allocator,
+        &ctx.tc.accounts_resize_delta,
+        original_data_len + MAX_PERMITTED_DATA_INCREASE,
+    );
+    try updateCallerAccount(
+        allocator,
+        &ctx.ic,
+        &ca.memory_map,
+        &caller_account,
+        &callee_account,
+        false, // is_loader_deprecated
+        false, // direct_mapping
+    );
+
+    const realloced = ca.slice()[callee_account.account.data.len..];
+    try std.testing.expectEqual(realloced.len, 0);
+    try std.testing.expect(std.mem.allEqual(u8, realloced, 0));
+
+    // Extend past maximum.
+    try callee_account.setDataLength(
+        allocator,
+        &ctx.tc.accounts_resize_delta,
+        original_data_len + MAX_PERMITTED_DATA_INCREASE + 1,
+    );
+    try std.testing.expectError(InstructionError.InvalidRealloc, updateCallerAccount(
+        allocator,
+        &ctx.ic,
+        &ca.memory_map,
+        &caller_account,
+        &callee_account,
+        false, // is_loader_deprecated
+        false, // direct_mapping
+    ));
+
+    // close the account
+    try callee_account.setDataLength(allocator, &ctx.tc.accounts_resize_delta, 0);
+    try updateCallerAccount(
+        allocator,
+        &ctx.ic,
+        &ca.memory_map,
+        &caller_account,
+        &callee_account,
+        false, // is_loader_deprecated
+        false, // direct_mapping
+    );
+    try std.testing.expectEqual(callee_account.account.data.len, 0);
 }
