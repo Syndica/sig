@@ -1939,6 +1939,45 @@ test "HeaviestSubtreeForkChoice.markForkValidandidate_mark_valid_then_ancestor_i
     );
 }
 
+test "HeaviestSubtreeForkChoice.isStrictAncestor_maybe_ancestor_same_as_key" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    const key = SlotAndHash{ .slot = 10, .hash = Hash.ZEROES };
+
+    try std.testing.expect(!fork_choice.isStrictAncestor(&key, &key));
+}
+
+test "HeaviestSubtreeForkChoice.isStrictAncestor_maybe_ancestor_slot_greater_than_key" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    const key = SlotAndHash{ .slot = 10, .hash = Hash.ZEROES };
+    const maybe_ancestor = SlotAndHash{ .slot = 11, .hash = Hash.ZEROES };
+
+    try std.testing.expect(!fork_choice.isStrictAncestor(&maybe_ancestor, &key));
+}
+
+test "HeaviestSubtreeForkChoice.isStrictAncestor_not_maybe_ancestor" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    const key = SlotAndHash{ .slot = 5, .hash = Hash.ZEROES };
+    const maybe_ancestor = SlotAndHash{ .slot = 4, .hash = Hash.ZEROES };
+
+    try std.testing.expect(!fork_choice.isStrictAncestor(&maybe_ancestor, &key));
+}
+
+test "HeaviestSubtreeForkChoice.isStrictAncestor_is_maybe_ancestor" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    const key = SlotAndHash{ .slot = 5, .hash = Hash.ZEROES };
+    const maybe_ancestor = SlotAndHash{ .slot = 1, .hash = Hash.ZEROES };
+
+    try std.testing.expect(fork_choice.isStrictAncestor(&maybe_ancestor, &key));
+}
+
 pub fn forkChoiceForTest(
     allocator: std.mem.Allocator,
     forks: []const TreeNode,
