@@ -775,12 +775,11 @@ pub const ForkChoice = struct {
         if (maybe_ancestor_key.slot > node_key.slot) {
             return false;
         }
-        // TODO Is this idiomatic/correct?
-        var self_copy = self.*;
-        var ancestor_iterator = self_copy.ancestorIterator(node_key.*);
-        while (ancestor_iterator.next()) |ancenstor| {
-            if (ancenstor.slot == maybe_ancestor_key.slot and
-                ancenstor.hash.eql(maybe_ancestor_key.hash))
+
+        var ancestor_iterator = self.ancestorIterator(node_key.*);
+        while (ancestor_iterator.next()) |ancestor| {
+            if (ancestor.slot == maybe_ancestor_key.slot and
+                ancestor.hash.eql(maybe_ancestor_key.hash))
             {
                 return true;
             }
@@ -1090,7 +1089,7 @@ pub const ForkChoice = struct {
     }
 
     fn ancestorIterator(
-        self: *ForkChoice,
+        self: *const ForkChoice,
         start_slot_hash_key: SlotAndHash,
     ) AncestorIterator {
         return AncestorIterator{
