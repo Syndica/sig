@@ -12,7 +12,6 @@ const UnixTimestamp = i64;
 pub const VoteTransaction = union(enum) {
     vote: Vote,
     vote_state_update: VoteStateUpdate,
-    // TODO Check the serialisation for the difference with compact_
     compact_vote_state_update: VoteStateUpdate,
     tower_sync: TowerSync,
 
@@ -106,9 +105,77 @@ pub const VoteTransaction = union(enum) {
     }
 
     pub fn eql(self: *const VoteTransaction, other: *const VoteTransaction) bool {
-        // TODO implement
-        _ = self;
-        _ = other;
-        return true;
+        if (@intFromEnum(self.*) != @intFromEnum(other.*)) {
+            return false;
+        }
+
+        return switch (self.*) {
+            .vote => |self_vote| {
+                const other_vote = other.vote;
+                return std.mem.eql(Slot, self_vote.slots, other_vote.slots) and
+                    self_vote.hash.eql(other_vote.hash) and
+                    self_vote.timestamp == other_vote.timestamp;
+            },
+            .vote_state_update => |self_vsu| {
+                const other_vsu = other.vote_state_update;
+                if (self_vsu.lockouts.items.len != other_vsu.lockouts.items.len or
+                    !self_vsu.hash.eql(other_vsu.hash) or
+                    self_vsu.timestamp != other_vsu.timestamp)
+                {
+                    return false;
+                }
+                for (
+                    self_vsu.lockouts.items,
+                    other_vsu.lockouts.items,
+                ) |self_lockout, other_lockout| {
+                    if (self_lockout.slot != other_lockout.slot or
+                        self_lockout.confirmation_count != other_lockout.confirmation_count)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            },
+            .compact_vote_state_update => |self_vsu| {
+                const other_vsu = other.compact_vote_state_update;
+                if (self_vsu.lockouts.items.len != other_vsu.lockouts.items.len or
+                    !self_vsu.hash.eql(other_vsu.hash) or
+                    self_vsu.timestamp != other_vsu.timestamp)
+                {
+                    return false;
+                }
+                for (
+                    self_vsu.lockouts.items,
+                    other_vsu.lockouts.items,
+                ) |self_lockout, other_lockout| {
+                    if (self_lockout.slot != other_lockout.slot or
+                        self_lockout.confirmation_count != other_lockout.confirmation_count)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            },
+            .tower_sync => |self_ts| {
+                const other_ts = other.tower_sync;
+                if (self_ts.lockouts.items.len != other_ts.lockouts.items.len or
+                    !self_ts.hash.eql(other_ts.hash) or
+                    self_ts.timestamp != other_ts.timestamp)
+                {
+                    return false;
+                }
+                for (
+                    self_ts.lockouts.items,
+                    other_ts.lockouts.items,
+                ) |self_lockout, other_lockout| {
+                    if (self_lockout.slot != other_lockout.slot or
+                        self_lockout.confirmation_count != other_lockout.confirmation_count)
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            },
+        };
     }
 };
