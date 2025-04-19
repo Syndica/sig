@@ -179,3 +179,162 @@ pub const VoteTransaction = union(enum) {
         };
     }
 };
+
+const Lockout = sig.runtime.program.vote_program.state.Lockout;
+test "vote_transaction.VoteTransaction - default initialization" {
+    var vote_transaction = try VoteTransaction.default(std.testing.allocator);
+    defer vote_transaction.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(
+        VoteTransaction{ .tower_sync = try TowerSync.default(std.testing.allocator) },
+        vote_transaction,
+    );
+}
+
+test "vote_transaction.VoteTransaction - variant equality" {
+    // Test vote equality
+    const vote1 = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{ 1, 2, 3 },
+        .hash = Hash.ZEROES,
+        .timestamp = 100,
+    } };
+    const vote2 = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{ 1, 2, 3 },
+        .hash = Hash.ZEROES,
+        .timestamp = 100,
+    } };
+    const vote_diff = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{ 1, 2 },
+        .hash = Hash.ZEROES,
+        .timestamp = 100,
+    } };
+    try std.testing.expect(vote1.eql(&vote2));
+    try std.testing.expect(!vote1.eql(&vote_diff));
+
+    // Test vote_state_update equality
+    var visual_state_update1 = VoteTransaction{ .vote_state_update = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(std.testing.allocator, 3),
+        .hash = Hash.ZEROES,
+        .timestamp = 200,
+        .root = 1,
+    } };
+    defer visual_state_update1.deinit(std.testing.allocator);
+    visual_state_update1.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 1, .confirmation_count = 1 },
+    );
+    visual_state_update1.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 2, .confirmation_count = 2 },
+    );
+
+    var visual_state_update2 = VoteTransaction{ .vote_state_update = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(std.testing.allocator, 3),
+        .hash = Hash.ZEROES,
+        .timestamp = 200,
+        .root = 1,
+    } };
+    defer visual_state_update2.deinit(std.testing.allocator);
+    visual_state_update2.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 1, .confirmation_count = 1 },
+    );
+    visual_state_update2.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 2, .confirmation_count = 2 },
+    );
+
+    try std.testing.expect(visual_state_update1.eql(&visual_state_update2));
+
+    // Test different variant inequality
+    try std.testing.expect(!vote1.eql(&visual_state_update1));
+}
+
+test "vote_transaction.VoteTransaction - timestamp operations" {
+    const vote = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{1},
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    } };
+
+    try std.testing.expectEqual(@as(?UnixTimestamp, null), vote.timestamp());
+
+    var mut_vote = vote;
+    mut_vote.setTimestamp(100);
+    try std.testing.expectEqual(@as(?UnixTimestamp, 100), mut_vote.timestamp());
+}
+
+test "vote_transaction.VoteTransaction - lastVotedSlot" {
+    const empty_vote = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{},
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    } };
+    try std.testing.expectEqual(null, empty_vote.lastVotedSlot());
+
+    const vote = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{ 1, 2, 3 },
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    } };
+    try std.testing.expectEqual(3, vote.lastVotedSlot());
+
+    var vote_state_update = VoteTransaction{ .vote_state_update = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout)
+            .initCapacity(std.testing.allocator, 2),
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .root = 100,
+    } };
+    defer vote_state_update.deinit(std.testing.allocator);
+    vote_state_update.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 10, .confirmation_count = 1 },
+    );
+    vote_state_update.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 20, .confirmation_count = 2 },
+    );
+    try std.testing.expectEqual(20, vote_state_update.lastVotedSlot());
+}
+
+test "vote_transaction.VoteTransaction - slot access" {
+    const vote = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{ 10, 20, 30 },
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    } };
+    try std.testing.expectEqual(10, vote.slot(0));
+    try std.testing.expectEqual(20, vote.slot(1));
+    try std.testing.expectEqual(30, vote.slot(2));
+}
+
+test "vote_transaction.VoteTransaction - length" {
+    const vote = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{ 1, 2, 3 },
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    } };
+    try std.testing.expectEqual(3, vote.len());
+
+    var vote_state_update = VoteTransaction{ .vote_state_update = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout)
+            .initCapacity(std.testing.allocator, 2),
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .root = 100,
+    } };
+    defer vote_state_update.deinit(std.testing.allocator);
+
+    vote_state_update.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 1, .confirmation_count = 1 },
+    );
+    vote_state_update.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 2, .confirmation_count = 2 },
+    );
+    try std.testing.expectEqual(2, vote_state_update.len());
+}
+
+test "vote_transaction.VoteTransaction - hash" {
+    const test_hash = Hash.ZEROES;
+    const vote = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{},
+        .hash = test_hash,
+        .timestamp = null,
+    } };
+    try std.testing.expect(test_hash.eql(vote.hash()));
+}
