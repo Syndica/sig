@@ -26,6 +26,24 @@ pub const SlotHistory = struct {
         sig.bincode.free(allocator, self);
     }
 
+    pub fn add(self: *SlotHistory, slot: u64) void {
+        if (slot > self.next_slot and
+            slot - self.next_slot >= MAX_ENTRIES)
+        {
+            const masks_to_clear = (MAX_ENTRIES + @bitSizeOf(u64) - 1) / @bitSizeOf(u64);
+            @memset(self.bits.masks[0..masks_to_clear], 0);
+        } else {
+            if (self.next_slot <= slot) {
+                for (self.next_slot..slot) |skipped| {
+                    self.bits.unset(skipped % MAX_ENTRIES);
+                }
+            }
+        }
+
+        self.bits.set(slot % MAX_ENTRIES);
+        self.next_slot = slot + 1;
+    }
+
     pub fn check(self: *const SlotHistory, slot: Slot) SlotCheckResult {
         if (slot > self.newest()) {
             return SlotCheckResult.future;
