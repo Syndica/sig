@@ -7,7 +7,6 @@ const Account = sig.core.Account;
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
 
 pub const TowerVoteState = struct {
-    // TODO confirm if this can be a slice
     votes: std.ArrayListUnmanaged(Lockout),
     root_slot: ?Slot,
 
