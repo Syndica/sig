@@ -2841,6 +2841,45 @@ test "tower: adjust lockouts after replay out of order" {
     try std.testing.expectError(TowerError.FatallyInconsistentReplayOutOfOrder, result);
 }
 
+test "tower: adjust lockouts after replay out of order via clearing history" {
+    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    defer tower.deinit(std.testing.allocator);
+
+    try tower.vote_state.votes.append(
+        std.testing.allocator,
+        Lockout{ .slot = 13, .confirmation_count = 1 },
+    );
+
+    try tower.vote_state.votes.append(
+        std.testing.allocator,
+        Lockout{ .slot = 14, .confirmation_count = 1 },
+    );
+
+    const slots = [_]Slot{14};
+    const vote = Vote{
+        .slots = &slots,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    };
+
+    tower.last_vote = VoteTransaction{ .vote = vote };
+    // Triggers clearning of votes
+    tower.initializeRoot(MAX_ENTRIES * 2);
+
+    var slot_history = try createTestSlotHistory(std.testing.allocator);
+    defer slot_history.bits.deinit(std.testing.allocator);
+    slot_history.add(@as(Slot, 0));
+    slot_history.add(@as(Slot, 2));
+
+    const result = tower.adjustLockoutsAfterReplay(
+        std.testing.allocator,
+        2,
+        &slot_history,
+    );
+
+    try std.testing.expectError(TowerError.FatallyInconsistentReplayOutOfOrder, result);
+}
+
 test "tower: adjust lockouts after replay reversed votes" {
     var tower = try createTestTower(std.testing.allocator, 10, 0.9);
     defer tower.deinit(std.testing.allocator);
