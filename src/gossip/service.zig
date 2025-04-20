@@ -1,6 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const bincode = sig.bincode;
 const socket_utils = sig.net.socket_utils;
@@ -506,6 +507,9 @@ pub const GossipService = struct {
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPackets(self: *Self, exit_condition: ExitCondition) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "gossip verifyPackets" });
+        defer zone.deinit();
+
         defer {
             // empty the channel
             while (self.packet_incoming_channel.tryReceive()) |_| {}
@@ -530,6 +534,9 @@ pub const GossipService = struct {
         // loop until the previous service closes and triggers us to close
         while (true) {
             self.packet_incoming_channel.waitToReceive(exit_condition) catch break;
+
+            const zone_inner = tracy.initZone(@src(), .{ .name = "gossip verifyPackets: receiving" });
+            defer zone_inner.deinit();
 
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
@@ -585,6 +592,9 @@ pub const GossipService = struct {
 
     /// main logic for recieving and processing gossip messages.
     pub fn processMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "gossip processMessages" });
+        defer zone.deinit();
+
         defer {
             // empty the channel and release the memory
             while (self.verified_incoming_channel.tryReceive()) |message| {
@@ -757,6 +767,13 @@ pub const GossipService = struct {
             defer self.metrics.gossip_packets_processed_total.add(gossip_packets_processed_total);
 
             // handle batch messages
+            const batch_handle_zone = tracy.initZone(
+                @src(),
+                .{ .name = "gossip processMessages - handle batch messages" },
+            );
+            defer batch_handle_zone.deinit();
+            batch_handle_zone.value(msg_count);
+
             if (push_messages.items.len > 0) {
                 var x_timer = try sig.time.Timer.start();
                 self.handleBatchPushMessages(&push_messages) catch |err| {
@@ -883,6 +900,9 @@ pub const GossipService = struct {
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
     fn buildMessages(self: *Self, seed: u64, exit_condition: ExitCondition) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "gossip buildMessages" });
+        defer zone.deinit();
+
         defer {
             exit_condition.afterExit();
             self.logger.info().log("buildMessages loop closed");
@@ -1049,6 +1069,9 @@ pub const GossipService = struct {
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
     fn buildPushMessages(self: *Self, push_cursor: *u64) !ArrayList(Packet) {
+        const zone = tracy.initZone(@src(), .{ .name = "gossip buildPushMessages" });
+        defer zone.deinit();
+
         // TODO: find a better static value for the length?
         // NOTE: this size seems to work reasonably well given the rate of
         // cursor growth from new insertions and how fast we generate
@@ -1197,6 +1220,9 @@ pub const GossipService = struct {
         bloom_size: usize,
         now: u64,
     ) !ArrayList(Packet) {
+        const zone = tracy.initZone(@src(), .{ .name = "gossip buildPullRequests" });
+        defer zone.deinit();
+
         // get nodes from gossip table
         var buf: [MAX_NUM_PULL_REQUESTS]ThreadSafeContactInfo = undefined;
         const peers = try self.getThreadSafeGossipNodes(

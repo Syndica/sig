@@ -4,6 +4,7 @@ const std = @import("std");
 const zstd = @import("zstd");
 const sig = @import("../sig.zig");
 const base58 = @import("base58");
+const tracy = @import("tracy");
 
 const bincode = sig.bincode;
 
@@ -2329,6 +2330,9 @@ pub const SnapshotFiles = struct {
     };
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, search_dir: std.fs.Dir) FindError!SnapshotFiles {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb SnapshotFiles.find" });
+        defer zone.deinit();
+
         var incremental_snapshots: std.ArrayListUnmanaged(IncrementalSnapshotFileInfo) = .{};
         defer incremental_snapshots.deinit(allocator);
 
@@ -2613,6 +2617,9 @@ pub fn parallelUnpackZstdTarBall(
     /// only used for progress estimation
     full_snapshot: bool,
 ) !void {
+    const zone = tracy.initZone(@src(), .{ .name = "accountsdb parallelUnpackZstdTarBall" });
+    defer zone.deinit();
+
     const file_size = (try file.stat()).size;
 
     // TODO: improve `zstd.Reader` to be capable of sourcing a stream of bytes
