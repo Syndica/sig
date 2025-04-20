@@ -240,6 +240,16 @@ test "vote_transaction.VoteTransaction - variant equality" {
         .{ .slot = 2, .confirmation_count = 2 },
     );
 
+    var visual_state_update_diff = VoteTransaction{ .vote_state_update = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(std.testing.allocator, 3),
+        .hash = Hash.ZEROES,
+        .timestamp = 200,
+        .root = 1,
+    } };
+    defer visual_state_update_diff.deinit(std.testing.allocator);
+    try std.testing.expect(visual_state_update1.eql(&visual_state_update2));
+    try std.testing.expect(!visual_state_update1.eql(&visual_state_update_diff));
+
     // Test vote_state_update equality
     var compact_visual_state_update1 = VoteTransaction{ .compact_vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(std.testing.allocator, 3),
@@ -268,6 +278,16 @@ test "vote_transaction.VoteTransaction - variant equality" {
     compact_visual_state_update2.compact_vote_state_update.lockouts.appendAssumeCapacity(
         .{ .slot = 2, .confirmation_count = 2 },
     );
+
+    var compact_visual_state_update_diff = VoteTransaction{ .compact_vote_state_update = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(std.testing.allocator, 3),
+        .hash = Hash.ZEROES,
+        .timestamp = 200,
+        .root = 1,
+    } };
+    defer compact_visual_state_update_diff.deinit(std.testing.allocator);
+    try std.testing.expect(compact_visual_state_update1.eql(&compact_visual_state_update2));
+    try std.testing.expect(!compact_visual_state_update1.eql(&compact_visual_state_update_diff));
 
     // Test tower_sync equality
     var tower_sync1 = VoteTransaction{ .tower_sync = .{
@@ -300,7 +320,17 @@ test "vote_transaction.VoteTransaction - variant equality" {
         .{ .slot = 2, .confirmation_count = 2 },
     );
 
-    try std.testing.expect(compact_visual_state_update1.eql(&compact_visual_state_update2));
+    var tower_sync_diff = VoteTransaction{ .tower_sync = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(std.testing.allocator, 3),
+        .hash = Hash.ZEROES,
+        .timestamp = 200,
+        .root = 1,
+        .block_id = Hash.ZEROES,
+    } };
+    defer tower_sync_diff.deinit(std.testing.allocator);
+
+    try std.testing.expect(tower_sync1.eql(&tower_sync2));
+    try std.testing.expect(!tower_sync1.eql(&tower_sync_diff));
 
     // Test different variant inequality
     try std.testing.expect(!vote1.eql(&visual_state_update1));
@@ -434,6 +464,66 @@ test "vote_transaction.VoteTransaction - lastVotedSlot" {
         .{ .slot = 20, .confirmation_count = 2 },
     );
     try std.testing.expectEqual(20, towe_sync.lastVotedSlot());
+}
+
+test "vote_transaction.VoteTransaction - isEmpty" {
+    const empty_vote = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{},
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    } };
+    try std.testing.expect(empty_vote.isEmpty());
+
+    const vote = VoteTransaction{ .vote = .{
+        .slots = &[_]Slot{ 1, 2, 3 },
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    } };
+    try std.testing.expect(!vote.isEmpty());
+
+    var vote_state_update = VoteTransaction{ .vote_state_update = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout)
+            .initCapacity(std.testing.allocator, 2),
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .root = 100,
+    } };
+    defer vote_state_update.deinit(std.testing.allocator);
+    try std.testing.expect(vote_state_update.isEmpty());
+
+    vote_state_update.vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 10, .confirmation_count = 1 },
+    );
+    try std.testing.expect(!vote_state_update.isEmpty());
+
+    var compact_vote_state_update = VoteTransaction{ .compact_vote_state_update = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout)
+            .initCapacity(std.testing.allocator, 2),
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .root = 100,
+    } };
+    defer compact_vote_state_update.deinit(std.testing.allocator);
+    try std.testing.expect(compact_vote_state_update.isEmpty());
+    compact_vote_state_update.compact_vote_state_update.lockouts.appendAssumeCapacity(
+        .{ .slot = 10, .confirmation_count = 1 },
+    );
+    try std.testing.expect(!compact_vote_state_update.isEmpty());
+
+    var towe_sync = VoteTransaction{ .tower_sync = .{
+        .lockouts = try std.ArrayListUnmanaged(Lockout)
+            .initCapacity(std.testing.allocator, 2),
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .root = 100,
+        .block_id = Hash.ZEROES,
+    } };
+    defer towe_sync.deinit(std.testing.allocator);
+    try std.testing.expect(towe_sync.isEmpty());
+    towe_sync.tower_sync.lockouts.appendAssumeCapacity(
+        .{ .slot = 10, .confirmation_count = 1 },
+    );
+    try std.testing.expect(!towe_sync.isEmpty());
 }
 
 test "vote_transaction.VoteTransaction - slot access" {
