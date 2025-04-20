@@ -1093,11 +1093,11 @@ pub const Tower = struct {
     ) !void {
         const tower_root = try self.getRoot();
         // retained slots will be consisted only from divergent slots
-        var retain_flags_for_each_vote_in_reverse = try std.ArrayList(bool).initCapacity(
+        var retain_flags_for_each_vote_in_reverse = try std.ArrayListUnmanaged(bool).initCapacity(
             allocator,
             self.vote_state.votes.items.len,
         );
-        defer retain_flags_for_each_vote_in_reverse.deinit();
+        defer retain_flags_for_each_vote_in_reverse.deinit(allocator);
 
         var still_in_future = true;
         var past_outside_history = false;
@@ -1165,7 +1165,8 @@ pub const Tower = struct {
             }
 
             maybe_checked_slot = slot_in_tower;
-            try retain_flags_for_each_vote_in_reverse.append(maybe_anchored_slot == null);
+            retain_flags_for_each_vote_in_reverse
+                .appendAssumeCapacity(maybe_anchored_slot == null);
         }
 
         // Check for errors if not anchored
@@ -1188,13 +1189,6 @@ pub const Tower = struct {
         var retain_flags_for_each_vote = std.mem.reverseIterator(
             retain_flags_for_each_vote_in_reverse.items,
         );
-
-        var reversed_flags = std.ArrayList(bool).init(allocator);
-        defer reversed_flags.deinit();
-
-        for (retain_flags_for_each_vote_in_reverse.items) |flag| {
-            try reversed_flags.insert(0, flag);
-        }
 
         var flags = try std.DynamicBitSetUnmanaged.initEmpty(
             allocator,
