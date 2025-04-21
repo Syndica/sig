@@ -184,6 +184,21 @@ pub const TransactionMessage = struct {
         };
     }
 
+    pub fn isSigner(self: TransactionMessage, index: usize) bool {
+        return index < self.signature_count;
+    }
+
+    pub fn isWritable(self: TransactionMessage, index: usize) bool {
+        const is_readonly_signed =
+            index < self.signature_count and
+            index > self.signature_count - self.readonly_signed_count;
+
+        const is_readonly_unsigned = index >= self.signature_count and
+            index < self.account_keys.len - self.readonly_unsigned_count;
+
+        return !(is_readonly_signed or is_readonly_unsigned);
+    }
+
     pub fn serialize(self: TransactionMessage, writer: anytype, version: TransactionVersion) !void {
         try writer.writeByte(self.signature_count);
         try writer.writeByte(self.readonly_signed_count);
