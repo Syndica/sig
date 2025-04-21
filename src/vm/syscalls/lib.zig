@@ -3,6 +3,8 @@ const std = @import("std");
 const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
 const cpi = @import("cpi.zig");
+
+const memory = sig.vm.memory;
 const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
 
@@ -223,16 +225,19 @@ pub fn register(
 
 // logging
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
-pub fn log(tc: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
     const vm_addr = registers.get(.r1);
     const len = registers.get(.r2);
 
     try tc.consumeCompute(@max(tc.compute_budget.syscall_base_cost, len));
 
-    const message = if (len > 0)
-        try mmap.vmap(.constant, vm_addr, len)
-    else
-        &[_]u8{};
+    const message = try memory_map.translateSlice(
+        u8,
+        .constant,
+        vm_addr,
+        len,
+        try tc.getCheckAligned(),
+    );
 
     if (!std.unicode.utf8ValidateSlice(message)) {
         return SyscallError.InvalidString;
@@ -266,7 +271,13 @@ pub fn logPubkey(tc: *TransactionContext, mmap: *MemoryMap, registers: RegisterM
 
     try tc.consumeCompute(tc.compute_budget.log_pubkey_units);
 
-    const pubkey_bytes = try mmap.vmap(.constant, vm_addr, Pubkey.SIZE);
+    const pubkey_bytes = try mmap.translateSlice(
+        u8,
+        .constant,
+        vm_addr,
+        @sizeOf(Pubkey),
+        try tc.getCheckAligned(),
+    );
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
 
     try stable_log.programLog(tc, pubkey.base58String().constSlice());
@@ -277,6 +288,11 @@ pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: RegisterMap) E
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
     try tc.log("Program consumption: {} units remaining", .{tc.compute_meter});
 }
+
+// /// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/logging.rs#L107
+// pub fn logData(tc: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+//     @panic("TODO: implement logData syscall");
+// }
 
 // memory operators
 pub const memcpy = memops.memcpy;

@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
-const memory = @import("../memory.zig");
 
 const ids = sig.runtime.ids;
 const bpf_loader_program = sig.runtime.program.bpf_loader_program;
@@ -9,6 +8,7 @@ const system_program = sig.runtime.program.system_program;
 const features = sig.runtime.features;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
+const memory = sig.vm.memory;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
@@ -160,7 +160,7 @@ fn VmValue(comptime T: type) type {
             switch (self) {
                 .translated => |ptr| return ptr,
                 .vm_address => |vma| {
-                    return translateType(T, state, vma.memory_map, vma.vm_addr, vma.check_aligned);
+                    return vma.memory_map.translateType(T, state, vma.vm_addr, vma.check_aligned);
                 },
             }
         }
@@ -173,68 +173,6 @@ const VmSlice = extern struct {
     ptr: u64,
     len: u64,
 };
-
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L604
-fn translate(
-    comptime state: memory.MemoryState,
-    memory_map: *const MemoryMap,
-    vm_addr: u64,
-    len: u64,
-) !u64 {
-    const slice = try memory_map.vmap(state, vm_addr, len);
-    return @intFromPtr(slice.ptr);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L616
-fn translateType(
-    comptime T: type,
-    comptime state: memory.MemoryState,
-    memory_map: *const MemoryMap,
-    vm_addr: u64,
-    check_aligned: bool,
-) !(switch (state) {
-    .mutable => *T,
-    .constant => *const T,
-}) {
-    const host_addr = try translate(state, memory_map, vm_addr, @sizeOf(T));
-    if (!check_aligned) {
-        return @ptrFromInt(host_addr);
-    } else if (host_addr % @alignOf(T) != 0) {
-        return SyscallError.UnalignedPointer;
-    } else {
-        return @ptrFromInt(host_addr);
-    }
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L647
-fn translateSlice(
-    comptime T: type,
-    comptime state: memory.MemoryState,
-    memory_map: *const MemoryMap,
-    vm_addr: u64,
-    len: u64,
-    check_aligned: bool,
-) !(switch (state) {
-    .mutable => []T,
-    .constant => []const T,
-}) {
-    if (len == 0) {
-        return &.{}; // &mut []
-    }
-
-    const total_size = len *| @sizeOf(T);
-    _ = std.math.cast(isize, total_size) orelse return SyscallError.InvalidLength;
-
-    const host_addr = try translate(state, memory_map, vm_addr, total_size);
-    if (check_aligned and host_addr % @alignOf(T) != 0) {
-        return SyscallError.UnalignedPointer;
-    }
-
-    return switch (state) {
-        .mutable => @as([*]T, @ptrFromInt(host_addr))[0..len],
-        .constant => @as([*]const T, @ptrFromInt(host_addr))[0..len],
-    };
-}
 
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L38
 fn checkAccountInfoPtr(
@@ -316,10 +254,9 @@ const CallerAccount = struct {
             const lamports_addr: u64 = @intFromPtr(account_info.lamports_addr.deref().asPtr());
 
             // Double translate lamports out of RefCell
-            const ptr: *const u64 = try translateType(
+            const ptr: *const u64 = try memory_map.translateType(
                 u64,
                 .constant,
-                memory_map,
                 lamports_addr,
                 ic.getCheckAligned(),
             );
@@ -334,19 +271,17 @@ const CallerAccount = struct {
                     "lamports",
                 );
             }
-            break :blk try translateType(
+            break :blk try memory_map.translateType(
                 u64,
                 .mutable,
-                memory_map,
                 ptr.*,
                 ic.getCheckAligned(),
             );
         };
 
-        const owner: *Pubkey = try translateType(
+        const owner: *Pubkey = try memory_map.translateType(
             Pubkey,
             .mutable,
-            memory_map,
             account_info.owner_addr,
             ic.getCheckAligned(),
         );
@@ -360,10 +295,9 @@ const CallerAccount = struct {
             }
 
             // Double translate data out of RefCell
-            const data: []const u8 = (try translateType(
+            const data: []const u8 = (try memory_map.translateType(
                 []const u8,
                 .constant,
-                memory_map,
                 data_ptr,
                 ic.getCheckAligned(),
             )).*;
@@ -397,9 +331,8 @@ const CallerAccount = struct {
                     .check_aligned = ic.getCheckAligned(),
                 } };
             } else r2l: {
-                const translated: *u64 = @ptrFromInt(try translate(
+                const translated: *u64 = @ptrFromInt(try memory_map.translate(
                     .constant,
-                    memory_map,
                     data_ptr +| @sizeOf(u64),
                     8,
                 ));
@@ -421,10 +354,9 @@ const CallerAccount = struct {
                 // memory access violation since we can't write to the account
                 // _yet_, but we will be able to once the caller returns.
                 break :ser &.{}; // &mut []
-            } else try translateSlice(
+            } else try memory_map.translateSlice(
                 u8,
                 .mutable,
-                memory_map,
                 vm_data_addr,
                 data.len,
                 ic.getCheckAligned(),
@@ -484,17 +416,15 @@ const CallerAccount = struct {
 
         // account_info points to host memory. The addresses used internally are
         // in vm space so they need to be translated.
-        const lamports = try translateType(
+        const lamports = try memory_map.translateType(
             u64,
             .mutable,
-            memory_map,
             account_info.lamports_addr,
             ic.getCheckAligned(),
         );
-        const owner = try translateType(
+        const owner = try memory_map.translateType(
             Pubkey,
             .mutable,
-            memory_map,
             account_info.owner_addr,
             ic.getCheckAligned(),
         );
@@ -508,10 +438,9 @@ const CallerAccount = struct {
         const serialized_data: []u8 = if (direct_mapping) ser: {
             // See comment in CallerAccount.fromAccountInfoRust()
             break :ser &.{}; // &mut []
-        } else try translateSlice(
+        } else try memory_map.translateSlice(
             u8,
             .mutable,
-            memory_map,
             account_info.data_addr,
             account_info.data_len,
             ic.getCheckAligned(),
@@ -532,9 +461,8 @@ const CallerAccount = struct {
                 .check_aligned = ic.getCheckAligned(),
             } }
         else
-            VmValue(u64){ .translated = @ptrFromInt(try translate(
+            VmValue(u64){ .translated = @ptrFromInt(try memory_map.translate(
                 .mutable,
-                memory_map,
                 data_len_vm_addr,
                 @sizeOf(u64),
             )) };
@@ -602,10 +530,9 @@ fn updateCalleeAccount(
             must_update_caller = true;
         }
         if (realloc_bytes_used > 0) {
-            const serialized_data = try translateSlice(
+            const serialized_data = try memory_map.translateSlice(
                 u8,
                 .constant,
-                memory_map,
                 caller_account.vm_data_addr +| caller_account.original_data_len,
                 realloc_bytes_used,
                 ic.getCheckAligned(),
@@ -676,10 +603,9 @@ fn translateAccounts(
         return SyscallError.InvalidPointer;
     }
 
-    const account_infos = try translateSlice(
+    const account_infos = try memory_map.translateSlice(
         AccountInfoType,
         .constant,
-        memory_map,
         account_infos_addr,
         account_infos_len,
         ic.getCheckAligned(),
@@ -736,10 +662,9 @@ fn translateAccounts(
 
         const account_key = ic.getAccountKeyByIndexUnchecked(meta.index_in_caller);
         const caller_account_index = for (account_infos, 0..) |info, idx| {
-            const info_key = try translateType(
+            const info_key = try memory_map.translateType(
                 Pubkey,
                 .constant,
-                memory_map,
                 info.key_addr,
                 ic.getCheckAligned(),
             );
@@ -817,35 +742,31 @@ fn translateInstruction(
         else => @compileError("invalid AccountInfo type"),
     };
 
-    const stable_instruction = try translateType(
+    const stable_instruction = try memory_map.translateType(
         InstructionType,
         .constant,
-        memory_map,
         vm_addr,
         ic.getCheckAligned(),
     );
-    const account_metas = try translateSlice(
+    const account_metas = try memory_map.translateSlice(
         AccountMetaType,
         .constant,
-        memory_map,
         stable_instruction.accounts_addr,
         stable_instruction.accounts_len,
         ic.getCheckAligned(),
     );
-    const data = try translateSlice(
+    const data = try memory_map.translateSlice(
         u8,
         .constant,
-        memory_map,
         stable_instruction.data_addr,
         stable_instruction.data_len,
         ic.getCheckAligned(),
     );
     const program_id = switch (AccountInfoType) {
         AccountInfoRust => stable_instruction.program_id,
-        AccountInfoC => (try translateType(
+        AccountInfoC => (try memory_map.translateType(
             Pubkey,
             .constant,
-            memory_map,
             stable_instruction.program_id_addr,
             ic.getCheckAligned(),
         )).*,
@@ -906,10 +827,9 @@ fn translateInstruction(
             .is_writable = account_meta.is_writable,
             .pubkey = switch (AccountInfoType) {
                 AccountInfoRust => account_meta.pubkey,
-                AccountInfoC => (try translateType(
+                AccountInfoC => (try memory_map.translateType(
                     Pubkey,
                     .constant,
-                    memory_map,
                     account_meta.pubkey_addr,
                     ic.getCheckAligned(),
                 )).*,
@@ -941,10 +861,9 @@ fn translateSigners(
 ) !std.BoundedArray(Pubkey, MAX_SIGNERS) {
     if (signers_seeds_len == 0) return .{};
 
-    const signers_seeds: []const VmSlice = try translateSlice(
+    const signers_seeds: []const VmSlice = try memory_map.translateSlice(
         VmSlice,
         .constant,
-        memory_map,
         signers_seeds_addr,
         signers_seeds_len,
         ic.getCheckAligned(),
@@ -956,10 +875,9 @@ fn translateSigners(
 
     var signers: std.BoundedArray(Pubkey, MAX_SIGNERS) = .{};
     for (signers_seeds) |signer_vm_slice| {
-        const untranslated_seeds = try translateSlice(
+        const untranslated_seeds = try memory_map.translateSlice(
             VmSlice,
             .constant,
-            memory_map,
             signer_vm_slice.ptr,
             signer_vm_slice.len,
             ic.getCheckAligned(),
@@ -971,10 +889,9 @@ fn translateSigners(
 
         var seeds: std.BoundedArray([]const u8, MAX_SIGNERS) = .{};
         for (untranslated_seeds) |seeds_vm_slice| {
-            seeds.appendAssumeCapacity(try translateSlice(
+            seeds.appendAssumeCapacity(try memory_map.translateSlice(
                 u8,
                 .constant,
-                memory_map,
                 seeds_vm_slice.ptr,
                 seeds_vm_slice.len,
                 ic.getCheckAligned(),
@@ -1620,10 +1537,9 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
     );
     defer memory_map.deinit(allocator);
 
-    const account_info = try translateType(
+    const account_info = try memory_map.translateType(
         AccountInfoRust,
         .constant,
-        &memory_map,
         vm_addr,
         false,
     );
@@ -1701,10 +1617,9 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoC" {
     try buf.writer().writeAll(std.mem.asBytes(&account.lamports));
     try buf.writer().writeAll(account.data);
 
-    const account_info = try translateType(
+    const account_info = try memory_map.translateType(
         AccountInfoC,
         .constant,
-        &memory_map,
         vm_addr,
         false,
     );
