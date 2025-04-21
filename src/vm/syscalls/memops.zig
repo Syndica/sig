@@ -324,7 +324,7 @@ pub fn memset(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
             dst_addr,
             @truncate(scalar),
             len,
-            ctx.account_metas.constSlice(),
+            ctx.serialized_accounts.constSlice(),
             mmap,
             parent.getCheckAligned(),
         );
@@ -350,7 +350,7 @@ pub fn memcpy(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
             dst_addr,
             src_addr,
             len,
-            ctx.account_metas.constSlice(),
+            ctx.serialized_accounts.constSlice(),
             mmap,
             parent.getCheckAligned(),
         );
@@ -385,7 +385,7 @@ pub fn memcmp(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
             a_addr,
             b_addr,
             len,
-            ctx.account_metas.constSlice(),
+            ctx.serialized_accounts.constSlice(),
             mmap,
             parent.getCheckAligned(),
         );

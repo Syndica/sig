@@ -112,7 +112,7 @@ pub fn execute(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/lib.rs#L278-L282
-    ic.tc.account_metas = accounts_metadata;
+    ic.tc.serialized_accounts = accounts_metadata;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1604-L1617
     // TODO: save account addresses for access violation errors resolution

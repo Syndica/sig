@@ -125,7 +125,7 @@ pub fn createExecutionContexts(
         .ec = ec,
         .sc = sc,
         .accounts = try accounts.toOwnedSlice(),
-        .account_metas = .{},
+        .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
         .return_data = return_data,

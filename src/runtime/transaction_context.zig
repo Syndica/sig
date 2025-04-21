@@ -64,7 +64,8 @@ pub const TransactionContext = struct {
 
     /// Transaction accounts
     accounts: []TransactionContextAccount,
-    account_metas: std.BoundedArray(
+    /// Used by CPI to access serialized account metadata.
+    serialized_accounts: std.BoundedArray(
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ),
