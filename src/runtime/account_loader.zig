@@ -34,6 +34,9 @@ pub fn loadTransactionAccounts(
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L417
+/// agave's LoadedTransactionAccounts contains a field "program indices". This has been omitted as
+/// it's a Vec<Vec<u8>> whose elements are either [program_id] or [] (when program_id is the native
+/// loader), which seems pointless.
 pub const LoadedAccounts = struct {
     collected_rent: u64 = 0,
     loaded_account_data_size: u32 = 0,
@@ -41,10 +44,6 @@ pub const LoadedAccounts = struct {
     /// indexes correspond with tx.msg.account_keys
     accounts_buf: [MAX_TX_ACCOUNT_LOCKS]AccountSharedData,
     rent_debits: [MAX_TX_ACCOUNT_LOCKS]RentDebit,
-
-    /// indexes correspond with tx.msg.instructions
-    /// null => instruction program is native loader
-    program_indices: []?u8 = &.{},
 };
 
 const BankKind = enum {
@@ -307,9 +306,6 @@ fn loadTransactionAccountsInner(
         );
     }
 
-    retval.program_indices = try allocator.alloc(?u8, tx.msg.instructions.len);
-    errdefer allocator.free(retval.program_indices);
-
     var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
     defer validated_loaders.deinit();
 
@@ -317,14 +313,12 @@ fn loadTransactionAccountsInner(
 
     // I'm not sure why we load the programs as their keys would have been in .account_keys, which
     // means they could have been loaded already in the previous loop. This matches agave.
-    for (tx.msg.instructions, 0..) |instruction, instruction_idx| {
+    for (tx.msg.instructions) |instruction| {
         const program_id = &tx.msg.account_keys[instruction.program_index];
 
         if (program_id.equals(&runtime.ids.NATIVE_LOADER_ID)) {
-            retval.program_indices[instruction_idx] = null;
             continue;
         }
-        retval.program_indices[instruction_idx] = instruction.program_index;
 
         const program_account = (try account_loader.loadAccount(program_id, false)) orelse
             return error.ProgramAccountNotFound;
