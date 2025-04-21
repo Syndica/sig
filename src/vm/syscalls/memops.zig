@@ -319,14 +319,14 @@ pub fn memset(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
 
     const feature_set = ctx.sc.ec.feature_set;
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const parent = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+        const ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
         try memsetNonContigious(
             dst_addr,
             @truncate(scalar),
             len,
             ctx.serialized_accounts.constSlice(),
             mmap,
-            parent.getCheckAligned(),
+            ic.getCheckAligned(),
         );
     } else {
         const host_addr = try mmap.vmap(.mutable, dst_addr, len);
@@ -345,14 +345,14 @@ pub fn memcpy(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
 
     const feature_set = ctx.sc.ec.feature_set;
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const parent = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+        const ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
         try memmoveNonContigious(
             dst_addr,
             src_addr,
             len,
             ctx.serialized_accounts.constSlice(),
             mmap,
-            parent.getCheckAligned(),
+            ic.getCheckAligned(),
         );
     } else {
         const dst_host = try mmap.vmap(.mutable, dst_addr, len);
@@ -380,14 +380,14 @@ pub fn memcmp(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
         );
         const cmp_result: *align(1) i32 = @ptrCast(cmp_result_slice.ptr);
 
-        const parent = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+        const ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
         cmp_result.* = try memcmpNonContigious(
             a_addr,
             b_addr,
             len,
             ctx.serialized_accounts.constSlice(),
             mmap,
-            parent.getCheckAligned(),
+            ic.getCheckAligned(),
         );
     } else {
         const a = try mmap.vmap(.constant, a_addr, len);
