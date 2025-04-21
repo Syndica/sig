@@ -1098,13 +1098,15 @@ pub const Tower = struct {
         var maybe_checked_slot: ?Slot = null;
         var maybe_anchored_slot: ?Slot = null;
 
-        var slots_in_tower = std.ArrayList(Slot).init(allocator);
-        defer slots_in_tower.deinit();
-        try slots_in_tower.append(tower_root);
-
         const voted = try self.votedSlots(allocator);
         defer allocator.free(voted);
-        try slots_in_tower.appendSlice(voted);
+
+        var slots_in_tower = try std.ArrayListUnmanaged(Slot)
+            .initCapacity(allocator, (1 + voted.len));
+        defer slots_in_tower.deinit(allocator);
+
+        slots_in_tower.appendAssumeCapacity(tower_root);
+        slots_in_tower.appendSliceAssumeCapacity(voted);
 
         // retained slots will be consisted only from divergent slots
         var retain_flags_for_each_vote_in_reverse = try std.ArrayListUnmanaged(bool).initCapacity(
