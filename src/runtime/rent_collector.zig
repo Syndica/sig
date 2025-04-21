@@ -7,7 +7,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
 
-const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);
+pub const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);
 
 pub const RentResult = union(enum) {
     NoRentCollectionNow,
@@ -26,7 +26,7 @@ pub const RentDue = union(enum) {
 pub const CollectedInfo = struct {
     rent_amount: u64,
     account_data_len_reclaimed: u64,
-    const NoneCollected: CollectedInfo = .{ .rent_amount = 0, .account_data_len_reclaimed = 0 };
+    pub const NoneCollected: CollectedInfo = .{ .rent_amount = 0, .account_data_len_reclaimed = 0 };
 };
 
 pub const RentCollector = struct {
@@ -45,6 +45,7 @@ pub const RentCollector = struct {
     }
 
     // [agave] solana-rent-collector-2.2.1/src/lib.rs:122
+    // RentCollector::collect_from_existing_account / SVMRentCollector::collect_rent
     pub fn collectFromExistingAccount(
         self: RentCollector,
         address: *const Pubkey,
@@ -76,7 +77,7 @@ pub const RentCollector = struct {
     }
 
     // [agave] solana-rent-collector-2.2.1/src/lib.rs:158
-    pub fn calculateRentResult(
+    fn calculateRentResult(
         self: RentCollector,
         address: *const Pubkey,
         account: AccountSharedData,

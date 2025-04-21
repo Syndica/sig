@@ -188,7 +188,7 @@ pub const TransactionMessage = struct {
         return index < self.signature_count;
     }
 
-    pub fn isWriteable(self: TransactionMessage, index: usize) bool {
+    pub fn isWritable(self: TransactionMessage, index: usize) bool {
         const is_readonly_signed =
             index < self.signature_count and
             index > self.signature_count - self.readonly_signed_count;
