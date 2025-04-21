@@ -396,8 +396,8 @@ fn constructInstructionsAccount(
         allocator,
         tx.msg.instructions.len,
     );
-    errdefer {
-        for (decompiled_instructions.items) |decompiled| allocator.free(decompiled.data);
+    defer {
+        for (decompiled_instructions.items) |decompiled| allocator.free(decompiled.accounts);
         decompiled_instructions.deinit();
     }
 
@@ -406,6 +406,8 @@ fn constructInstructionsAccount(
             InstructionAccount,
             instruction.account_indexes.len,
         );
+        errdefer allocator.free(accounts_meta);
+
         errdefer comptime unreachable;
 
         for (instruction.account_indexes, accounts_meta) |account_idx, *account_meta| {
@@ -428,7 +430,7 @@ fn constructInstructionsAccount(
         allocator,
         decompiled_instructions.items,
     );
-    errdefer data.deinit();
+    defer data.deinit();
     try data.appendSlice(&.{ 0, 0 }); // room for current instruction index
 
     return .{
@@ -633,4 +635,47 @@ test "load accounts rent paid" {
 
     try std.testing.expectEqual(expected_rent, loaded.collected_rent);
     try std.testing.expectEqual(2, found);
+}
+
+test "constructInstructionsAccount" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
+
+    var data: [1024]u8 = undefined;
+    prng.fill(&data);
+
+    const fee_payer_address = Pubkey.initRandom(prng.random());
+    const instruction_address = Pubkey.initRandom(prng.random());
+
+    const tx: sig.core.Transaction = .{
+        .signatures = &.{},
+        .version = .legacy,
+        .msg = .{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 0,
+            .account_keys = &.{ fee_payer_address, instruction_address },
+            .recent_blockhash = .{ .data = [_]u8{0x00} ** Hash.SIZE },
+            .instructions = &.{.{
+                .program_index = 1,
+                .data = &data,
+                .account_indexes = &.{},
+            }},
+            .address_lookups = &.{},
+        },
+    };
+
+    const checkFn = struct {
+        fn f(alloc: std.mem.Allocator, txn: *const sig.core.Transaction) !void {
+            const account = try constructInstructionsAccount(alloc, txn);
+            defer allocator.free(account.data);
+        }
+    }.f;
+
+    try std.testing.checkAllAllocationFailures(allocator, checkFn, .{&tx});
+
+    const account = try constructInstructionsAccount(allocator, &tx);
+    defer allocator.free(account.data);
+    try std.testing.expectEqual(0, account.lamports);
+    try std.testing.expect(account.data.len > 8);
 }
