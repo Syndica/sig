@@ -29,6 +29,7 @@ pub const CollectedInfo = struct {
     pub const NoneCollected: CollectedInfo = .{ .rent_amount = 0, .account_data_len_reclaimed = 0 };
 };
 
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/801ac25f6d35d94736ed576425e44f9ec63de809/rent-collector/src/lib.rs#L21
 pub const RentCollector = struct {
     epoch: Epoch,
     epoch_schedule: EpochSchedule,
@@ -44,8 +45,7 @@ pub const RentCollector = struct {
         };
     }
 
-    // [agave] solana-rent-collector-2.2.1/src/lib.rs:122
-    // RentCollector::collect_from_existing_account / SVMRentCollector::collect_rent
+    // [agave] RentCollector::collect_from_existing_account / SVMRentCollector::collect_rent
     pub fn collectFromExistingAccount(
         self: RentCollector,
         address: *const Pubkey,
@@ -76,7 +76,6 @@ pub const RentCollector = struct {
         };
     }
 
-    // [agave] solana-rent-collector-2.2.1/src/lib.rs:158
     fn calculateRentResult(
         self: RentCollector,
         address: *const Pubkey,
@@ -109,12 +108,10 @@ pub const RentCollector = struct {
         };
     }
 
-    // [agave] solana-rent-collector-2.2.1/src/lib.rs:82
     pub fn shouldCollectRent(address: *const Pubkey, executable: bool) bool {
         return !(executable or address.equals(&sig.runtime.ids.Incinerator));
     }
 
-    // [agave] solana-rent-collector-2.2.1/src/lib.rs:89
     pub fn getRentDue(
         self: RentCollector,
         lamports: u64,
@@ -128,7 +125,7 @@ pub const RentCollector = struct {
             slots_elapsed +|= self.epoch_schedule.getSlotsInEpoch(epoch +| 1);
         }
 
-        // as firedancer says: "Consensus-critical use of doubles :(""
+        // as firedancer says: "Consensus-critical use of doubles :("
         const years_elapsed: f64 = if (self.slots_per_year != 0.0)
             @as(f64, @floatFromInt(slots_elapsed)) / self.slots_per_year
         else
