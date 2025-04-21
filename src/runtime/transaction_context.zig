@@ -135,6 +135,17 @@ pub const TransactionContext = struct {
         return &self.accounts[index];
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d033f544a96a72c6c664e56871eb8a24b5/program-runtime/src/invoke_context.rs#L686
+    pub fn getCheckAligned(self: *TransactionContext) InstructionError!bool {
+        return (try self.getCurrentInstructionContext()).getCheckAligned();
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d033f544a96a72c6c664e56871eb8a24b5/transaction-context/src/lib.rs#L340
+    pub fn getCurrentInstructionContext(self: *TransactionContext) InstructionError!*InstructionContext {
+        if (self.instruction_stack.len == 0) return InstructionError.CallDepth;
+        return &self.instruction_stack.buffer[self.instruction_stack.len - 1];
+    }
+
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L646
     pub fn borrowAccountAtIndex(
         self: *TransactionContext,
