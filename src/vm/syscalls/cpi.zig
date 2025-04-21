@@ -8,6 +8,7 @@ const bpf_loader_program = sig.runtime.program.bpf_loader_program;
 const system_program = sig.runtime.program.system_program;
 const features = sig.runtime.features;
 const pubkey_utils = sig.runtime.pubkey_utils;
+const serialize = sig.runtime.program.bpf.serialize;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
@@ -27,7 +28,10 @@ const SyscallError = sig.vm.syscalls.Error;
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
 
-/// [agave] StableVec: https://github.com/anza-xyz/solana-sdk/blob/master/stable-layout/src/stable_vec.rs#L30
+const MAX_PERMITTED_DATA_INCREASE = serialize.MAX_PERMITTED_DATA_INCREASE;
+const BPF_ALIGN_OF_U128 = serialize.BPF_ALIGN_OF_U128;
+
+/// [agave] StableVec: https://github.com/anza-xyz/solana-sdk/blob/c54daf5355ad43448786cafdb66ff07d3add8be5/stable-layout/src/stable_vec.rs#L30
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0666fa5999750153070e5c43d64813467bfdc38e/stable-layout/src/stable_instruction.rs#L33
 const StableInstructionRust = extern struct {
     // StableVec(AccountMetaRust)
@@ -925,8 +929,8 @@ const MAX_SIGNERS = 16;
 
 /// Reads a slice of seed slices from the VM and converts them into program address Pubkeys.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L520
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L747
+/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L511
+/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L735
 fn translateSigners(
     ic: *const InstructionContext,
     memory_map: *const MemoryMap,
@@ -986,7 +990,6 @@ fn translateSigners(
     return signers;
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1573
 fn accountDataRegion(
     memory_map: *const MemoryMap,
     vm_data_addr: u64,
@@ -1001,9 +1004,6 @@ fn accountDataRegion(
     return region;
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/master/transaction-context/src/lib.rs#L47
-const MAX_PERMITTED_DATA_INCREASE: usize = 1024 * 10;
-
 fn accountReallocRegion(
     memory_map: *const MemoryMap,
     vm_data_addr: u64,
@@ -1013,9 +1013,6 @@ fn accountReallocRegion(
     if (is_loader_deprecated) {
         return null;
     }
-
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/2819a100f2d0a176d4ec9fd085ac233abf77e206/program-entrypoint/src/lib.rs#L359
-    const BPF_ALIGN_OF_U128 = 8;
 
     const addr = vm_data_addr +| original_data_len;
     const region = try memory_map.region(.constant, addr);
@@ -1036,7 +1033,7 @@ fn accountReallocRegion(
 /// This method updates caller_account so the CPI caller can see the callee's
 /// changes.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1321
+/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1335
 fn updateCallerAccount(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
@@ -1279,7 +1276,7 @@ fn updateCallerAccount(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1080
+/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1054
 pub fn cpiCommon(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1293,11 +1290,7 @@ pub fn cpiCommon(
 ) !void {
     try ic.tc.consumeCompute(ic.tc.compute_budget.invoke_units);
 
-    // TODO:
-    // if (ic.???.execute_time) |timer| {
-    //      timer.stop();
-    //      ic.???.timings.execute_us += timer.asMicros();
-    // }
+    // TODO: timings
 
     const instruction = try translateInstruction(
         allocator,
@@ -1328,7 +1321,7 @@ pub fn cpiCommon(
     );
 
     // TODO check_authorized_program(ic, instruction):
-    // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1054
+    // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1028C4-L1028C28
 
     var accounts = try translateAccounts(
         allocator,
@@ -1362,7 +1355,7 @@ pub fn cpiCommon(
             defer callee_account.release();
 
             // update_caller_account_perms:
-            // [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1276
+            // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1250
 
             if (try accountDataRegion(
                 memory_map,
@@ -1407,8 +1400,6 @@ pub fn cpiCommon(
             direct_mapping,
         );
     }
-
-    // TODO: ic.execute_time =
 }
 
 const TestContext = struct {
