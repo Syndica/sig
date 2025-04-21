@@ -766,7 +766,8 @@ pub const VoteState = struct {
                 false;
 
             if (less_than_last_voted_slot) {
-                i = std.math.add(usize, i, 1) catch return InstructionError.ProgramArithmeticOverflow;
+                i = std.math.add(usize, i, 1) catch
+                    return InstructionError.ProgramArithmeticOverflow;
                 continue;
             }
 
@@ -777,14 +778,17 @@ pub const VoteState = struct {
                     return InstructionError.ProgramArithmeticOverflow
             ][0]) {
                 // Decrement `j` to find newer slots
-                j = std.math.sub(usize, j, 1) catch return InstructionError.ProgramArithmeticOverflow;
+                j = std.math.sub(usize, j, 1) catch
+                    return InstructionError.ProgramArithmeticOverflow;
                 continue;
             }
 
             // 3) Once the hash for `s` is found, bump `s` to the next slot
             // in `vote_slots` and continue.
-            i = std.math.add(usize, i, 1) catch return InstructionError.ProgramArithmeticOverflow;
-            j = std.math.sub(usize, j, 1) catch return InstructionError.ProgramArithmeticOverflow;
+            i = std.math.add(usize, i, 1) catch
+                return InstructionError.ProgramArithmeticOverflow;
+            j = std.math.sub(usize, j, 1) catch
+                return InstructionError.ProgramArithmeticOverflow;
         }
 
         if (j == slot_hashes.entries.len) {

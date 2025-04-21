@@ -108,7 +108,8 @@ pub const EbpfError = error{
     SyscallError, // (Box<dyn Error>),
 };
 
-pub const ExecutionError = SyscallError || EbpfError || InstructionError || std.fs.File.WriteError || error{
+pub const ExecutionError =
+    SyscallError || EbpfError || InstructionError || std.fs.File.WriteError || error{
     OutOfMemory,
     Overflow,
 };
