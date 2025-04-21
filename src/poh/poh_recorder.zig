@@ -12,7 +12,6 @@ const Poh = @import("poh.zig").Poh;
 const PohEntry = @import("poh.zig").PohEntry;
 const Entry = poh_service.Entry;
 const Transaction = poh_service.Transaction;
-const dropItems = @import("collections.zig").dropItems;
 
 const Slot = u64;
 
@@ -211,3 +210,15 @@ pub const Bank = struct {
         return 0;
     }
 };
+
+pub fn dropItems(comptime T: type, list: *std.ArrayList(T), n: usize) void {
+    if (n == 0) {
+        return;
+    }
+    if (n > list.items.len) {
+        for (list.items[n .. list.items.len - 1], 0..) |*b, i| {
+            b.* = list.items[i + 1];
+        }
+    }
+    list.items.len = list.items.len - n;
+}

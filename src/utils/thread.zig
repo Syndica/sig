@@ -192,9 +192,10 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
     return struct {
         allocator: std.mem.Allocator,
-        pool: ThreadPool,
-        tasks: std.ArrayList(TaskAdapter),
-        results: std.ArrayList(TaskResult),
+        pool: *ThreadPool,
+        tasks: std.ArrayListUnmanaged(TaskAdapter),
+        results: std.ArrayListUnmanaged(TaskResult),
+        pool_is_owned: bool,
 
         pub const Task = TaskType;
 
@@ -205,24 +206,51 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             num_threads: u32,
             num_tasks: u64,
         ) !Self {
-            var tasks = try std.ArrayList(TaskAdapter).initCapacity(allocator, num_tasks);
+            var tasks = try std.ArrayListUnmanaged(TaskAdapter).initCapacity(allocator, num_tasks);
             errdefer tasks.deinit();
 
-            var results = try std.ArrayList(TaskResult).initCapacity(allocator, num_tasks);
+            var results = try std.ArrayListUnmanaged(TaskResult).initCapacity(allocator, num_tasks);
+            errdefer results.deinit();
+
+            const pool = try allocator.create(ThreadPool);
+            pool.* = ThreadPool.init(.{ .max_threads = num_threads });
+
+            return .{
+                .allocator = allocator,
+                .pool = pool,
+                .tasks = tasks,
+                .results = results,
+                .pool_is_owned = true,
+            };
+        }
+
+        pub fn initBorrowed(
+            allocator: std.mem.Allocator,
+            pool: *ThreadPool,
+            num_tasks: u64,
+        ) !Self {
+            var tasks = try std.ArrayListUnmanaged(TaskAdapter).initCapacity(allocator, num_tasks);
+            errdefer tasks.deinit();
+
+            var results = try std.ArrayListUnmanaged(TaskResult).initCapacity(allocator, num_tasks);
             errdefer results.deinit();
 
             return .{
                 .allocator = allocator,
-                .pool = ThreadPool.init(.{ .max_threads = num_threads }),
+                .pool = pool,
                 .tasks = tasks,
                 .results = results,
+                .pool_is_owned = false,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.pool.shutdown();
-            self.tasks.deinit();
-            self.results.deinit();
+            if (self.pool_is_owned) {
+                self.pool.shutdown();
+                self.allocator.destroy(self.pool);
+            }
+            self.tasks.deinit(self.allocator);
+            self.results.deinit(self.allocator);
             self.pool.deinit();
         }
 

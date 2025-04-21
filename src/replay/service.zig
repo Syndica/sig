@@ -6,11 +6,13 @@ const deps = replay.deps;
 
 const Allocator = std.mem.Allocator;
 
-const AsyncEntryVerifier = sig.core.entry.AsyncEntryVerifier;
+const ThreadPool = sig.sync.ThreadPool;
+
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const Entry = sig.core.Entry;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
+const Transaction = sig.core.Transaction;
 
 const BankForks = deps.BankForks;
 const ProgressMap = deps.ProgressMap;
@@ -18,16 +20,26 @@ const Bank = deps.Bank;
 const Tower = deps.Tower;
 const tower_storage = deps.tower_storage;
 
+const EntryVerifier = replay.verifiers.EntryVerifier;
+const ListRecycler = replay.verifiers.ListRecycler;
+const RuntimeSanitizedTransaction = replay.verifiers.RuntimeSanitizedTransaction;
+const ReplayEntry = replay.verifiers.ReplayEntry;
+const TransactionVerifyAndHasher = replay.verifiers.TransactionVerifyAndHasher;
+
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
 const ReplayState = struct {
     tower: Tower,
     bank_forks: BankForks,
     blockstore_reader: BlockstoreReader,
+    entry_confirmer: EntryConfirmer,
 
-    fn init() ReplayState {
+    fn init(allocator: Allocator) ReplayState {
         const tower = try tower_storage.load() orelse Tower.init();
-        return .{ .tower = tower };
+        return .{
+            .tower = tower,
+            .entry_confirmer = EntryConfirmer.init(allocator),
+        };
     }
 };
 
@@ -95,6 +107,7 @@ const ReplayActiveBankError = Allocator.Error | error{BankNotFound};
 fn replayActiveBank(
     allocator: Allocator,
     logger: ScopedLogger,
+    entry_confirmer: *EntryConfirmer,
     blockstore_reader: *const BlockstoreReader,
     bank_forks: *BankForks,
     progress: *ProgressMap,
@@ -120,7 +133,7 @@ fn replayActiveBank(
         try blockstore_reader.getSlotEntriesWithShredInfo(bank_slot, start_shred, false);
     _ = num_shreds; // autofix
 
-    try confirmSlotEntries(logger, bank, entries, slot, slot_is_full, false, false);
+    try entry_confirmer.confirmSlotEntries(logger, bank, entries, slot, slot_is_full, false, false);
 }
 
 pub const ConfirmationProgress = struct {
@@ -131,38 +144,62 @@ pub const ConfirmationProgress = struct {
     num_txs: usize,
 };
 
-/// Placeholder to represent that we will need to introduce a synchronization
-/// mechanism for the contained data eventually, but it's not needed currently
-/// since it's not yet used in a multithreaded context.
-pub fn PseudoMux(T: type) type {
-    return struct { get: T };
-}
-
-/// agave: confirm_slot
-fn confirmSlotEntries(
-    entry_verifier: *AsyncEntryVerifier,
-    progress: *ConfirmationProgress,
+pub const EntryConfirmer = struct {
     logger: ScopedLogger,
-    bank: *const Bank,
-    entries: []const Entry,
-    slot: Slot,
-    slot_is_full: bool,
-    allow_dead_slots: bool,
-) BlockstoreProcessorError!void {
-    _ = slot; // autofix
-    _ = allow_dead_slots; // autofix
-    // TODO: send each entry to entry notification sender
-    try verifyTicks(logger, bank, entries, slot_is_full, progress.get.tick_hash_count);
-    entry_verifier.start(progress.get.last_entry, entries);
+    entry_verifier: EntryVerifier,
+    transaction_verifier: TransactionVerifyAndHasher,
+    list_recycler: *ListRecycler(RuntimeSanitizedTransaction),
 
-    // TODO: verify transaction signatures:
-    //     TODO: call entry::start_verify_transactions
-    //     TODO: return error on failure
-    // TODO: executes entry transactions and verify results
-    //     TODO: call process_entries
-    // TODO: entry::finish_verify
-    entry_verifier.finish();
-}
+    const list_recycler_size = 100; // TODO tune
+
+    pub fn init(allocator: Allocator, logger: ScopedLogger, thread_pool: *ThreadPool) EntryConfirmer {
+        const entry_verifier = try EntryVerifier
+            .init(allocator, thread_pool, thread_pool.max_thread);
+        errdefer entry_verifier.deinit(allocator);
+
+        const list_recycler = try allocator.create(ListRecycler(RuntimeSanitizedTransaction));
+        list_recycler.* = ListRecycler(RuntimeSanitizedTransaction)
+            .init(allocator, list_recycler_size);
+        errdefer list_recycler.deinit(allocator);
+
+        const transaction_verifier = try TransactionVerifyAndHasher
+            .init(allocator, thread_pool, list_recycler, thread_pool.max_thread);
+        errdefer transaction_verifier.deinit(allocator);
+
+        return .{
+            .logger = logger,
+            .entry_verifier = entry_verifier,
+            .transaction_verifier = transaction_verifier,
+            .list_recycler = list_recycler,
+        };
+    }
+
+    /// agave: confirm_slot
+    fn confirmSlotEntries(
+        self: *EntryConfirmer,
+        progress: *ConfirmationProgress,
+        bank: *const Bank,
+        entries: []const Entry,
+        slot: Slot,
+        slot_is_full: bool,
+        allow_dead_slots: bool,
+    ) BlockstoreProcessorError!void {
+        _ = slot; // autofix
+        _ = allow_dead_slots; // autofix
+        // TODO: send each entry to entry notification sender
+        try verifyTicks(self.logger, bank, entries, slot_is_full, progress.get.tick_hash_count);
+        self.transaction_verifier.start(entries);
+        try self.transaction_verifier.finish(self.replay_transactions);
+        self.entry_verifier.start(progress.last_entry, entries);
+
+        // TODO: executes entry transactions and verify results
+        //     TODO: call process_entries
+
+        if (self.entry_verifier.finish()) {
+            return error.PohVerificationFailed;
+        }
+    }
+};
 
 const BlockstoreProcessorError = BlockError;
 

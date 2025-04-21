@@ -32,7 +32,7 @@ pub const Entry = struct {
 
 /// analogous to agave's [impl EntrySlice for [Entry]](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L632)
 pub const entry_slice = struct {
-    /// analogous to [tick_count](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L904)
+    /// Count the number of ticks in all the entries
     pub fn tickCount(entries: []const Entry) u64 {
         var tick_count: u64 = 0;
         for (entries) |entry| {
@@ -72,78 +72,6 @@ pub const entry_slice = struct {
     }
 };
 
-/// Verifies entries asynchronously in a thread pool by reproducing the poh
-/// chain in parallel and aggregating the results.
-///
-/// TODO: use SIMDs or GPU to vastly increase parallelism
-pub const AsyncEntryVerifier = struct {
-    allocator: Allocator,
-    thread_pool: sig.utils.thread.HomogeneousThreadPool(Task),
-    preallocated_nodes: []const std.ArrayListUnmanaged(Hash),
-    max_tasks: usize,
-    running: bool,
-
-    const Task = struct {
-        allocator: Allocator,
-        preallocated_nodes: *std.ArrayListUnmanaged(Hash),
-        initial_hash: Hash,
-        entries: []const Entry,
-
-        pub fn run(self: *Task) bool {
-            return verifyPoh(self.allocator, self.preallocated_nodes, self.initial_hash, self.entries);
-        }
-    };
-
-    pub fn init(allocator: Allocator, num_threads: u32) Allocator.Error!AsyncEntryVerifier {
-        const preallocated_nodes = try allocator.alloc(std.ArrayListUnmanaged(Hash), num_threads);
-        for (preallocated_nodes) |pn| pn = .{};
-        return .{
-            .allocator = allocator,
-            .thread_pool = try sig.utils.thread.HomogeneousThreadPool(Task)
-                .init(allocator, num_threads, num_threads),
-            .preallocated_nodes = preallocated_nodes,
-            .max_tasks = num_threads,
-        };
-    }
-
-    pub fn deinit(self: AsyncEntryVerifier) void {
-        self.thread_pool.deinit();
-        self.allocator.free(self.preallocated_nodes);
-    }
-
-    /// Schedule verification tasks into the thread pool.
-    /// Call `finish` to get the result.
-    pub fn start(self: *AsyncEntryVerifier, initial_hash: Hash, entries: []const Entry) void {
-        std.debug.assert(!self.running);
-        self.running = true;
-        if (entries.len == 0) return true;
-        const num_tasks = @min(self.max_tasks, entries.len);
-        const entries_per_task = entries.len / num_tasks;
-        var batch_initial_hash = initial_hash;
-        for (0..num_tasks) |i| {
-            const end = if (i == num_tasks + 1) entries.len else i * entries_per_task;
-            self.thread_pool.schedule(.{
-                .allocator = self.allocator,
-                .preallocated_nodes = &self.preallocated_nodes[i],
-                .initial_hash = batch_initial_hash,
-                .entries = entries[i..end],
-            });
-            batch_initial_hash = entries[end - 1];
-        }
-    }
-
-    /// Block until all verification tasks are complete, and return the result.
-    pub fn finish(self: *AsyncEntryVerifier) Allocator.Error!bool {
-        defer self.running = false;
-        const results = try self.thread_pool.join();
-        defer results.deinit();
-        for (results.items) |result| {
-            if (!try result) return false;
-        }
-        return true;
-    }
-};
-
 /// Simple PoH validation that validates the hash of every entry in sequence.
 pub fn verifyPoh(
     allocator: Allocator,
@@ -175,8 +103,9 @@ pub fn verifyPoh(
     return true;
 }
 
-/// Hash a group of transactions (typically extracted from an Entry) as a merkle
-/// tree and return the root node.
+/// Hash a group of transactions as a merkle tree and return the root node.
+///
+/// This is typically used to get an Entry's hash for PoH.
 ///
 /// Optionally accepts a pointer to a list of hashes for reuse across calls to
 /// minimize the number of allocations when hashing large numbers of entries.

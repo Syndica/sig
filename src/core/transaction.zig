@@ -3,6 +3,9 @@ const sig = @import("../sig.zig");
 
 const leb = std.leb;
 
+const Allocator = std.mem.Allocator;
+const Blake3 = std.crypto.hash.Blake3;
+
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
@@ -94,6 +97,36 @@ pub const Transaction = struct {
 
     pub fn validate(self: Transaction) !void {
         try self.msg.validate();
+    }
+
+    pub const VerifyError = error{
+        /// The message is larger than the largest allowed transaction message size.
+        NoSpaceLeft,
+        /// Signature verification failure due to input being in wrong form.
+        NonCanonicalError,
+        /// There are not as many accounts as there are signatures.
+        NotEnoughAccounts,
+        /// A signature was invalid.
+        SignatureVerificationFailed,
+    };
+
+    /// Verify the transaction signatures and return the blake3 hash of the message.
+    pub fn verifyAndHashMessage(self: Transaction) VerifyError!Hash {
+        var bytes: [MAX_BYTES]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&bytes);
+        try self.msg.serialize(stream.writer(), self.version);
+        const serialized_msg = stream.getWritten();
+
+        if (self.msg.account_keys.len > self.signatures.len) {
+            return error.NotEnoughAccounts;
+        }
+        for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
+            if (!try signature.verify(pubkey, serialized_msg)) {
+                return error.SignatureVerificationFailed;
+            }
+        }
+
+        return TransactionMessage.hash(serialized_msg);
     }
 };
 
@@ -262,6 +295,16 @@ pub const TransactionMessage = struct {
                     return error.AccountIndexOutOfBounds;
             }
         }
+    }
+
+    /// Return the blake3 hash of the pre-serialized message.
+    pub fn hash(serialized_message: []const u8) Hash {
+        var hasher = Blake3.init(.{});
+        hasher.update("solana-tx-message-v1");
+        hasher.update(serialized_message);
+        var the_hash: Hash = undefined;
+        hasher.final(&the_hash.data);
+        return the_hash;
     }
 };
 
