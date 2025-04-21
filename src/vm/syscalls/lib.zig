@@ -4,6 +4,7 @@ const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
 const cpi = @import("cpi.zig");
 const features = sig.runtime.features;
+const stable_log = sig.runtime.stable_log;
 
 const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
@@ -223,24 +224,27 @@ pub fn register(
 
 // logging
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
-pub fn log(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn log(tc: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
     const vm_addr = registers.get(.r1);
     const len = registers.get(.r2);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L15-L19
-    const cost = @max(ctx.compute_budget.syscall_base_cost, len);
-    try ctx.consumeCompute(cost);
+    try tc.consumeCompute(@max(tc.compute_budget.syscall_base_cost, len));
 
-    const host_addr = try mmap.vmap(.constant, vm_addr, len);
-    const string = std.mem.sliceTo(host_addr, 0);
-    try ctx.log("{s}", .{string});
+    const message = if (len > 0)
+        try mmap.vmap(.constant, vm_addr, len)
+    else
+        &[_]u8{};
+
+    if (!std.unicode.utf8ValidateSlice(message)) {
+        return SyscallError.InvalidString;
+    }
+
+    try stable_log.programLog(tc, message);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
-pub fn log64(ctx: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Error!void {
-    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L47-L48
-    const cost = ctx.compute_budget.log_64_units;
-    try ctx.consumeCompute(cost);
+pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Error!void {
+    try tc.consumeCompute(tc.compute_budget.log_64_units);
 
     const arg1 = registers.get(.r1);
     const arg2 = registers.get(.r2);
@@ -248,31 +252,31 @@ pub fn log64(ctx: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Er
     const arg4 = registers.get(.r4);
     const arg5 = registers.get(.r5);
 
-    try ctx.log(
-        "0x{x} 0x{x} 0x{x} 0x{x} 0x{x}",
+    const message = try std.fmt.allocPrint(
+        tc.allocator,
+        "0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}",
         .{ arg1, arg2, arg3, arg4, arg5 },
     );
+
+    try stable_log.programLog(tc, message);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
-pub fn logPubkey(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L94-L95
-    const cost = ctx.compute_budget.log_pubkey_units;
-    try ctx.consumeCompute(cost);
+pub fn logPubkey(tc: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+    const vm_addr = registers.get(.r1);
 
-    const pubkey_addr = registers.get(.r1);
-    const pubkey_bytes = try mmap.vmap(.constant, pubkey_addr, @sizeOf(Pubkey));
+    try tc.consumeCompute(tc.compute_budget.log_pubkey_units);
+
+    const pubkey_bytes = try mmap.vmap(.constant, vm_addr, Pubkey.SIZE);
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
-    try ctx.log("log: {}", .{pubkey});
+
+    try stable_log.programLog(tc, pubkey.base58String().constSlice());
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
-pub fn logComputeUnits(ctx: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
-    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L70-L71
-    const cost = ctx.compute_budget.syscall_base_cost;
-    try ctx.consumeCompute(cost);
-
-    try ctx.log("TODO: compute budget calculations", .{});
+pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+    try tc.log("Program consumption: {} units remaining", .{tc.compute_meter});
 }
 
 // memory operators
