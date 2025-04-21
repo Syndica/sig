@@ -436,8 +436,9 @@ test "aligned vmap" {
     var program_mem: [4]u8 = .{0xFF} ** 4;
     var stack_mem: [4]u8 = .{0xDD} ** 4;
 
-    const m = try MemoryMap.init(
-        std.testing.failing_allocator,
+    const allocator = std.testing.allocator; // needed for regions dupe
+    var m = try MemoryMap.init(
+        allocator,
         &.{
             Region.init(.mutable, &program_mem, RODATA_START),
             Region.init(.constant, &stack_mem, STACK_START),
@@ -445,6 +446,7 @@ test "aligned vmap" {
         .v3,
         .{},
     );
+    defer m.deinit(allocator);
 
     try expectEqual(
         program_mem[0..1],
@@ -478,8 +480,9 @@ test "aligned region" {
     var program_mem: [4]u8 = .{0xFF} ** 4;
     var stack_mem: [4]u8 = .{0xDD} ** 4;
 
-    const m = try MemoryMap.init(
-        std.testing.failing_allocator,
+    const allocator = std.testing.allocator; // needed for regions dupe
+    var m = try MemoryMap.init(
+        allocator,
         &.{
             Region.init(.mutable, &program_mem, RODATA_START),
             Region.init(.constant, &stack_mem, STACK_START),
@@ -487,6 +490,7 @@ test "aligned region" {
         .v3,
         .{},
     );
+    defer m.deinit(allocator);
 
     try expectError(error.AccessViolation, m.region(.constant, RODATA_START - 1));
     try expectEqual(&program_mem, (try m.region(.constant, RODATA_START)).hostSlice(.constant));
