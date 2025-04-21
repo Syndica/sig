@@ -419,7 +419,7 @@ fn constructInstructionsAccount(
         });
     }
 
-    // [agave] solana-instructions-sysvar-2.2.1/src/lib.rs:68
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d1467c1ab0c35e1a3b905b8ba0ac0bf538/instructions-sysvar/src/lib.rs#L68
     var data = try runtime.sysvar.instruction.serializeInstructions(
         allocator,
         decompiled_instructions.items,

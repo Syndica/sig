@@ -45,7 +45,6 @@ pub const RentCollector = struct {
         };
     }
 
-    // [agave] RentCollector::collect_from_existing_account / SVMRentCollector::collect_rent
     pub fn collectFromExistingAccount(
         self: RentCollector,
         address: *const Pubkey,

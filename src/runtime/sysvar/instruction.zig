@@ -3,14 +3,14 @@ const sig = @import("../../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const Instruction = sig.core.Instruction;
 
-// [agave] solana-instructions-sysvar-2.2.1/src/lib.rs:77
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d1467c1ab0c35e1a3b905b8ba0ac0bf538/instructions-sysvar/src/lib.rs#L77
 pub const InstructionsSysvarAccountMeta = packed struct(u8) {
     is_signer: bool,
     is_writable: bool,
     _: u6 = 0, // padding
 };
 
-// [agave] solana-instructions-sysvar-2.2.1/src/lib.rs:99
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d1467c1ab0c35e1a3b905b8ba0ac0bf538/instructions-sysvar/src/lib.rs#L99
 // First encode the number of instructions:
 // [0..2 - num_instructions
 //
