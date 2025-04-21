@@ -375,12 +375,15 @@ pub fn abort(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
 pub fn panic(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
     const file = registers.get(.r1);
     const len = registers.get(.r2);
-    // const line = registers.get(.r3);
-    // const column = registers.get(.r4);
+
+    try ctx.consumeCompute(len);
 
     const message = try mmap.vmap(.constant, file, len);
-    try ctx.log("panic: {s}", .{message});
-    return SyscallError.Abort;
+    if (!std.unicode.utf8ValidateSlice(message)) {
+        return SyscallError.InvalidString;
+    }
+
+    return SyscallError.Panic;
 }
 
 test poseidon {
