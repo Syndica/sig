@@ -37,6 +37,7 @@ pub const Error = error{
     MaxInstructionDataLenExceeded,
     MaxInstructionAccountsExceeded,
     MaxInstructionAccountInfosExceeded,
+    ProgramNotSupported,
 } || std.fs.File.WriteError || InstructionError || sig.vm.memory.RegionError;
 
 pub const Syscall = *const fn (

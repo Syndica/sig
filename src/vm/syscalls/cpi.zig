@@ -24,6 +24,7 @@ const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 const SyscallError = sig.vm.syscalls.Error;
+const PRECOMPILES = sig.runtime.program.precompile_programs.PRECOMPILES;
 
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
@@ -1320,8 +1321,35 @@ pub fn cpiCommon(
         signers.slice(),
     );
 
-    // TODO check_authorized_program(ic, instruction):
+    // check_authorized_program(ic, instruction):
     // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1028C4-L1028C28
+    if (ids.NATIVE_LOADER_ID.equals(&instruction.program_id) or
+        bpf_loader_program.v1.ID.equals(&instruction.program_id) or
+        bpf_loader_program.v2.ID.equals(&instruction.program_id) or
+        (bpf_loader_program.v3.ID.equals(&instruction.program_id) and !(blk: {
+        // Check valid upgradable instruction
+        const v3_instruction = try info.deserializeInstruction(
+            allocator,
+            bpf_loader_program.v3.Instruction,
+        );
+        defer sig.bincode.free(allocator, v3_instruction);
+        break :blk switch (v3_instruction) {
+            .close => true,
+            .upgrade => true,
+            .set_authority => true,
+            .set_authority_checked => ic.ec.feature_set.active.contains(
+                features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
+            ),
+            else => false,
+        };
+    })) or (blk: {
+        for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
+        break :blk false;
+    })) {
+        // TODO add {instruction.program_id} as context to error.
+        // https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1048
+        return SyscallError.ProgramNotSupported;
+    }
 
     var accounts = try translateAccounts(
         allocator,
