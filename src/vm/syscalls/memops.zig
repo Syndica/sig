@@ -48,10 +48,10 @@ const MemoryChunkIterator = struct {
     fn next(self: *MemoryChunkIterator) !?Chunk {
         if (self.start == self.end) return null;
 
-        const region = switch (self.reversed) {
+        const region = (switch (self.reversed) {
             true => try self.mmap.region(.constant, self.end -| 1),
             false => try self.mmap.region(.constant, self.start),
-        };
+        }).*;
 
         var region_is_account: bool = false;
 

@@ -265,7 +265,7 @@ pub const AlignedMemoryMap = struct {
         len: u64,
     ) AccessError!state.Slice() {
         const reg = try self.findRegion(vm_addr);
-        return self.mapRegion(state, reg, vm_addr, len);
+        return self.mapRegion(state, reg.*, vm_addr, len);
     }
 
     fn mapRegion(
@@ -414,7 +414,7 @@ const UnalignedMemoryMap = struct {
         len: u64,
     ) AccessError!access_type.Slice() {
         const reg = try self.findRegion(vm_addr);
-        return self.mapRegion(access_type, reg, vm_addr, len);
+        return self.mapRegion(access_type, reg.*, vm_addr, len);
     }
 
     fn mapRegion(
