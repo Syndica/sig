@@ -1092,12 +1092,6 @@ pub const Tower = struct {
         slot_history: *const SlotHistory,
     ) !void {
         const tower_root = try self.getRoot();
-        // retained slots will be consisted only from divergent slots
-        var retain_flags_for_each_vote_in_reverse = try std.ArrayListUnmanaged(bool).initCapacity(
-            allocator,
-            self.vote_state.votes.items.len,
-        );
-        defer retain_flags_for_each_vote_in_reverse.deinit(allocator);
 
         var still_in_future = true;
         var past_outside_history = false;
@@ -1107,9 +1101,17 @@ pub const Tower = struct {
         var slots_in_tower = std.ArrayList(Slot).init(allocator);
         defer slots_in_tower.deinit();
         try slots_in_tower.append(tower_root);
+
         const voted = try self.votedSlots(allocator);
         defer allocator.free(voted);
         try slots_in_tower.appendSlice(voted);
+
+        // retained slots will be consisted only from divergent slots
+        var retain_flags_for_each_vote_in_reverse = try std.ArrayListUnmanaged(bool).initCapacity(
+            allocator,
+            slots_in_tower.items.len,
+        );
+        defer retain_flags_for_each_vote_in_reverse.deinit(allocator);
 
         // iterate over votes + root (if any) in the newest => oldest order
         // bail out early if bad condition is found
