@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const AutoHashMap = std.AutoHashMap;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const Account = sig.core.Account;
@@ -62,7 +62,7 @@ const SwitchForkDecision = union(enum) {
 pub const Stake = u64;
 
 pub const VotedSlot = Slot;
-pub const VotedStakes = AutoHashMap(Slot, Stake);
+pub const VotedStakes = AutoHashMapUnmanaged(Slot, Stake);
 
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
@@ -500,7 +500,7 @@ pub const Tower = struct {
         candidate_slot: Slot,
         last_voted_slot: Slot,
         switch_slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
         last_vote_ancestors: *const SortedSet(Slot),
     ) ?bool {
 
@@ -567,8 +567,8 @@ pub const Tower = struct {
         self: *const Tower,
         allocator: std.mem.Allocator,
         switch_slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
-        descendants: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        descendants: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const VoteAccountsHashMap,
@@ -879,8 +879,8 @@ pub const Tower = struct {
         self: *Tower,
         allocator: std.mem.Allocator,
         switch_slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
-        descendants: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        descendants: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const VoteAccountsHashMap,
@@ -1331,7 +1331,7 @@ pub const Tower = struct {
         vote_account_pubkey: *const Pubkey,
         bank_slot: Slot,
         vote_accounts: *const VoteAccountsHashMap,
-        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
         get_frozen_hash: fn (Slot) ?Hash,
         latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
     ) ComputedBankState {
@@ -1507,7 +1507,7 @@ pub const Tower = struct {
     fn isDescendantSlot(
         maybe_descendant: Slot,
         slot: Slot,
-        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
     ) ?bool {
         return if (ancestors.get(maybe_descendant)) |candidate_slot_ancestors|
             candidate_slot_ancestors.contains(slot)
@@ -1523,7 +1523,7 @@ pub const Tower = struct {
     /// * `slot_b` is not in `ancestors`
     /// * There is no common ancestor of slot_a and slot_b in `ancestors`
     fn greatestCommonAncestor(
-        ancestors: *const std.AutoHashMap(
+        ancestors: *const AutoHashMapUnmanaged(
             Slot,
             SortedSet(Slot),
         ),
@@ -1578,7 +1578,7 @@ pub const Tower = struct {
         threshold_depth: usize,
         threshold_size: f64,
         slot: Slot,
-        voted_stakes: *const std.AutoHashMap(Slot, u64),
+        voted_stakes: *const AutoHashMapUnmanaged(Slot, u64),
         total_stake: u64,
     ) ThresholdDecision {
         const threshold_vote = maybe_threshold_vote orelse {
@@ -1626,7 +1626,7 @@ pub const Tower = struct {
     pub fn populateAncestorVotedStakes(
         voted_stakes: *SortedSet(Slot),
         vote_slots: []const Slot,
-        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
     ) !void {
         // If there's no ancestors, that means this slot must be from before the current root,
         // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
@@ -1646,7 +1646,7 @@ pub const Tower = struct {
         voted_stakes: *VotedStakes,
         voted_slot: Slot,
         voted_stake: u64,
-        ancestors: *const std.AutoHashMap(Slot, SortedSet(Slot)),
+        ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
     ) void {
         // If there's no ancestors, that means this slot must be from
         // before the current root, so ignore this slot
@@ -1666,10 +1666,11 @@ test "tower: check vote threshold without votes" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
-    try stakes.put(0, 1);
+    stakes.putAssumeCapacity(0, 1);
 
     const result = try tower.checkVoteStakeThresholds(
         std.testing.allocator,
@@ -1685,11 +1686,12 @@ test "tower: check vote threshold no skip lockout with new root" {
     var tower = try createTestTower(std.testing.allocator, 4, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, MAX_LOCKOUT_HISTORY);
 
     for (0..(MAX_LOCKOUT_HISTORY + 1)) |i| {
-        try stakes.put(i, 1);
+        stakes.putAssumeCapacity(i, 1);
         _ = try tower.recordBankVoteAndUpdateLockouts(
             std.testing.allocator,
             i,
@@ -1713,10 +1715,11 @@ test "tower: is slot confirmed not enough stake failure" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
-    try stakes.put(0, 1);
+    stakes.putAssumeCapacity(0, 1);
 
     const result = isSlotConfirmed(&tower, 0, &stakes, 2);
     try std.testing.expect(!result);
@@ -1726,8 +1729,8 @@ test "tower: is slot confirmed unknown slot" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
 
     const result = isSlotConfirmed(&tower, 0, &stakes, 2);
     try std.testing.expect(!result);
@@ -1737,20 +1740,22 @@ test "tower: is slot confirmed pass" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
-    try stakes.put(0, 2);
+    stakes.putAssumeCapacity(0, 2);
 
     const result = isSlotConfirmed(&tower, 0, &stakes, 2);
     try std.testing.expect(result);
 }
 
 test "tower: is slot duplicate confirmed not enough stake failure" {
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
-    try stakes.put(0, 52);
+    stakes.putAssumeCapacity(0, 52);
 
     const result = Tower.isSlotDuplicateConfirmed(
         0,
@@ -1761,8 +1766,8 @@ test "tower: is slot duplicate confirmed not enough stake failure" {
 }
 
 test "tower: is slot duplicate confirmed unknown slot" {
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
 
     const result = Tower.isSlotDuplicateConfirmed(
         0,
@@ -1773,10 +1778,11 @@ test "tower: is slot duplicate confirmed unknown slot" {
 }
 
 test "tower: is slot duplicate confirmed pass" {
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
-    try stakes.put(0, 53);
+    stakes.putAssumeCapacity(0, 53);
 
     const result = Tower.isSlotDuplicateConfirmed(
         0,
@@ -2011,10 +2017,11 @@ test "tower: check vote threshold below threshold" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
-    try stakes.put(0, 1);
+    stakes.putAssumeCapacity(0, 1);
 
     _ = try tower.recordBankVoteAndUpdateLockouts(
         std.testing.allocator,
@@ -2038,10 +2045,11 @@ test "tower: check vote threshold above threshold" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
-    try stakes.put(0, 2);
+    stakes.putAssumeCapacity(0, 2);
 
     _ = try tower.recordBankVoteAndUpdateLockouts(
         std.testing.allocator,
@@ -2065,12 +2073,13 @@ test "tower: check vote thresholds above thresholds" {
     var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 3);
 
-    try stakes.put(0, 3);
-    try stakes.put(VOTE_THRESHOLD_DEPTH_SHALLOW, 2);
-    try stakes.put(VOTE_THRESHOLD_DEPTH_SHALLOW - 1, 2);
+    stakes.putAssumeCapacity(0, 3);
+    stakes.putAssumeCapacity(VOTE_THRESHOLD_DEPTH_SHALLOW, 2);
+    stakes.putAssumeCapacity(VOTE_THRESHOLD_DEPTH_SHALLOW - 1, 2);
 
     for (0..VOTE_THRESHOLD_DEPTH) |i| {
         _ = try tower.recordBankVoteAndUpdateLockouts(
@@ -2097,11 +2106,12 @@ test "tower: check vote threshold deep below threshold" {
     var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 2);
 
-    try stakes.put(0, 6);
-    try stakes.put(VOTE_THRESHOLD_DEPTH_SHALLOW, 4);
+    stakes.putAssumeCapacity(0, 6);
+    stakes.putAssumeCapacity(VOTE_THRESHOLD_DEPTH_SHALLOW, 4);
 
     for (0..VOTE_THRESHOLD_DEPTH) |i| {
         _ = try tower.recordBankVoteAndUpdateLockouts(
@@ -2128,11 +2138,12 @@ test "tower: check vote threshold shallow below threshold" {
     var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 2);
 
-    try stakes.put(0, 7);
-    try stakes.put(VOTE_THRESHOLD_DEPTH_SHALLOW, 1);
+    stakes.putAssumeCapacity(0, 7);
+    stakes.putAssumeCapacity(VOTE_THRESHOLD_DEPTH_SHALLOW, 1);
 
     for (0..VOTE_THRESHOLD_DEPTH) |i| {
         _ = try tower.recordBankVoteAndUpdateLockouts(
@@ -2159,10 +2170,11 @@ test "tower: check vote threshold above threshold after pop" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
-    try stakes.put(0, 2);
+    stakes.putAssumeCapacity(0, 2);
 
     for (0..3) |i| {
         _ = try tower.recordBankVoteAndUpdateLockouts(
@@ -2189,8 +2201,8 @@ test "tower: check vote threshold above threshold no stake" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
 
     _ = try tower.recordBankVoteAndUpdateLockouts(
         std.testing.allocator,
@@ -2215,11 +2227,12 @@ test "tower: check vote threshold lockouts not updated" {
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = std.AutoHashMap(u64, u64).init(std.testing.allocator);
-    defer stakes.deinit();
+    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 2);
 
-    try stakes.put(0, 1);
-    try stakes.put(1, 2);
+    stakes.putAssumeCapacity(0, 1);
+    stakes.putAssumeCapacity(1, 2);
 
     for (0..3) |i| {
         _ = try tower.recordBankVoteAndUpdateLockouts(
