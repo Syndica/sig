@@ -2,7 +2,7 @@ const phash = @import("poseidon");
 const std = @import("std");
 const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
-
+const cpi = @import("cpi.zig");
 const features = sig.runtime.features;
 
 const Pubkey = sig.core.Pubkey;
@@ -170,8 +170,16 @@ pub fn register(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_return_data", getReturnData,);
 
     // Cross Program Invocation
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_c", invokeSignedC,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", invokeSignedRust,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_invoke_signed_c",
+        invokeSignedC,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_invoke_signed_rust",
+        invokeSignedRust,
+    );
 
     // Memory Allocator
     if (!feature_set.isActive(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL, slot)) {
@@ -399,5 +407,42 @@ test poseidon {
             .{ .name = "sol_panic_", .builtin_fn = panic },
         },
         .{ 0, 48526 },
+    );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
+pub fn invokeSignedC(ctx: *TransactionContext, mmap: *MemoryMap, rm: RegisterMap) Error!void {
+    return invokeSigned(cpi.AccountInfoC, ctx, mmap, rm);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
+pub fn invokeSignedRust(ctx: *TransactionContext, mmap: *MemoryMap, rm: RegisterMap) Error!void {
+    return invokeSigned(cpi.AccountInfoRust, ctx, mmap, rm);
+}
+
+fn invokeSigned(
+    comptime AccountInfoType: type,
+    ctx: *TransactionContext,
+    mmap: *MemoryMap,
+    registers: RegisterMap,
+) Error!void {
+    const instruction_addr = registers.get(.r1);
+    const account_infos_addr = registers.get(.r2);
+    const account_infos_len = registers.get(.r3);
+    const signers_seeds_addr = registers.get(.r4);
+    const signers_seeds_len = registers.get(.r5);
+
+    const caller_ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+
+    return cpi.cpiCommon(
+        ctx.allocator,
+        caller_ic,
+        mmap,
+        AccountInfoType,
+        instruction_addr,
+        account_infos_addr,
+        account_infos_len,
+        signers_seeds_addr,
+        signers_seeds_len,
     );
 }

@@ -81,7 +81,7 @@ const AccountMetaC = extern struct {
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
-const AccountInfoRust = extern struct {
+pub const AccountInfoRust = extern struct {
     key_addr: u64,
     lamports_addr: Rc(RefCell(u64)),
     data: Rc(RefCell([]u8)),
@@ -93,7 +93,7 @@ const AccountInfoRust = extern struct {
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/359d7eb2b68639443d750ffcec0c7e358f138975/bpf_loader/src/syscalls/cpi.rs#L597
-const AccountInfoC = extern struct {
+pub const AccountInfoC = extern struct {
     key_addr: u64,
     lamports_addr: u64,
     data_len: u64,
@@ -650,7 +650,7 @@ fn updateCalleeAccount(
     return must_update_caller;
 }
 
-const TranslatedAccount = struct { index_in_caller: u64, caller_account: ?CallerAccount };
+const TranslatedAccount = struct { index_in_caller: u16, caller_account: ?CallerAccount };
 const TranslatedAccounts = std.BoundedArray(TranslatedAccount, InstructionInfo.MAX_ACCOUNT_METAS);
 
 /// Implements SyscallInvokeSigned::translate_accounts for both AccountInfoRust & AccountInfoC.
@@ -1292,9 +1292,9 @@ fn updateCallerAccount(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L1080
-fn cpiCommon(
+pub fn cpiCommon(
     allocator: std.mem.Allocator,
-    ic: *const InstructionContext,
+    ic: *InstructionContext,
     memory_map: *MemoryMap,
     comptime AccountInfoType: type,
     instruction_addr: u64,
@@ -1302,7 +1302,7 @@ fn cpiCommon(
     account_infos_len: u64,
     signers_seeds_addr: u64,
     signers_seeds_len: u64,
-) !u64 {
+) !void {
     try ic.tc.consumeCompute(ic.tc.compute_budget.invoke_units);
 
     // TODO:
@@ -1402,7 +1402,7 @@ fn cpiCommon(
         }
     }
 
-    for (accounts.slice()) |acc| {
+    for (accounts.slice()) |*acc| {
         if (acc.caller_account == null) continue;
 
         const caller_account: *CallerAccount = &acc.caller_account.?;
@@ -2632,10 +2632,10 @@ test "vm.syscalls.cpi: updateCallerAccount: data capacity direct mapping" {
 
     var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
     defer callee_account.release();
-    
+
     // Update the buffer.
     try callee_account.setDataFromSlice(allocator, &ctx.tc.accounts_resize_delta, "baz");
-    
+
     {
         // TODO: ensure enough account data capacity (no data capacity atm).
         // try std.testing.expect(callee_account.capacity >= 3);
@@ -2650,7 +2650,7 @@ test "vm.syscalls.cpi: updateCallerAccount: data capacity direct mapping" {
             false, // is_loader_deprecated
             true, // direct_mapping
         );
-        
+
         // TODO: ensure enough account data capacity (no data capacity atm).
         // try std.testing.expect(callee_account.capacity >= caller_account.original_data_len);
         try std.testing.expectEqual(callee_account.constAccountData().len, 3);
