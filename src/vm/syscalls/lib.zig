@@ -14,7 +14,6 @@ const BuiltinProgram = sig.vm.BuiltinProgram;
 const FeatureSet = sig.runtime.features.FeatureSet;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
-const InstructionError = sig.core.instruction.InstructionError;
 
 pub const Error = sig.vm.ExecutionError;
 
