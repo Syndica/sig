@@ -3,43 +3,36 @@ const std = @import("std");
 /// ***FnvHasher*** is a FNV-1 (64-bit) hasher implementation.
 /// See: https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
 pub const FnvHasher = struct {
-    hashh: u64,
+    accumulator: u64,
 
-    const Self = @This();
-    const prime: u64 = 0x100000001b3;
+    const PRIME: u64 = 0x100000001b3;
     pub const DEFAULT_OFFSET: u64 = 0xcbf29ce484222325;
 
-    pub fn init() Self {
-        return Self{
-            .hashh = DEFAULT_OFFSET,
-        };
+    pub const init: FnvHasher = .{ .accumulator = DEFAULT_OFFSET };
+
+    pub fn initWithOffset(offset: u64) FnvHasher {
+        return .{ .accumulator = offset };
     }
 
-    pub fn initWithOffset(offset: u64) Self {
-        return Self{
-            .hashh = offset,
-        };
-    }
-
-    pub fn update(self: *Self, input: []const u8) void {
+    pub fn update(self: *FnvHasher, input: []const u8) void {
         for (input) |byte| {
-            self.hashh ^= byte;
-            self.hashh *%= prime;
+            self.accumulator ^= byte;
+            self.accumulator *%= PRIME;
         }
     }
 
-    pub fn final(self: *Self) u64 {
-        return self.hashh;
+    pub fn final(self: *FnvHasher) u64 {
+        return self.accumulator;
     }
 
     pub fn hash(input: []const u8) u64 {
-        var c = Self.init();
+        var c = init;
         c.update(input);
         return c.final();
     }
 
     pub fn hashWithOffset(input: []const u8, offset: u64) u64 {
-        var c = Self.initWithOffset(offset);
+        var c = initWithOffset(offset);
         c.update(input);
         return c.final();
     }
@@ -48,7 +41,7 @@ pub const FnvHasher = struct {
 test "fnv hasher with default is correct" {
     const exp: u64 = 12638152016183539244;
 
-    var hasher = FnvHasher.init();
+    var hasher = FnvHasher.init;
     hasher.update(&.{1});
     const result = hasher.final();
     try std.testing.expectEqual(exp, result);
