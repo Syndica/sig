@@ -7,7 +7,7 @@ const servePrometheus = sig.prometheus.servePrometheus;
 const globalRegistry = sig.prometheus.globalRegistry;
 
 const Cmd = struct {
-    subcmd: union(enum) {
+    subcmd: ?union(enum) {
         benchmark: Benchmark,
         csv: Csv,
     },
@@ -25,7 +25,7 @@ const Cmd = struct {
         },
     };
 
-    const pipe_path_option: cli.OptionInfo([]const u8) = .{
+    const pipe_path_arg: cli.ArgumentInfo([]const u8) = .{
         .kind = .named,
         .name_override = "geyser-pipe-path",
         .alias = .none,
@@ -44,7 +44,7 @@ const Cmd = struct {
                 .long = null,
             },
             .sub = .{
-                .pipe_path = pipe_path_option,
+                .pipe_path = pipe_path_arg,
                 .measure_rate_secs = .{
                     .kind = .named,
                     .name_override = "measure-rate",
@@ -71,7 +71,7 @@ const Cmd = struct {
                 .long = null,
             },
             .sub = .{
-                .pipe_path = pipe_path_option,
+                .pipe_path = pipe_path_arg,
                 .geyser_bincode_buf_len = .{
                     .kind = .named,
                     .name_override = null,
@@ -135,7 +135,7 @@ pub fn main() !void {
     ) orelse return;
     defer parser.free(gpa, cmd);
 
-    switch (cmd.subcmd) {
+    switch (cmd.subcmd orelse return error.MissingSubcommand) {
         .benchmark => |params| try benchmark(params),
         .csv => |params| try csvDump(gpa, params),
     }

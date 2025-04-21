@@ -16,6 +16,7 @@ pub const Config = struct {
     ssh_workdir: []const u8,
     no_network_tests: bool,
     has_side_effects: bool,
+    enable_tracy: bool,
 
     pub fn fromBuild(b: *Build) !Config {
         var self = Config{
@@ -68,8 +69,7 @@ pub const Config = struct {
                 "ssh-workdir",
                 "When using ssh-host, this configures the working " ++
                     "directory where executables will run (default: sig).",
-            ) orelse
-                "sig",
+            ) orelse "sig",
             .no_network_tests = b.option(
                 bool,
                 "no-network-tests",
@@ -79,6 +79,11 @@ pub const Config = struct {
                 bool,
                 "side-effects",
                 "Disables caching of the run step",
+            ) orelse false,
+            .enable_tracy = b.option(
+                bool,
+                "enable-tracy",
+                "Enables tracy",
             ) orelse false,
         };
 
@@ -147,6 +152,15 @@ pub fn build(b: *Build) !void {
     const pretty_table_dep = b.dependency("prettytable", dep_opts);
     const pretty_table_mod = pretty_table_dep.module("prettytable");
 
+    const tracy_dep = b.dependency("tracy", .{
+        .target = config.target,
+        // needed to avoid ubsan killing tracy with system tracing on (Illegal Instruction)
+        .optimize = .ReleaseFast,
+        .tracy_enable = config.enable_tracy,
+        .tracy_no_system_tracing = false,
+    });
+    const tracy_mod = tracy_dep.module("tracy");
+
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/sig.zig"),
@@ -159,8 +173,8 @@ pub fn build(b: *Build) !void {
     sig_mod.addImport("secp256k1", secp256k1_mod);
     sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
-
     sig_mod.addImport("poseidon", poseidon_mod);
+    sig_mod.addImport("tracy", tracy_mod);
 
     switch (config.blockstore_db) {
         .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
@@ -202,6 +216,8 @@ pub fn build(b: *Build) !void {
     sig_exe.root_module.addImport("secp256k1", secp256k1_mod);
     sig_exe.root_module.addImport("ssl", ssl_mod);
     sig_exe.root_module.addImport("xev", xev_mod);
+    sig_exe.root_module.addImport("tracy", tracy_mod);
+
     switch (config.blockstore_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -229,6 +245,7 @@ pub fn build(b: *Build) !void {
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     unit_tests_exe.root_module.addImport("poseidon", poseidon_mod);
     unit_tests_exe.root_module.addImport("secp256k1", secp256k1_mod);
+    unit_tests_exe.root_module.addImport("tracy", tracy_mod);
 
     switch (config.blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -256,6 +273,8 @@ pub fn build(b: *Build) !void {
     fuzz_exe.root_module.addImport("zig-network", zig_network_mod);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
+    fuzz_exe.root_module.addImport("tracy", tracy_mod);
+
     switch (config.blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
@@ -287,6 +306,8 @@ pub fn build(b: *Build) !void {
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
     benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
+    benchmark_exe.root_module.addImport("tracy", tracy_mod);
+
     switch (config.blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},

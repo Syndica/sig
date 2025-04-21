@@ -7,9 +7,9 @@ const Slot = sig.core.Slot;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/slot-hashes/src/lib.rs#L43
 pub const SlotHashes = struct {
-    const Entry = struct { Slot, Hash };
-
     entries: []const Entry,
+
+    pub const Entry = struct { Slot, Hash };
 
     pub const ID =
         Pubkey.parseBase58String("SysvarS1otHashes111111111111111111111111111") catch unreachable;
@@ -17,6 +17,10 @@ pub const SlotHashes = struct {
     fn compareFn(context: void, key: Slot, mid_item: Entry) std.math.Order {
         _ = context;
         return std.math.order(key, mid_item[0]);
+    }
+
+    pub fn deinit(self: SlotHashes, allocator: std.mem.Allocator) void {
+        allocator.free(self.entries);
     }
 
     pub fn getIndex(self: *const SlotHashes, slot: u64) ?usize {

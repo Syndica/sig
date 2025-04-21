@@ -1,18 +1,18 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const lib = @import("lib.zig");
-const memory = @import("memory.zig");
-const interpreter = @import("interpreter.zig");
-const Vm = interpreter.Vm;
-const sbpf = @import("sbpf.zig");
-const Elf = @import("elf.zig").Elf;
-const syscalls = @import("syscalls.zig");
 
-const Executable = lib.Executable;
-const BuiltinProgram = lib.BuiltinProgram;
-const Config = lib.Config;
-const Region = memory.Region;
-const MemoryMap = memory.MemoryMap;
+const sbpf = sig.vm.sbpf;
+const memory = sig.vm.memory;
+const syscalls = sig.vm.syscalls;
+
+const Elf = sig.vm.elf.Elf;
+const Executable = sig.vm.Executable;
+const BuiltinProgram = sig.vm.BuiltinProgram;
+const Config = sig.vm.Config;
+const Region = sig.vm.memory.Region;
+const MemoryMap = sig.vm.memory.MemoryMap;
+const Vm = sig.vm.interpreter.Vm;
+const VmResult = sig.vm.interpreter.Result;
 const OpCode = sbpf.Instruction.OpCode;
 
 const expectEqual = std.testing.expectEqual;
@@ -74,6 +74,7 @@ fn testAsmWithMemory(
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
     }
     var vm = try Vm.init(
@@ -88,7 +89,7 @@ fn testAsmWithMemory(
 
     const expected_result, const expected_instruction_count = expected;
     const result, const instruction_count = vm.run();
-    try expectEqual(interpreter.Result.fromValue(expected_result), result);
+    try expectEqual(VmResult.fromValue(expected_result), result);
     try expectEqual(expected_instruction_count, instruction_count);
 }
 
@@ -1907,6 +1908,7 @@ test "pqr" {
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
     }
     const max_int = std.math.maxInt(u64);
@@ -1982,7 +1984,7 @@ test "pqr" {
 
         const config: Config = .{ .maximum_version = .v2 };
 
-        var registry: lib.Registry(u64) = .{};
+        var registry: sig.vm.Registry(u64) = .{};
         var loader: BuiltinProgram = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
@@ -2035,7 +2037,7 @@ test "pqr divide by zero" {
 
         const config: Config = .{ .maximum_version = .v2 };
 
-        var registry: lib.Registry(u64) = .{};
+        var registry: sig.vm.Registry(u64) = .{};
         var loader: BuiltinProgram = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
@@ -2058,6 +2060,7 @@ test "pqr divide by zero" {
         defer {
             ec.deinit();
             allocator.destroy(ec);
+            sc.deinit();
             allocator.destroy(sc);
         }
 
@@ -2340,6 +2343,7 @@ pub fn testElfWithSyscalls(
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
     }
     var vm = try Vm.init(
@@ -2354,7 +2358,7 @@ pub fn testElfWithSyscalls(
 
     const expected_result, const expected_instruction_count = expected;
     const result, const instruction_count = vm.run();
-    try expectEqual(interpreter.Result.fromValue(expected_result), result);
+    try expectEqual(VmResult.fromValue(expected_result), result);
     try expectEqual(expected_instruction_count, instruction_count);
 }
 
@@ -2542,7 +2546,7 @@ fn testVerifyTextBytesWithSyscalls(
         );
     }
 
-    var function_registry: lib.Registry(u64) = .{};
+    var function_registry: sig.vm.Registry(u64) = .{};
     var executable = try Executable.fromTextBytes(
         allocator,
         program,

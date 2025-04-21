@@ -21,8 +21,6 @@ comptime {
     _ = LinuxIoUring;
 }
 
-const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
-
 /// The minimum buffer read size.
 pub const MIN_READ_BUFFER_SIZE = 4096;
 
@@ -40,8 +38,7 @@ pub const WorkPool = union(enum) {
 pub const Context = struct {
     allocator: std.mem.Allocator,
     logger: sig.trace.log.ScopedLogger(LOGGER_SCOPE),
-    snapshot_dir: std.fs.Dir,
-    latest_snapshot_gen_info: *sig.sync.RwMux(?SnapshotGenerationInfo),
+    accountsdb: *sig.accounts_db.AccountsDB,
 
     /// Wait group for all currently running tasks, used to wait for
     /// all of them to finish before deinitializing.
@@ -55,12 +52,7 @@ pub const Context = struct {
         /// Must be a thread-safe allocator.
         allocator: std.mem.Allocator,
         logger: sig.trace.Logger,
-
-        /// Not closed by the `Server`, but must live at least as long as it.
-        snapshot_dir: std.fs.Dir,
-        /// Should reflect the latest generated snapshot eligible for propagation at any
-        /// given time with respect to the contents of the specified `snapshot_dir`.
-        latest_snapshot_gen_info: *sig.sync.RwMux(?SnapshotGenerationInfo),
+        accountsdb: *sig.accounts_db.AccountsDB,
 
         /// The size for the read buffer allocated to every request.
         /// Clamped to be greater than or equal to `MIN_READ_BUFFER_SIZE`.
@@ -79,8 +71,7 @@ pub const Context = struct {
         return .{
             .allocator = params.allocator,
             .logger = params.logger.withScope(LOGGER_SCOPE),
-            .snapshot_dir = params.snapshot_dir,
-            .latest_snapshot_gen_info = params.latest_snapshot_gen_info,
+            .accountsdb = params.accountsdb,
 
             .wait_group = .{},
             .read_buffer_size = @max(params.read_buffer_size, MIN_READ_BUFFER_SIZE),
@@ -133,65 +124,78 @@ test "serveSpawn snapshots" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
+    // const logger_unscoped: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
+    const logger_unscoped: sig.trace.Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
-    // const logger_unscoped: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
-    const logger_unscoped: sig.trace.Logger = .noop;
-
-    const logger = logger_unscoped.withScope(@src().fn_name);
-
-    // the directory into which the snapshots will be unpacked.
+    // the directory into which the snapshots will be unpacked and copied to.
     var unpacked_snap_dir = try tmp_dir.makeOpenPath("snapshot", .{});
     defer unpacked_snap_dir.close();
 
-    // the source from which `fundAndUnpackTestSnapshots` will unpack the snapshots.
-    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
-    defer test_data_dir.close();
+    var accountsdb = try sig.accounts_db.AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger.unscoped(),
+        .snapshot_dir = unpacked_snap_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 1,
+    });
+    defer accountsdb.deinit();
 
     const snap_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(
         std.Thread.getCpuCount() catch 1,
         unpacked_snap_dir,
     );
 
-    var latest_snapshot_gen_info = sig.sync.RwMux(?SnapshotGenerationInfo).init(blk: {
+    {
+        // the source from which `fundAndUnpackTestSnapshots` will unpack the snapshots.
+        var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
+        defer test_data_dir.close();
+
+        try test_data_dir.copyFile(
+            snap_files.full.snapshotArchiveName().constSlice(),
+            unpacked_snap_dir,
+            snap_files.full.snapshotArchiveName().constSlice(),
+            .{},
+        );
+        if (snap_files.incremental()) |incremental| {
+            try test_data_dir.copyFile(
+                incremental.snapshotArchiveName().constSlice(),
+                unpacked_snap_dir,
+                incremental.snapshotArchiveName().constSlice(),
+                .{},
+            );
+        }
+
         const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
-        const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
+        const full_inc_manifest = try FullAndIncrementalManifest.fromFiles(
             allocator,
             logger.unscoped(),
             unpacked_snap_dir,
             snap_files,
         );
-        defer all_snap_fields.deinit(allocator);
+        defer full_inc_manifest.deinit(allocator);
 
-        break :blk .{
-            .full = .{
-                .slot = snap_files.full.slot,
-                .hash = snap_files.full.hash,
-                .capitalization = all_snap_fields.full.bank_fields.capitalization,
-            },
-            .inc = inc: {
-                const inc = all_snap_fields.incremental orelse break :inc null;
-                // if the incremental snapshot field is not null, these shouldn't be either
-                const inc_info = snap_files.incremental_info.?;
-                const inc_persist = inc.bank_extra.snapshot_persistence.?;
-                break :inc .{
-                    .slot = inc_info.slot,
-                    .hash = inc_info.hash,
-                    .capitalization = inc_persist.incremental_capitalization,
-                };
-            },
-        };
-    });
+        const man = try accountsdb.loadFromSnapshotAndValidate(.{
+            .allocator = allocator,
+            .full_inc_manifest = full_inc_manifest,
+            .n_threads = 1,
+            .accounts_per_file_estimate = 1_500,
+        });
+        defer man.deinit(allocator);
+    }
 
     const rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
     const sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, rpc_port);
     var server_ctx = try Context.init(.{
         .allocator = allocator,
         .logger = logger.unscoped(),
-        .snapshot_dir = test_data_dir,
-        .latest_snapshot_gen_info = &latest_snapshot_gen_info,
+        .accountsdb = &accountsdb,
         .socket_addr = sock_addr,
         .read_buffer_size = 4096,
         .reuse_address = true,
@@ -218,7 +222,7 @@ test "serveSpawn snapshots" {
 
         try testExpectSnapshotResponse(
             allocator,
-            test_data_dir,
+            unpacked_snap_dir,
             server_ctx.tcp.listen_address.getPort(),
             .full,
             snap_files.full,
@@ -227,12 +231,149 @@ test "serveSpawn snapshots" {
         if (snap_files.incremental()) |inc| {
             try testExpectSnapshotResponse(
                 allocator,
-                test_data_dir,
+                unpacked_snap_dir,
                 server_ctx.tcp.listen_address.getPort(),
                 .incremental,
                 inc,
             );
         }
+    }
+}
+
+test "serveSpawn getAccountInfo" {
+    if (sig.build_options.no_network_tests) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    // const logger_unscoped: sig.trace.Logger = .{ .direct_print = .{ .max_level = .trace } };
+    const logger_unscoped: sig.trace.Logger = .noop;
+    const logger = logger_unscoped.withScope(@src().fn_name);
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    // the directory into which the snapshots will be unpacked.
+    var unpacked_snap_dir = try tmp_dir.makeOpenPath("snapshot", .{});
+    defer unpacked_snap_dir.close();
+
+    var accountsdb = try sig.accounts_db.AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger.unscoped(),
+        .snapshot_dir = unpacked_snap_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 1,
+    });
+    defer accountsdb.deinit();
+
+    const expected_account = try sig.core.Account.initRandom(
+        allocator,
+        random,
+        random.uintLessThan(usize, 16),
+    );
+    defer expected_account.deinit(allocator);
+
+    const expected_pubkey = sig.core.Pubkey.initRandom(random);
+    const expected_slot: sig.core.Slot = 200;
+
+    try accountsdb.account_index.expandRefCapacity(1);
+    try accountsdb.putAccountSlice(
+        &.{expected_account},
+        &.{expected_pubkey},
+        expected_slot,
+    );
+
+    const test_rpc_port = random.intRangeLessThan(u16, 8_000, 10_000);
+    const test_sock_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, test_rpc_port);
+    var server_ctx = try Context.init(.{
+        .allocator = allocator,
+        .logger = logger.unscoped(),
+        .accountsdb = &accountsdb,
+        .socket_addr = test_sock_addr,
+        .read_buffer_size = 4096,
+        .reuse_address = true,
+    });
+    defer server_ctx.joinDeinit();
+
+    var maybe_liou = try LinuxIoUring.init(&server_ctx);
+    // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
+    // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
+    defer if (maybe_liou != null) maybe_liou.?.deinit();
+
+    for ([_]?WorkPool{
+        .basic,
+        // TODO: see above TODO about `if (a) |*b|` on `?noreturn`.
+        // if (maybe_liou != null) .{ .linux_io_uring = &maybe_liou.? } else null,
+    }) |maybe_work_pool| {
+        const work_pool = maybe_work_pool orelse continue;
+        logger.info().logf("Running with {s}", .{@tagName(work_pool)});
+
+        var exit = std.atomic.Value(bool).init(false);
+        const serve_thread = try serveSpawn(&exit, &server_ctx, work_pool);
+        defer serve_thread.join();
+        defer exit.store(true, .release);
+
+        const localhost_url_bounded = sig.utils.fmt.boundedFmt(
+            "http://localhost:{d}/",
+            .{server_ctx.tcp.listen_address.getPort()},
+        );
+        const localhost_url = try std.Uri.parse(localhost_url_bounded.constSlice());
+
+        const request: sig.rpc.request.Request = .{
+            .id = .null,
+            .method = .{ .getAccountInfo = .{
+                .pubkey = expected_pubkey,
+                .config = .{
+                    .encoding = .base64,
+                },
+            } },
+        };
+        const request_str = try std.json.stringifyAlloc(allocator, request, .{});
+        defer allocator.free(request_str);
+
+        const resp_str = try testHttpFetchSelf(allocator, .POST, localhost_url, .{
+            .body = request_str,
+            .headers = .{
+                .content_type = .{ .override = "application/json" },
+            },
+        });
+        defer allocator.free(resp_str);
+
+        const Response = sig.rpc.methods.GetAccountInfo.Response;
+        const resp_json = try sig.rpc.response.Response(Response).fromJson(allocator, resp_str);
+        defer resp_json.deinit();
+
+        const resp_value = try resp_json.result();
+        try std.testing.expectEqual(expected_slot, resp_value.context.slot);
+        try std.testing.expectEqualStrings("2.0.15", resp_value.context.apiVersion);
+
+        const raw_data = try expected_account.data.readAllocate(
+            allocator,
+            0,
+            expected_account.data.len(),
+        );
+        defer allocator.free(raw_data);
+
+        const encoded_len = std.base64.standard.Encoder.calcSize(raw_data.len);
+        const encoded_data_buf = try allocator.alloc(u8, encoded_len);
+        defer allocator.free(encoded_data_buf);
+
+        const expected_value: Response.Value = .{
+            .data = .{ .encoded = .{
+                std.base64.standard.Encoder.encode(encoded_data_buf, raw_data),
+                .base64,
+            } },
+            .executable = expected_account.executable,
+            .lamports = expected_account.lamports,
+            .owner = expected_account.owner,
+            .rentEpoch = expected_account.rent_epoch,
+            .space = expected_account.data.len(),
+        };
+        try std.testing.expectEqualDeep(expected_value, resp_value.value);
     }
 }
 
@@ -268,36 +409,50 @@ fn testExpectSnapshotResponse(
     );
     const snap_url = try std.Uri.parse(snap_url_str_bounded.constSlice());
 
-    const actual_data = try testDownloadSelfSnapshot(allocator, snap_url);
+    const actual_data = try testHttpFetchSelf(allocator, .GET, snap_url, .{});
     defer allocator.free(actual_data);
 
     try std.testing.expectEqualSlices(u8, expected_data, actual_data);
 }
 
-fn testDownloadSelfSnapshot(
+fn testHttpFetchSelf(
     allocator: std.mem.Allocator,
-    snap_url: std.Uri,
+    http_method: std.http.Method,
+    uri: std.Uri,
+    opts: struct {
+        headers: std.http.Client.Request.Headers = .{},
+        extra_headers: []const std.http.Header = &.{},
+        privileged_headers: []const std.http.Header = &.{},
+        body: ?[]const u8 = null,
+    },
 ) ![]const u8 {
     var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
 
     var server_header_buffer: [4096 * 16]u8 = undefined;
-    var request = try client.open(.GET, snap_url, .{
+    var request = try client.open(http_method, uri, .{
         .server_header_buffer = &server_header_buffer,
+        .headers = opts.headers,
+        .extra_headers = opts.extra_headers,
+        .privileged_headers = opts.privileged_headers,
     });
     defer request.deinit();
 
+    if (opts.body) |body| request.transfer_encoding = .{ .content_length = body.len };
     try request.send();
+    if (opts.body) |body| try request.writer().writeAll(body);
     try request.finish();
+
     try request.wait();
 
-    const content_len = request.response.content_length.?;
     const reader = request.reader();
 
     const response_content = try reader.readAllAlloc(allocator, 1 << 32);
     errdefer allocator.free(response_content);
 
-    try std.testing.expectEqual(content_len, response_content.len);
+    if (request.response.content_length) |content_len| {
+        try std.testing.expectEqual(content_len, response_content.len);
+    }
 
     return response_content;
 }

@@ -43,7 +43,7 @@ pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
             const data = try allocator.alloc(u8, len);
             errdefer allocator.free(data);
 
-            _ = try reader.readAll(data);
+            if (try reader.readAll(data) != len) return error.EndOfStream;
 
             return data;
         }

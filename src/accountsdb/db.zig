@@ -4,6 +4,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const zstd = @import("zstd");
+const tracy = @import("tracy");
 
 const sysvar = sig.runtime.sysvar;
 const snapgen = sig.accounts_db.snapshots.generate;
@@ -161,23 +162,33 @@ pub const AccountsDB = struct {
     };
 
     pub const InitParams = struct {
+        pub const Index = union(AccountIndex.AllocatorConfig.Tag) {
+            ram,
+            disk,
+            parent: *sig.accounts_db.index.ReferenceAllocator,
+        };
         allocator: std.mem.Allocator,
         logger: Logger,
         snapshot_dir: std.fs.Dir,
         geyser_writer: ?*GeyserWriter,
         gossip_view: ?GossipView,
-        index_allocation: AccountIndex.AllocatorConfig.Tag,
+        index_allocation: Index,
         number_of_index_shards: usize,
         /// Amount of BufferPool frames, used for cached reads. Default = 1GiB.
         buffer_pool_frames: u32 = 2 * 1024 * 1024,
     };
 
     pub fn init(params: InitParams) !Self {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb init" });
+        defer zone.deinit();
+
         // init index
         const index_config: AccountIndex.AllocatorConfig = switch (params.index_allocation) {
             .disk => .{ .disk = .{ .accountsdb_dir = params.snapshot_dir } },
             .ram => .{ .ram = .{ .allocator = params.allocator } },
+            .parent => |parent| .{ .parent = parent },
         };
+
         var account_index = try AccountIndex.init(
             params.allocator,
             params.logger,
@@ -226,6 +237,9 @@ pub const AccountsDB = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinit" });
+        defer zone.deinit();
+
         self.account_index.deinit();
         self.buffer_pool.deinit(self.allocator);
 
@@ -273,6 +287,9 @@ pub const AccountsDB = struct {
         should_fastload: bool,
         save_index: bool,
     ) !SnapshotManifest {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadWithDefaults" });
+        defer zone.deinit();
+
         const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
         errdefer collapsed_manifest.deinit(self.allocator);
 
@@ -325,9 +342,68 @@ pub const AccountsDB = struct {
         return collapsed_manifest;
     }
 
+    /// easier to use load function
+    pub fn loadFromSnapshotAndValidate(
+        self: *Self,
+        params: struct {
+            /// needs to be a thread-safe allocator
+            allocator: std.mem.Allocator,
+            /// Must have been allocated with `self.allocator`.
+            full_inc_manifest: FullAndIncrementalManifest,
+            n_threads: u32,
+            accounts_per_file_estimate: u64,
+        },
+    ) !SnapshotManifest {
+        const allocator = params.allocator;
+        const full_inc_manifest = params.full_inc_manifest;
+        const n_threads = params.n_threads;
+        const accounts_per_file_estimate = params.accounts_per_file_estimate;
+
+        const collapsed_manifest = try full_inc_manifest.collapse(self.allocator);
+        errdefer collapsed_manifest.deinit(self.allocator);
+
+        {
+            var load_timer = try sig.time.Timer.start();
+            try self.loadFromSnapshot(
+                collapsed_manifest.accounts_db_fields,
+                n_threads,
+                allocator,
+                accounts_per_file_estimate,
+            );
+            self.logger.info().logf("loadFromSnapshot: total time: {s}", .{load_timer.read()});
+        }
+
+        {
+            const full_man = full_inc_manifest.full;
+            const maybe_inc_persistence = if (full_inc_manifest.incremental) |inc|
+                inc.bank_extra.snapshot_persistence
+            else
+                null;
+
+            var validate_timer = try sig.time.Timer.start();
+            try self.validateLoadFromSnapshot(.{
+                .full_slot = full_man.bank_fields.slot,
+                .expected_full = .{
+                    .accounts_hash = full_man.accounts_db_fields.bank_hash_info.accounts_hash,
+                    .capitalization = full_man.bank_fields.capitalization,
+                },
+                .expected_incremental = if (maybe_inc_persistence) |inc_persistence| .{
+                    .accounts_hash = inc_persistence.incremental_hash,
+                    .capitalization = inc_persistence.incremental_capitalization,
+                } else null,
+            });
+            self.logger.info().logf("validateLoadFromSnapshot: total time: {s}", .{validate_timer.read()});
+        }
+
+        return collapsed_manifest;
+    }
+
     pub fn saveStateForFastload(
         self: *Self,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb fastsaveStateForFastloadload" });
+        defer zone.deinit();
+
         self.logger.info().log("running saveStateForFastload...");
         var fastload_dir = try self.snapshot_dir.makeOpenPath("fastload_state", .{});
         defer fastload_dir.close();
@@ -339,6 +415,9 @@ pub const AccountsDB = struct {
         dir: std.fs.Dir,
         snapshot_manifest: AccountsDbFields,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb fastload" });
+        defer zone.deinit();
+
         self.logger.info().log("running fastload...");
 
         var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
@@ -395,6 +474,9 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         accounts_per_file_estimate: u64,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadFromSnapshot" });
+        defer zone.deinit();
+
         self.logger.info().log("running loadFromSnapshot...");
 
         // used to read account files
@@ -465,6 +547,9 @@ pub const AccountsDB = struct {
         loading_threads: []AccountsDB,
         parent: *AccountsDB,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb initLoadingThreads" });
+        defer zone.deinit();
+
         @memset(loading_threads, undefined);
 
         for (loading_threads, 0..) |*loading_thread, init_count| {
@@ -477,7 +562,7 @@ pub const AccountsDB = struct {
 
                 .logger = .noop, // dont spam the logs with init information (we set it after)
                 .gossip_view = null, // loading threads would never need to generate a snapshot, therefore it doesn't need a view into gossip.
-                .index_allocation = .ram, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
+                .index_allocation = .{ .parent = &parent.account_index.reference_allocator }, // we set this to use the disk reference allocator if we already have one (ram allocator doesn't allocate on init)
             });
 
             loading_thread.logger = parent.logger;
@@ -500,6 +585,9 @@ pub const AccountsDB = struct {
         per_thread_allocator: std.mem.Allocator,
         loading_threads: []AccountsDB,
     ) void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deinitLoadingThreads" });
+        defer zone.deinit();
+
         for (loading_threads) |*loading_thread| {
             // NOTE: deinit hashmap, dont close the files
             const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
@@ -519,6 +607,9 @@ pub const AccountsDB = struct {
         accounts_per_file_estimate: u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadAndVerifyAccountsFilesMultiThread" });
+        defer zone.deinit();
+
         const thread_db = &loading_threads[task.thread_id];
         try thread_db.loadAndVerifyAccountsFiles(
             accounts_dir,
@@ -542,6 +633,9 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadAndVerifyAccountsFiles" });
+        defer zone.deinit();
+
         // NOTE: we can hold this lock for the entire function
         // because nothing else should be access the filemap
         // while loading from a snapshot
@@ -707,28 +801,43 @@ pub const AccountsDB = struct {
             });
         }
 
-        // allocate enough memory
-        try self.account_index.pubkey_ref_map.ensureTotalCapacity(shard_counts);
+        {
+            const pubkey_ref_map_zone = tracy.initZone(@src(), .{
+                .name = "accountsdb loadAndVerifyAccountsFiles pubkey_ref_map.ensureTotalCapacity",
+            });
+            defer pubkey_ref_map_zone.deinit();
+
+            // allocate enough memory
+            try self.account_index.pubkey_ref_map.ensureTotalCapacity(shard_counts);
+        }
 
         // PERF: can probs be faster if you sort the pubkeys first, and then you know
         // it will always be a search for a free spot, and not search for a match
-        timer.reset();
-        for (references_buf[0..n_accounts_total], 0..) |*ref, ref_count| {
-            _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
-                ref,
-                ref_global_index + ref_count,
-            );
 
-            if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
-                printTimeEstimate(
-                    self.logger,
-                    &timer,
-                    n_accounts_total,
-                    ref_count,
-                    "building index",
-                    "thread0",
+        {
+            const index_build_zone = tracy.initZone(@src(), .{
+                .name = "accountsdb loadAndVerifyAccountsFiles building index",
+            });
+            defer index_build_zone.deinit();
+
+            timer.reset();
+            for (references_buf[0..n_accounts_total], 0..) |*ref, ref_count| {
+                _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
+                    ref,
+                    ref_global_index + ref_count,
                 );
-                progress_timer.reset();
+
+                if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
+                    printTimeEstimate(
+                        self.logger,
+                        &timer,
+                        n_accounts_total,
+                        ref_count,
+                        "building index",
+                        "thread0",
+                    );
+                    progress_timer.reset();
+                }
             }
         }
     }
@@ -740,6 +849,9 @@ pub const AccountsDB = struct {
         thread_dbs: []AccountsDB,
         n_threads: usize,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb mergeMultipleDBs" });
+        defer zone.deinit();
+
         self.logger.info().logf("[{d} threads]: running mergeMultipleDBs...", .{n_threads});
 
         try spawnThreadTasks(self.allocator, mergeThreadIndexesMultiThread, .{
@@ -814,6 +926,9 @@ pub const AccountsDB = struct {
         thread_dbs: []const AccountsDB,
         task: sig.utils.thread.TaskParams,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb mergeThreadIndexesMultiThread" });
+        defer zone.deinit();
+
         const shard_start_index = task.start_index;
         const shard_end_index = task.end_index;
 
@@ -897,6 +1012,9 @@ pub const AccountsDB = struct {
         self: *Self,
         config: AccountHashesConfig,
     ) !struct { Hash, u64 } {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb computeAccountHashesAndLamports" });
+        defer zone.deinit();
+
         var timer = try sig.time.Timer.start();
         // TODO: make cli arg
         const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
@@ -983,6 +1101,9 @@ pub const AccountsDB = struct {
         self: *Self,
         params: ValidateLoadFromSnapshotParams,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb validateLoadFromSnapshot" });
+        defer zone.deinit();
+
         const maybe_latest_snapshot_info: *?SnapshotGenerationInfo, var latest_snapshot_info_lg = self.latest_snapshot_gen_info.writeWithLock();
         defer latest_snapshot_info_lg.unlock();
 
@@ -1093,6 +1214,9 @@ pub const AccountsDB = struct {
         total_lamports: []u64,
         task: sig.utils.thread.TaskParams,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getHashesFromIndexMultiThread" });
+        defer zone.deinit();
+
         try getHashesFromIndex(
             self,
             config,
@@ -1115,6 +1239,9 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getHashesFromIndex" });
+        defer zone.deinit();
+
         var total_n_pubkeys: usize = 0;
         for (shards) |*shard_rw| {
             const shard, var shard_lg = shard_rw.readWithLock();
@@ -1262,6 +1389,9 @@ pub const AccountsDB = struct {
         self: *Self,
         config: ManagerLoopConfig,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb runManagerLoop" });
+        defer zone.deinit();
+
         const exit = config.exit;
         const slots_per_full_snapshot = config.slots_per_full_snapshot;
         const slots_per_incremental_snapshot = config.slots_per_incremental_snapshot;
@@ -1301,6 +1431,8 @@ pub const AccountsDB = struct {
         defer tmp_bank_fields.deinit(self.allocator);
 
         while (!exit.load(.acquire)) {
+            tracy.frameMarkNamed("manager loop");
+
             defer {
                 const elapsed = timer.lap();
                 if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
@@ -1439,6 +1571,9 @@ pub const AccountsDB = struct {
     /// as the data field ([]u8) for each account.
     /// Returns the unclean file id.
     pub fn flushSlot(self: *Self, slot: Slot) !FileId {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb flushSlot" });
+        defer zone.deinit();
+
         var timer = try sig.time.Timer.start();
 
         defer self.metrics.number_files_flushed.inc();
@@ -1566,6 +1701,9 @@ pub const AccountsDB = struct {
         num_zero_lamports: usize,
         num_old_states: usize,
     } {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb cleanAccountFiles" });
+        defer zone.deinit();
+
         var timer = try sig.time.Timer.start();
 
         const number_of_files = unclean_account_files.len;
@@ -1720,6 +1858,9 @@ pub const AccountsDB = struct {
         self: *Self,
         delete_account_files: []const FileId,
     ) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb deleteAccountFiles" });
+        defer zone.deinit();
+
         const number_of_files = delete_account_files.len;
         defer {
             self.metrics.number_files_deleted.add(number_of_files);
@@ -1804,6 +1945,9 @@ pub const AccountsDB = struct {
         shrink_account_files: []const FileId,
         delete_account_files: *std.AutoArrayHashMap(FileId, void),
     ) !struct { num_accounts_deleted: usize } {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb shrinkAccountFiles" });
+        defer zone.deinit();
+
         var timer = try sig.time.Timer.start();
 
         const number_of_files = shrink_account_files.len;
@@ -2262,6 +2406,22 @@ pub const AccountsDB = struct {
         return try self.getAccountFromRefWithReadLock(max_ref);
     }
 
+    pub fn getSlotAndAccountInSlotRangeWithReadLock(
+        self: *Self,
+        pubkey: *const Pubkey,
+        min_slot: ?Slot,
+        max_slot: ?Slot,
+    ) GetAccountError!?struct { AccountInCacheOrFile, Slot, AccountInCacheOrFileLock } {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, max_slot) orelse
+            return null;
+        const account, const account_lg = try self.getAccountFromRefWithReadLock(max_ref);
+        return .{ account, max_ref.slot, account_lg };
+    }
+
     pub const GetTypeFromAccountError = GetAccountError || error{DeserializationError};
     pub fn getTypeFromAccount(
         self: *Self,
@@ -2339,15 +2499,22 @@ pub const AccountsDB = struct {
 
             try file_map.put(self.allocator, account_file.id, account_file.*);
 
+            var buffer_pool_frame_buf: [BufferPool.MAX_READ_BYTES_ALLOCATED]u8 = undefined;
+            var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+            const frame_allocator = fba.allocator();
+
             // we update the bank hash stats while locking the file map to avoid
             // reading accounts from the file map and getting inaccurate/stale
             // bank hash stats.
             var account_iter = account_file.iterator(
-                self.allocator,
+                frame_allocator,
                 &self.buffer_pool,
             );
             while (try account_iter.next()) |account_in_file| {
-                defer account_in_file.deinit(self.allocator);
+                defer {
+                    account_in_file.deinit(frame_allocator);
+                    fba.reset();
+                }
 
                 const bhs, var bhs_lg = try self.getOrInitBankHashStats(account_file.slot);
                 defer bhs_lg.unlock();
@@ -2492,6 +2659,9 @@ pub const AccountsDB = struct {
     /// Returns a pointer to the bank hash stats for the given slot, and a lock guard on the
     /// bank hash stats map, which should be unlocked after mutating the bank hash stats.
     fn getOrInitBankHashStats(self: *Self, slot: Slot) !struct { *BankHashStats, RwMux(BankHashStatsMap).WLockGuard } {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb getOrInitBankHashStats" });
+        defer zone.deinit();
+
         const bank_hash_stats, var bank_hash_stats_lg = self.bank_hash_stats.writeWithLock();
         errdefer bank_hash_stats_lg.unlock();
 
@@ -3164,6 +3334,9 @@ pub fn indexAndValidateAccountFile(
     account_refs: *ArrayListUnmanaged(AccountRef),
     geyser_storage: ?*GeyserTmpStorage,
 ) ValidateAccountFileError!void {
+    const zone = tracy.initZone(@src(), .{ .name = "accountsdb AccountIndex.indexAndValidateAccountFile" });
+    defer zone.deinit();
+
     var offset: usize = 0;
     var number_of_accounts: usize = 0;
 
@@ -3171,16 +3344,24 @@ pub fn indexAndValidateAccountFile(
         return error.ShardCountMismatch;
     }
 
+    var buffer_pool_frame_buf: [BufferPool.MAX_READ_BYTES_ALLOCATED]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+    const frame_allocator = fba.allocator();
+
     while (true) {
         const account = accounts_file.readAccount(
-            allocator,
+            frame_allocator,
             buffer_pool,
             offset,
         ) catch |err| switch (err) {
             error.EOF => break,
             else => |e| return e,
         };
-        defer account.deinit(allocator);
+
+        defer {
+            account.deinit(frame_allocator);
+            fba.reset();
+        }
 
         try account.validate();
 
@@ -3822,10 +4003,7 @@ test "flushing slots works" {
     const file_id = file_map.keys()[0];
 
     const account_file = file_map.getPtr(file_id).?;
-    account_file.number_of_accounts = try account_file.validate(
-        allocator,
-        &bp,
-    );
+    account_file.number_of_accounts = try account_file.validate(&bp);
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
     try std.testing.expect(unclean_account_files.items.len == 1);
@@ -3873,7 +4051,8 @@ test "purge accounts in cache works" {
     try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     for (0..n_accounts) |i| {
-        _, var lg = accounts_db.account_index.pubkey_ref_map.getRead(&pubkeys[i]) orelse return error.TestUnexpectedNull;
+        _, var lg = accounts_db.account_index.pubkey_ref_map.getRead(&pubkeys[i]) orelse
+            return error.TestUnexpectedNull;
         lg.unlock();
     }
 
@@ -4761,6 +4940,12 @@ pub const BenchmarkAccountsDB = struct {
         var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
+        const index_type: AccountsDB.InitParams.Index = switch (bench_args.index) {
+            .disk => .disk,
+            .ram => .ram,
+            .parent => @panic("invalid benchmark argument"),
+        };
+
         const logger = .noop;
         var accounts_db: AccountsDB = try AccountsDB.init(.{
             .allocator = allocator,
@@ -4768,7 +4953,7 @@ pub const BenchmarkAccountsDB = struct {
             .snapshot_dir = snapshot_dir,
             .geyser_writer = null,
             .gossip_view = null,
-            .index_allocation = bench_args.index,
+            .index_allocation = index_type,
             .number_of_index_shards = 32,
         });
         defer accounts_db.deinit();
@@ -4797,6 +4982,7 @@ pub const BenchmarkAccountsDB = struct {
 
         const write_time = timer_blk: {
             switch (bench_args.accounts) {
+                .parent => @panic("invalid bench arg"),
                 .ram => {
                     const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
                     const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));

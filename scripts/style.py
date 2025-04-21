@@ -142,7 +142,6 @@ files_excluded_from_line_length_check = [
     "src/bloom/bit_set.zig",
     "src/bloom/bit_vec.zig",
     "src/bloom/bitvec.zig",
-    "src/bloom/bloom.zig",
     "src/core/leader_schedule.zig",
     "src/core/transaction.zig",
     "src/geyser/core.zig",
