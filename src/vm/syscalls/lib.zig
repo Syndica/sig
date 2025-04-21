@@ -89,6 +89,13 @@ pub fn register(
         logComputeUnits,
     );
 
+    // Log Data
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_log_data",
+        logData,
+    );
+
     // Program derived addresses
     // _ = try syscalls.functions.registerHashed(allocator, "sol_create_program_address", createProgramAddress,);
     // _ = try syscalls.functions.registerHashed(allocator, "sol_try_find_program_address", createProgramAddress,);
@@ -217,9 +224,6 @@ pub fn register(
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake,);
     // }
 
-    // Log Data
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_log_data", logData,);
-
     return syscalls;
 }
 
@@ -266,12 +270,12 @@ pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Err
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
-pub fn logPubkey(tc: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn logPubkey(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
     const vm_addr = registers.get(.r1);
 
     try tc.consumeCompute(tc.compute_budget.log_pubkey_units);
 
-    const pubkey_bytes = try mmap.translateSlice(
+    const pubkey_bytes = try memory_map.translateSlice(
         u8,
         .constant,
         vm_addr,
@@ -289,10 +293,39 @@ pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: RegisterMap) E
     try tc.log("Program consumption: {} units remaining", .{tc.compute_meter});
 }
 
-// /// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/logging.rs#L107
-// pub fn logData(tc: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-//     @panic("TODO: implement logData syscall");
-// }
+/// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/logging.rs#L107
+pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
+    const vm_addr = registers.get(.r1);
+    const len = registers.get(.r2);
+
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+
+    const vm_messages = try memory_map.translateSlice(
+        []u8,
+        .constant,
+        vm_addr,
+        len,
+        try tc.getCheckAligned(),
+    );
+
+    var cost = tc.compute_budget.syscall_base_cost *| vm_messages.len;
+    for (vm_messages) |msg| cost +|= msg.len;
+    try tc.consumeCompute(cost);
+
+    var messages = try tc.allocator.alloc([]const u8, vm_messages.len);
+    defer tc.allocator.free(messages);
+    for (vm_messages, 0..) |msg, i| {
+        messages[i] = try memory_map.translateSlice(
+            u8,
+            .constant,
+            @intFromPtr(msg.ptr),
+            msg.len,
+            try tc.getCheckAligned(),
+        );
+    }
+
+    try stable_log.programData(tc, messages);
+}
 
 // memory operators
 pub const memcpy = memops.memcpy;
@@ -348,7 +381,7 @@ const Slice = extern struct {
     len: u64,
 };
 
-pub fn poseidon(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn poseidon(ctx: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
     // const parameters: Parameters = @enumFromInt(registers.get(.r1));
     const endianness: std.builtin.Endian = @enumFromInt(registers.get(.r2));
     const addr = registers.get(.r3);
@@ -365,8 +398,8 @@ pub fn poseidon(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterM
     const cost = try budget.poseidonCost(len);
     try ctx.consumeCompute(cost);
 
-    const hash_result = try mmap.vmap(.mutable, result_addr, 32);
-    const input_bytes = try mmap.vmap(
+    const hash_result = try memory_map.vmap(.mutable, result_addr, 32);
+    const input_bytes = try memory_map.vmap(
         .constant,
         addr,
         len * @sizeOf(Slice),
@@ -375,7 +408,7 @@ pub fn poseidon(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterM
 
     var hasher = phash.Hasher.init(endianness);
     for (inputs) |input| {
-        const slice = try mmap.vmap(
+        const slice = try memory_map.vmap(
             .constant,
             @intFromPtr(input.addr),
             input.len,
@@ -399,13 +432,13 @@ pub fn abort(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
     return SyscallError.Abort;
 }
 
-pub fn panic(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
     const file = registers.get(.r1);
     const len = registers.get(.r2);
 
     try ctx.consumeCompute(len);
 
-    const message = try mmap.vmap(.constant, file, len);
+    const message = try memory_map.vmap(.constant, file, len);
     if (!std.unicode.utf8ValidateSlice(message)) {
         return SyscallError.InvalidString;
     }

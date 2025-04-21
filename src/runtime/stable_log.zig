@@ -74,7 +74,7 @@ pub fn programData(
             try encoded.appendSlice(tc.allocator, BASE_64_ENCODER.encode(buffer, chunk));
             try encoded.append(tc.allocator, ' ');
         }
-        _ = encoded.pop();
+        if (encoded.items.len > 0) _ = encoded.pop();
 
         try lc.log(
             tc.allocator,

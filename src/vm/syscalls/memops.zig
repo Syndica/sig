@@ -11,7 +11,7 @@ const features = sig.runtime.features;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
 const MemoryChunkIterator = struct {
-    mmap: *MemoryMap,
+    memory_map: *MemoryMap,
     accounts: []const SerializedAccountMetadata,
     initial_addr: u64,
     start: u64,
@@ -23,7 +23,7 @@ const MemoryChunkIterator = struct {
     reversed: bool,
 
     fn init(
-        mmap: *MemoryMap,
+        memory_map: *MemoryMap,
         accounts: []const SerializedAccountMetadata,
         vm_addr: u64,
         len: u64,
@@ -32,7 +32,7 @@ const MemoryChunkIterator = struct {
     ) !MemoryChunkIterator {
         const vm_addr_end = std.math.add(u64, vm_addr, len) catch return error.AccessViolation;
         return .{
-            .mmap = mmap,
+            .memory_map = memory_map,
             .accounts = accounts,
             .initial_addr = vm_addr,
             .len = len,
@@ -48,10 +48,10 @@ const MemoryChunkIterator = struct {
     fn next(self: *MemoryChunkIterator) !?Chunk {
         if (self.start == self.end) return null;
 
-        const region = (switch (self.reversed) {
-            true => try self.mmap.region(.constant, self.end -| 1),
-            false => try self.mmap.region(.constant, self.start),
-        }).*;
+        const region = switch (self.reversed) {
+            true => try self.memory_map.region(.constant, self.end -| 1),
+            false => try self.memory_map.region(.constant, self.start),
+        };
 
         var region_is_account: bool = false;
 
@@ -147,7 +147,7 @@ fn iterateMemoryPairs(
     src_addr: u64,
     comptime src_state: memory.MemoryState,
     len: u64,
-    mmap: *MemoryMap,
+    memory_map: *MemoryMap,
     accounts: []const SerializedAccountMetadata,
     resize_area: bool,
     reverse: bool,
@@ -155,7 +155,7 @@ fn iterateMemoryPairs(
     ctx: *Context,
 ) !void {
     var src_iter = try MemoryChunkIterator.init(
-        mmap,
+        memory_map,
         accounts,
         src_addr,
         len,
@@ -163,7 +163,7 @@ fn iterateMemoryPairs(
         reverse,
     );
     var dst_iter = try MemoryChunkIterator.init(
-        mmap,
+        memory_map,
         accounts,
         dst_addr,
         len,
@@ -193,8 +193,8 @@ fn iterateMemoryPairs(
         else
             .{ src_chunk_addr, dst_chunk_addr };
 
-        const src_host = try mmap.mapRegion(src_state, src_region, src_vm_addr, chunk_len);
-        const dst_host = try mmap.mapRegion(dst_state, dst_region, dst_vm_addr, chunk_len);
+        const src_host = try memory_map.mapRegion(src_state, src_region, src_vm_addr, chunk_len);
+        const dst_host = try memory_map.mapRegion(dst_state, dst_region, dst_vm_addr, chunk_len);
 
         try ctx.run(dst_host, src_host);
 
@@ -222,7 +222,7 @@ fn memmoveNonContigious(
     src_addr: u64,
     len: u64,
     accounts: []const SerializedAccountMetadata,
-    mmap: *MemoryMap,
+    memory_map: *MemoryMap,
     resize_area: bool,
 ) !void {
     const reverse = (dst_addr -| src_addr) < len;
@@ -233,7 +233,7 @@ fn memmoveNonContigious(
         src_addr,
         .constant,
         len,
-        mmap,
+        memory_map,
         accounts,
         resize_area,
         reverse,
@@ -247,11 +247,11 @@ fn memsetNonContigious(
     c: u8,
     len: u64,
     accounts: []const SerializedAccountMetadata,
-    mmap: *MemoryMap,
+    memory_map: *MemoryMap,
     check_aligned: bool,
 ) !void {
     var dst_iter = try MemoryChunkIterator.init(
-        mmap,
+        memory_map,
         accounts,
         dst_addr,
         len,
@@ -261,7 +261,7 @@ fn memsetNonContigious(
 
     while (try dst_iter.next()) |chunk| {
         const dst_region, const dst_vm_addr, const dst_len = chunk;
-        const dst_host = try mmap.mapRegion(.mutable, dst_region, dst_vm_addr, dst_len);
+        const dst_host = try memory_map.mapRegion(.mutable, dst_region, dst_vm_addr, dst_len);
         @memset(dst_host, c);
     }
 }
@@ -285,7 +285,7 @@ fn memcmpNonContigious(
     dst_addr: u64,
     len: u64,
     accounts: []const SerializedAccountMetadata,
-    mmap: *MemoryMap,
+    memory_map: *MemoryMap,
     resize_area: bool,
 ) !i32 {
     var ctx: MemcmpContext = .{ .result = 0 };
@@ -295,7 +295,7 @@ fn memcmpNonContigious(
         src_addr,
         .constant,
         len,
-        mmap,
+        memory_map,
         accounts,
         resize_area,
         false,
@@ -309,90 +309,90 @@ fn memcmpNonContigious(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L130-L162
-pub fn memset(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
     const dst_addr = registers.get(.r1);
     const scalar = registers.get(.r2);
     const len = registers.get(.r3);
 
     // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L142
-    try consumeMemoryCompute(ctx, len);
+    try consumeMemoryCompute(tc, len);
 
-    const feature_set = ctx.sc.ec.feature_set;
+    const feature_set = tc.sc.ec.feature_set;
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         try memsetNonContigious(
             dst_addr,
             @truncate(scalar),
             len,
-            ctx.serialized_accounts.constSlice(),
-            mmap,
+            tc.serialized_accounts.constSlice(),
+            memory_map,
             ic.getCheckAligned(),
         );
     } else {
-        const host_addr = try mmap.vmap(.mutable, dst_addr, len);
+        const host_addr = try memory_map.vmap(.mutable, dst_addr, len);
         @memset(host_addr, @truncate(scalar));
     }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/dst/syscalls/mem_ops.rs#L31-L52
-pub fn memcpy(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
     const dst_addr = registers.get(.r1);
     const src_addr = registers.get(.r2);
     const len = registers.get(.r3);
 
     // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L43
-    try consumeMemoryCompute(ctx, len);
+    try consumeMemoryCompute(tc, len);
 
-    const feature_set = ctx.sc.ec.feature_set;
+    const feature_set = tc.sc.ec.feature_set;
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         try memmoveNonContigious(
             dst_addr,
             src_addr,
             len,
-            ctx.serialized_accounts.constSlice(),
-            mmap,
+            tc.serialized_accounts.constSlice(),
+            memory_map,
             ic.getCheckAligned(),
         );
     } else {
-        const dst_host = try mmap.vmap(.mutable, dst_addr, len);
-        const src_host = try mmap.vmap(.constant, src_addr, len);
+        const dst_host = try memory_map.vmap(.mutable, dst_addr, len);
+        const src_host = try memory_map.vmap(.constant, src_addr, len);
         @memcpy(dst_host, src_host);
     }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L72-L128
-pub fn memcmp(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
     const a_addr = registers.get(.r1);
     const b_addr = registers.get(.r2);
     const len = registers.get(.r3);
     const cmp_result_addr = registers.get(.r4);
 
     // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L84
-    try consumeMemoryCompute(ctx, len);
+    try consumeMemoryCompute(tc, len);
 
-    const feature_set = ctx.sc.ec.feature_set;
+    const feature_set = tc.sc.ec.feature_set;
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const cmp_result_slice = try mmap.vmap(
+        const cmp_result_slice = try memory_map.vmap(
             .mutable,
             cmp_result_addr,
             @sizeOf(i32),
         );
         const cmp_result: *align(1) i32 = @ptrCast(cmp_result_slice.ptr);
 
-        const ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         cmp_result.* = try memcmpNonContigious(
             a_addr,
             b_addr,
             len,
-            ctx.serialized_accounts.constSlice(),
-            mmap,
+            tc.serialized_accounts.constSlice(),
+            memory_map,
             ic.getCheckAligned(),
         );
     } else {
-        const a = try mmap.vmap(.constant, a_addr, len);
-        const b = try mmap.vmap(.constant, b_addr, len);
-        const cmp_result_slice = try mmap.vmap(
+        const a = try memory_map.vmap(.constant, a_addr, len);
+        const b = try memory_map.vmap(.constant, b_addr, len);
+        const cmp_result_slice = try memory_map.vmap(
             .mutable,
             cmp_result_addr,
             @sizeOf(i32),
@@ -405,24 +405,24 @@ pub fn memcmp(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L8-L15
-fn consumeMemoryCompute(ctx: *TransactionContext, length: u64) !void {
-    const budget = ctx.compute_budget;
+fn consumeMemoryCompute(tc: *TransactionContext, length: u64) !void {
+    const budget = tc.compute_budget;
     const cost = @max(budget.mem_op_base_cost, length / budget.cpi_bytes_per_unit);
-    try ctx.consumeCompute(cost);
+    try tc.consumeCompute(cost);
 }
 
 test "chunk iterator no regions" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{},
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     var src_chunk_iter = try MemoryChunkIterator.init(
-        &mmap,
+        &memory_map,
         &.{},
         0,
         1,
@@ -434,16 +434,16 @@ test "chunk iterator no regions" {
 
 test "chunk iterator out of bounds upper" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{},
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     try std.testing.expectError(error.AccessViolation, MemoryChunkIterator.init(
-        &mmap,
+        &memory_map,
         &.{},
         std.math.maxInt(u64),
         1,
@@ -454,17 +454,17 @@ test "chunk iterator out of bounds upper" {
 
 test "chunk iterator out of bounds" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{memory.Region.init(.constant, &(.{0xFF} ** 42), memory.RODATA_START)},
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     {
         var src_chunk_iter = try MemoryChunkIterator.init(
-            &mmap,
+            &memory_map,
             &.{},
             memory.RODATA_START - 1,
             42,
@@ -476,7 +476,7 @@ test "chunk iterator out of bounds" {
 
     {
         var src_chunk_iter = try MemoryChunkIterator.init(
-            &mmap,
+            &memory_map,
             &.{},
             memory.RODATA_START,
             43,
@@ -489,7 +489,7 @@ test "chunk iterator out of bounds" {
 
     {
         var src_chunk_iter = try MemoryChunkIterator.init(
-            &mmap,
+            &memory_map,
             &.{},
             memory.RODATA_START,
             43,
@@ -501,7 +501,7 @@ test "chunk iterator out of bounds" {
 
     {
         var src_chunk_iter = try MemoryChunkIterator.init(
-            &mmap,
+            &memory_map,
             &.{},
             memory.RODATA_START - 1,
             43,
@@ -515,17 +515,17 @@ test "chunk iterator out of bounds" {
 
 test "chunk iterator one" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{memory.Region.init(.constant, &(.{0xFF} ** 42), memory.RODATA_START)},
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     {
         var src_chunk_iter = try MemoryChunkIterator.init(
-            &mmap,
+            &memory_map,
             &.{},
             memory.RODATA_START - 1,
             1,
@@ -537,7 +537,7 @@ test "chunk iterator one" {
 
     {
         var src_chunk_iter = try MemoryChunkIterator.init(
-            &mmap,
+            &memory_map,
             &.{},
             memory.RODATA_START + 42,
             1,
@@ -558,7 +558,7 @@ test "chunk iterator one" {
             const vm_addr, const len = entry;
             inline for (.{ true, false }) |reverse| {
                 var iter = try MemoryChunkIterator.init(
-                    &mmap,
+                    &memory_map,
                     &.{},
                     vm_addr,
                     len,
@@ -580,7 +580,7 @@ test "chunk iterator one" {
 
 test "chunk iterator two" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{
             memory.Region.init(.constant, &(.{0x11} ** 8), memory.RODATA_START),
@@ -589,7 +589,7 @@ test "chunk iterator two" {
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     inline for (.{
         .{ memory.RODATA_START, 8, &.{.{ memory.RODATA_START, 8 }} },
@@ -602,7 +602,7 @@ test "chunk iterator two" {
         const vm_addr, const len, const expected = entry;
         inline for (.{ true, false }) |reverse| {
             var iter = try MemoryChunkIterator.init(
-                &mmap,
+                &memory_map,
                 &.{},
                 vm_addr,
                 len,
@@ -634,7 +634,7 @@ test "chunk iterator two" {
 
 test "chunks short" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{
             memory.Region.init(.constant, &(.{0x11} ** 8), memory.RODATA_START),
@@ -643,7 +643,7 @@ test "chunks short" {
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     // dst shorter than src
     try std.testing.expectError(error.AccessViolation, memmoveNonContigious(
@@ -651,7 +651,7 @@ test "chunks short" {
         memory.RODATA_START + 8,
         8,
         &.{},
-        &mmap,
+        &memory_map,
         true,
     ));
 
@@ -661,14 +661,14 @@ test "chunks short" {
         memory.RODATA_START + 2,
         3,
         &.{},
-        &mmap,
+        &memory_map,
         true,
     ));
 }
 
 test "memmove non contiguous readonly" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{
             memory.Region.init(.constant, &(.{0x11} ** 8), memory.RODATA_START),
@@ -677,21 +677,21 @@ test "memmove non contiguous readonly" {
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     try std.testing.expectError(error.AccessViolation, memmoveNonContigious(
         memory.RODATA_START,
         memory.RODATA_START + 8,
         4,
         &.{},
-        &mmap,
+        &memory_map,
         true,
     ));
 }
 
 test "memset non contiguous readonly" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{
             memory.Region.init(.constant, &(.{0x11} ** 8), memory.RODATA_START),
@@ -700,14 +700,14 @@ test "memset non contiguous readonly" {
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     try std.testing.expectError(error.AccessViolation, memsetNonContigious(
         memory.RODATA_START,
         0x33,
         9,
         &.{},
-        &mmap,
+        &memory_map,
         true,
     ));
 }
@@ -720,7 +720,7 @@ test "memset non contigious" {
     var mem3: [3]u8 = .{ 0x33, 0x33, 0x33 };
     var mem4: [4]u8 = .{ 0x44, 0x44, 0x44, 0x44 };
 
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{
             memory.Region.init(.constant, &mem1, memory.RODATA_START),
@@ -731,9 +731,9 @@ test "memset non contigious" {
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
-    try memsetNonContigious(memory.RODATA_START + 1, 0x55, 7, &.{}, &mmap, true);
+    try memsetNonContigious(memory.RODATA_START + 1, 0x55, 7, &.{}, &memory_map, true);
 
     try std.testing.expectEqualSlices(u8, &.{0x11}, &mem1);
     try std.testing.expectEqualSlices(u8, &.{ 0x55, 0x55 }, &mem2);
@@ -743,7 +743,7 @@ test "memset non contigious" {
 
 test "memcmp non contigious" {
     const allocator = std.testing.allocator;
-    var mmap = try MemoryMap.init(
+    var memory_map = try MemoryMap.init(
         allocator,
         &.{
             memory.Region.init(.constant, "foo", memory.RODATA_START),
@@ -753,14 +753,14 @@ test "memcmp non contigious" {
         .v3,
         .{ .aligned_memory_mapping = false },
     );
-    defer mmap.deinit(allocator);
+    defer memory_map.deinit(allocator);
 
     try std.testing.expectEqual(0, try memcmpNonContigious(
         memory.RODATA_START,
         memory.RODATA_START + 9,
         9,
         &.{},
-        &mmap,
+        &memory_map,
         true,
     ));
 
@@ -769,7 +769,7 @@ test "memcmp non contigious" {
         memory.RODATA_START + 1,
         8,
         &.{},
-        &mmap,
+        &memory_map,
         true,
     ));
 
@@ -778,7 +778,7 @@ test "memcmp non contigious" {
         memory.RODATA_START + 11,
         5,
         &.{},
-        &mmap,
+        &memory_map,
         true,
     ));
 }
