@@ -22,22 +22,10 @@ const EpochContext = sig.runtime.EpochContext;
 const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
-const Serializer = sig.runtime.program.bpf.serialize.Serializer;
+const SyscallError = sig.vm.syscalls.Error;
 
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
-
-pub const SyscallError = error{
-    BadSeeds,
-    TooManySigners,
-    UnalignedPointer,
-    InvalidPointer,
-    TooManyAccounts,
-    InstructionTooLarge,
-    MaxInstructionDataLenExceeded,
-    MaxInstructionAccountsExceeded,
-    MaxInstructionAccountInfosExceeded,
-} || sig.vm.syscalls.Error;
 
 /// [agave] StableVec: https://github.com/anza-xyz/solana-sdk/blob/master/stable-layout/src/stable_vec.rs#L30
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0666fa5999750153070e5c43d64813467bfdc38e/stable-layout/src/stable_instruction.rs#L33

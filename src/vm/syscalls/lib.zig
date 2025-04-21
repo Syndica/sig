@@ -28,8 +28,16 @@ pub const Error = error{
     Unexpected,
     ComputationalBudgetExceeded,
     ReturnDataTooLarge,
-    InvalidMemoryRegion,
-} || std.fs.File.WriteError || InstructionError;
+    BadSeeds,
+    TooManySigners,
+    UnalignedPointer,
+    InvalidPointer,
+    TooManyAccounts,
+    InstructionTooLarge,
+    MaxInstructionDataLenExceeded,
+    MaxInstructionAccountsExceeded,
+    MaxInstructionAccountInfosExceeded,
+} || std.fs.File.WriteError || InstructionError || sig.vm.memory.RegionError;
 
 pub const Syscall = *const fn (
     *TransactionContext,
