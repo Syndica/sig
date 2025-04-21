@@ -1425,27 +1425,13 @@ const TestContext = struct {
     tc: *TransactionContext,
     ic: InstructionContext,
 
-    fn initWritable(allocator: std.mem.Allocator, prng: std.Random, data: []const u8) !TestContext {
-        return initWith(allocator, prng, data, system_program.ID, system_program.ID);
-    }
-
-    fn initReadOnly(allocator: std.mem.Allocator, prng: std.Random, data: []const u8) !TestContext {
-        const non_program_id_owner = Pubkey.initRandom(prng);
-        return initWith(allocator, prng, data, non_program_id_owner, system_program.ID);
-    }
-
-    fn initWith(
-        allocator: std.mem.Allocator,
-        prng: std.Random,
-        account_data: []const u8,
-        account_owner: Pubkey,
-        program_id: Pubkey,
-    ) !TestContext {
+    fn init(allocator: std.mem.Allocator, prng: std.Random, account_data: []const u8) !TestContext {
         comptime std.debug.assert(builtin.is_test);
 
         const tc = try allocator.create(TransactionContext);
         errdefer allocator.destroy(tc);
 
+        const program_id = Pubkey.initRandom(prng);
         const account_key = Pubkey.initRandom(prng);
         const testing = sig.runtime.testing;
 
@@ -1454,7 +1440,7 @@ const TestContext = struct {
                 .{
                     .pubkey = account_key,
                     .data = account_data,
-                    .owner = account_owner,
+                    .owner = program_id,
                     .lamports = prng.uintAtMost(u64, 1000),
                 },
                 .{
@@ -1478,7 +1464,7 @@ const TestContext = struct {
             .tc = tc,
             .ixn_info = try testing.createInstructionInfo(
                 tc,
-                system_program.ID,
+                program_id,
                 system_program.Instruction{ .assign = .{ .owner = account_key } }, // whatever.
                 &.{
                     .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -1601,7 +1587,7 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), "foobar");
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
 
     const account = ctx.getAccount();
@@ -1655,7 +1641,7 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoC" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), "foobar");
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
 
     const account = ctx.getAccount();
@@ -1742,7 +1728,7 @@ test "vm.syscalls.cpi: translateAccounts" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), "foobar");
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
 
     const account = ctx.getAccount();
@@ -1813,7 +1799,7 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), "foo");
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
     defer ctx.deinit(allocator);
 
     const data = "ins data";
@@ -1927,7 +1913,7 @@ test "vm.syscalls.cpi: translateSigners" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), "foo");
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
     defer ctx.deinit(allocator);
 
     const program_id = Pubkey.initRandom(prng.random());
@@ -2091,7 +2077,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), &.{});
+    var ctx = try TestContext.init(allocator, prng.random(), &.{});
     defer ctx.deinit(allocator);
     const account = ctx.getAccount();
 
@@ -2129,7 +2115,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: account data" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), "foobar");
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
     const account = ctx.getAccount();
 
@@ -2192,7 +2178,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: account data readonly" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initReadOnly(allocator, prng.random(), "foobar");
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
     const account = ctx.getAccount();
 
@@ -2208,6 +2194,9 @@ test "vm.syscalls.cpi: updateCalleeAccount: account data readonly" {
 
     var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
     defer callee_account.release();
+
+    // Make account readonly (going through setOwner would hit error.ModifiedProgramId).
+    callee_account.account.owner = Pubkey.initRandom(prng.random());
 
     // Check data must be the same when readonly
     caller_account.serialized_data[0] = 'b';
@@ -2246,7 +2235,7 @@ test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), &.{});
+    var ctx = try TestContext.init(allocator, prng.random(), &.{});
     defer ctx.deinit(allocator);
     const account = ctx.getAccount();
 
@@ -2284,7 +2273,7 @@ test "vm.syscalls.cpi: updateCallerAccount: data" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
-    var ctx = try TestContext.initWritable(allocator, prng.random(), "foobar");
+    var ctx = try TestContext.init(allocator, prng.random(), "foobar");
     defer ctx.deinit(allocator);
     const account = ctx.getAccount();
 
