@@ -250,7 +250,7 @@ fn collectRentFromAccount(
     feature_set: *const runtime.FeatureSet,
     rent_collector: *const runtime.rent_collector.RentCollector,
 ) runtime.rent_collector.CollectedInfo {
-    if (!feature_set.active.contains(runtime.feature_set.DISABLE_RENT_FEES_COLLECTION)) {
+    if (!feature_set.active.contains(runtime.features.DISABLE_RENT_FEES_COLLECTION)) {
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
 
@@ -330,7 +330,7 @@ fn loadTransactionAccountsInner(
             return error.ProgramAccountNotFound;
 
         if (!program_account.account.executable and
-            !features.active.contains(runtime.feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS))
+            !features.active.contains(runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS))
         {
             return error.InvalidProgramForExecution;
         }
@@ -350,7 +350,7 @@ fn loadTransactionAccountsInner(
 
         if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID) or
             (!program_account.account.executable and
-            !features.active.contains(runtime.feature_set.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS)))
+            !features.active.contains(runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS)))
         {
             return error.InvalidProgramForExecution;
         }
