@@ -185,7 +185,7 @@ test "stable_log" {
         "Program data: ZGF0YTA= ZGF0YTE=",
         "Program return: SigDefau1tPubkey111111111111111111111111111 cmV0dXJu",
         "Program SigDefau1tPubkey111111111111111111111111111 success",
-        "Program SigDefau1tPubkey111111111111111111111111111 failed: error.Error",
+        "Program SigDefau1tPubkey111111111111111111111111111 failed: error",
     };
     const actual = tc.log_collector.?.collect();
 
