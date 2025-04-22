@@ -144,7 +144,7 @@ const LoadedTransactionAccount = struct {
 };
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
-fn AccountLoader(comptime bank_kind: BankKind) type {
+pub fn AccountLoader(comptime bank_kind: BankKind) type {
     return struct {
         const Self = @This();
         const Cache = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData);
