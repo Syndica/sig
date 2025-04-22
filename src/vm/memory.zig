@@ -96,7 +96,7 @@ pub const MemoryMap = union(enum) {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L604
-    fn translate(
+    pub fn translate(
         memory_map: *const MemoryMap,
         comptime state: MemoryState,
         vm_addr: u64,
