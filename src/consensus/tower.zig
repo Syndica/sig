@@ -119,23 +119,25 @@ pub const TowerError = error{
 pub const Tower = struct {
     logger: ScopedLogger(@typeName(Self)),
     node_pubkey: Pubkey,
+    /// This is the number of ancestor slots to consider when calculating the switch threshold.
     threshold_depth: usize,
+    /// This is the percentage of votes required within that depth to permit a fork switch.
     threshold_size: f64,
     vote_state: TowerVoteState,
     last_vote: VoteTransaction,
-    // The blockhash used in the last vote transaction, may or may not equal the
-    // blockhash of the voted block itself, depending if the vote slot was refreshed.
-    // For instance, a vote for slot 5, may be refreshed/resubmitted for inclusion in
-    //  block 10, in  which case `last_vote_tx_blockhash` equals the blockhash of 10, not 5.
-    // For non voting validators this is NonVoting
+    /// The blockhash used in the last vote transaction, may or may not equal the
+    /// blockhash of the voted block itself, depending if the vote slot was refreshed.
+    /// For instance, a vote for slot 5, may be refreshed/resubmitted for inclusion in
+    ///  block 10, in  which case `last_vote_tx_blockhash` equals the blockhash of 10, not 5.
+    /// For non voting validators this is NonVoting
     last_vote_tx_blockhash: BlockhashStatus,
     last_timestamp: BlockTimestamp,
-    // Restored last voted slot which cannot be found in SlotHistory at replayed root
-    // (This is a special field for slashing-free validator restart with edge cases).
-    // This could be emptied after some time; but left intact indefinitely for easier
-    // implementation
-    // Further, stray slot can be stale or not. `Stale` here means whether given
-    // bank_forks (=~ ledger) lacks the slot or not.
+    /// Restored last voted slot which cannot be found in SlotHistory at replayed root
+    /// (This is a special field for slashing-free validator restart with edge cases).
+    /// This could be emptied after some time; but left intact indefinitely for easier
+    /// implementation
+    /// Further, stray slot can be stale or not. `Stale` here means whether given
+    /// bank_forks (=~ ledger) lacks the slot or not.
     stray_restored_slot: ?Slot,
     last_switch_threshold_check: ?struct { Slot, SwitchForkDecision },
 
@@ -654,11 +656,11 @@ pub const Tower = struct {
                     , .{last_voted_slot});
                 }
                 break :blk SortedSet(u64).init(allocator);
-            } else @panic("TODO");
+            } else return error.NoAncestorsFoundForLastVote;
         };
 
-        // TODO can error handling be improved here
-        const switch_slot_ancestors = ancestors.get(switch_slot).?;
+        const switch_slot_ancestors = ancestors.get(switch_slot) orelse
+            return error.NoAncestorsFoundForSwitchSlot;
 
         if (switch_slot == last_voted_slot or switch_slot_ancestors.contains(last_voted_slot)) {
             // If the `switch_slot is a descendant of the last vote,
@@ -687,9 +689,7 @@ pub const Tower = struct {
                 //
                 // This is covered by test_future_tower_* in local_cluster
                 return SwitchForkDecision{ .failed_switch_threshold = .{ 0, total_stake } };
-            } else {
-                @panic("TODO add message");
-            }
+            } else return error.NoAncestorsFoundForLastVote;
         }
 
         // By this point, we know the `switch_slot` is on a different fork
@@ -988,7 +988,6 @@ pub const Tower = struct {
         replayed_root: Slot,
         slot_history: *const SlotHistory,
     ) !void {
-        // sanity assertions for roots
         const tower_root = try self.getRoot();
         const voted_slots = try self.votedSlots(allocator);
         defer allocator.free(voted_slots);
@@ -1001,6 +1000,7 @@ pub const Tower = struct {
             tower_root,
             replayed_root,
         });
+        // Sanity assertions for roots. Must be in the slot history
         std.debug.assert(slot_history.check(replayed_root) == .found);
 
         var default_vote = try VoteTransaction.default(allocator);
@@ -1009,6 +1009,10 @@ pub const Tower = struct {
         var default_tower = VoteTransaction{ .tower_sync = try TowerSync.default(allocator) };
         defer default_tower.deinit(allocator);
 
+        // This ensures that if vote_state.votes is empty,
+        // then the only acceptable values for last_vote are:
+        // - A default VoteStateUpdate or
+        // - A default TowerSync
         std.debug.assert(
             (self.last_vote.eql(&default_vote) and
                 self.vote_state.votes.items.len == 0) or
