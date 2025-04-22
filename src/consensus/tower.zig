@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const Account = sig.core.Account;
 const Bank = sig.accounts_db.Bank;
@@ -17,8 +16,6 @@ const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
 const ProgressMap = sig.consensus.unimplemented.ProgressMap;
 const Pubkey = sig.core.Pubkey;
 const ReplayStage = sig.consensus.unimplemented.ReplayStage;
-const SavedTower = sig.consensus.tower_storage.SavedTower;
-const SavedTowerVersion = sig.consensus.tower_storage.SavedTowerVersions;
 const Slot = sig.core.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
@@ -1288,15 +1285,6 @@ pub const Tower = struct {
     // boot
     fn initializeRoot(self: *Tower, root_slot: Slot) void {
         self.vote_state.root_slot = root_slot;
-    }
-
-    pub fn save(
-        self: *const Tower,
-        tower_storage: *const TowerStorage,
-        node_keypair: *const KeyPair,
-    ) !void {
-        const saved_tower = try SavedTower.init(self, node_keypair);
-        try tower_storage.store(&SavedTowerVersion{ .current = saved_tower });
     }
 
     // Static methods
