@@ -411,17 +411,10 @@ pub fn poseidon(
             @intFromPtr(input.addr),
             input.len,
         );
-        hasher.append(slice[0..32]) catch {
-            // TODO: THIS IS INCORRECT, it is set to temporarily match the error set. Agave
-            // returns sets a custom poseidon error here.
-            return error.OutOfMemory;
-        };
+        hasher.append(slice[0..32]) catch
+            return error.Overflow;
     }
-    const result = hasher.finish() catch {
-        // TODO: THIS IS INCORRECT, it is set to temporarily match the error set. Agave
-        // returns sets a custom poseidon error here.
-        return error.OutOfMemory;
-    };
+    const result = hasher.finish();
     @memcpy(hash_result, &result);
 }
 
