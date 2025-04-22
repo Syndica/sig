@@ -3931,7 +3931,7 @@ test "load other sysvars" {
     }
 
     const SlotAndHash = sig.core.hash.SlotAndHash;
-    _ = try accounts_db.getTypeFromAccount(allocator, sysvar.EpochSchedule, &sysvar.EpochSchedule.ID);
+    _ = try accounts_db.getTypeFromAccount(allocator, sig.core.EpochSchedule, &sig.core.EpochSchedule.ID);
     _ = try accounts_db.getTypeFromAccount(allocator, sysvar.Rent, &sysvar.Rent.ID);
     _ = try accounts_db.getTypeFromAccount(allocator, SlotAndHash, &sysvar.SlotHashes.ID);
 

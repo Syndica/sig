@@ -45,7 +45,7 @@ pub const ExecuteContextsParams = struct {
 
     pub const SysvarCacheParams = struct {
         clock: ?sysvar.Clock = null,
-        epoch_schedule: ?sysvar.EpochSchedule = null,
+        epoch_schedule: ?sig.core.EpochSchedule = null,
         epoch_rewards: ?sysvar.EpochRewards = null,
         rent: ?sysvar.Rent = null,
         last_restart_slot: ?sysvar.LastRestartSlot = null,
