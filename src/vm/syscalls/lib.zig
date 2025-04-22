@@ -89,7 +89,6 @@ pub fn register(
         logComputeUnits,
     );
 
-    // Log Data
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_log_data",
@@ -136,7 +135,11 @@ pub fn register(
         memcpy,
     );
 
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_memmove_", memmove,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_memmove_",
+        memmove,
+    );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
@@ -323,6 +326,7 @@ pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regi
 
 // memory operators
 pub const memcpy = memops.memcpy;
+pub const memmove = memops.memmove;
 pub const memset = memops.memset;
 pub const memcmp = memops.memcmp;
 

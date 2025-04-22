@@ -3,6 +3,9 @@ const sig = @import("../../sig.zig");
 
 const memory = sig.vm.memory;
 const syscalls = sig.vm.syscalls;
+
+const EbpfError = sig.vm.EbpfError;
+const SyscallError = sig.vm.SyscallError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
 const Error = syscalls.Error;
 const MemoryMap = sig.vm.memory.MemoryMap;
@@ -97,7 +100,7 @@ const MemoryChunkIterator = struct {
 
         if (self.is_account) |is_account| {
             if (is_account != region_is_account) {
-                return error.InvalidLength;
+                return EbpfError.AccessViolation;
             }
         } else {
             self.is_account = region_is_account;
@@ -217,7 +220,7 @@ const MemmoveContext = struct {
     }
 };
 
-fn memmoveNonContigious(
+fn moveNonContiguous(
     dst_addr: u64,
     src_addr: u64,
     len: u64,
@@ -340,25 +343,23 @@ pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     const src_addr = registers.get(.r2);
     const len = registers.get(.r3);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L43
+    if (isOverlapping(src_addr, dst_addr, len))
+        return SyscallError.CopyOverlapping;
+
     try consumeMemoryCompute(tc, len);
 
-    const feature_set = tc.sc.ec.feature_set;
-    if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
-        try memmoveNonContigious(
-            dst_addr,
-            src_addr,
-            len,
-            tc.serialized_accounts.constSlice(),
-            memory_map,
-            ic.getCheckAligned(),
-        );
-    } else {
-        const dst_host = try memory_map.vmap(.mutable, dst_addr, len);
-        const src_host = try memory_map.vmap(.constant, src_addr, len);
-        @memcpy(dst_host, src_host);
-    }
+    try move(tc, memory_map, dst_addr, src_addr, len);
+}
+
+/// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mem_ops.rs#L16
+pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
+    const dst_addr = registers.get(.r1);
+    const src_addr = registers.get(.r2);
+    const len = registers.get(.r3);
+
+    try consumeMemoryCompute(tc, len);
+
+    try move(tc, memory_map, dst_addr, src_addr, len);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L72-L128
@@ -401,6 +402,47 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
         var memcmp_ctx: MemcmpContext = .{ .result = 0 };
         memcmp_ctx.run(a, b) catch {};
         cmp_result.* = memcmp_ctx.result;
+    }
+}
+
+fn isOverlapping(
+    src_addr: u64,
+    dst_addr: u64,
+    len: u64,
+) bool {
+    return if (src_addr > dst_addr)
+        dst_addr +| len >= src_addr
+    else
+        src_addr +| len >= dst_addr;
+}
+
+/// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mem_ops.rs#L145
+fn move(tc: *TransactionContext, memory_map: *MemoryMap, dst_addr: u64, src_addr: u64, len: u64) !void {
+    const feature_set = tc.sc.ec.feature_set;
+    if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
+        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+        std.debug.print("moveNonContiguous: dst_addr: {x}, src_addr: {x}, len: {x}\n", .{
+            dst_addr,
+            src_addr,
+            len,
+        });
+        try moveNonContiguous(
+            dst_addr,
+            src_addr,
+            len,
+            tc.serialized_accounts.constSlice(),
+            memory_map,
+            ic.getCheckAligned(),
+        );
+    } else {
+        std.debug.print("moveContiguous: dst_addr: {x}, src_addr: {x}, len: {x}\n", .{
+            dst_addr,
+            src_addr,
+            len,
+        });
+        const dst_host = try memory_map.vmap(.mutable, dst_addr, len);
+        const src_host = try memory_map.vmap(.constant, src_addr, len);
+        @memcpy(dst_host, src_host);
     }
 }
 
@@ -646,7 +688,7 @@ test "chunks short" {
     defer memory_map.deinit(allocator);
 
     // dst shorter than src
-    try std.testing.expectError(error.AccessViolation, memmoveNonContigious(
+    try std.testing.expectError(error.AccessViolation, moveNonContiguous(
         memory.RODATA_START,
         memory.RODATA_START + 8,
         8,
@@ -656,7 +698,7 @@ test "chunks short" {
     ));
 
     // src shorter than dst
-    try std.testing.expectError(error.AccessViolation, memmoveNonContigious(
+    try std.testing.expectError(error.AccessViolation, moveNonContiguous(
         memory.RODATA_START + 10,
         memory.RODATA_START + 2,
         3,
@@ -679,7 +721,7 @@ test "memmove non contiguous readonly" {
     );
     defer memory_map.deinit(allocator);
 
-    try std.testing.expectError(error.AccessViolation, memmoveNonContigious(
+    try std.testing.expectError(error.AccessViolation, moveNonContiguous(
         memory.RODATA_START,
         memory.RODATA_START + 8,
         4,
