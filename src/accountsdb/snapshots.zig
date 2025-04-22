@@ -17,6 +17,7 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
+pub const RentCollector = sig.runtime.rent_collector.RentCollector;
 
 const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
 const FileId = sig.accounts_db.accounts_file.FileId;
@@ -376,23 +377,6 @@ pub const Delegation = struct {
             .activation_epoch = random.int(Epoch),
             .deactivation_epoch = random.int(Epoch),
             .deprecated_warmup_cooldown_rate = random.float(f64),
-        };
-    }
-};
-
-/// Analogous to [RentCollector](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/rent_collector.rs#L16)
-pub const RentCollector = struct {
-    epoch: Epoch,
-    epoch_schedule: EpochSchedule,
-    slots_per_year: f64,
-    rent: Rent,
-
-    pub fn initRandom(random: std.Random) RentCollector {
-        return .{
-            .epoch = random.int(Epoch),
-            .epoch_schedule = EpochSchedule.initRandom(random),
-            .slots_per_year = random.float(f64),
-            .rent = Rent.initRandom(random),
         };
     }
 };

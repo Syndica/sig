@@ -6,7 +6,7 @@ const sysvars = sig.runtime.sysvar;
 
 const Pubkey = sig.core.Pubkey;
 const Clock = sysvars.Clock;
-const EpochSchedule = sysvars.EpochSchedule;
+const EpochSchedule = sig.core.EpochSchedule;
 const EpochRewards = sysvars.EpochRewards;
 const Rent = sysvars.Rent;
 const SlotHashes = sysvars.SlotHashes;
