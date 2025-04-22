@@ -935,8 +935,6 @@ pub const Config = struct {
     stack_frame_size: usize = 4096,
     /// Enables the use of MemoryMapping and MemoryRegion for address translation
     enable_address_translation: bool = true,
-    /// Enables gaps in VM address space between the stack frames
-    enable_stack_frame_gaps: bool = true,
     /// Maximal pc distance after which a new instruction meter validation is emitted by the JIT
     instruction_meter_checkpoint_distance: usize = 10_000,
     /// Enable instruction meter and limiting
@@ -955,9 +953,11 @@ pub const Config = struct {
     optimize_rodata: bool = true,
     /// Use aligned memory mapping
     aligned_memory_mapping: bool = true,
+    /// Enables gaps in VM address space between the stack frames
+    enable_stack_frame_gaps: bool = true,
+
     /// Allowed [SBPFVersion]s
     minimum_version: sbpf.Version = .v0,
-
     maximum_version: sbpf.Version = .v3,
 
     pub fn stackSize(config: Config) u64 {

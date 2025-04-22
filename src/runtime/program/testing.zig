@@ -54,9 +54,9 @@ pub fn expectProgramExecuteResult(
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
-    var initial_context_params_ = initial_context_params;
+    var context_params = initial_context_params;
     if (options.print_logs and initial_context_params.log_collector == null) {
-        initial_context_params_.log_collector = LogCollector.init(null);
+        context_params.log_collector = LogCollector.init(null);
     }
 
     // Create the initial transaction context
@@ -65,7 +65,7 @@ pub fn expectProgramExecuteResult(
     const initial_ec, const initial_sc, var initial_tc = try createExecutionContexts(
         allocator,
         initial_prng.random(),
-        initial_context_params_,
+        context_params,
     );
     defer {
         // Log messages before deiniting the transaction context

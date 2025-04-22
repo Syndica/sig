@@ -21,7 +21,7 @@ const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
-const EpochSchedule = sig.runtime.sysvar.EpochSchedule;
+const EpochSchedule = sig.core.EpochSchedule;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const features = sig.runtime.features;
 

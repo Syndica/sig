@@ -890,7 +890,7 @@ pub const AccountDataHandle = union(enum) {
         switch (self.*) {
             .owned_allocation, .unowned_allocation => |data| return @memcpy(buf, data[start..end]),
             .sub_read => |*sb| return sb.parent.read(sb.start + start, buf),
-            .empty => unreachable,
+            .empty => return,
             .buffer_pool_read => {},
         }
 

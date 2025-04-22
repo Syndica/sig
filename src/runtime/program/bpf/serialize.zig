@@ -10,6 +10,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
+const InstructionInfo = sig.runtime.InstructionInfo;
 
 const Region = vm.memory.Region;
 
@@ -183,19 +184,18 @@ pub const Serializer = struct {
     }
 };
 
+const SerializeReturn = struct {
+    []u8,
+    []Region,
+    std.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
+};
+
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L188
 pub fn serializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     copy_account_data: bool,
-) (error{OutOfMemory} || InstructionError)!struct {
-    []u8,
-    []Region,
-    []SerializedAccountMeta,
-} {
-    if (ic.ixn_info.account_metas.len > std.math.maxInt(u8))
-        return InstructionError.MaxAccountsExceeded;
-
+) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
@@ -246,11 +246,7 @@ fn serializeParametersUnaligned(
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
-) (error{OutOfMemory} || InstructionError)!struct {
-    []u8,
-    []Region,
-    []SerializedAccountMeta,
-} {
+) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: usize = @sizeOf(u64);
     for (accounts) |account| {
         size += 1; // dup
@@ -284,11 +280,10 @@ fn serializeParametersUnaligned(
         copy_account_data,
     );
 
-    var account_metas = try std.ArrayListUnmanaged(SerializedAccountMeta).initCapacity(
-        allocator,
-        accounts.len,
-    );
-    defer account_metas.deinit(allocator);
+    var account_metas: std.BoundedArray(
+        SerializedAccountMeta,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ) = .{};
 
     _ = serializer.write(u64, std.mem.nativeToLittle(u64, accounts.len));
     for (accounts) |account| {
@@ -328,7 +323,7 @@ fn serializeParametersUnaligned(
                 });
             },
             .duplicate => |index| {
-                account_metas.appendAssumeCapacity(account_metas.items[index]);
+                account_metas.appendAssumeCapacity(account_metas.constSlice()[index]);
                 _ = serializer.write(u8, @intCast(index));
             },
         }
@@ -346,7 +341,7 @@ fn serializeParametersUnaligned(
     return .{
         memory,
         regions,
-        try account_metas.toOwnedSlice(allocator),
+        account_metas,
     };
 }
 
@@ -357,11 +352,7 @@ fn serializeParametersAligned(
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
-) (error{OutOfMemory} || InstructionError)!struct {
-    []u8,
-    []Region,
-    []SerializedAccountMeta,
-} {
+) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: u64 = @sizeOf(u64);
     for (accounts) |account| {
         size += 1; // dup
@@ -407,11 +398,10 @@ fn serializeParametersAligned(
     );
     errdefer serializer.deinit();
 
-    var account_metas = try std.ArrayListUnmanaged(SerializedAccountMeta).initCapacity(
-        allocator,
-        accounts.len,
-    );
-    defer account_metas.deinit(allocator);
+    var account_metas: std.BoundedArray(
+        SerializedAccountMeta,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ) = .{};
 
     _ = serializer.write(u64, std.mem.nativeToLittle(u64, accounts.len));
     for (accounts) |account| {
@@ -451,7 +441,7 @@ fn serializeParametersAligned(
                 });
             },
             .duplicate => |index| {
-                account_metas.appendAssumeCapacity(account_metas.items[index]);
+                account_metas.appendAssumeCapacity(account_metas.constSlice()[index]);
                 _ = serializer.write(u8, index);
                 _ = serializer.writeBytes(&.{ 0, 0, 0, 0, 0, 0, 0 });
             },
@@ -471,7 +461,7 @@ fn serializeParametersAligned(
     return .{
         memory,
         regions,
-        try account_metas.toOwnedSlice(allocator),
+        account_metas,
     };
 }
 
@@ -481,7 +471,7 @@ pub fn deserializeParameters(
     ic: *InstructionContext,
     copy_account_data: bool,
     memory: []u8,
-    account_metas: []SerializedAccountMeta,
+    account_metas: []const SerializedAccountMeta,
 ) (error{OutOfMemory} || InstructionError)!void {
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
@@ -912,7 +902,6 @@ test "serializeParameters" {
             defer {
                 allocator.free(memory);
                 allocator.free(regions);
-                allocator.free(account_metas);
             }
 
             const serialized_regions = try concatRegions(allocator, regions);
@@ -930,7 +919,7 @@ test "serializeParameters" {
                 &ic,
                 copy_account_data,
                 memory,
-                account_metas,
+                account_metas.constSlice(),
             );
             for (pre_accounts, 0..) |pre_account, index_in_transaction| {
                 const post_account = tc.accounts[index_in_transaction];

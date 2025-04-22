@@ -45,7 +45,7 @@ pub const ExecuteContextsParams = struct {
 
     pub const SysvarCacheParams = struct {
         clock: ?sysvar.Clock = null,
-        epoch_schedule: ?sysvar.EpochSchedule = null,
+        epoch_schedule: ?sig.core.EpochSchedule = null,
         epoch_rewards: ?sysvar.EpochRewards = null,
         rent: ?sysvar.Rent = null,
         last_restart_slot: ?sysvar.LastRestartSlot = null,
@@ -125,6 +125,7 @@ pub fn createExecutionContexts(
         .ec = ec,
         .sc = sc,
         .accounts = try accounts.toOwnedSlice(),
+        .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
         .return_data = return_data,
@@ -326,8 +327,9 @@ pub fn expectTransactionContextEqual(
     if (expected.accounts_resize_delta != actual.accounts_resize_delta)
         return error.AccountsResizeDeltaMismatch;
 
-    if (expected.compute_meter != actual.compute_meter)
+    if (expected.compute_meter != actual.compute_meter) {
         return error.ComputeMeterMismatch;
+    }
 
     if (expected.custom_error != actual.custom_error)
         return error.MaybeCustomErrorMismatch;

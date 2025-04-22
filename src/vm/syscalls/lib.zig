@@ -1,7 +1,8 @@
 const phash = @import("poseidon");
 const std = @import("std");
+const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
-
+const cpi = @import("cpi.zig");
 const features = sig.runtime.features;
 
 const Pubkey = sig.core.Pubkey;
@@ -27,7 +28,17 @@ pub const Error = error{
     Unexpected,
     ComputationalBudgetExceeded,
     ReturnDataTooLarge,
-} || std.fs.File.WriteError || InstructionError;
+    BadSeeds,
+    TooManySigners,
+    UnalignedPointer,
+    InvalidPointer,
+    TooManyAccounts,
+    InstructionTooLarge,
+    MaxInstructionDataLenExceeded,
+    MaxInstructionAccountsExceeded,
+    MaxInstructionAccountInfosExceeded,
+    ProgramNotSupported,
+} || std.fs.File.WriteError || InstructionError || sig.vm.memory.RegionError;
 
 pub const Syscall = *const fn (
     *TransactionContext,
@@ -168,8 +179,16 @@ pub fn register(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_return_data", getReturnData,);
 
     // Cross Program Invocation
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_c", invokeSignedC,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", invokeSignedRust,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_invoke_signed_c",
+        invokeSignedC,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_invoke_signed_rust",
+        invokeSignedRust,
+    );
 
     // Memory Allocator
     if (!feature_set.isActive(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL, slot)) {
@@ -280,63 +299,9 @@ pub fn logComputeUnits(ctx: *TransactionContext, _: *MemoryMap, _: RegisterMap) 
 }
 
 // memory operators
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L130-L162
-pub fn memset(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    const dst_addr = registers.get(.r1);
-    const scalar = registers.get(.r2);
-    const len = registers.get(.r3);
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L142
-    try consumeMemoryCompute(ctx, len);
-
-    const host_addr = try mmap.vmap(.mutable, dst_addr, len);
-    @memset(host_addr, @truncate(scalar));
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L31-L52
-pub fn memcpy(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    const dst_addr = registers.get(.r1);
-    const src_addr = registers.get(.r2);
-    const len = registers.get(.r3);
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L43
-    try consumeMemoryCompute(ctx, len);
-
-    const dst_host = try mmap.vmap(.mutable, dst_addr, len);
-    const src_host = try mmap.vmap(.constant, src_addr, len);
-    @memcpy(dst_host, src_host);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L72-L128
-pub fn memcmp(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    const a_addr = registers.get(.r1);
-    const b_addr = registers.get(.r2);
-    const n = registers.get(.r3);
-    const cmp_result_addr = registers.get(.r4);
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L84
-    try consumeMemoryCompute(ctx, n);
-
-    const a = try mmap.vmap(.constant, a_addr, n);
-    const b = try mmap.vmap(.constant, b_addr, n);
-    const cmp_result_slice = try mmap.vmap(
-        .mutable,
-        cmp_result_addr,
-        @sizeOf(u32),
-    );
-    const cmp_result: *align(1) u32 = @ptrCast(cmp_result_slice.ptr);
-
-    const result = std.mem.order(u8, a, b);
-    cmp_result.* = @intFromEnum(result);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L8-L15
-fn consumeMemoryCompute(ctx: *TransactionContext, length: u64) !void {
-    const budget = ctx.compute_budget;
-    const cost = @max(budget.mem_op_base_cost, length / budget.cpi_bytes_per_unit);
-    try ctx.consumeCompute(cost);
-}
+pub const memcpy = memops.memcpy;
+pub const memset = memops.memset;
+pub const memcmp = memops.memcmp;
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
@@ -451,5 +416,42 @@ test poseidon {
             .{ .name = "sol_panic_", .builtin_fn = panic },
         },
         .{ 0, 48526 },
+    );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
+pub fn invokeSignedC(ctx: *TransactionContext, mmap: *MemoryMap, rm: RegisterMap) Error!void {
+    return invokeSigned(cpi.AccountInfoC, ctx, mmap, rm);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
+pub fn invokeSignedRust(ctx: *TransactionContext, mmap: *MemoryMap, rm: RegisterMap) Error!void {
+    return invokeSigned(cpi.AccountInfoRust, ctx, mmap, rm);
+}
+
+fn invokeSigned(
+    comptime AccountInfoType: type,
+    ctx: *TransactionContext,
+    mmap: *MemoryMap,
+    registers: RegisterMap,
+) Error!void {
+    const instruction_addr = registers.get(.r1);
+    const account_infos_addr = registers.get(.r2);
+    const account_infos_len = registers.get(.r3);
+    const signers_seeds_addr = registers.get(.r4);
+    const signers_seeds_len = registers.get(.r5);
+
+    const caller_ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+
+    return cpi.cpiCommon(
+        ctx.allocator,
+        caller_ic,
+        mmap,
+        AccountInfoType,
+        instruction_addr,
+        account_infos_addr,
+        account_infos_len,
+        signers_seeds_addr,
+        signers_seeds_len,
     );
 }
