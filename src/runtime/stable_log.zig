@@ -44,9 +44,9 @@ pub fn programInvoke(
 /// That is, any program-generated output is guaranteed to be prefixed by "Program log: "
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L42
-pub fn programLog(tc: *TransactionContext, message: []const u8) !void {
+pub fn programLog(tc: *TransactionContext, comptime fmt: []const u8, args: anytype) !void {
     if (tc.log_collector) |*lc| {
-        try lc.log(tc.allocator, "Program log: {str}", .{message});
+        try lc.log(tc.allocator, "Program log: " ++ fmt, args);
     }
 }
 
@@ -173,7 +173,7 @@ test "stable_log" {
         Pubkey.parseBase58String("SigDefau1tPubkey111111111111111111111111111") catch unreachable;
 
     try programInvoke(&tc, program_id, 0);
-    try programLog(&tc, "log");
+    try programLog(&tc, "{s}", .{"log"});
     try programData(&tc, &.{ "data0", "data1" });
     try programReturn(&tc, program_id, "return");
     try programSuccess(&tc, program_id);
