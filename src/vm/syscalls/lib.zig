@@ -303,7 +303,7 @@ pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: Regis
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
 
     const vm_messages = try memory_map.translateSlice(
-        []u8,
+        Slice,
         .constant,
         vm_addr,
         len,
@@ -320,7 +320,7 @@ pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: Regis
         messages[i] = try memory_map.translateSlice(
             u8,
             .constant,
-            @intFromPtr(msg.ptr),
+            @intFromPtr(msg.addr),
             msg.len,
             try tc.getCheckAligned(),
         );
