@@ -1,4 +1,4 @@
-pub const account_loaded = @import("account_loader.zig");
+pub const account_loader = @import("account_loader.zig");
 pub const borrowed_account = @import("borrowed_account.zig");
 pub const compute_budget = @import("compute_budget.zig");
 pub const executor = @import("executor.zig");
