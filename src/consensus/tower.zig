@@ -410,7 +410,7 @@ pub const Tower = struct {
 
     // root may be forcibly set by arbitrary replay root slot, for example from a root
     // after replaying a snapshot.
-    // Also, tower.root() couldn't be None; initialize_lockouts() ensures that.
+    // Also, tower.getRoot() couldn't be null; initializeLockouts() ensures that.
     // Conceptually, every tower must have been constructed from a concrete starting point,
     // which establishes the origin of trust (i.e. root) whether booting from genesis (slot 0) or
     // snapshot (slot N). In other words, there should be no possibility a Tower doesn't have
@@ -494,7 +494,7 @@ pub const Tower = struct {
     ///
     /// We assume `candidate_slot` is not an ancestor of `last_voted_slot`.
     ///
-    /// Returns None if `candidate_slot` or `switch_slot` is not present in `ancestors`
+    /// Returns null if `candidate_slot` or `switch_slot` is not present in `ancestors`
     fn isValidSwitchingProofVote(
         self: *const Tower,
         candidate_slot: Slot,
@@ -622,8 +622,8 @@ pub const Tower = struct {
         const last_vote_ancestors = ancestors.get(last_voted_slot) orelse blk: {
             if (self.isStrayLastVote()) {
                 // Unless last vote is stray and stale, ancestors.get(last_voted_slot) must
-                // return Some(_), justifying to panic! here.
-                // Also, adjust_lockouts_after_replay() correctly makes last_voted_slot None,
+                // return a value, justifying to panic! here.
+                // Also, adjustLockoutsAfterReplay() correctly makes last_voted_slot None,
                 // if all saved votes are ancestors of replayed_root_slot. So this code shouldn't be
                 // touched in that case as well.
                 // In other words, except being stray, all other slots have been voted on while
@@ -1023,7 +1023,7 @@ pub const Tower = struct {
         if (self.lastVotedSlot()) |last_voted_slot| {
             if (tower_root <= replayed_root) {
                 // Normally, we goes into this clause with possible help of
-                // reconcile_blockstore_roots_with_external_source()
+                // reconcileBlockstoreRootsWithExternalSource() (yet to be implemented)
                 if (slot_history.check(last_voted_slot) == .too_old) {
                     // We could try hard to anchor with other older votes, but opt to simplify the
                     // following logic
@@ -1044,10 +1044,6 @@ pub const Tower = struct {
                 );
                 self.initializeRoot(replayed_root);
             } else {
-                // This should never occur under normal operation.
-                // While this validator's voting is suspended this way,
-                // suspended_decision_due_to_major_unsynced_ledger() will be also touched.
-
                 self.logger.err().logf(
                     \\For some reason, we're REPROCESSING slots which has already been voted and
                     \\ROOTED by us; VOTING will be SUSPENDED UNTIL {}!
@@ -1080,7 +1076,7 @@ pub const Tower = struct {
             }
         } else {
             // This else clause is for newly created tower.
-            // initialize_lockouts_from_bank() should ensure the following invariant,
+            // initializeLockoutsFromBank() should ensure the following invariant,
             // otherwise we're screwing something up.
             std.debug.assert(tower_root == replayed_root);
         }
@@ -1414,7 +1410,7 @@ pub const Tower = struct {
             }
 
             // The last vote in the vote stack is a simulated vote on bank_slot, which
-            // we added to the vote stack earlier in this function by calling process_vote().
+            // we added to the vote stack earlier in this function by calling processVote().
             // We don't want to update the ancestors stakes of this vote b/c it does not
             // represent an actual vote by the validator.
 
@@ -1503,7 +1499,7 @@ pub const Tower = struct {
 
     /// Checks if `maybe_descendant` is a descendant of `slot`.
     ///
-    /// Returns None if `maybe_descendant` is not present in `ancestors`
+    /// Returns none if `maybe_descendant` is not present in `ancestors`
     fn isDescendantSlot(
         maybe_descendant: Slot,
         slot: Slot,
@@ -1518,7 +1514,7 @@ pub const Tower = struct {
     /// Returns `Some(gca)` where `gca` is the greatest (by slot number)
     /// common ancestor of both `slot_a` and `slot_b`.
     ///
-    /// Returns `None` if:
+    /// Returns `null` if:
     /// * `slot_a` is not in `ancestors`
     /// * `slot_b` is not in `ancestors`
     /// * There is no common ancestor of slot_a and slot_b in `ancestors`
