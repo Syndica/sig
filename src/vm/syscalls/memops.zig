@@ -100,7 +100,7 @@ const MemoryChunkIterator = struct {
 
         if (self.is_account) |is_account| {
             if (is_account != region_is_account) {
-                return EbpfError.AccessViolation;
+                return SyscallError.InvalidLength;
             }
         } else {
             self.is_account = region_is_account;
@@ -216,7 +216,7 @@ fn iterateMemoryPairs(
 
 const MemmoveContext = struct {
     fn run(_: *@This(), dst: []u8, src: []const u8) !void {
-        @memcpy(dst, src);
+        std.mem.copyBackwards(u8, dst, src);
     }
 };
 
