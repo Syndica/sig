@@ -141,7 +141,9 @@ pub const TransactionContext = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d033f544a96a72c6c664e56871eb8a24b5/transaction-context/src/lib.rs#L340
-    pub fn getCurrentInstructionContext(self: *TransactionContext) InstructionError!*InstructionContext {
+    pub fn getCurrentInstructionContext(
+        self: *TransactionContext,
+    ) InstructionError!*InstructionContext {
         if (self.instruction_stack.len == 0) return InstructionError.CallDepth;
         return &self.instruction_stack.buffer[self.instruction_stack.len - 1];
     }

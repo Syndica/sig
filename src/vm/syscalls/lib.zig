@@ -270,7 +270,11 @@ pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Err
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
-pub fn logPubkey(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn logPubkey(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: RegisterMap,
+) Error!void {
     const vm_addr = registers.get(.r1);
 
     try tc.consumeCompute(tc.compute_budget.log_pubkey_units);
@@ -381,7 +385,11 @@ const Slice = extern struct {
     len: u64,
 };
 
-pub fn poseidon(ctx: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn poseidon(
+    ctx: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: RegisterMap,
+) Error!void {
     // const parameters: Parameters = @enumFromInt(registers.get(.r1));
     const endianness: std.builtin.Endian = @enumFromInt(registers.get(.r2));
     const addr = registers.get(.r3);
