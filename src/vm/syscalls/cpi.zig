@@ -169,7 +169,7 @@ fn VmValue(comptime T: type) type {
 
 /// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
 /// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
-const VmSlice = extern struct {
+pub const VmSlice = extern struct {
     ptr: u64,
     len: u64,
 };

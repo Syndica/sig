@@ -1,5 +1,6 @@
 const phash = @import("poseidon");
 const std = @import("std");
+const cpi = @import("cpi.zig");
 const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
 const cpi = @import("cpi.zig");
@@ -303,7 +304,7 @@ pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: Regis
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
 
     const vm_messages = try memory_map.translateSlice(
-        Slice,
+        cpi.VmSlice,
         .constant,
         vm_addr,
         len,
@@ -320,7 +321,7 @@ pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: Regis
         messages[i] = try memory_map.translateSlice(
             u8,
             .constant,
-            @intFromPtr(msg.addr),
+            msg.ptr,
             msg.len,
             try tc.getCheckAligned(),
         );
