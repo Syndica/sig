@@ -23,7 +23,7 @@ pub const Error = sig.vm.ExecutionError;
 pub const Syscall = *const fn (
     *TransactionContext,
     *MemoryMap,
-    RegisterMap,
+    *RegisterMap,
 ) Error!void;
 
 pub const Entry = struct {
@@ -230,7 +230,7 @@ pub fn register(
 
 // logging
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
-pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const vm_addr = registers.get(.r1);
     const len = registers.get(.r2);
 
@@ -252,7 +252,7 @@ pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterM
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
-pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: *RegisterMap) Error!void {
     try tc.consumeCompute(tc.compute_budget.log_64_units);
 
     const arg1 = registers.get(.r1);
@@ -272,7 +272,7 @@ pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Err
 pub fn logPubkey(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
-    registers: RegisterMap,
+    registers: *RegisterMap,
 ) Error!void {
     const vm_addr = registers.get(.r1);
 
@@ -291,13 +291,13 @@ pub fn logPubkey(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
-pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
+pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
     try tc.log("Program consumption: {} units remaining", .{tc.compute_meter});
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/logging.rs#L107
-pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const vm_addr = registers.get(.r1);
     const len = registers.get(.r2);
 
@@ -336,7 +336,7 @@ pub const memset = memops.memset;
 pub const memcmp = memops.memcmp;
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
-pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
+pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     @panic("TODO: implement allocFree syscall");
 }
 
@@ -344,9 +344,9 @@ pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!vo
 pub const MAX_RETURN_DATA: usize = 1024;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/4f68141ba70b7574da0bc185ef5d08fe33d19887/programs/bpf_loader/src/syscalls/mod.rs#L1450
-pub fn setReturnData(ctx: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) Error!void {
-    const addr = rm.get(.r1);
-    const len = rm.get(.r2);
+pub fn setReturnData(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
+    const addr = registers.get(.r1);
+    const len = registers.get(.r2);
 
     const cost = if (ctx.compute_budget.cpi_bytes_per_unit > 0)
         (len / ctx.compute_budget.cpi_bytes_per_unit) +| ctx.compute_budget.syscall_base_cost
@@ -363,7 +363,7 @@ pub fn setReturnData(ctx: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) 
     const return_data = if (len == 0)
         empty_return_data
     else
-        try mm.vmap(.constant, addr, len);
+        try memory_map.vmap(.constant, addr, len);
 
     if (ctx.instruction_stack.len == 0) return error.CallDepth;
     const ic = ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
@@ -385,9 +385,9 @@ const Slice = extern struct {
 };
 
 pub fn poseidon(
-    ctx: *TransactionContext,
+    tc: *TransactionContext,
     memory_map: *MemoryMap,
-    registers: RegisterMap,
+    registers: *RegisterMap,
 ) Error!void {
     // const parameters: Parameters = @enumFromInt(registers.get(.r1));
     const endianness: std.builtin.Endian = @enumFromInt(registers.get(.r2));
@@ -399,11 +399,11 @@ pub fn poseidon(
         return error.InvalidLength;
     }
 
-    const budget = ctx.compute_budget;
+    const budget = tc.compute_budget;
     // TODO: Agave logs a specific message when this overflows.
     // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1923-L1926
     const cost = try budget.poseidonCost(len);
-    try ctx.consumeCompute(cost);
+    try tc.consumeCompute(cost);
 
     const hash_result = try memory_map.vmap(.mutable, result_addr, 32);
     const input_bytes = try memory_map.vmap(
@@ -413,6 +413,10 @@ pub fn poseidon(
     );
     const inputs = std.mem.bytesAsSlice(Slice, input_bytes);
 
+    // Agave handles poseidon errors in an annoying way.
+    // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
+    // It is acitvated on all clusters, we still check for activation here and panic if it is not active.
+    // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
     var hasher = phash.Hasher.init(endianness);
     for (inputs) |input| {
         const slice = try memory_map.vmap(
@@ -420,19 +424,24 @@ pub fn poseidon(
             @intFromPtr(input.addr),
             input.len,
         );
-        hasher.append(slice[0..32]) catch
-            return error.Overflow;
+        hasher.append(slice[0..32]) catch {
+            if (tc.ec.feature_set.active.contains(features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES)) {
+                var registers_var = registers;
+                registers_var.set(.r0, 1);
+                return;
+            } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
+        };
     }
     const result = hasher.finish();
     @memcpy(hash_result, &result);
 }
 
 // special
-pub fn abort(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
+pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     return SyscallError.Abort;
 }
 
-pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const file = registers.get(.r1);
     const len = registers.get(.r2);
 
