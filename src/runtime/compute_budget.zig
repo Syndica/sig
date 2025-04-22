@@ -62,22 +62,19 @@ pub const ComputeBudget = struct {
     ///
     /// Returns the cost of a Poseidon hash syscall for a given input length.
     pub fn poseidonCost(self: ComputeBudget, len: u64) SyscallError!u64 {
-        const squared_inputs = std.math.powi(u64, len, 2) catch {
+        const squared_inputs = std.math.powi(u64, len, 2) catch
             return SyscallError.ArithmeticOverflow;
-        };
+
         const mul_result = std.math.mul(
             u64,
             squared_inputs,
             self.poseidon_cost_coefficient_a,
-        ) catch {
-            return SyscallError.ArithmeticOverflow;
-        };
+        ) catch return SyscallError.ArithmeticOverflow;
+
         return std.math.add(
             u64,
             mul_result,
             self.poseidon_cost_coefficient_c,
-        ) catch {
-            return SyscallError.ArithmeticOverflow;
-        };
+        ) catch return SyscallError.ArithmeticOverflow;
     }
 };
