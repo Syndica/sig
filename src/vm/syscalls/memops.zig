@@ -51,6 +51,12 @@ const MemoryChunkIterator = struct {
     fn next(self: *MemoryChunkIterator) !?Chunk {
         if (self.start == self.end) return null;
 
+        std.debug.print("next: start: {x}, end: {x}, len: {x}\n", .{
+            self.start,
+            self.end,
+            self.len,
+        });
+
         const region = switch (self.reversed) {
             true => try self.memory_map.region(.constant, self.end -| 1),
             false => try self.memory_map.region(.constant, self.start),
@@ -196,6 +202,12 @@ fn iterateMemoryPairs(
         else
             .{ src_chunk_addr, dst_chunk_addr };
 
+        std.debug.print("src_chunk: {x}, dst_chunk: {x}, chunk_len: {x}\n", .{
+            src_chunk_addr,
+            dst_chunk_addr,
+            chunk_len,
+        });
+
         const src_host = try memory_map.mapRegion(src_state, src_region, src_vm_addr, chunk_len);
         const dst_host = try memory_map.mapRegion(dst_state, dst_region, dst_vm_addr, chunk_len);
 
@@ -228,7 +240,7 @@ fn moveNonContiguous(
     memory_map: *MemoryMap,
     resize_area: bool,
 ) !void {
-    const reverse = (dst_addr -| src_addr) < len;
+    const reverse = true;
     var ctx: MemmoveContext = .{};
     return iterateMemoryPairs(
         dst_addr,
@@ -242,7 +254,12 @@ fn moveNonContiguous(
         reverse,
         MemmoveContext,
         &ctx,
-    );
+    ) catch |err| {
+        if (@errorReturnTrace()) |e| {
+            std.debug.dumpStackTrace(e.*);
+        }
+        return err;
+    };
 }
 
 fn memsetNonContigious(
