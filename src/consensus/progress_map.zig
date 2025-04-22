@@ -6,6 +6,52 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
 
+/// TODO: merge into real replay stage when it exists?
+const replay_stage = struct {
+    pub const SUPERMINORITY_THRESHOLD: struct {
+        comptime numerator: comptime_int = 1,
+        comptime denominator: comptime_int = 3,
+
+        pub fn asFloat(self: @This(), comptime T: type) T {
+            const num: T = @floatFromInt(self.numerator);
+            const denom: T = @floatFromInt(self.denominator);
+            return num / denom;
+        }
+
+        pub fn orderAgainstScalar(self: @This(), value: anytype) std.math.Order {
+            const T = @TypeOf(value);
+            switch (@typeInfo(T)) {
+                .ComptimeInt,
+                => std.math.order(self.numerator, self.denominator * value),
+                .Int,
+                => std.math.order(self.numerator, std.math.mulWide(T, self.denominator, value)),
+                .ComptimeFloat,
+                .Float,
+                => std.math.order(self.asFloat(T), value),
+                else => comptime unreachable,
+            }
+        }
+
+        /// Order of threshold against `fraction_num / fraction_denom` without conversion to floating point.
+        pub fn orderAgainstFraction(
+            self: @This(),
+            fraction_num: anytype,
+            fraction_denom: anytype,
+        ) std.math.Order {
+            const Num = @TypeOf(fraction_num);
+            const Denom = @TypeOf(fraction_denom);
+
+            const NormalizedNum = std.math.IntFittingRange(0, self.numerator * std.math.maxInt(Denom));
+            const self_norm_num = @as(NormalizedNum, self.numerator) * fraction_denom;
+
+            const NormalizedDenom = std.math.IntFittingRange(0, std.math.maxInt(Num) * 3);
+            const frac_norm_num = self.numerator * @as(NormalizedDenom, fraction_num);
+
+            return std.math.order(self_norm_num, frac_norm_num);
+        }
+    } = .{};
+};
+
 /// TODO: any uses of these types are to be evaluated in their context, and
 /// the actual required synchronization semantics are to be determined later.
 const stubs = struct {
@@ -142,6 +188,81 @@ pub const ForkProgress = struct {
             .num_dropped_blocks_on_fork = self.num_dropped_blocks_on_fork,
         };
     }
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        params: struct {
+            /// Should usually be `.now()`.
+            now: sig.time.Instant,
+            last_entry: Hash,
+            prev_leader_slot: ?Slot,
+            validator_stake_info: ?ValidatorStakeInfo,
+            num_blocks_on_fork: u64,
+            num_dropped_blocks_on_fork: u64,
+        },
+    ) std.mem.Allocator.Error!ForkProgress {
+        const is_leader_slot: bool, //
+        const propagated_validators_stake: u64, //
+        var propagated_validators: PubkeyArraySet, //
+        const is_propagated: bool, //
+        const total_epoch_stake: u64 //
+        = if (params.validator_stake_info) |info| blk: {
+            const propagated_validators =
+                try PubkeyArraySet.init(allocator, &.{info.validator_vote_pubkey}, &.{});
+            errdefer comptime unreachable;
+            break :blk .{
+                true,
+                info.stake,
+                propagated_validators,
+                info.isPropagated(),
+                info.total_epoch_stake,
+            };
+        } else .{ false, 0, .{}, false, 0 };
+        errdefer propagated_validators.deinit(allocator);
+
+        return .{
+            .is_dead = false,
+            .fork_stats = ForkStats.EMPTY_ZEROES,
+            .replay_stats = .{ .arc_ed = .{ .rwlock_ed = blockstore_processor.ReplaySlotStats.initEmptyZeroes(params.now) } },
+            .replay_progress = .{ .arc_ed = .{ .rwlock_ed = blockstore_processor.ConfirmationProgress.init(params.last_entry) } },
+            .num_blocks_on_fork = params.num_blocks_on_fork,
+            .num_dropped_blocks_on_fork = params.num_dropped_blocks_on_fork,
+            .propagated_stats = .{
+                .propagated_validators = propagated_validators,
+                .propagated_validators_stake = propagated_validators_stake,
+                .is_propagated = is_propagated,
+                .is_leader_slot = is_leader_slot,
+                .prev_leader_slot = params.prev_leader_slot,
+                .total_epoch_stake = total_epoch_stake,
+
+                .propagated_node_ids = .{},
+                .slot_vote_tracker = null,
+                .cluster_slot_pubkeys = null,
+            },
+            .retransmit_info = .{
+                .retry_time = params.now,
+                .retry_iteration = 0,
+            },
+        };
+    }
+};
+
+pub const ValidatorStakeInfo = struct {
+    validator_vote_pubkey: Pubkey,
+    stake: u64,
+    total_epoch_stake: u64,
+
+    pub const DEFAULT: ValidatorStakeInfo = .{
+        .stake = 0,
+        .validator_vote_pubkey = Pubkey.ZEROES,
+        .total_epoch_stake = 1,
+    };
+
+    pub fn isPropagated(self: ValidatorStakeInfo) bool {
+        return self.total_epoch_stake == 0 or
+            replay_stage.SUPERMINORITY_THRESHOLD
+            .orderAgainstFraction(self.stake, self.total_epoch_stake) == .lt;
+    }
 };
 
 pub const ForkStats = struct {
@@ -162,10 +283,24 @@ pub const ForkStats = struct {
 
     pub const VoteThreshold = std.ArrayListUnmanaged(consensus.ThresholdDecision);
 
-    pub fn deinit(
-        self: ForkStats,
-        allocator: std.mem.Allocator,
-    ) void {
+    pub const EMPTY_ZEROES: ForkStats = .{
+        .fork_stake = 0,
+        .total_stake = 0,
+        .block_height = 0,
+        .has_voted = false,
+        .is_recent = false,
+        .is_empty = false,
+        .vote_threshold = .{},
+        .is_locked_out = false,
+        .voted_stakes = .{},
+        .duplicate_confirmed_hash = Hash.ZEROES,
+        .computed = false,
+        .lockout_intervals = LockoutIntervals.EMPTY,
+        .bank_hash = Hash.ZEROES,
+        .my_latest_landed_vote = 0,
+    };
+
+    pub fn deinit(self: ForkStats, allocator: std.mem.Allocator) void {
         var vote_threshold = self.vote_threshold;
         vote_threshold.deinit(allocator);
 
@@ -291,10 +426,7 @@ pub const LockoutIntervals = struct {
 
     pub const EMPTY: LockoutIntervals = .{ .map = .{} };
 
-    pub fn deinit(
-        self: LockoutIntervals,
-        allocator: std.mem.Allocator,
-    ) void {
+    pub fn deinit(self: LockoutIntervals, allocator: std.mem.Allocator) void {
         var btree = self.map;
         for (btree.values()) |*list| list.deinit(allocator);
         btree.deinit(allocator);
@@ -373,22 +505,12 @@ pub const cluster_info_vote_listener = struct {
         gossip_only_stake: u64,
 
         pub const Voted = std.AutoArrayHashMapUnmanaged(Pubkey, bool);
-        pub const OptimisticVotesTracker =
-            std.AutoArrayHashMapUnmanaged(Hash, consensus.VoteStakeTracker);
-        fn optimisticVotesTrackerDeinit(
-            allocator: std.mem.Allocator,
-            ovt: OptimisticVotesTracker,
-        ) void {
-            var copy = ovt;
-            for (copy.values()) |vst| vst.deinit(allocator);
-            copy.deinit(allocator);
-        }
 
         pub fn deinit(self: SlotVoteTracker, allocator: std.mem.Allocator) void {
             var voted = self.voted;
             voted.deinit(allocator);
 
-            optimisticVotesTrackerDeinit(allocator, self.optimistic_votes_tracker);
+            self.optimistic_votes_tracker.deinit(allocator);
 
             var maybe_voted_slot_updates = self.voted_slot_updates;
             if (maybe_voted_slot_updates) |*vsu| vsu.deinit(allocator);
@@ -401,13 +523,8 @@ pub const cluster_info_vote_listener = struct {
             var voted = try self.voted.clone(allocator);
             errdefer voted.deinit(allocator);
 
-            const ovt = &self.optimistic_votes_tracker;
-            var cloned_ovt: OptimisticVotesTracker = .{};
-            errdefer optimisticVotesTrackerDeinit(allocator, cloned_ovt);
-            try cloned_ovt.ensureTotalCapacity(allocator, ovt.count());
-            for (ovt.keys(), ovt.values()) |k, v| {
-                cloned_ovt.putAssumeCapacity(k, try v.clone(allocator));
-            }
+            const optimistic_votes_tracker = try self.optimistic_votes_tracker.clone(allocator);
+            errdefer optimistic_votes_tracker.deinit(allocator);
 
             var voted_slot_updates: ?std.ArrayListUnmanaged(Pubkey) = blk: {
                 const vsu = self.voted_slot_updates orelse break :blk null;
@@ -417,10 +534,37 @@ pub const cluster_info_vote_listener = struct {
 
             return .{
                 .voted = voted,
-                .optimistic_votes_tracker = cloned_ovt,
+                .optimistic_votes_tracker = optimistic_votes_tracker,
                 .voted_slot_updates = voted_slot_updates,
                 .gossip_only_stake = self.gossip_only_stake,
             };
+        }
+    };
+
+    pub const OptimisticVotesTracker = struct {
+        map: std.AutoArrayHashMapUnmanaged(Hash, consensus.VoteStakeTracker),
+
+        pub const EMPTY: OptimisticVotesTracker = .{ .map = .{} };
+
+        pub fn deinit(self: OptimisticVotesTracker, allocator: std.mem.Allocator) void {
+            for (self.map.values()) |vst| vst.deinit(allocator);
+            var map = self.map;
+            map.deinit(allocator);
+        }
+
+        pub fn clone(
+            self: OptimisticVotesTracker,
+            allocator: std.mem.Allocator,
+        ) std.mem.Allocator.Error!OptimisticVotesTracker {
+            var cloned_ovt = OptimisticVotesTracker.EMPTY;
+            errdefer cloned_ovt.deinit(allocator);
+
+            try cloned_ovt.map.ensureTotalCapacity(allocator, self.map.count());
+            for (self.map.keys(), self.map.values()) |k, v| {
+                cloned_ovt.map.putAssumeCapacity(k, try v.clone(allocator));
+            }
+
+            return cloned_ovt;
         }
     };
 };
@@ -476,6 +620,22 @@ pub const blockstore_processor = struct {
         /// `batch_execute()` measurements.
         batch_execute: BatchExecutionTiming,
 
+        pub fn initEmptyZeroes(
+            /// Should usually be `.now()`.
+            started: sig.time.Instant,
+        ) ConfirmationTiming {
+            return .{
+                .started = started,
+                .confirmation_elapsed = 0,
+                .replay_elapsed = 0,
+                .poh_verify_elapsed = 0,
+                .transaction_verify_elapsed = 0,
+                .fetch_elapsed = 0,
+                .fetch_fail_elapsed = 0,
+                .batch_execute = BatchExecutionTiming.EMPTY_ZEROES,
+            };
+        }
+
         pub fn deinit(self: ConfirmationTiming, allocator: std.mem.Allocator) void {
             self.batch_execute.deinit(allocator);
         }
@@ -511,6 +671,12 @@ pub const blockstore_processor = struct {
         /// all.
         slowest_thread: ThreadExecuteTimings,
 
+        pub const EMPTY_ZEROES: BatchExecutionTiming = .{
+            .totals = timings.ExecuteTimings.EMPTY_ZEROES,
+            .wall_clock_us = @enumFromInt(0),
+            .slowest_thread = ThreadExecuteTimings.EMPTY_ZEROES,
+        };
+
         pub fn deinit(self: BatchExecutionTiming, allocator: std.mem.Allocator) void {
             self.totals.deinit(allocator);
             self.slowest_thread.deinit(allocator);
@@ -532,6 +698,12 @@ pub const blockstore_processor = struct {
         total_thread_us: Saturating(u64),
         total_transactions_executed: Saturating(u64),
         execute_timings: timings.ExecuteTimings,
+
+        pub const EMPTY_ZEROES: ThreadExecuteTimings = .{
+            .total_thread_us = @enumFromInt(0),
+            .total_transactions_executed = @enumFromInt(0),
+            .execute_timings = timings.ExecuteTimings.EMPTY_ZEROES,
+        };
 
         pub fn deinit(self: ThreadExecuteTimings, allocator: std.mem.Allocator) void {
             self.execute_timings.deinit(allocator);
@@ -555,6 +727,17 @@ pub const blockstore_processor = struct {
         num_shreds: u64,
         num_entries: usize,
         num_txs: usize,
+
+        pub fn init(last_entry: Hash) ConfirmationProgress {
+            return .{
+                .last_entry = last_entry,
+
+                .tick_hash_count = 0,
+                .num_shreds = 0,
+                .num_entries = 0,
+                .num_txs = 0,
+            };
+        }
     };
 };
 
@@ -635,6 +818,12 @@ pub const timings = struct {
         details: ExecuteDetailsTimings,
         execute_accessories: ExecuteAccessoryTimings,
 
+        pub const EMPTY_ZEROES: ExecuteTimings = .{
+            .metrics = Metrics.initFill(@enumFromInt(0)),
+            .details = ExecuteDetailsTimings.EMPTY_ZEROES,
+            .execute_accessories = ExecuteAccessoryTimings.ZEROES,
+        };
+
         pub fn deinit(self: ExecuteTimings, allocator: std.mem.Allocator) void {
             self.details.deinit(allocator);
         }
@@ -668,29 +857,31 @@ pub const timings = struct {
         create_executor_jit_compile_us: Saturating(u64),
         per_program_timings: PerProgramTimings,
 
-        pub const PerProgramTimings = std.AutoArrayHashMapUnmanaged(Pubkey, ProgramTiming);
+        pub const EMPTY_ZEROES: ExecuteDetailsTimings = .{
+            .serialize_us = @enumFromInt(0),
+            .create_vm_us = @enumFromInt(0),
+            .execute_us = @enumFromInt(0),
+            .deserialize_us = @enumFromInt(0),
+            .get_or_create_executor_us = @enumFromInt(0),
+            .changed_account_count = @enumFromInt(0),
+            .total_account_count = @enumFromInt(0),
+            .create_executor_register_syscalls_us = @enumFromInt(0),
+            .create_executor_load_elf_us = @enumFromInt(0),
+            .create_executor_verify_code_us = @enumFromInt(0),
+            .create_executor_jit_compile_us = @enumFromInt(0),
+            .per_program_timings = PerProgramTimings.EMPTY,
+        };
 
         pub fn deinit(self: ExecuteDetailsTimings, allocator: std.mem.Allocator) void {
-            var per_program_timings = self.per_program_timings;
-            for (self.per_program_timings.values()) |pt| pt.deinit(allocator);
-            per_program_timings.deinit(allocator);
+            self.per_program_timings.deinit(allocator);
         }
 
         pub fn clone(
             self: ExecuteDetailsTimings,
             allocator: std.mem.Allocator,
         ) std.mem.Allocator.Error!ExecuteDetailsTimings {
-            var ppt: PerProgramTimings = .{};
-            errdefer ppt.deinit(allocator);
-            errdefer for (ppt.values()) |program_timing| program_timing.deinit(allocator);
-            try ppt.ensureTotalCapacity(allocator, self.per_program_timings.count());
-            for (
-                self.per_program_timings.keys(),
-                self.per_program_timings.values(),
-            ) |k, v| ppt.putAssumeCapacityNoClobber(k, try v.clone(allocator));
-
             var copy = self;
-            copy.per_program_timings = ppt;
+            copy.per_program_timings = try self.per_program_timings.clone(allocator);
             return copy;
         }
 
@@ -703,19 +894,51 @@ pub const timings = struct {
                     => if (self_field.toInt() != other_field.toInt()) {
                         return false;
                     },
-                    std.AutoArrayHashMapUnmanaged(Pubkey, ProgramTiming),
-                    => {
-                        if (self_field.count() != other_field.count()) {
-                            return false;
-                        }
-                        for (self_field.keys(), self_field.values()) |self_k, self_v| {
-                            const other_entry = other_field.getEntry(self_k) orelse return false;
-                            if (!self_k.equals(other_entry.key_ptr)) return false;
-                            if (!self_v.eql(other_entry.value_ptr)) return false;
-                        }
+                    PerProgramTimings,
+                    => if (!self_field.eql(other_field.*)) {
+                        return false;
                     },
                     else => comptime unreachable,
                 }
+            }
+            return true;
+        }
+    };
+
+    pub const PerProgramTimings = struct {
+        map: std.AutoArrayHashMapUnmanaged(Pubkey, ProgramTiming),
+
+        pub const EMPTY: PerProgramTimings = .{ .map = .{} };
+
+        pub fn deinit(self: PerProgramTimings, allocator: std.mem.Allocator) void {
+            for (self.map.values()) |pt| pt.deinit(allocator);
+            var map = self.map;
+            map.deinit(allocator);
+        }
+
+        pub fn clone(
+            self: PerProgramTimings,
+            allocator: std.mem.Allocator,
+        ) std.mem.Allocator.Error!PerProgramTimings {
+            var cloned = PerProgramTimings.EMPTY;
+            errdefer cloned.deinit(allocator);
+
+            try cloned.map.ensureTotalCapacity(allocator, self.map.count());
+            for (self.map.keys(), self.map.values()) |k, v| {
+                cloned.map.putAssumeCapacityNoClobber(k, try v.clone(allocator));
+            }
+
+            return cloned;
+        }
+
+        /// Compares the maps, unordered.
+        pub fn eql(self: PerProgramTimings, other: PerProgramTimings) bool {
+            if (self.map.count() != self.map.count()) {
+                return false;
+            }
+            for (self.map.keys(), self.map.values()) |self_k, self_v| {
+                const other_v = other.map.get(self_k) orelse return false;
+                if (!self_v.eql(&other_v)) return false;
             }
             return true;
         }
@@ -726,6 +949,13 @@ pub const timings = struct {
         verify_caller_us: Saturating(u64),
         process_executable_chain_us: Saturating(u64),
         verify_callee_us: Saturating(u64),
+
+        pub const ZEROES: ExecuteProcessInstructionTimings = .{
+            .total_us = @enumFromInt(0),
+            .verify_caller_us = @enumFromInt(0),
+            .process_executable_chain_us = @enumFromInt(0),
+            .verify_callee_us = @enumFromInt(0),
+        };
     };
 
     pub const ExecuteAccessoryTimings = struct {
@@ -733,6 +963,13 @@ pub const timings = struct {
         get_executors_us: Saturating(u64),
         process_message_us: Saturating(u64),
         process_instructions: ExecuteProcessInstructionTimings,
+
+        pub const ZEROES: ExecuteAccessoryTimings = .{
+            .feature_set_clone_us = @enumFromInt(0),
+            .get_executors_us = @enumFromInt(0),
+            .process_message_us = @enumFromInt(0),
+            .process_instructions = ExecuteProcessInstructionTimings.ZEROES,
+        };
     };
 };
 
@@ -753,6 +990,128 @@ test "ProgressMap memory ownership" {
 
     const cloned = try progress_map.clone(allocator);
     defer cloned.deinit(allocator);
+}
+
+test "ForkProgress.init" {
+    const allocator = std.testing.allocator;
+
+    const now = sig.time.Instant.now();
+    const vsi: ValidatorStakeInfo = .{
+        .validator_vote_pubkey = Pubkey.ZEROES,
+        .stake = 13,
+        .total_epoch_stake = 14,
+    };
+
+    var expected_propagated_validators: PubkeyArraySet = .{};
+    defer expected_propagated_validators.deinit(allocator);
+    try expected_propagated_validators.put(allocator, vsi.validator_vote_pubkey, {});
+
+    const actual = try ForkProgress.init(allocator, .{
+        .now = now,
+        .last_entry = Hash.ZEROES,
+        .prev_leader_slot = null,
+        .validator_stake_info = vsi,
+        .num_blocks_on_fork = 15,
+        .num_dropped_blocks_on_fork = 16,
+    });
+    defer actual.deinit(allocator);
+
+    const expected: ForkProgress = .{
+        .is_dead = false,
+        .fork_stats = ForkStats.EMPTY_ZEROES,
+        .replay_stats = .{ .arc_ed = .{ .rwlock_ed = blockstore_processor.ReplaySlotStats.initEmptyZeroes(now) } },
+        .replay_progress = .{ .arc_ed = .{ .rwlock_ed = blockstore_processor.ConfirmationProgress.init(Hash.ZEROES) } },
+        .num_blocks_on_fork = 15,
+        .num_dropped_blocks_on_fork = 16,
+        .propagated_stats = .{
+            .propagated_validators = expected_propagated_validators,
+            .propagated_validators_stake = vsi.stake,
+            .is_propagated = vsi.isPropagated(),
+            .is_leader_slot = true,
+            .prev_leader_slot = null,
+            .total_epoch_stake = vsi.total_epoch_stake,
+
+            .propagated_node_ids = .{},
+            .slot_vote_tracker = null,
+            .cluster_slot_pubkeys = null,
+        },
+        .retransmit_info = .{
+            .retry_time = now,
+            .retry_iteration = 0,
+        },
+    };
+
+    try std.testing.expectEqual(expected.is_dead, actual.is_dead);
+    try std.testing.expectEqual(expected.fork_stats, actual.fork_stats);
+    try std.testing.expectEqual(expected.replay_stats, actual.replay_stats);
+    try std.testing.expectEqual(expected.replay_progress, actual.replay_progress);
+    try std.testing.expectEqual(expected.num_blocks_on_fork, actual.num_blocks_on_fork);
+    try std.testing.expectEqual(expected.num_dropped_blocks_on_fork, actual.num_dropped_blocks_on_fork);
+    try std.testing.expectEqualSlices(
+        Pubkey,
+        expected.propagated_stats.propagated_validators.keys(),
+        actual.propagated_stats.propagated_validators.keys(),
+    );
+    try std.testing.expectEqual(
+        expected.propagated_stats.propagated_validators_stake,
+        actual.propagated_stats.propagated_validators_stake,
+    );
+    try std.testing.expectEqual(
+        expected.propagated_stats.is_propagated,
+        actual.propagated_stats.is_propagated,
+    );
+    try std.testing.expectEqual(
+        expected.propagated_stats.is_leader_slot,
+        actual.propagated_stats.is_leader_slot,
+    );
+    try std.testing.expectEqual(
+        expected.propagated_stats.prev_leader_slot,
+        actual.propagated_stats.prev_leader_slot,
+    );
+    try std.testing.expectEqual(
+        expected.propagated_stats.total_epoch_stake,
+        actual.propagated_stats.total_epoch_stake,
+    );
+    try std.testing.expectEqualSlices(
+        Pubkey,
+        expected.propagated_stats.propagated_node_ids.keys(),
+        actual.propagated_stats.propagated_node_ids.keys(),
+    );
+    try std.testing.expectEqual(
+        expected.propagated_stats.slot_vote_tracker,
+        actual.propagated_stats.slot_vote_tracker,
+    );
+    try std.testing.expectEqual(
+        expected.propagated_stats.cluster_slot_pubkeys,
+        actual.propagated_stats.cluster_slot_pubkeys,
+    );
+    try std.testing.expectEqual(expected.retransmit_info, actual.retransmit_info);
+}
+
+test "timings.ExecuteDetailsTimings.eql" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(608159);
+    const random = prng.random();
+
+    const edt = try executeDetailsTimingsInitRandom(allocator, random, .{
+        .per_program_timings_len = random.intRangeAtMost(u32, 1, 32),
+        .program_timings_max_len = random.intRangeAtMost(u32, 1, 32),
+    });
+    defer edt.deinit(allocator);
+
+    var edt2 = try edt.clone(allocator);
+    defer edt2.deinit(allocator);
+
+    try std.testing.expect(edt.eql(&edt2));
+
+    edt2.serialize_us.asInt().* +%= 1;
+    try std.testing.expect(!edt.eql(&edt2));
+    edt2.serialize_us.asInt().* -%= 1;
+    try std.testing.expect(edt.eql(&edt2));
+    const last_key = edt2.per_program_timings.map.keys()[edt2.per_program_timings.map.count() - 1];
+    edt2.per_program_timings.map.fetchOrderedRemove(last_key).?.value.deinit(allocator);
+    try std.testing.expect(!edt.eql(&edt2));
 }
 
 /// NOTE: Used in tests for generating dummy data.
@@ -973,12 +1332,12 @@ pub fn slotVoteTrackerInitRandom(
         voted.putAssumeCapacity(Pubkey.initRandom(random), random.boolean());
     }
 
-    var ovt: SlotVoteTracker.OptimisticVotesTracker = .{};
-    errdefer SlotVoteTracker.optimisticVotesTrackerDeinit(allocator, ovt);
-    try ovt.ensureTotalCapacity(allocator, params.optimistic_tracker_len);
+    var ovt = cluster_info_vote_listener.OptimisticVotesTracker.EMPTY;
+    errdefer ovt.deinit(allocator);
+    try ovt.map.ensureTotalCapacity(allocator, params.optimistic_tracker_len);
     for (0..params.optimistic_tracker_len) |_| {
         const voted_len = random.uintAtMost(u32, params.optimistic_tracker_entry_max_len);
-        ovt.putAssumeCapacity(Hash.initRandom(random), .{
+        ovt.map.putAssumeCapacity(Hash.initRandom(random), .{
             .voted = try pubkeyArraySetInitRandom(allocator, random, voted_len),
             .stake = random.int(u64),
         });
@@ -1128,15 +1487,15 @@ fn executeDetailsTimingsInitRandom(
         .create_executor_load_elf_us = @enumFromInt(random.int(u64)),
         .create_executor_verify_code_us = @enumFromInt(random.int(u64)),
         .create_executor_jit_compile_us = @enumFromInt(random.int(u64)),
-        .per_program_timings = .{},
+        .per_program_timings = timings.PerProgramTimings.EMPTY,
     };
     errdefer result.deinit(allocator);
 
     const ppt = &result.per_program_timings;
-    try ppt.ensureTotalCapacity(allocator, params.per_program_timings_len);
+    try ppt.map.ensureTotalCapacity(allocator, params.per_program_timings_len);
     for (0..params.per_program_timings_len) |_| {
         const value_ptr = while (true) {
-            const gop = ppt.getOrPutAssumeCapacity(Pubkey.initRandom(random));
+            const gop = ppt.map.getOrPutAssumeCapacity(Pubkey.initRandom(random));
             if (gop.found_existing) continue;
             break gop.value_ptr;
         };
