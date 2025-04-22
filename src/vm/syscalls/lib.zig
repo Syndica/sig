@@ -238,7 +238,7 @@ pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: RegisterM
         return SyscallError.InvalidString;
     }
 
-    try stable_log.programLog(tc, message);
+    try stable_log.programLog(tc, "{s}", .{message});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
@@ -251,13 +251,11 @@ pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Err
     const arg4 = registers.get(.r4);
     const arg5 = registers.get(.r5);
 
-    const message = try std.fmt.allocPrint(
-        tc.allocator,
+    try stable_log.programLog(
+        tc,
         "0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}",
         .{ arg1, arg2, arg3, arg4, arg5 },
     );
-
-    try stable_log.programLog(tc, message);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
@@ -279,7 +277,7 @@ pub fn logPubkey(
     );
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
 
-    try stable_log.programLog(tc, pubkey.base58String().constSlice());
+    try stable_log.programLog(tc, "{}", .{pubkey});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
