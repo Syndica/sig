@@ -40,6 +40,12 @@ pub const EpochSchedule = extern struct {
         core.Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch
         unreachable;
 
+    pub const DEFAULT = EpochSchedule.custom(
+        DEFAULT_SLOTS_PER_EPOCH,
+        DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
+        true,
+    ) catch unreachable;
+
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
     }
@@ -78,14 +84,6 @@ pub const EpochSchedule = extern struct {
             @as(Slot, 1) <<| epoch +| @ctz(MINIMUM_SLOTS_PER_EPOCH)
         else
             self.slots_per_epoch;
-    }
-
-    pub fn default() !EpochSchedule {
-        return EpochSchedule.custom(
-            DEFAULT_SLOTS_PER_EPOCH,
-            DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
-            true,
-        );
     }
 
     pub fn custom(

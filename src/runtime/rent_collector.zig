@@ -140,7 +140,7 @@ pub fn defaultCollector(epoch: Epoch) RentCollector {
     if (!@import("builtin").is_test) @compileError("defaultCollector for test usage only");
     return .{
         .epoch = epoch,
-        .epoch_schedule = sig.runtime.sysvar.EpochSchedule.default() catch unreachable,
+        .epoch_schedule = sig.runtime.sysvar.EpochSchedule.DEFAULT,
         .slots_per_year = 78892314.983999997, // [agave] GenesisConfig::default().slots_per_year()
         .rent = sig.runtime.sysvar.Rent.DEFAULT,
     };
