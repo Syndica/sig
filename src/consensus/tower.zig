@@ -1824,6 +1824,37 @@ pub const Tower = struct {
             .switch_fork_decision = final_switch_fork_decision,
         };
     }
+
+    /// Handles fork selection when switch fails due to duplicate rollback
+    pub fn selectCandidatesFailedSwitchDuplicateRollback(
+        heaviest_bank: *const RcBank,
+        // [Audit] Only used in logging in Agave
+        _: Slot,
+        failure_reasons: *std.ArrayList(HeaviestForkFailures),
+        initial_switch_fork_decision: SwitchForkDecision,
+    ) !CandidateVoteAndResetBanks {
+        // If we can't switch and our last vote was on an unconfirmed duplicate slot,
+        // we reset to the heaviest bank (even if not descendant of last vote)
+
+        const hanle_heaviest_bank = heaviest_bank.acquire();
+        defer _ = hanle_heaviest_bank.release();
+        const hanle_heaviest_bank_slot = hanle_heaviest_bank.payload().bank_fields.slot;
+
+        try failure_reasons.append(.{
+            .FailedSwitchThreshold = .{
+                .slot = hanle_heaviest_bank_slot,
+                .observed_stake = 0,
+                .total_stake = 0,
+            },
+        });
+
+        const reset_bank: ?*const RcBank = heaviest_bank;
+        return CandidateVoteAndResetBanks{
+            .candidate_vote_bank = null,
+            .reset_bank = reset_bank,
+            .switch_fork_decision = initial_switch_fork_decision,
+        };
+    }
 };
 
 test "tower: check vote threshold without votes" {
