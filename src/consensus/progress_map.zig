@@ -1238,54 +1238,26 @@ test "ForkProgress.init" {
     });
     defer actual_init_from_bank.deinit(allocator);
 
-    const FpFieldTag = std.meta.FieldEnum(ForkProgress);
-    const PsFieldTag = std.meta.FieldEnum(PropagatedStats);
     for (0.., [_]ForkProgress{
         actual_init,
         actual_init_from_bank,
-    }) |i, actual| {
-        errdefer std.log.err("Failure on ForkProgress [{d}]", .{i});
-        inline for (
-            @typeInfo(ForkProgress).Struct.fields,
-        ) |fp_field| {
-            switch (@field(FpFieldTag, fp_field.name)) {
-                .is_dead,
-                .fork_stats,
-                .replay_stats,
-                .replay_progress,
-                .num_blocks_on_fork,
-                .num_dropped_blocks_on_fork,
-                .retransmit_info,
-                => try std.testing.expectEqual(@field(expected, fp_field.name), @field(actual, fp_field.name)),
-
-                .propagated_stats => {
-                    const expected_ps = &expected.propagated_stats;
-                    const actual_ps = &actual.propagated_stats;
-                    inline for (
-                        @typeInfo(PropagatedStats).Struct.fields,
-                    ) |ps_field| switch (@field(PsFieldTag, ps_field.name)) {
-                        .propagated_validators_stake,
-                        .is_propagated,
-                        .is_leader_slot,
-                        .prev_leader_slot,
-                        .total_epoch_stake,
-                        .slot_vote_tracker,
-                        .cluster_slot_pubkeys,
-                        => try std.testing.expectEqual(
-                            @field(expected_ps, ps_field.name),
-                            @field(actual_ps, ps_field.name),
-                        ),
-                        .propagated_validators,
-                        .propagated_node_ids,
-                        => try std.testing.expectEqualSlices(
-                            Pubkey,
-                            @field(expected_ps, ps_field.name).keys(),
-                            @field(actual_ps, ps_field.name).keys(),
-                        ),
-                    };
-                },
+    }) |fp_i, actual| {
+        errdefer std.log.err("Failure on ForkProgress [{d}]", .{fp_i});
+        try sig.testing.expectEqualDeepWithOverrides(expected, actual, struct {
+            pub fn compare(a: anytype, b: @TypeOf(a)) !bool {
+                const T = @TypeOf(a);
+                if (sig.utils.types.arrayListInfo(T)) |info| {
+                    try std.testing.expectEqualSlices(info.Elem, a.items, b.items);
+                    return true;
+                }
+                if (sig.utils.types.hashMapInfo(T)) |info| {
+                    try std.testing.expectEqualSlices(info.Key, a.keys(), b.keys());
+                    try std.testing.expectEqualSlices(info.Value, a.values(), b.values());
+                    return true;
+                }
+                return false;
             }
-        }
+        });
     }
 }
 
