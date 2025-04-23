@@ -468,6 +468,40 @@ pub const PropagatedStats = struct {
             .total_epoch_stake = self.total_epoch_stake,
         };
     }
+
+    /// Same as `addVotePubkeyAssumeCapacity`, except it [re-]allocates if needed, instead of
+    /// assuming capacity is sufficient.
+    pub fn addVotePubkey(
+        self: *PropagatedStats,
+        allocator: std.mem.Allocator,
+        vote_pubkey: Pubkey,
+        stake: u64,
+    ) std.mem.Allocator.Error!bool {
+        const gop = try self.propagated_validators.getOrPut(allocator, vote_pubkey);
+        gop.value_ptr.* = {};
+        if (!gop.found_existing) self.propagated_validators_stake += stake;
+        return !gop.found_existing;
+    }
+
+    /// Adds `vote_pubkey` to the propagated validator pubkey set, adding its associated `stake`
+    /// to the total propagated validator stake.
+    ///
+    /// Returns a bool indicating whether or not `vote_pubkey` was inserted into the set, ie
+    /// it returns `true` if `vote_pubkey` was inserted, and `false` if it already existed (and
+    /// thus wouldn't have been inserted).
+    ///
+    /// This assumes that the capacity of `self.propagated_validators` is enough to hold at least
+    /// one new entry, or that `vote_pubkey` is already an entry.
+    pub fn addVotePubkeyAssumeCapacity(
+        self: *PropagatedStats,
+        vote_pubkey: Pubkey,
+        stake: u64,
+    ) bool {
+        const gop = self.propagated_validators.getOrPutAssumeCapacity(vote_pubkey);
+        gop.value_ptr.* = {};
+        if (!gop.found_existing) self.propagated_validators_stake += stake;
+        return !gop.found_existing;
+    }
 };
 
 pub const RetransmitInfo = struct {
