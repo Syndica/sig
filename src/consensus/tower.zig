@@ -88,17 +88,25 @@ const ComputedBankState = struct {
     my_latest_landed_vote: ?Slot,
 };
 
-// TODO The use of Rc
 pub const CandidateVoteAndResetBanks = struct {
     // A bank that the validator will vote on given it passes all
     // remaining vote checks
-    candidate_vote_bank: ?*const RcBank,
+    candidate_vote_bank: ?*const Bank,
 
     // A bank that the validator will reset its PoH to regardless
     // of voting behavior
-    reset_bank: ?*const RcBank,
+    reset_bank: ?*const Bank,
 
     switch_fork_decision: SwitchForkDecision,
+};
+
+pub const SelectVoteAndResetForkResult = struct {
+    vote_bank: ?struct {
+        bank: Bank,
+        decision: SwitchForkDecision,
+    },
+    reset_bank: ?Bank,
+    heaviest_fork_failures: std.ArrayListUnmanaged(HeaviestForkFailures),
 };
 
 pub const ThresholdDecision = union(enum) {
@@ -1806,21 +1814,9 @@ pub const Tower = struct {
             // Return original vote candidate for logging purposes (can't actually vote)
             heaviest_bank;
 
-        var rc_heaviest_bank_on_same_voted_fork: ?RcBank = null;
-        if (heaviest_bank_on_same_voted_fork) |bank| {
-            rc_heaviest_bank_on_same_voted_fork = try RcBank.create(allocator);
-            rc_heaviest_bank_on_same_voted_fork.?.payload().* = bank.*;
-        }
-
-        var rc_candidate_vote_bank: ?RcBank = null;
-        if (candidate_vote_bank) |bank| {
-            rc_candidate_vote_bank = try RcBank.create(allocator);
-            rc_candidate_vote_bank.?.payload().* = bank.*;
-        }
-
         return CandidateVoteAndResetBanks{
-            .candidate_vote_bank = if (rc_candidate_vote_bank) |rc| &rc else null,
-            .reset_bank = if (rc_heaviest_bank_on_same_voted_fork) |rc| &rc else null,
+            .candidate_vote_bank = if (candidate_vote_bank) |bank| bank else null,
+            .reset_bank = if (heaviest_bank_on_same_voted_fork) |bank| bank else null,
             .switch_fork_decision = final_switch_fork_decision,
         };
     }
@@ -1847,24 +1843,19 @@ pub const Tower = struct {
                 initial_switch_fork_decision,
             ),
             .failed_switch_duplicate_rollback => |latest_duplicate_ancestor| blk: {
-                const rc_heaviest_bank = try RcBank.create(allocator);
-                defer _ = rc_heaviest_bank.release();
-                rc_heaviest_bank.payload().* = heaviest_bank.*;
                 break :blk try Tower
                     .selectCandidatesFailedSwitchDuplicateRollback(
                     allocator,
-                    &rc_heaviest_bank,
+                    heaviest_bank,
                     latest_duplicate_ancestor,
                     failure_reasons,
                     initial_switch_fork_decision,
                 );
             },
             .same_fork, .switch_proof => blk: {
-                const rc_bank = try RcBank.create(allocator);
-                rc_bank.payload().* = heaviest_bank.*;
                 break :blk CandidateVoteAndResetBanks{
-                    .candidate_vote_bank = &rc_bank,
-                    .reset_bank = &rc_bank,
+                    .candidate_vote_bank = heaviest_bank,
+                    .reset_bank = heaviest_bank,
                     .switch_fork_decision = initial_switch_fork_decision,
                 };
             },
@@ -1951,10 +1942,94 @@ pub const Tower = struct {
         return can_vote;
     }
 
+    /// Selects banks for voting and reset based on fork selection rules.
+    /// Returns a result containing:
+    /// - Optional bank to vote on (with decision)
+    /// - Optional bank to reset PoH to
+    /// - List of any fork selection failures
+    pub fn selectVoteAndResetForks(
+        self: *Tower,
+        allocator: std.mem.Allocator,
+        heaviest_bank: *Bank,
+        heaviest_bank_on_same_voted_fork: ?*Bank,
+        ancestors: *const AutoHashMapUnmanaged(u64, SortedSet(u64)),
+        descendants: *const AutoHashMapUnmanaged(u64, SortedSet(u64)),
+        progress: *const ProgressMap,
+        latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+        fork_choice: *const HeaviestSubtreeForkChoice,
+    ) !SelectVoteAndResetForkResult {
+        // Initialize result with failure list
+        var failure_reasons = try std.ArrayListUnmanaged(HeaviestForkFailures).initCapacity(
+            allocator,
+            0,
+        );
+        defer failure_reasons.deinit(allocator);
+
+        // Check switch threshold conditions
+        const initial_decision = try self.checkSwitchThreshold(
+            allocator,
+            heaviest_bank.bank_fields.slot,
+            ancestors,
+            descendants,
+            progress,
+            // TODO revisit safety.
+            heaviest_bank
+                .bank_fields.epoch_stakes
+                .get(heaviest_bank.bank_fields.epoch).?.total_stake,
+            &heaviest_bank
+                .bank_fields.epoch_stakes
+                .get(heaviest_bank.bank_fields.epoch).?.stakes.vote_accounts.accounts,
+            latest_validator_votes_for_frozen_banks,
+            fork_choice,
+        );
+
+        // Select candidate banks
+        const banks = try self.selectCandidateVoteAndResetBanks(
+            allocator,
+            heaviest_bank,
+            heaviest_bank_on_same_voted_fork,
+            progress,
+            &failure_reasons,
+            initial_decision,
+        );
+
+        // Handle no viable candidate case
+        const candidate_vote_bank = banks.candidate_vote_bank orelse {
+            return SelectVoteAndResetForkResult{
+                .vote_bank = null,
+                .reset_bank = banks.reset_bank.?.*,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        };
+
+        if (try self.canVoteOnCandidateBank(
+            allocator,
+            candidate_vote_bank.bank_fields.slot,
+            progress,
+            &failure_reasons,
+            &banks.switch_fork_decision,
+        )) {
+            return SelectVoteAndResetForkResult{
+                .vote_bank = .{
+                    .bank = candidate_vote_bank.*,
+                    .decision = banks.switch_fork_decision,
+                },
+                .reset_bank = candidate_vote_bank.*,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        } else {
+            return SelectVoteAndResetForkResult{
+                .vote_bank = null,
+                .reset_bank = if (banks.reset_bank) |bank| bank.* else null,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        }
+    }
+
     /// Handles fork selection when switch fails due to duplicate rollback
     pub fn selectCandidatesFailedSwitchDuplicateRollback(
         allocator: std.mem.Allocator,
-        heaviest_bank: *const RcBank,
+        heaviest_bank: *const Bank,
         // [Audit] Only used in logging in Agave
         _: Slot,
         failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
@@ -1963,19 +2038,15 @@ pub const Tower = struct {
         // If we can't switch and our last vote was on an unconfirmed duplicate slot,
         // we reset to the heaviest bank (even if not descendant of last vote)
 
-        const hanle_heaviest_bank = heaviest_bank.acquire();
-        defer _ = hanle_heaviest_bank.release();
-        const hanle_heaviest_bank_slot = hanle_heaviest_bank.payload().bank_fields.slot;
-
         try failure_reasons.append(allocator, .{
             .FailedSwitchThreshold = .{
-                .slot = hanle_heaviest_bank_slot,
+                .slot = heaviest_bank.bank_fields.slot,
                 .observed_stake = 0,
                 .total_stake = 0,
             },
         });
 
-        const reset_bank: ?*const RcBank = heaviest_bank;
+        const reset_bank: ?*const Bank = heaviest_bank;
         return CandidateVoteAndResetBanks{
             .candidate_vote_bank = null,
             .reset_bank = reset_bank,
