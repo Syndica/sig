@@ -107,7 +107,11 @@ pub const BankFields = struct {
         return cloned;
     }
 
-    pub fn getStakedNodes(self: *const BankFields, allocator: std.mem.Allocator, epoch: Epoch) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+    pub fn getStakedNodes(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
         const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
         return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
     }
@@ -213,14 +217,19 @@ pub fn ancestorsRandom(
     var ancestors = Ancestors.Managed.init(allocator);
     errdefer ancestors.deinit();
 
-    try sig.rand.fillHashmapWithRng(&ancestors, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(rand: std.Random) !Slot {
-            return rand.int(Slot);
-        }
-        pub fn randomValue(rand: std.Random) !usize {
-            return rand.int(usize);
-        }
-    });
+    try sig.rand.fillHashmapWithRng(
+        &ancestors,
+        random,
+        random.uintAtMost(usize, max_list_entries),
+        struct {
+            pub fn randomKey(rand: std.Random) !Slot {
+                return rand.int(Slot);
+            }
+            pub fn randomValue(rand: std.Random) !usize {
+                return rand.int(usize);
+            }
+        },
+    );
 
     return ancestors.unmanaged;
 }
@@ -282,14 +291,19 @@ pub fn blockhashQueueAgesRandom(
     var ages = BlockhashQueueAges.Managed.init(allocator);
     errdefer ages.deinit();
 
-    try sig.rand.fillHashmapWithRng(&ages, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(rand: std.Random) !Hash {
-            return Hash.initRandom(rand);
-        }
-        pub fn randomValue(rand: std.Random) !HashAge {
-            return HashAge.initRandom(rand);
-        }
-    });
+    try sig.rand.fillHashmapWithRng(
+        &ages,
+        random,
+        random.uintAtMost(usize, max_list_entries),
+        struct {
+            pub fn randomKey(rand: std.Random) !Hash {
+                return Hash.initRandom(rand);
+            }
+            pub fn randomValue(rand: std.Random) !HashAge {
+                return HashAge.initRandom(rand);
+            }
+        },
+    );
 
     return ages.unmanaged;
 }
@@ -415,18 +429,25 @@ pub const UnusedAccounts = struct {
             var managed = ptr.promote(allocator);
             defer ptr.* = managed.unmanaged;
 
-            try sig.rand.fillHashmapWithRng(&managed, random, random.uintAtMost(usize, max_list_entries), struct {
-                pub fn randomKey(rand: std.Random) !Pubkey {
-                    return Pubkey.initRandom(rand);
-                }
-                pub fn randomValue(rand: std.Random) !hm_info.Value {
-                    return switch (hm_info.Value) {
-                        u64 => rand.int(u64),
-                        void => {},
-                        else => @compileError("Unexpected value type: " ++ @typeName(hm_info.Value)),
-                    };
-                }
-            });
+            try sig.rand.fillHashmapWithRng(
+                &managed,
+                random,
+                random.uintAtMost(usize, max_list_entries),
+                struct {
+                    pub fn randomKey(rand: std.Random) !Pubkey {
+                        return Pubkey.initRandom(rand);
+                    }
+                    pub fn randomValue(rand: std.Random) !hm_info.Value {
+                        return switch (hm_info.Value) {
+                            u64 => rand.int(u64),
+                            void => {},
+                            else => @compileError(
+                                "Unexpected value type: " ++ @typeName(hm_info.Value),
+                            ),
+                        };
+                    }
+                },
+            );
         }
 
         return unused_accounts;

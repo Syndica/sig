@@ -45,21 +45,26 @@ pub fn epochStakeMapRandom(
     var epoch_stakes = EpochStakeMap.Managed.init(allocator);
     errdefer epochStakeMapDeinit(epoch_stakes.unmanaged, allocator);
 
-    try sig.rand.fillHashmapWithRng(&epoch_stakes, random, random.uintAtMost(usize, max_list_entries), struct {
-        allocator: std.mem.Allocator,
-        max_list_entries: usize,
+    try sig.rand.fillHashmapWithRng(
+        &epoch_stakes,
+        random,
+        random.uintAtMost(usize, max_list_entries),
+        struct {
+            allocator: std.mem.Allocator,
+            max_list_entries: usize,
 
-        pub fn randomKey(_: @This(), rand: std.Random) !Epoch {
-            return rand.int(Epoch);
-        }
+            pub fn randomKey(_: @This(), rand: std.Random) !Epoch {
+                return rand.int(Epoch);
+            }
 
-        pub fn randomValue(ctx: @This(), rand: std.Random) !EpochStakes {
-            return try EpochStakes.initRandom(ctx.allocator, rand, ctx.max_list_entries);
-        }
-    }{
-        .allocator = allocator,
-        .max_list_entries = max_list_entries,
-    });
+            pub fn randomValue(ctx: @This(), rand: std.Random) !EpochStakes {
+                return try EpochStakes.initRandom(ctx.allocator, rand, ctx.max_list_entries);
+            }
+        }{
+            .allocator = allocator,
+            .max_list_entries = max_list_entries,
+        },
+    );
 
     return epoch_stakes.unmanaged;
 }
@@ -113,10 +118,12 @@ pub const EpochStakes = struct {
         var result_stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
         errdefer result_stakes.deinit(allocator);
 
-        const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
+        const node_id_to_vote_accounts =
+            try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
         errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
 
-        var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
+        var epoch_authorized_voters =
+            try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
         errdefer epoch_authorized_voters.deinit(allocator);
 
         return .{
@@ -306,7 +313,8 @@ pub const NodeVoteAccounts = struct {
         allocator: std.mem.Allocator,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!NodeVoteAccounts {
-        const vote_accounts = try allocator.alloc(Pubkey, random.uintLessThan(usize, max_list_entries));
+        const vote_accounts =
+            try allocator.alloc(Pubkey, random.uintLessThan(usize, max_list_entries));
         errdefer allocator.free(vote_accounts);
         for (vote_accounts) |*vote_account| vote_account.* = Pubkey.initRandom(random);
         return .{
@@ -353,21 +361,26 @@ pub fn nodeIdToVoteAccountsMapRandom(
     var node_id_to_vote_accounts = NodeIdToVoteAccountsMap.Managed.init(allocator);
     errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts.unmanaged, allocator);
 
-    try sig.rand.fillHashmapWithRng(&node_id_to_vote_accounts, random, random.uintAtMost(usize, max_list_entries), struct {
-        allocator: std.mem.Allocator,
-        max_list_entries: usize,
+    try sig.rand.fillHashmapWithRng(
+        &node_id_to_vote_accounts,
+        random,
+        random.uintAtMost(usize, max_list_entries),
+        struct {
+            allocator: std.mem.Allocator,
+            max_list_entries: usize,
 
-        pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
-            return Pubkey.initRandom(rand);
-        }
+            pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
+                return Pubkey.initRandom(rand);
+            }
 
-        pub fn randomValue(ctx: @This(), rand: std.Random) !NodeVoteAccounts {
-            return try NodeVoteAccounts.initRandom(rand, ctx.allocator, ctx.max_list_entries);
-        }
-    }{
-        .allocator = allocator,
-        .max_list_entries = max_list_entries,
-    });
+            pub fn randomValue(ctx: @This(), rand: std.Random) !NodeVoteAccounts {
+                return try NodeVoteAccounts.initRandom(rand, ctx.allocator, ctx.max_list_entries);
+            }
+        }{
+            .allocator = allocator,
+            .max_list_entries = max_list_entries,
+        },
+    );
 
     return node_id_to_vote_accounts.unmanaged;
 }
@@ -383,14 +396,19 @@ pub fn epochAuthorizedVotersRandom(
     var epoch_authorized_voters = EpochAuthorizedVoters.Managed.init(allocator);
     errdefer epoch_authorized_voters.deinit();
 
-    try sig.rand.fillHashmapWithRng(&epoch_authorized_voters, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(rand: std.Random) !Pubkey {
-            return Pubkey.initRandom(rand);
-        }
-        pub fn randomValue(rand: std.Random) !Pubkey {
-            return Pubkey.initRandom(rand);
-        }
-    });
+    try sig.rand.fillHashmapWithRng(
+        &epoch_authorized_voters,
+        random,
+        random.uintAtMost(usize, max_list_entries),
+        struct {
+            pub fn randomKey(rand: std.Random) !Pubkey {
+                return Pubkey.initRandom(rand);
+            }
+            pub fn randomValue(rand: std.Random) !Pubkey {
+                return Pubkey.initRandom(rand);
+            }
+        },
+    );
 
     return epoch_authorized_voters.unmanaged;
 }
@@ -433,7 +451,8 @@ pub const VersionedEpochStake = union(enum(u32)) {
             );
             errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
 
-            var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
+            var epoch_authorized_voters =
+                try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
             errdefer epoch_authorized_voters.deinit(allocator);
 
             return .{
@@ -450,7 +469,8 @@ pub const VersionedEpochStake = union(enum(u32)) {
         random: std.Random,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!VersionedEpochStake {
-        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1); // randomly generate the tag otherwise
+        // randomly generate the tag otherwise
+        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1);
         return .{
             .current = try Current.initRandom(allocator, random, max_list_entries),
         };
@@ -645,29 +665,35 @@ pub const VoteAccounts = struct {
             vote_account.account.deinit(allocator);
         };
 
-        try sig.rand.fillHashmapWithRng(&stakes_vote_accounts, random, random.uintAtMost(usize, max_list_entries), struct {
-            allocator: std.mem.Allocator,
-            max_list_entries: usize,
+        try sig.rand.fillHashmapWithRng(
+            &stakes_vote_accounts,
+            random,
+            random.uintAtMost(usize, max_list_entries),
+            struct {
+                allocator: std.mem.Allocator,
+                max_list_entries: usize,
 
-            pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
-                return Pubkey.initRandom(rand);
-            }
-            pub fn randomValue(ctx: @This(), rand: std.Random) !StakeAndVoteAccount {
-                const vote_account: VoteAccount = try VoteAccount.initRandom(
-                    rand,
-                    ctx.allocator,
-                    ctx.max_list_entries,
-                    error{ RandomError1, RandomError2, RandomError3 },
-                );
-                errdefer vote_account.deinit(ctx.allocator);
-                return .{ rand.int(u64), vote_account };
-            }
-        }{
-            .allocator = allocator,
-            .max_list_entries = max_list_entries,
-        });
+                pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
+                    return Pubkey.initRandom(rand);
+                }
+                pub fn randomValue(ctx: @This(), rand: std.Random) !StakeAndVoteAccount {
+                    const vote_account: VoteAccount = try VoteAccount.initRandom(
+                        rand,
+                        ctx.allocator,
+                        ctx.max_list_entries,
+                        error{ RandomError1, RandomError2, RandomError3 },
+                    );
+                    errdefer vote_account.deinit(ctx.allocator);
+                    return .{ rand.int(u64), vote_account };
+                }
+            }{
+                .allocator = allocator,
+                .max_list_entries = max_list_entries,
+            },
+        );
 
-        var stakes_maybe_staked_nodes = if (random.boolean()) std.AutoArrayHashMap(Pubkey, u64).init(allocator) else null;
+        var stakes_maybe_staked_nodes =
+            if (random.boolean()) std.AutoArrayHashMap(Pubkey, u64).init(allocator) else null;
         errdefer if (stakes_maybe_staked_nodes) |*staked_nodes| staked_nodes.deinit();
 
         if (stakes_maybe_staked_nodes) |*staked_nodes| {
@@ -688,7 +714,10 @@ pub const VoteAccounts = struct {
 
         return .{
             .accounts = stakes_vote_accounts.unmanaged,
-            .staked_nodes = if (stakes_maybe_staked_nodes) |staked_nodes| staked_nodes.unmanaged else null,
+            .staked_nodes = if (stakes_maybe_staked_nodes) |staked_nodes|
+                staked_nodes.unmanaged
+            else
+                null,
         };
     }
 };
@@ -697,7 +726,8 @@ pub const VoteAccount = struct {
     account: Account,
     vote_state: ?anyerror!VoteState = null,
 
-    pub const @"!bincode-config:vote_state" = bincode.FieldConfig(?anyerror!VoteState){ .skip = true };
+    pub const @"!bincode-config:vote_state" =
+        bincode.FieldConfig(?anyerror!VoteState){ .skip = true };
 
     pub fn deinit(vote_account: VoteAccount, allocator: std.mem.Allocator) void {
         vote_account.account.deinit(allocator);
@@ -742,10 +772,11 @@ pub const VoteAccount = struct {
         max_list_entries: usize,
         comptime RandomErrorSet: type,
     ) std.mem.Allocator.Error!VoteAccount {
-        const account = try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries));
+        const account =
+            try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries));
         errdefer account.deinit(allocator);
 
-        const vote_state: ?anyerror!VoteState = switch (random.enumValue(enum { null, err, value })) {
+        const vote_state = switch (random.enumValue(enum { null, err, value })) {
             .null => null,
             .err => @as(anyerror!VoteState, sig.rand.errorValue(random, RandomErrorSet)),
             .value => VoteState.initRandom(random),
@@ -778,6 +809,7 @@ test "deserialize VoteState.node_pubkey" {
         90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
     } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
     const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
-    const expected_pubkey = try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
+    const expected_pubkey =
+        try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
 }
