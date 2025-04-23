@@ -422,8 +422,7 @@ pub fn poseidon(
         );
         hasher.append(slice[0..32]) catch {
             if (tc.ec.feature_set.active.contains(features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES)) {
-                var registers_var = registers;
-                registers_var.set(.r0, 1);
+                registers.set(.r0, 1);
                 return;
             } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
         };
