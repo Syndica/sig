@@ -1871,6 +1871,86 @@ pub const Tower = struct {
         };
     }
 
+    /// Checks for all possible reasons we might not be able to vote on the candidate
+    /// bank. Records any failure reasons, and doesn't early return so we can be sure
+    /// to record all possible reasons.
+    pub fn canVoteOnCandidateBank(
+        self: *const Tower,
+        allocator: std.mem.Allocator,
+        candidate_vote_bank_slot: Slot,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        switch_fork_decision: *const SwitchForkDecision,
+    ) !bool {
+        const fork_stats = progress.getForkStats(candidate_vote_bank_slot) orelse
+            return error.ForkStatsNotFound;
+        const propagated_stats = progress.getPropagatedStats(candidate_vote_bank_slot) orelse
+            return error.PropagatedStatsNotFound;
+
+        const is_locked_out = fork_stats.is_locked_out;
+        const vote_thresholds = &fork_stats.vote_threshold;
+        const propagated_stake = propagated_stats.propagated_validators_stake;
+        const is_leader_slot = propagated_stats.is_leader_slot;
+        const fork_weight = fork_stats.forkWeight();
+        const total_threshold_stake = fork_stats.total_stake;
+        const total_epoch_stake = propagated_stats.total_epoch_stake;
+
+        // Check if we are locked out
+        if (is_locked_out) {
+            try failure_reasons.append(
+                allocator,
+                .{ .LockedOut = candidate_vote_bank_slot },
+            );
+        }
+
+        // Check vote thresholds
+        var threshold_passed = true;
+        for (vote_thresholds.items) |threshold_failure| {
+            if (threshold_failure != .failed_threshold) continue;
+
+            const vote_depth = threshold_failure.failed_threshold[0];
+            const fork_stake = threshold_failure.failed_threshold[1];
+
+            try failure_reasons.append(allocator, .{ .FailedThreshold = .{
+                .slot = candidate_vote_bank_slot,
+                .vote_depth = vote_depth,
+                .observed_stake = fork_stake,
+                .total_stake = total_threshold_stake,
+            } });
+
+            // Ignore shallow checks for voting purposes
+            if (vote_depth >= self.threshold_depth) {
+                threshold_passed = false;
+            }
+        }
+
+        // Check leader slot propagation
+        const propagation_confirmed = is_leader_slot or
+            progress.getLeaderPropagationSlotMustExist(candidate_vote_bank_slot)[0];
+        if (!propagation_confirmed) {
+            try failure_reasons.append(allocator, .{ .NoPropagatedConfirmation = .{
+                .slot = candidate_vote_bank_slot,
+                .observed_stake = propagated_stake,
+                .total_stake = total_epoch_stake,
+            } });
+        }
+
+        // Final decision
+        const can_vote = !is_locked_out and
+            threshold_passed and
+            propagation_confirmed and
+            switch_fork_decision.canVote();
+
+        if (can_vote) {
+            self.logger.info().logf(
+                "voting: {d} {d:.1}%",
+                .{ candidate_vote_bank_slot, 100.0 * fork_weight },
+            );
+        }
+
+        return can_vote;
+    }
+
     /// Handles fork selection when switch fails due to duplicate rollback
     pub fn selectCandidatesFailedSwitchDuplicateRollback(
         allocator: std.mem.Allocator,
