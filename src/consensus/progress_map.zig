@@ -530,6 +530,45 @@ pub const PropagatedStats = struct {
         if (!gop.found_existing) self.propagated_validators_stake += stake;
         return !gop.found_existing;
     }
+
+    pub fn addNodePubkey(
+        self: *PropagatedStats,
+        allocator: std.mem.Allocator,
+        node_pubkey: Pubkey,
+        bank: stubs.Bank,
+    ) std.mem.Allocator.Error!void {
+        if (self.propagated_node_ids.contains(node_pubkey)) return;
+        const nva = bank.epochVoteAccountsForNodeId(node_pubkey) orelse return;
+        const epoch_vote_accounts = bank.epochVoteAccounts(bank.epoch()) orelse std.debug.panic(
+            "Epoch stakes for bank's own epoch must exist",
+            .{},
+        );
+        try self.addNodePubkeyInternal(
+            allocator,
+            node_pubkey,
+            nva.vote_accounts,
+            epoch_vote_accounts,
+        );
+    }
+
+    fn addNodePubkeyInternal(
+        self: *PropagatedStats,
+        allocator: std.mem.Allocator,
+        node_pubkey: Pubkey,
+        vote_account_pubkeys: []const Pubkey,
+        epoch_vote_accounts: sig.accounts_db.snapshots.StakeAndVoteAccountsMap,
+    ) std.mem.Allocator.Error!void {
+        try self.propagated_node_ids.put(allocator, node_pubkey);
+
+        try self.propagated_validators.ensureUnusedCapacity(allocator, vote_account_pubkeys.len);
+        for (vote_account_pubkeys) |vote_account_pubkey| {
+            const stake = blk: {
+                const stake, _ = epoch_vote_accounts.get(vote_account_pubkey) orelse break :blk 0;
+                break :blk stake;
+            };
+            _ = self.addVotePubkeyAssumeCapacity(vote_account_pubkey, stake);
+        }
+    }
 };
 
 pub const RetransmitInfo = struct {
