@@ -1825,12 +1825,59 @@ pub const Tower = struct {
         };
     }
 
+    /// Selects appropriate banks for voting and reset based on fork decision
+    pub fn selectCandidateVoteAndResetBanks(
+        self: *const Tower,
+        allocator: std.mem.Allocator,
+        heaviest_bank: *const Bank,
+        heaviest_bank_on_same_voted_fork: ?*const Bank,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        initial_switch_fork_decision: SwitchForkDecision,
+    ) !CandidateVoteAndResetBanks {
+        return switch (initial_switch_fork_decision) {
+            .failed_switch_threshold => |data| try self.selectCandidatesFailedSwitch(
+                allocator,
+                heaviest_bank,
+                heaviest_bank_on_same_voted_fork,
+                progress,
+                failure_reasons,
+                data[0],
+                data[1],
+                initial_switch_fork_decision,
+            ),
+            .failed_switch_duplicate_rollback => |latest_duplicate_ancestor| blk: {
+                const rc_heaviest_bank = try RcBank.create(allocator);
+                defer _ = rc_heaviest_bank.release();
+                rc_heaviest_bank.payload().* = heaviest_bank.*;
+                break :blk try Tower
+                    .selectCandidatesFailedSwitchDuplicateRollback(
+                    allocator,
+                    &rc_heaviest_bank,
+                    latest_duplicate_ancestor,
+                    failure_reasons,
+                    initial_switch_fork_decision,
+                );
+            },
+            .same_fork, .switch_proof => blk: {
+                const rc_bank = try RcBank.create(allocator);
+                rc_bank.payload().* = heaviest_bank.*;
+                break :blk CandidateVoteAndResetBanks{
+                    .candidate_vote_bank = &rc_bank,
+                    .reset_bank = &rc_bank,
+                    .switch_fork_decision = initial_switch_fork_decision,
+                };
+            },
+        };
+    }
+
     /// Handles fork selection when switch fails due to duplicate rollback
     pub fn selectCandidatesFailedSwitchDuplicateRollback(
+        allocator: std.mem.Allocator,
         heaviest_bank: *const RcBank,
         // [Audit] Only used in logging in Agave
         _: Slot,
-        failure_reasons: *std.ArrayList(HeaviestForkFailures),
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
         initial_switch_fork_decision: SwitchForkDecision,
     ) !CandidateVoteAndResetBanks {
         // If we can't switch and our last vote was on an unconfirmed duplicate slot,
@@ -1840,7 +1887,7 @@ pub const Tower = struct {
         defer _ = hanle_heaviest_bank.release();
         const hanle_heaviest_bank_slot = hanle_heaviest_bank.payload().bank_fields.slot;
 
-        try failure_reasons.append(.{
+        try failure_reasons.append(allocator, .{
             .FailedSwitchThreshold = .{
                 .slot = hanle_heaviest_bank_slot,
                 .observed_stake = 0,
