@@ -125,7 +125,10 @@ fn expectEqualDeepWithOverridesImpl(
             },
             .Slice => {
                 if (expected.len != actual.len) {
-                    testPrint("Slice len not the same, expected {d}, found {d}\n", .{ expected.len, actual.len });
+                    testPrint("Slice len not the same, expected {d}, found {d}\n", .{
+                        expected.len,
+                        actual.len,
+                    });
                     return error.TestExpectedEqual;
                 }
 
@@ -159,7 +162,8 @@ fn expectEqualDeepWithOverridesImpl(
         },
 
         .Union => |info| {
-            const Tag = info.tag_type orelse @compileError("Unable to compare untagged union values");
+            const Tag = info.tag_type orelse
+                @compileError("Unable to compare untagged union values");
 
             const expected_tag: Tag = expected;
             const actual_tag: Tag = actual;

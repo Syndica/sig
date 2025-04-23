@@ -48,10 +48,8 @@ const stubs = struct {
             self: Bank,
             node_id: Pubkey,
         ) ?*const sig.accounts_db.snapshots.NodeVoteAccounts {
-            const epoch_stakes = self.data.epoch_stakes.getPtr(self.data.epoch) orelse std.debug.panic(
-                "Epoch stakes for bank's own epoch must exist",
-                .{},
-            );
+            const epoch_stakes = self.data.epoch_stakes.getPtr(self.data.epoch) orelse
+                std.debug.panic("Epoch stakes for bank's own epoch must exist", .{});
             return epoch_stakes.node_id_to_vote_accounts.getPtr(node_id);
         }
 
@@ -102,10 +100,12 @@ const replay_stage = struct {
             const Num = @TypeOf(fraction_num);
             const Denom = @TypeOf(fraction_denom);
 
-            const NormalizedNum = std.math.IntFittingRange(0, self.numerator * std.math.maxInt(Denom));
+            const NormalizedNum =
+                std.math.IntFittingRange(0, self.numerator * std.math.maxInt(Denom));
             const self_norm_num = @as(NormalizedNum, self.numerator) * fraction_denom;
 
-            const NormalizedDenom = std.math.IntFittingRange(0, std.math.maxInt(Num) * 3);
+            const NormalizedDenom =
+                std.math.IntFittingRange(0, std.math.maxInt(Num) * 3);
             const frac_norm_num = self.numerator * @as(NormalizedDenom, fraction_num);
 
             return std.math.order(self_norm_num, frac_norm_num);
@@ -315,8 +315,12 @@ pub const ForkProgress = struct {
         return .{
             .is_dead = false,
             .fork_stats = ForkStats.EMPTY_ZEROES,
-            .replay_stats = .{ .arc_ed = .{ .rwlock_ed = blockstore_processor.ReplaySlotStats.initEmptyZeroes(params.now) } },
-            .replay_progress = .{ .arc_ed = .{ .rwlock_ed = blockstore_processor.ConfirmationProgress.init(params.last_entry) } },
+            .replay_stats = .{ .arc_ed = .{
+                .rwlock_ed = blockstore_processor.ReplaySlotStats.initEmptyZeroes(params.now),
+            } },
+            .replay_progress = .{ .arc_ed = .{
+                .rwlock_ed = blockstore_processor.ConfirmationProgress.init(params.last_entry),
+            } },
             .num_blocks_on_fork = params.num_blocks_on_fork,
             .num_dropped_blocks_on_fork = params.num_dropped_blocks_on_fork,
             .propagated_stats = .{
@@ -1165,7 +1169,7 @@ test "ForkProgress.init" {
 
     const now = sig.time.Instant.now();
     var bank: stubs.Bank = .{
-        .data = try sig.accounts_db.snapshots.BankFields.initRandom(std.testing.allocator, random, 128),
+        .data = try sig.accounts_db.snapshots.BankFields.initRandom(allocator, random, 128),
     };
     defer bank.data.deinit(allocator);
     bank.data.hash = Hash.ZEROES;
@@ -1532,7 +1536,11 @@ pub fn slotVoteTrackerInitRandom(
     errdefer ovt.deinit(allocator);
     try ovt.map.ensureTotalCapacity(allocator, params.optimistic_tracker_len);
     for (0..params.optimistic_tracker_len) |_| {
-        const voted_len = random.intRangeAtMost(u32, params.optimistic_tracker_entry_len.min, params.optimistic_tracker_entry_len.max);
+        const voted_len = random.intRangeAtMost(
+            u32,
+            params.optimistic_tracker_entry_len.min,
+            params.optimistic_tracker_entry_len.max,
+        );
         ovt.map.putAssumeCapacity(Hash.initRandom(random), .{
             .voted = try pubkeyArraySetInitRandom(allocator, random, voted_len),
             .stake = random.int(u64),
