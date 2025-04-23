@@ -51,7 +51,7 @@ const MemoryChunkIterator = struct {
         const region = switch (self.reversed) {
             true => try self.memory_map.region(.constant, self.end -| 1),
             false => try self.memory_map.region(.constant, self.start),
-        };
+        }.*;
 
         var region_is_account: bool = false;
 

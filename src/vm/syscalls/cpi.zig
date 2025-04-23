@@ -1066,10 +1066,9 @@ fn updateCallerAccount(
                     const dirty_realloc_start = @max(post_len, caller_account.original_data_len);
                     // and we want to zero up to the old length
                     const dirty_realloc_len = prev_len -| dirty_realloc_start;
-                    const serialized_data = try translateSlice(
+                    const serialized_data = try memory_map.translateSlice(
                         u8,
                         .mutable,
-                        memory_map,
                         caller_account.vm_data_addr +| dirty_realloc_start,
                         dirty_realloc_len,
                         ic.getCheckAligned(),
@@ -1087,10 +1086,9 @@ fn updateCallerAccount(
         // when direct mapping is enabled we don't cache the serialized data in
         // caller_account.serialized_data. See CallerAccount::from_account_info.
         if (!direct_mapping) {
-            caller_account.serialized_data = try translateSlice(
+            caller_account.serialized_data = try memory_map.translateSlice(
                 u8,
                 .mutable,
-                memory_map,
                 caller_account.vm_data_addr,
                 post_len,
                 false, // Don't care since it is byte aligned,
@@ -1100,10 +1098,9 @@ fn updateCallerAccount(
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = post_len;
 
         // This is the len field in the serialized parameters
-        const serialized_len_ptr = try translateType(
+        const serialized_len_ptr = try memory_map.translateType(
             u64,
             .mutable,
-            memory_map,
             caller_account.vm_data_addr -| @sizeOf(u64),
             ic.getCheckAligned(),
         );
@@ -1168,10 +1165,9 @@ fn updateCallerAccount(
                 region.host_memory = .{ .mutable = @constCast(region.constSlice()) };
                 defer region.host_memory = original;
 
-                break :blk try translateSlice(
+                break :blk try memory_map.translateSlice(
                     u8,
                     .mutable,
-                    memory_map,
                     caller_account.vm_data_addr +| caller_account.original_data_len,
                     realloc_bytes_used,
                     ic.getCheckAligned(),
@@ -2180,10 +2176,9 @@ test "vm.syscalls.cpi: updateCalleeAccount: data direct mapping" {
     var callee_account = try ctx.ic.borrowInstructionAccount(account.index);
     defer callee_account.release();
 
-    const serialized_data = try translateSlice(
+    const serialized_data = try ca.memory_map.translateSlice(
         u8,
         .mutable,
-        &ca.memory_map,
         caller_account.vm_data_addr +| caller_account.original_data_len,
         3,
         ctx.ic.getCheckAligned(),
@@ -2433,10 +2428,9 @@ test "vm.syscalls.cpi: updateCallerAccount: data direct mapping" {
             // Check the caller & callee account data pointers match
             try std.testing.expectEqual(
                 callee_account.account.data.ptr,
-                (try translateSlice(
+                (try ca.memory_map.translateSlice(
                     u8,
                     .constant,
-                    &ca.memory_map,
                     caller_account.vm_data_addr,
                     1,
                     true,
@@ -2451,10 +2445,9 @@ test "vm.syscalls.cpi: updateCallerAccount: data direct mapping" {
                 (try caller_account.ref_to_len_in_vm.get(.constant)).*,
             );
 
-            const realloc_area = try translateSlice(
+            const realloc_area = try ca.memory_map.translateSlice(
                 u8,
                 .constant,
-                &ca.memory_map,
                 caller_account.vm_data_addr +| caller_account.original_data_len,
                 MAX_PERMITTED_DATA_INCREASE,
                 ctx.ic.getCheckAligned(),
@@ -2581,10 +2574,9 @@ test "vm.syscalls.cpi: updateCallerAccount: data capacity direct mapping" {
     try std.testing.expect(std.mem.eql(
         u8,
         callee_account.constAccountData(),
-        try translateSlice(
+        try ca.memory_map.translateSlice(
             u8,
             .constant,
-            &ca.memory_map,
             caller_account.vm_data_addr,
             callee_account.constAccountData().len,
             true,

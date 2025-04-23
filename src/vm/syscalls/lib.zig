@@ -3,7 +3,6 @@ const std = @import("std");
 const cpi = @import("cpi.zig");
 const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
-const cpi = @import("cpi.zig");
 
 const memory = sig.vm.memory;
 const features = sig.runtime.features;
@@ -474,12 +473,12 @@ test poseidon {
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
-pub fn invokeSignedC(ctx: *TransactionContext, mmap: *MemoryMap, rm: RegisterMap) Error!void {
+pub fn invokeSignedC(ctx: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
     return invokeSigned(cpi.AccountInfoC, ctx, mmap, rm);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
-pub fn invokeSignedRust(ctx: *TransactionContext, mmap: *MemoryMap, rm: RegisterMap) Error!void {
+pub fn invokeSignedRust(ctx: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
     return invokeSigned(cpi.AccountInfoRust, ctx, mmap, rm);
 }
 
@@ -487,7 +486,7 @@ fn invokeSigned(
     comptime AccountInfoType: type,
     ctx: *TransactionContext,
     mmap: *MemoryMap,
-    registers: RegisterMap,
+    registers: *RegisterMap,
 ) Error!void {
     const instruction_addr = registers.get(.r1);
     const account_infos_addr = registers.get(.r2);
