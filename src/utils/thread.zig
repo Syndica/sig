@@ -207,10 +207,10 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             num_tasks: u64,
         ) !Self {
             var tasks = try std.ArrayListUnmanaged(TaskAdapter).initCapacity(allocator, num_tasks);
-            errdefer tasks.deinit();
+            errdefer tasks.deinit(allocator);
 
             var results = try std.ArrayListUnmanaged(TaskResult).initCapacity(allocator, num_tasks);
-            errdefer results.deinit();
+            errdefer results.deinit(allocator);
 
             const pool = try allocator.create(ThreadPool);
             pool.* = ThreadPool.init(.{ .max_threads = num_threads });
@@ -267,13 +267,13 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// returns a list of any results for tasks that did not have a pointer provided
         /// NOTE: if this fails then the result field is left in a bad state in which case the
         /// thread pool should be discarded/reset
-        pub fn join(self: *Self) std.mem.Allocator.Error!std.ArrayList(TaskResult) {
+        pub fn join(self: *Self) std.mem.Allocator.Error!std.ArrayListUnmanaged(TaskResult) {
             for (self.tasks.items) |*task| task.join();
 
             var results = self.results;
-            errdefer results.deinit();
+            errdefer results.deinit(self.allocator);
 
-            self.results = try std.ArrayList(TaskResult).initCapacity(self.allocator, self.tasks.capacity);
+            self.results = try std.ArrayListUnmanaged(TaskResult).initCapacity(self.allocator, self.tasks.capacity);
             self.tasks.clearRetainingCapacity();
             return results;
         }
@@ -282,7 +282,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// NOTE: this will return the first error encountered which may be inconsistent between runs.
         pub fn joinFallible(self: *Self) !void {
             var results = try self.join();
-            defer results.deinit();
+            defer results.deinit(self.allocator);
             for (results.items) |result| try result;
         }
     };
@@ -347,8 +347,8 @@ test "typed thread pool" {
     pool.schedule(.{ .a = 1, .b = 2 });
     pool.schedule(.{ .a = 1, .b = 4 });
 
-    const results = try pool.join();
-    defer results.deinit();
+    var results = try pool.join();
+    defer results.deinit(std.testing.allocator);
 
     try std.testing.expect(3 == results.items.len);
     try std.testing.expect(2 == results.items[0]);

@@ -12,11 +12,15 @@ const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
 
 pub const tower_storage = struct {
-    pub fn load() !?Tower {}
+    pub fn load() !?Tower {
+        return Tower.init();
+    }
 };
 
 pub const Tower = struct {
-    pub fn init() ?Tower {}
+    pub fn init() Tower {
+        return .{};
+    }
 };
 
 pub const BankForks = struct {

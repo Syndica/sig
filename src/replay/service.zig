@@ -28,26 +28,65 @@ const TransactionVerifyAndHasher = replay.verifiers.TransactionVerifyAndHasher;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
+/// Number of threads to use in replay's thread pool
+const NUM_THREADS = 4;
+
+pub const ReplayDependencies = struct {
+    /// Used for all allocations within the replay stage
+    allocator: Allocator,
+    logger: sig.trace.Logger,
+    /// Tell replay when to exit
+    exit: *std.atomic.Value(bool),
+    /// Used to get the entries to validate them and execute the transactions
+    blockstore_reader: *BlockstoreReader,
+};
+
 const ReplayState = struct {
+    thread_pool: *ThreadPool,
     tower: Tower,
     bank_forks: BankForks,
-    blockstore_reader: BlockstoreReader,
+    blockstore_reader: *BlockstoreReader,
     entry_confirmer: EntryConfirmer,
 
-    fn init(allocator: Allocator) ReplayState {
+    fn init(dependencies: ReplayDependencies) ReplayState {
         const tower = try tower_storage.load() orelse Tower.init();
+
+        const thread_pool = try dependencies.allocator.create(ThreadPool);
+        errdefer dependencies.allocator.destroy(thread_pool);
+        thread_pool.* = ThreadPool.init(.{ .max_threads = NUM_THREADS });
+
+        const entry_confirmer = try EntryConfirmer.init(
+            dependencies.allocator,
+            dependencies.logger,
+            thread_pool,
+        );
+        errdefer entry_confirmer.deinit();
+
         return .{
             .tower = tower,
-            .entry_confirmer = EntryConfirmer.init(allocator),
+            .thread_pool = thread_pool,
+            .entry_confirmer = entry_confirmer,
+            .blockstore_reader = dependencies.blockstore_reader,
         };
+    }
+
+    fn deinit(self: *ReplayState) void {
+        self.entry_confirmer.deinit();
     }
 };
 
-fn run(state: ReplayState) void {
-    while (true) iterate(state);
+/// Run the replay service indefinitely.
+pub fn run(dependencies: ReplayDependencies) !void {
+    var state = ReplayState.init(dependencies);
+    defer state.deinit();
+
+    while (!dependencies.exit.load(.monotonic)) try advanceReplay(&state);
 }
 
-fn iterate(state: ReplayState) void {
+/// Run a single iteration of the entire replay process. Includes:
+/// - replay all active banks that have not been replayed yet
+/// - running concensus on the latest updates
+fn advanceReplay(state: *ReplayState) !void {
     // TODO: generate_new_bank_forks
 
     // TODO: replay_active_banks
@@ -144,15 +183,23 @@ pub const ConfirmationProgress = struct {
     num_txs: usize,
 };
 
-pub const EntryConfirmer = struct {
+/// Maintains the state that is used by confirmSlotEntries and must be persisted
+/// across calls.
+const EntryConfirmer = struct {
     logger: ScopedLogger,
     entry_verifier: EntryVerifier,
     transaction_verifier: TransactionVerifyAndHasher,
+    /// NOTE: in the future, this may be needed in other contexts, at which
+    /// point the lifetime should be re-evaluated.
     list_recycler: *ListRecycler(RuntimeSanitizedTransaction),
 
     const list_recycler_size = 100; // TODO tune
 
-    pub fn init(allocator: Allocator, logger: ScopedLogger, thread_pool: *ThreadPool) EntryConfirmer {
+    pub fn init(
+        allocator: Allocator,
+        logger: ScopedLogger,
+        thread_pool: *ThreadPool,
+    ) Allocator.Error!EntryConfirmer {
         const entry_verifier = try EntryVerifier
             .init(allocator, thread_pool, thread_pool.max_thread);
         errdefer entry_verifier.deinit(allocator);
@@ -174,7 +221,10 @@ pub const EntryConfirmer = struct {
         };
     }
 
+    pub fn deinit() void {}
+
     /// agave: confirm_slot
+    /// fd: runtime_process_txns_in_microblock_stream
     fn confirmSlotEntries(
         self: *EntryConfirmer,
         progress: *ConfirmationProgress,
