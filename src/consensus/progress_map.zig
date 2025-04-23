@@ -6,6 +6,42 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
 
+/// TODO: any uses of these types are to be evaluated in their context, and
+/// the actual required semantics are to be determined later.
+const stubs = struct {
+    fn Arc(comptime T: type) type {
+        return struct { arc_ed: T };
+    }
+    fn RwLock(comptime T: type) type {
+        return struct { rwlock_ed: T };
+    }
+
+    const VoteAccountUnused = struct {};
+
+    const Bank = struct {
+        blockash_queue: sig.accounts_db.snapshots.BlockhashQueue,
+        collector_id: Pubkey,
+        total_epoch_stake: u64,
+        current_epoch_vote_accounts_map: EpochVoteAccountsMap,
+        /// Hash of this Bank's state. Only meaningful after freezing.
+        hash: Hash,
+
+        const EpochVoteAccountsMap = std.AutoArrayHashMapUnmanaged(
+            Pubkey,
+            struct { u64, VoteAccountUnused },
+        );
+
+        fn epochVoteAccountStake(bank: Bank, vote_account: Pubkey) u64 {
+            const stake, _ = bank.current_epoch_vote_accounts_map.get(vote_account) orelse return 0;
+            return stake;
+        }
+
+        fn isFrozen(bank: Bank) bool {
+            return !bank.hash.eql(Hash.ZEROES);
+        }
+    };
+};
+
 /// TODO: merge into real replay stage when it exists?
 const replay_stage = struct {
     pub const SUPERMINORITY_THRESHOLD: struct {
@@ -50,17 +86,6 @@ const replay_stage = struct {
             return std.math.order(self_norm_num, frac_norm_num);
         }
     } = .{};
-};
-
-/// TODO: any uses of these types are to be evaluated in their context, and
-/// the actual required synchronization semantics are to be determined later.
-const stubs = struct {
-    fn Arc(comptime T: type) type {
-        return struct { arc_ed: T };
-    }
-    fn RwLock(comptime T: type) type {
-        return struct { rwlock_ed: T };
-    }
 };
 
 // TODO: move this somewhere better?
@@ -187,6 +212,45 @@ pub const ForkProgress = struct {
             .num_blocks_on_fork = self.num_blocks_on_fork,
             .num_dropped_blocks_on_fork = self.num_dropped_blocks_on_fork,
         };
+    }
+
+    pub fn initFromBank(
+        allocator: std.mem.Allocator,
+        params: struct {
+            bank: *const stubs.Bank,
+            /// Should usually be `.now()`.
+            now: sig.time.Instant,
+            validator_identity: *const Pubkey,
+            validator_vote_pubkey: *const Pubkey,
+            prev_leader_slot: ?Slot,
+            num_blocks_on_fork: u64,
+            num_dropped_blocks_on_fork: u64,
+        },
+    ) std.mem.Allocator.Error!ForkProgress {
+        const validator_stake_info: ?ValidatorStakeInfo = if (Pubkey.equals(
+            &params.bank.collector_id,
+            params.validator_identity,
+        )) .{
+            .validator_vote_pubkey = params.validator_vote_pubkey.*,
+            .stake = params.bank.epochVoteAccountStake(params.validator_vote_pubkey.*),
+            .total_epoch_stake = params.bank.total_epoch_stake,
+        } else null;
+
+        var new_progress = try ForkProgress.init(allocator, .{
+            .now = params.now,
+            .last_entry = params.bank.blockash_queue.last_hash orelse std.debug.panic("no hash has been set", .{}),
+            .prev_leader_slot = params.prev_leader_slot,
+            .validator_stake_info = validator_stake_info,
+            .num_blocks_on_fork = params.num_blocks_on_fork,
+            .num_dropped_blocks_on_fork = params.num_dropped_blocks_on_fork,
+        });
+        errdefer new_progress.deinit(allocator);
+
+        if (params.bank.isFrozen()) {
+            new_progress.fork_stats.bank_hash = params.bank.hash;
+        }
+
+        return new_progress;
     }
 
     pub fn init(
@@ -994,6 +1058,12 @@ test "ProgressMap memory ownership" {
 
 test "ForkProgress.init" {
     const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var prng = std.Random.DefaultPrng.init(3744);
+    const random = prng.random();
 
     const now = sig.time.Instant.now();
     const vsi: ValidatorStakeInfo = .{
@@ -1001,26 +1071,34 @@ test "ForkProgress.init" {
         .stake = 13,
         .total_epoch_stake = 14,
     };
+    const bank: stubs.Bank = .{
+        .blockash_queue = .{
+            .last_hash_index = 0,
+            .last_hash = Hash.ZEROES,
+            .ages = .{},
+            .max_age = 23,
+        },
+        .collector_id = Pubkey.initRandom(random),
+        .total_epoch_stake = vsi.total_epoch_stake,
+        .current_epoch_vote_accounts_map = try stubs.Bank.EpochVoteAccountsMap.init(arena, &.{vsi.validator_vote_pubkey}, &.{.{ vsi.stake, .{} }}),
+        .hash = Hash.ZEROES,
+    };
 
     var expected_propagated_validators: PubkeyArraySet = .{};
     defer expected_propagated_validators.deinit(allocator);
     try expected_propagated_validators.put(allocator, vsi.validator_vote_pubkey, {});
 
-    const actual = try ForkProgress.init(allocator, .{
-        .now = now,
-        .last_entry = Hash.ZEROES,
-        .prev_leader_slot = null,
-        .validator_stake_info = vsi,
-        .num_blocks_on_fork = 15,
-        .num_dropped_blocks_on_fork = 16,
-    });
-    defer actual.deinit(allocator);
-
     const expected: ForkProgress = .{
         .is_dead = false,
         .fork_stats = ForkStats.EMPTY_ZEROES,
-        .replay_stats = .{ .arc_ed = .{ .rwlock_ed = blockstore_processor.ReplaySlotStats.initEmptyZeroes(now) } },
-        .replay_progress = .{ .arc_ed = .{ .rwlock_ed = blockstore_processor.ConfirmationProgress.init(Hash.ZEROES) } },
+        .replay_stats = .{ .arc_ed = .{
+            .rwlock_ed = blockstore_processor
+                .ReplaySlotStats.initEmptyZeroes(now),
+        } },
+        .replay_progress = .{ .arc_ed = .{
+            .rwlock_ed = blockstore_processor
+                .ConfirmationProgress.init(bank.blockash_queue.last_hash.?),
+        } },
         .num_blocks_on_fork = 15,
         .num_dropped_blocks_on_fork = 16,
         .propagated_stats = .{
@@ -1041,51 +1119,76 @@ test "ForkProgress.init" {
         },
     };
 
-    try std.testing.expectEqual(expected.is_dead, actual.is_dead);
-    try std.testing.expectEqual(expected.fork_stats, actual.fork_stats);
-    try std.testing.expectEqual(expected.replay_stats, actual.replay_stats);
-    try std.testing.expectEqual(expected.replay_progress, actual.replay_progress);
-    try std.testing.expectEqual(expected.num_blocks_on_fork, actual.num_blocks_on_fork);
-    try std.testing.expectEqual(expected.num_dropped_blocks_on_fork, actual.num_dropped_blocks_on_fork);
-    try std.testing.expectEqualSlices(
-        Pubkey,
-        expected.propagated_stats.propagated_validators.keys(),
-        actual.propagated_stats.propagated_validators.keys(),
-    );
-    try std.testing.expectEqual(
-        expected.propagated_stats.propagated_validators_stake,
-        actual.propagated_stats.propagated_validators_stake,
-    );
-    try std.testing.expectEqual(
-        expected.propagated_stats.is_propagated,
-        actual.propagated_stats.is_propagated,
-    );
-    try std.testing.expectEqual(
-        expected.propagated_stats.is_leader_slot,
-        actual.propagated_stats.is_leader_slot,
-    );
-    try std.testing.expectEqual(
-        expected.propagated_stats.prev_leader_slot,
-        actual.propagated_stats.prev_leader_slot,
-    );
-    try std.testing.expectEqual(
-        expected.propagated_stats.total_epoch_stake,
-        actual.propagated_stats.total_epoch_stake,
-    );
-    try std.testing.expectEqualSlices(
-        Pubkey,
-        expected.propagated_stats.propagated_node_ids.keys(),
-        actual.propagated_stats.propagated_node_ids.keys(),
-    );
-    try std.testing.expectEqual(
-        expected.propagated_stats.slot_vote_tracker,
-        actual.propagated_stats.slot_vote_tracker,
-    );
-    try std.testing.expectEqual(
-        expected.propagated_stats.cluster_slot_pubkeys,
-        actual.propagated_stats.cluster_slot_pubkeys,
-    );
-    try std.testing.expectEqual(expected.retransmit_info, actual.retransmit_info);
+    const actual_init = try ForkProgress.init(allocator, .{
+        .now = now,
+        .last_entry = bank.blockash_queue.last_hash.?,
+        .prev_leader_slot = null,
+        .validator_stake_info = vsi,
+        .num_blocks_on_fork = 15,
+        .num_dropped_blocks_on_fork = 16,
+    });
+    defer actual_init.deinit(allocator);
+
+    const actual_init_from_bank = try ForkProgress.initFromBank(allocator, .{
+        .bank = &bank,
+        .now = now,
+        .validator_identity = &bank.collector_id,
+        .validator_vote_pubkey = &vsi.validator_vote_pubkey,
+        .prev_leader_slot = null,
+        .num_blocks_on_fork = 15,
+        .num_dropped_blocks_on_fork = 16,
+    });
+    defer actual_init_from_bank.deinit(allocator);
+
+    const FpFieldTag = std.meta.FieldEnum(ForkProgress);
+    const PsFieldTag = std.meta.FieldEnum(PropagatedStats);
+    for (0.., [_]ForkProgress{
+        actual_init,
+        actual_init_from_bank,
+    }) |i, actual| {
+        errdefer std.log.err("Failure on ForkProgress [{d}]", .{i});
+        inline for (
+            @typeInfo(ForkProgress).Struct.fields,
+        ) |fp_field| {
+            switch (@field(FpFieldTag, fp_field.name)) {
+                .is_dead,
+                .fork_stats,
+                .replay_stats,
+                .replay_progress,
+                .num_blocks_on_fork,
+                .num_dropped_blocks_on_fork,
+                .retransmit_info,
+                => try std.testing.expectEqual(@field(expected, fp_field.name), @field(actual, fp_field.name)),
+
+                .propagated_stats => {
+                    const expected_ps = &expected.propagated_stats;
+                    const actual_ps = &actual.propagated_stats;
+                    inline for (
+                        @typeInfo(PropagatedStats).Struct.fields,
+                    ) |ps_field| switch (@field(PsFieldTag, ps_field.name)) {
+                        .propagated_validators_stake,
+                        .is_propagated,
+                        .is_leader_slot,
+                        .prev_leader_slot,
+                        .total_epoch_stake,
+                        .slot_vote_tracker,
+                        .cluster_slot_pubkeys,
+                        => try std.testing.expectEqual(
+                            @field(expected_ps, ps_field.name),
+                            @field(actual_ps, ps_field.name),
+                        ),
+                        .propagated_validators,
+                        .propagated_node_ids,
+                        => try std.testing.expectEqualSlices(
+                            Pubkey,
+                            @field(expected_ps, ps_field.name).keys(),
+                            @field(actual_ps, ps_field.name).keys(),
+                        ),
+                    };
+                },
+            }
+        }
+    }
 }
 
 test "timings.ExecuteDetailsTimings.eql" {
