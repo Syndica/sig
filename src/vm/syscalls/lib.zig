@@ -395,14 +395,10 @@ pub fn poseidon(
     const len = registers.get(.r4);
     const result_addr = registers.get(.r5);
 
-    if (len > 12) {
-        return error.InvalidLength;
-    }
+    if (len > 12) return error.InvalidLength;
 
     const budget = tc.compute_budget;
-    // TODO: Agave logs a specific message when this overflows.
-    // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1923-L1926
-    const cost = try budget.poseidonCost(len);
+    const cost = budget.poseidonCost(@intCast(len));
     try tc.consumeCompute(cost);
 
     const hash_result = try memory_map.vmap(.mutable, result_addr, 32);

@@ -65,20 +65,9 @@ pub const ComputeBudget = struct {
     /// [fd] https://github.com/firedancer-io/firedancer/blob/211dfccc1d84a50191a487a6abffd962f7954179/src/flamenco/vm/syscall/fd_vm_syscall_crypto.c#L238-L245
     ///
     /// Returns the cost of a Poseidon hash syscall for a given input length.
-    pub fn poseidonCost(self: ComputeBudget, len: u64) SyscallError!u64 {
-        const squared_inputs = std.math.powi(u64, len, 2) catch
-            return SyscallError.ArithmeticOverflow;
-
-        const mul_result = std.math.mul(
-            u64,
-            squared_inputs,
-            self.poseidon_cost_coefficient_a,
-        ) catch return SyscallError.ArithmeticOverflow;
-
-        return std.math.add(
-            u64,
-            mul_result,
-            self.poseidon_cost_coefficient_c,
-        ) catch return SyscallError.ArithmeticOverflow;
+    pub fn poseidonCost(self: ComputeBudget, len: std.math.IntFittingRange(0, 12)) u64 {
+        const squared_inputs = std.math.powi(u64, len, 2) catch unreachable;
+        const mul = squared_inputs * self.poseidon_cost_coefficient_a;
+        return mul + self.poseidon_cost_coefficient_c;
     }
 };
