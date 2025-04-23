@@ -33,6 +33,7 @@ const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
 const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
+const RcBank = sig.sync.Rc(Bank);
 
 const UnixTimestamp = i64;
 
@@ -55,6 +56,15 @@ const SwitchForkDecision = union(enum) {
         Slot,
     },
     failed_switch_duplicate_rollback: Slot,
+
+    pub fn canVote(self: *const SwitchForkDecision) bool {
+        return switch (self.*) {
+            .failed_switch_threshold => false,
+            .failed_switch_duplicate_rollback => false,
+            .same_fork => true,
+            .switch_proof => true,
+        };
+    }
 };
 
 pub const Stake = u64;
@@ -76,6 +86,19 @@ const ComputedBankState = struct {
     // keyed by end of the range
     lockout_intervals: LockoutIntervals,
     my_latest_landed_vote: ?Slot,
+};
+
+// TODO The use of Rc
+pub const CandidateVoteAndResetBanks = struct {
+    // A bank that the validator will vote on given it passes all
+    // remaining vote checks
+    candidate_vote_bank: ?*const RcBank,
+
+    // A bank that the validator will reset its PoH to regardless
+    // of voting behavior
+    reset_bank: ?*const RcBank,
+
+    switch_fork_decision: SwitchForkDecision,
 };
 
 pub const ThresholdDecision = union(enum) {
@@ -1746,6 +1769,60 @@ pub const Tower = struct {
 
         // Return the original switch_fork_decision.
         return switch_fork_decision;
+    }
+
+    /// Handles candidate selection when fork switching fails threshold checks
+    pub fn selectCandidatesFailedSwitch(
+        self: *const Tower,
+        allocator: std.mem.Allocator,
+        heaviest_bank: *const Bank,
+        heaviest_bank_on_same_voted_fork: ?*const Bank,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        switch_proof_stake: u64,
+        total_stake: u64,
+        initial_switch_fork_decision: SwitchForkDecision,
+    ) !CandidateVoteAndResetBanks {
+        // If our last vote is unable to land (even through normal refresh), then we
+        // temporarily "super" refresh our vote to the tip of our last voted fork.
+        const final_switch_fork_decision = try self.recheckForkDecisionFailedSwitchThreshold(
+            allocator,
+            if (heaviest_bank_on_same_voted_fork) |bank| bank else null,
+            progress,
+            heaviest_bank.bank_fields.slot,
+            failure_reasons,
+            switch_proof_stake,
+            total_stake,
+            initial_switch_fork_decision,
+        );
+
+        const candidate_vote_bank = if (final_switch_fork_decision.canVote())
+            // We need to "super" refresh our vote to the tip of our last voted fork
+            // because our last vote is unable to land. This is inferred by
+            // initially determining we can't vote but then determining we can vote
+            // on the same fork.
+            heaviest_bank_on_same_voted_fork
+        else
+            // Return original vote candidate for logging purposes (can't actually vote)
+            heaviest_bank;
+
+        var rc_heaviest_bank_on_same_voted_fork: ?RcBank = null;
+        if (heaviest_bank_on_same_voted_fork) |bank| {
+            rc_heaviest_bank_on_same_voted_fork = try RcBank.create(allocator);
+            rc_heaviest_bank_on_same_voted_fork.?.payload().* = bank.*;
+        }
+
+        var rc_candidate_vote_bank: ?RcBank = null;
+        if (candidate_vote_bank) |bank| {
+            rc_candidate_vote_bank = try RcBank.create(allocator);
+            rc_candidate_vote_bank.?.payload().* = bank.*;
+        }
+
+        return CandidateVoteAndResetBanks{
+            .candidate_vote_bank = if (rc_candidate_vote_bank) |rc| &rc else null,
+            .reset_bank = if (rc_heaviest_bank_on_same_voted_fork) |rc| &rc else null,
+            .switch_fork_decision = final_switch_fork_decision,
+        };
     }
 };
 
