@@ -396,13 +396,17 @@ pub fn poseidon(
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    // const parameters: Parameters = @enumFromInt(registers.get(.r1));
-    const endianness: std.builtin.Endian = @enumFromInt(registers.get(.r2));
+    const parameters = std.meta.intToEnum(Parameters, registers.get(.r1)) catch
+        return error.InvalidParameters;
+    std.debug.assert(parameters == .Bn254X5);
+
+    const endianness = std.meta.intToEnum(std.builtin.Endian, registers.get(.r2)) catch
+        return error.InvalidEndianness;
     const addr = registers.get(.r3);
     const len = registers.get(.r4);
     const result_addr = registers.get(.r5);
 
-    if (len > 12) return error.InvalidLength;
+    if (len > 12) return error.InvalidNumberOfInputs;
 
     const budget = tc.compute_budget;
     const cost = budget.poseidonCost(@intCast(len));

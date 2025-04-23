@@ -51,7 +51,7 @@ pub fn writeToSlice(slice: []u8, data: anytype, params: bincode.Params) ![]u8 {
     return stream.getWritten();
 }
 
-pub inline fn writeAlloc(allocator: std.mem.Allocator, data: anytype, params: bincode.Params) ![]u8 {
+pub fn writeAlloc(allocator: std.mem.Allocator, data: anytype, params: bincode.Params) ![]u8 {
     const buffer = try allocator.alloc(u8, bincode.sizeOf(data, params));
     errdefer allocator.free(buffer);
     return try bincode.writeToSlice(buffer, data, params);

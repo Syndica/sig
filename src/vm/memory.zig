@@ -69,6 +69,29 @@ pub const MemoryMap = union(enum) {
         return accessViolation(vm_addr, version, config);
     }
 
+    pub fn store(
+        self: MemoryMap,
+        comptime T: type,
+        vm_addr: u64,
+        value: T,
+    ) !void {
+        return switch (self) {
+            .aligned => |aligned| aligned.store(T, vm_addr, value),
+            .unaligned => |unaligned| unaligned.store(T, vm_addr, value),
+        };
+    }
+
+    pub fn load(
+        self: MemoryMap,
+        comptime T: type,
+        vm_addr: u64,
+    ) !T {
+        return switch (self) {
+            .aligned => |aligned| aligned.load(T, vm_addr),
+            .unaligned => |unaligned| unaligned.load(T, vm_addr),
+        };
+    }
+
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L782
     pub fn vmap(
         self: MemoryMap,
@@ -322,6 +345,26 @@ pub const AlignedMemoryMap = struct {
         return err;
     }
 
+    fn store(
+        self: *const AlignedMemoryMap,
+        comptime T: type,
+        vm_addr: u64,
+        value: T,
+    ) !void {
+        comptime std.debug.assert(@sizeOf(T) <= @sizeOf(u64));
+        const slice = try self.vmap(.mutable, vm_addr, @sizeOf(T));
+        std.mem.writeInt(T, slice[0..@sizeOf(T)], value, .little);
+    }
+
+    fn load(
+        self: *const AlignedMemoryMap,
+        comptime T: type,
+        vm_addr: u64,
+    ) !T {
+        const slice = try self.vmap(.constant, vm_addr, @sizeOf(T));
+        return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
+    }
+
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L628
     fn vmap(
         self: *const AlignedMemoryMap,
@@ -471,9 +514,79 @@ const UnalignedMemoryMap = struct {
             &self.regions[index - 1];
     }
 
+    fn store(
+        self: *const UnalignedMemoryMap,
+        comptime T: type,
+        vm_addr: u64,
+        value: T,
+    ) !void {
+        const err = accessViolation(vm_addr, self.version, self.config);
+
+        var region = try self.findRegion(vm_addr);
+        if (region.host_memory != .mutable) return err;
+
+        if (region.translate(.mutable, vm_addr, @sizeOf(T))) |slice| {
+            // fast path
+            std.mem.writeInt(T, slice[0..@sizeOf(T)], value, .little);
+            return;
+        }
+
+        var current_addr = vm_addr;
+        var src: []const u8 = std.mem.asBytes(&value);
+        while (src.len > 0) {
+            if (region.host_memory != .mutable) break;
+
+            const write_len = @min(region.vm_addr_end -| current_addr, src.len);
+            if (write_len == 0) break;
+
+            if (region.translate(.mutable, current_addr, write_len)) |slice| {
+                @memcpy(slice, src[0..write_len]);
+                src = src[write_len..];
+                if (src.len == 0) return; // done!
+                current_addr = current_addr +| write_len;
+                region = self.findRegion(current_addr) catch break;
+            } else break;
+        }
+
+        return err;
+    }
+
+    fn load(
+        self: *const UnalignedMemoryMap,
+        comptime T: type,
+        vm_addr: u64,
+    ) !T {
+        comptime std.debug.assert(@sizeOf(T) <= @sizeOf(u64));
+        const err = accessViolation(vm_addr, self.version, self.config);
+
+        var region = try self.findRegion(vm_addr);
+        if (region.translate(.constant, vm_addr, @sizeOf(T))) |slice| {
+            // fast path
+            return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
+        }
+
+        var dest: [@sizeOf(T)]u8 = undefined;
+        var ptr: []u8 = &dest;
+        var current_addr = vm_addr;
+
+        while (ptr.len > 0) {
+            const load_len = @min(ptr.len, region.vm_addr_end -| current_addr);
+            if (load_len == 0) break;
+            if (region.translate(.constant, current_addr, load_len)) |slice| {
+                @memcpy(ptr[0..load_len], slice);
+                ptr = ptr[load_len..];
+                if (ptr.len == 0) return @bitCast(dest);
+                current_addr = current_addr +| load_len;
+                region = self.findRegion(current_addr) catch break;
+            } else break;
+        }
+
+        return err;
+    }
+
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L323
     fn vmap(
-        self: UnalignedMemoryMap,
+        self: *const UnalignedMemoryMap,
         comptime access_type: MemoryState,
         vm_addr: u64,
         len: u64,
