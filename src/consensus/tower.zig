@@ -115,6 +115,27 @@ pub const TowerError = error{
     FatallyInconsistentTowerSlotOrder,
 };
 
+pub const HeaviestForkFailures = union(enum) {
+    LockedOut: u64,
+    FailedThreshold: struct {
+        slot: Slot,
+        vote_depth: u64,
+        observed_stake: u64,
+        total_stake: u64,
+    },
+    /// Failed to meet stake threshold for switching forks
+    FailedSwitchThreshold: struct {
+        slot: Slot,
+        observed_stake: u64,
+        total_stake: u64,
+    },
+    NoPropagatedConfirmation: struct {
+        slot: Slot,
+        observed_stake: u64,
+        total_stake: u64,
+    },
+};
+
 pub const Tower = struct {
     logger: ScopedLogger(@typeName(Self)),
     node_pubkey: Pubkey,
@@ -1653,6 +1674,78 @@ pub const Tower = struct {
             (last_voted_slot >= my_latest_landed_vote_slot) or
             // 3. Last vote is within slot hashes, regular refresh is enough
             heaviest_bank_on_same_voted_fork.isInSlotHashesHistory(&last_voted_slot);
+    }
+
+    /// Handles fork selection when switch threshold fails.
+    ///
+    /// Two cases:
+    /// 1. If last vote can't land: vote at current fork tip (SameFork)
+    /// 2. Otherwise: stay on current fork (don't vote) to prevent network halts
+    ///
+    /// Prevents mass fork abandonment that could stall the network.
+    pub fn recheckForkDecisionFailedSwitchThreshold(
+        self: *const Tower,
+        allocator: std.mem.Allocator,
+        reset_bank: ?*const Bank,
+        progress: *const ProgressMap,
+        heaviest_bank_slot: Slot,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        switch_proof_stake: u64,
+        total_stake: u64,
+        switch_fork_decision: SwitchForkDecision,
+    ) !SwitchForkDecision {
+        if (!self.lastVoteAbleToLand(reset_bank, progress)) {
+            // If we reach here, these assumptions are true:
+            // 1. We can't switch because of threshold
+            // 2. Our last vote is now outside slot hashes history of the tip of fork
+            // So, there was no hope of this last vote ever landing again.
+
+            // In this case, we do want to obey threshold, yet try to register our vote on
+            // the current fork, so we choose to vote at the tip of current fork instead.
+            // This will not cause longer lockout because lockout doesn't double after 512
+            // slots, it might be enough to get majority vote.
+            return SwitchForkDecision.same_fork;
+        }
+
+        // If we can't switch, then reset to the next votable bank on the same
+        // fork as our last vote, but don't vote.
+        // We don't just reset to the heaviest fork when switch threshold fails because
+        // a situation like this can occur:
+        // Figure 1:
+        //             slot 0
+        //                 |
+        //             slot 1
+        //             /        \
+        // slot 2 (last vote)     |
+        //             |      slot 8 (10%)
+        //     slot 4 (9%)
+        // Imagine 90% of validators voted on slot 4, but only 9% landed. If everybody that fails
+        // the switch threshold abandons slot 4 to build on slot 8 (because it's *currently* heavier),
+        // then there will be no blocks to include the votes for slot 4, and the network halts
+        // because 90% of validators can't vote
+        self.logger.info().logf(
+            \\ Waiting to switch vote to {d}, resetting to slot {?} for now, 
+            \\ switch proof stake: {d}, threshold stake: {d:.2}, total stake: {d}"
+        ,
+            .{
+                heaviest_bank_slot,
+                if (reset_bank) |b| b.bank_fields.slot else null,
+                switch_proof_stake,
+                @as(f64, @floatFromInt(total_stake)) * SWITCH_FORK_THRESHOLD,
+                total_stake,
+            },
+        );
+
+        try failure_reasons.append(allocator, .{
+            .FailedSwitchThreshold = .{
+                .slot = heaviest_bank_slot,
+                .observed_stake = switch_proof_stake,
+                .total_stake = total_stake,
+            },
+        });
+
+        // Return the original switch_fork_decision.
+        return switch_fork_decision;
     }
 };
 
