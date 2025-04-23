@@ -559,7 +559,11 @@ pub const Vm = struct {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
-                        try entry.value(self.transaction_context, &self.memory_map, &self.registers);
+                        try entry.value(
+                            self.transaction_context,
+                            &self.memory_map,
+                            &self.registers,
+                        );
                     } else {
                         @panic("TODO: detect invalid syscall in verifier");
                     }

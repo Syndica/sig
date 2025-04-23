@@ -297,7 +297,11 @@ pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: *RegisterMap) 
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/logging.rs#L107
-pub fn logData(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
+pub fn logData(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
     const vm_addr = registers.get(.r1);
     const len = registers.get(.r2);
 
@@ -344,7 +348,11 @@ pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!v
 pub const MAX_RETURN_DATA: usize = 1024;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/4f68141ba70b7574da0bc185ef5d08fe33d19887/programs/bpf_loader/src/syscalls/mod.rs#L1450
-pub fn setReturnData(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
+pub fn setReturnData(
+    ctx: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
     const addr = registers.get(.r1);
     const len = registers.get(.r2);
 
@@ -421,7 +429,9 @@ pub fn poseidon(
             input.len,
         );
         hasher.append(slice[0..32]) catch {
-            if (tc.ec.feature_set.active.contains(features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES)) {
+            if (tc.ec.feature_set.active.contains(
+                features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
+            )) {
                 registers.set(.r0, 1);
                 return;
             } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");

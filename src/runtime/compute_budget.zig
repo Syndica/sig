@@ -1,7 +1,4 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
-
-const SyscallError = sig.vm.SyscallError;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/compute-budget/src/compute_budget.rs#L11-L119
 pub const ComputeBudget = struct {
