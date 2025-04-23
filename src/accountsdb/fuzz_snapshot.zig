@@ -3,12 +3,12 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 
+const BankFields = sig.core.BankFields;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const BankFields = sig.accounts_db.snapshots.BankFields;
 const ExtraFields = sig.accounts_db.snapshots.ExtraFields;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const SnapshotManifest = sig.accounts_db.Manifest;

@@ -2,9 +2,10 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const BankFields = sig.core.BankFields;
+
 const AccountsDB = sig.accounts_db.AccountsDB;
-const BankFields = sig.accounts_db.snapshots.BankFields;
-const GenesisConfig = sig.accounts_db.GenesisConfig;
+const GenesisConfig = sig.core.GenesisConfig;
 const SnapshotManifest = sig.accounts_db.snapshots.Manifest;
 
 // TODO: we can likley come up with a better name for this struct

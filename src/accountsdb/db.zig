@@ -16,13 +16,14 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
+const BankFields = sig.core.BankFields;
+
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const StatusCache = sig.accounts_db.StatusCache;
 
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
 const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
 const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;

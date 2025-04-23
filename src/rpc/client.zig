@@ -4,7 +4,7 @@ const rpc = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
+const ClusterType = sig.core.ClusterType;
 
 const MethodAndParams = rpc.methods.MethodAndParams;
 const HttpPostFetcher = rpc.http.HttpPostFetcher;

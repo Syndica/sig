@@ -6,7 +6,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const AccountSharedData = runtime.AccountSharedData;
 const Hash = sig.core.Hash;
-const RentCollector = runtime.rent_collector.RentCollector;
+const RentCollector = sig.core.rent_collector.RentCollector;
 
 // [firedancer] https://github.com/firedancer-io/firedancer/blob/ddde57c40c4d4334c25bb32de17f833d4d79a889/src/ballet/txn/fd_txn.h#L116
 const MAX_TX_ACCOUNT_LOCKS = 128;
@@ -136,7 +136,7 @@ const LoadedTransactionAccount = struct {
             .data = &.{},
             .owner = Pubkey.ZEROES,
             .executable = false,
-            .rent_epoch = runtime.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+            .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
         },
         .loaded_size = 0,
         .rent_collected = 0,
@@ -211,7 +211,7 @@ fn loadTransactionAccount(
     tx: *const sig.core.Transaction,
     account_key: *const sig.core.Pubkey,
     account_idx: usize,
-    rent_collector: *const runtime.rent_collector.RentCollector,
+    rent_collector: *const sig.core.rent_collector.RentCollector,
     feature_set: *const runtime.FeatureSet,
 ) !LoadedTransactionAccount {
     if (account_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
@@ -247,22 +247,22 @@ fn collectRentFromAccount(
     account: *AccountSharedData,
     account_key: *const sig.core.Pubkey,
     feature_set: *const runtime.FeatureSet,
-    rent_collector: *const runtime.rent_collector.RentCollector,
-) runtime.rent_collector.CollectedInfo {
+    rent_collector: *const sig.core.rent_collector.RentCollector,
+) sig.core.rent_collector.CollectedInfo {
     if (!feature_set.active.contains(runtime.features.DISABLE_RENT_FEES_COLLECTION)) {
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
 
-    if (account.rent_epoch != runtime.rent_collector.RENT_EXEMPT_RENT_EPOCH and
+    if (account.rent_epoch != sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH and
         rent_collector.getRentDue(
         account.lamports,
         account.data.len,
         account.rent_epoch,
     ) != .Exempt) {
-        account.rent_epoch = runtime.rent_collector.RENT_EXEMPT_RENT_EPOCH;
+        account.rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
     }
 
-    return runtime.rent_collector.CollectedInfo.NoneCollected;
+    return sig.core.rent_collector.CollectedInfo.NoneCollected;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L425
@@ -273,7 +273,7 @@ fn loadTransactionAccountsInner(
     requested_max_total_data_size: u32, // should be inside the tx?
     account_loader: *AccountLoader(bank_kind),
     features: *const runtime.FeatureSet,
-    rent_collector: *const runtime.rent_collector.RentCollector,
+    rent_collector: *const sig.core.rent_collector.RentCollector,
 ) !LoadedAccounts {
     var retval: LoadedAccounts = .{
         // safe: upon success, these will be set for every account index
@@ -446,7 +446,7 @@ fn newAccountLoader(allocator: std.mem.Allocator) AccountLoader(.Mocked) {
                 .allocator = allocator,
                 .slot = 0,
                 .accounts = .{},
-                .rent_collector = runtime.rent_collector.defaultCollector(0),
+                .rent_collector = sig.core.rent_collector.defaultCollector(0),
             },
         },
     };
