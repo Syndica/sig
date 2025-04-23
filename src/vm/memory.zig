@@ -1,6 +1,9 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 const sbpf = @import("sbpf.zig");
 const exe = @import("executable.zig");
+
+const SyscallError = sig.vm.SyscallError;
 
 /// Virtual address of the bytecode region (in SBPFv3)
 pub const BYTECODE_START: u64 = 0x000000000;
@@ -89,6 +92,68 @@ pub const MemoryMap = union(enum) {
         return switch (self) {
             .aligned => |aligned| aligned.mapRegion(state, reg, vm_addr, len),
             .unaligned => |unaligned| unaligned.mapRegion(state, reg, vm_addr, len),
+        };
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L604
+    pub fn translate(
+        memory_map: *const MemoryMap,
+        comptime state: MemoryState,
+        vm_addr: u64,
+        len: u64,
+    ) !u64 {
+        const slice = try memory_map.vmap(state, vm_addr, len);
+        return @intFromPtr(slice.ptr);
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L616
+    pub fn translateType(
+        memory_map: *const MemoryMap,
+        comptime T: type,
+        comptime state: MemoryState,
+        vm_addr: u64,
+        check_aligned: bool,
+    ) !(switch (state) {
+        .mutable => *T,
+        .constant => *const T,
+    }) {
+        const host_addr = try memory_map.translate(state, vm_addr, @sizeOf(T));
+        if (!check_aligned) {
+            return @ptrFromInt(host_addr);
+        } else if (host_addr % @alignOf(T) != 0) {
+            return SyscallError.UnalignedPointer;
+        } else {
+            return @ptrFromInt(host_addr);
+        }
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L647
+    pub fn translateSlice(
+        memory_map: *const MemoryMap,
+        comptime T: type,
+        comptime state: MemoryState,
+        vm_addr: u64,
+        len: u64,
+        check_aligned: bool,
+    ) !(switch (state) {
+        .mutable => []T,
+        .constant => []const T,
+    }) {
+        if (len == 0) {
+            return &.{}; // &mut []
+        }
+
+        const total_size = len *| @sizeOf(T);
+        _ = std.math.cast(isize, total_size) orelse return SyscallError.InvalidLength;
+
+        const host_addr = try memory_map.translate(state, vm_addr, total_size);
+        if (check_aligned and host_addr % @alignOf(T) != 0) {
+            return SyscallError.UnalignedPointer;
+        }
+
+        return switch (state) {
+            .mutable => @as([*]T, @ptrFromInt(host_addr))[0..len],
+            .constant => @as([*]const T, @ptrFromInt(host_addr))[0..len],
         };
     }
 };
