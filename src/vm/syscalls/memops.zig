@@ -332,19 +332,27 @@ pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     try consumeMemoryCompute(tc, len);
 
     const feature_set = tc.sc.ec.feature_set;
+    const check_aligned = try tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         try memsetNonContigious(
             dst_addr,
             @truncate(scalar),
             len,
             tc.serialized_accounts.constSlice(),
             memory_map,
-            ic.getCheckAligned(),
+            check_aligned,
         );
     } else {
-        const host_addr = try memory_map.vmap(.mutable, dst_addr, len);
-        @memset(host_addr, @truncate(scalar));
+        const host = try memory_map.translateSlice(u8, .mutable, dst_addr, len, check_aligned);
+        @memset(host, @truncate(scalar));
+    }
+}
+
+fn isOverlapping(src_addr: u64, src_len: u64, dst_addr: u64, dst_len: u64) bool {
+    if (src_addr > dst_addr) {
+        return (src_addr -| dst_addr) < dst_len;
+    } else {
+        return (dst_addr -| src_addr) < src_len;
     }
 }
 
@@ -354,27 +362,26 @@ pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     const src_addr = registers.get(.r2);
     const len = registers.get(.r3);
 
-    const disjoint = (src_addr + len <= dst_addr) or (dst_addr + len <= src_addr);
-    if (!disjoint) {
+    try consumeMemoryCompute(tc, len);
+
+    if (isOverlapping(src_addr, len, dst_addr, len)) {
         return SyscallError.CopyOverlapping;
     }
 
-    try consumeMemoryCompute(tc, len);
-
     const feature_set = tc.sc.ec.feature_set;
+    const check_aligned = try tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         try memmoveNonContigious(
             dst_addr,
             src_addr,
             len,
             tc.serialized_accounts.constSlice(),
             memory_map,
-            ic.getCheckAligned(),
+            check_aligned,
         );
     } else {
-        const dst_host = try memory_map.vmap(.mutable, dst_addr, len);
-        const src_host = try memory_map.vmap(.constant, src_addr, len);
+        const dst_host = try memory_map.translateSlice(u8, .mutable, dst_addr, len, check_aligned);
+        const src_host = try memory_map.translateSlice(u8, .constant, src_addr, len, check_aligned);
         @memcpy(dst_host, src_host);
     }
 }
@@ -388,19 +395,19 @@ pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, reg_map: *Regist
     try consumeMemoryCompute(tc, len);
 
     const feature_set = tc.sc.ec.feature_set;
+    const check_aligned = try tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         try memmoveNonContigious(
             dst_addr,
             src_addr,
             len,
             tc.serialized_accounts.constSlice(),
             memory_map,
-            ic.getCheckAligned(),
+            check_aligned,
         );
     } else {
-        const dst_host = try memory_map.vmap(.mutable, dst_addr, len);
-        const src_host = try memory_map.vmap(.constant, src_addr, len);
+        const dst_host = try memory_map.translateSlice(u8, .mutable, dst_addr, len, check_aligned);
+        const src_host = try memory_map.translateSlice(u8, .constant, src_addr, len, check_aligned);
         _ = MemmoveContext.memmove(dst_host.ptr, src_host.ptr, len);
     }
 }
