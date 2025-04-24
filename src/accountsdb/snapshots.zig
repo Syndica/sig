@@ -148,28 +148,23 @@ pub const ExtraFields = struct {
         .accounts_lt_hash = null,
     };
 
-    pub fn deinit(extra: *const ExtraFields, allocator: std.mem.Allocator) void {
-        var versioned_epoch_stakes = extra.versioned_epoch_stakes;
+    pub fn deinit(self: *const ExtraFields, allocator: std.mem.Allocator) void {
+        var versioned_epoch_stakes = self.versioned_epoch_stakes;
         for (versioned_epoch_stakes.values()) |ves| ves.deinit(allocator);
         versioned_epoch_stakes.deinit(allocator);
     }
 
     pub fn clone(
-        extra: *const ExtraFields,
+        self: *const ExtraFields,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!ExtraFields {
-        var versioned_epoch_stakes: VersionedEpochStakesMap = .{};
-        errdefer versioned_epoch_stakes.deinit(allocator);
-        errdefer for (extra.versioned_epoch_stakes.values()) |ves| {
-            ves.deinit(allocator);
-        };
-
         return .{
-            .lamports_per_signature = extra.lamports_per_signature,
-            .snapshot_persistence = extra.snapshot_persistence,
-            .epoch_accounts_hash = extra.epoch_accounts_hash,
-            .versioned_epoch_stakes = versioned_epoch_stakes,
-            .accounts_lt_hash = extra.accounts_lt_hash,
+            .lamports_per_signature = self.lamports_per_signature,
+            .snapshot_persistence = self.snapshot_persistence,
+            .epoch_accounts_hash = self.epoch_accounts_hash,
+            .versioned_epoch_stakes = try sig.utils.collections
+                .cloneMapAndValues(allocator, self.versioned_epoch_stakes),
+            .accounts_lt_hash = self.accounts_lt_hash,
         };
     }
 

@@ -856,6 +856,27 @@ pub fn RingBuffer(comptime I: type, comptime Size: usize) type {
     };
 }
 
+pub fn cloneMapAndValues(allocator: Allocator, map: anytype) Allocator.Error!@TypeOf(map) {
+    var new_map: @TypeOf(map) = .{};
+
+    errdefer deinitMapAndValues(allocator, new_map);
+
+    var iter = map.iterator();
+    while (iter.next()) |entry| {
+        const val = try entry.value_ptr.clone(allocator);
+        errdefer val.deinit(allocator);
+        try new_map.put(allocator, entry.key_ptr.*, val);
+    }
+
+    return new_map;
+}
+
+pub fn deinitMapAndValues(allocator: Allocator, const_map: anytype) void {
+    var map = const_map;
+    for (map.values()) |value| value.deinit(allocator);
+    (&map).deinit(allocator);
+}
+
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;

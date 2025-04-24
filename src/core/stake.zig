@@ -3,15 +3,20 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 
+const Allocator = std.mem.Allocator;
+
 const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
+
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
 pub const EpochStakeMap = std.AutoArrayHashMapUnmanaged(Epoch, EpochStakes);
 
 pub fn epochStakeMapDeinit(
     epoch_stakes: EpochStakeMap,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 ) void {
     for (epoch_stakes.values()) |epoch_stake| {
         epoch_stake.deinit(allocator);
@@ -23,8 +28,8 @@ pub fn epochStakeMapDeinit(
 
 pub fn epochStakeMapClone(
     epoch_stakes: EpochStakeMap,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!EpochStakeMap {
+    allocator: Allocator,
+) Allocator.Error!EpochStakeMap {
     var cloned: EpochStakeMap = .{};
     errdefer epochStakeMapDeinit(cloned, allocator);
     try cloned.ensureTotalCapacity(allocator, epoch_stakes.count());
@@ -39,9 +44,9 @@ pub fn epochStakeMapClone(
 
 pub fn epochStakeMapRandom(
     random: std.Random,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     max_list_entries: usize,
-) std.mem.Allocator.Error!EpochStakeMap {
+) Allocator.Error!EpochStakeMap {
     var epoch_stakes = EpochStakeMap.Managed.init(allocator);
     errdefer epochStakeMapDeinit(epoch_stakes.unmanaged, allocator);
 
@@ -50,7 +55,7 @@ pub fn epochStakeMapRandom(
         random,
         random.uintAtMost(usize, max_list_entries),
         struct {
-            allocator: std.mem.Allocator,
+            allocator: Allocator,
             max_list_entries: usize,
 
             pub fn randomKey(_: @This(), rand: std.Random) !Epoch {
@@ -76,7 +81,7 @@ pub const EpochStakes = struct {
     node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
     epoch_authorized_voters: EpochAuthorizedVoters,
 
-    pub fn deinit(epoch_stakes: EpochStakes, allocator: std.mem.Allocator) void {
+    pub fn deinit(epoch_stakes: EpochStakes, allocator: Allocator) void {
         epoch_stakes.stakes.deinit(allocator);
         nodeIdToVoteAccountsMapDeinit(epoch_stakes.node_id_to_vote_accounts, allocator);
 
@@ -86,8 +91,8 @@ pub const EpochStakes = struct {
 
     pub fn clone(
         epoch_stakes: EpochStakes,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!EpochStakes {
+        allocator: Allocator,
+    ) Allocator.Error!EpochStakes {
         const stakes = try epoch_stakes.stakes.clone(allocator);
         errdefer stakes.deinit(allocator);
 
@@ -109,12 +114,12 @@ pub const EpochStakes = struct {
     }
 
     pub fn initRandom(
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
         /// for commentary on the runtime of this function.
         random: std.Random,
         max_list_entries: usize,
-    ) std.mem.Allocator.Error!EpochStakes {
+    ) Allocator.Error!EpochStakes {
         var result_stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries);
         errdefer result_stakes.deinit(allocator);
 
@@ -158,13 +163,13 @@ pub fn Stakes(comptime DelegationElem: type) type {
 
         pub const DelegationsMap = std.AutoArrayHashMapUnmanaged(Pubkey, DelegationElem);
 
-        pub fn deinit(stakes: Self, allocator: std.mem.Allocator) void {
+        pub fn deinit(stakes: Self, allocator: Allocator) void {
             stakes.vote_accounts.deinit(allocator);
             freeDelegations(allocator, stakes.delegations);
             allocator.free(stakes.history);
         }
 
-        fn freeDelegations(allocator: std.mem.Allocator, delegations: DelegationsMap) void {
+        fn freeDelegations(allocator: Allocator, delegations: DelegationsMap) void {
             var copy = delegations;
             switch (DelegationElem) {
                 Delegation, Stake => {}, // these values needn't be deinitialized
@@ -175,8 +180,8 @@ pub fn Stakes(comptime DelegationElem: type) type {
 
         pub fn clone(
             stakes: Self,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!Self {
+            allocator: Allocator,
+        ) Allocator.Error!Self {
             const vote_accounts = try stakes.vote_accounts.clone(allocator);
             errdefer vote_accounts.deinit(allocator);
 
@@ -196,12 +201,12 @@ pub fn Stakes(comptime DelegationElem: type) type {
         }
 
         pub fn initRandom(
-            allocator: std.mem.Allocator,
+            allocator: Allocator,
             /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
             /// for commentary on the runtime of this function.
             random: std.Random,
             max_list_entries: usize,
-        ) std.mem.Allocator.Error!Self {
+        ) Allocator.Error!Self {
             const vote_accounts = try VoteAccounts.initRandom(random, allocator, max_list_entries);
             errdefer vote_accounts.deinit(allocator);
 
@@ -275,14 +280,14 @@ pub const NodeVoteAccounts = struct {
     vote_accounts: []const Pubkey,
     total_stake: u64,
 
-    pub fn deinit(node_vote_accounts: NodeVoteAccounts, allocator: std.mem.Allocator) void {
+    pub fn deinit(node_vote_accounts: NodeVoteAccounts, allocator: Allocator) void {
         allocator.free(node_vote_accounts.vote_accounts);
     }
 
     pub fn clone(
         node_vote_accounts: NodeVoteAccounts,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!NodeVoteAccounts {
+        allocator: Allocator,
+    ) Allocator.Error!NodeVoteAccounts {
         return .{
             .vote_accounts = try allocator.dupe(Pubkey, node_vote_accounts.vote_accounts),
             .total_stake = node_vote_accounts.total_stake,
@@ -291,9 +296,9 @@ pub const NodeVoteAccounts = struct {
 
     pub fn initRandom(
         random: std.Random,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         max_list_entries: usize,
-    ) std.mem.Allocator.Error!NodeVoteAccounts {
+    ) Allocator.Error!NodeVoteAccounts {
         const vote_accounts =
             try allocator.alloc(Pubkey, random.uintLessThan(usize, max_list_entries));
         errdefer allocator.free(vote_accounts);
@@ -310,7 +315,7 @@ pub const NodeIdToVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, NodeVo
 
 pub fn nodeIdToVoteAccountsMapDeinit(
     map: NodeIdToVoteAccountsMap,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 ) void {
     for (map.values()) |*node_vote_accounts| {
         node_vote_accounts.deinit(allocator);
@@ -321,8 +326,8 @@ pub fn nodeIdToVoteAccountsMapDeinit(
 
 pub fn nodeIdToVoteAccountsMapClone(
     map: NodeIdToVoteAccountsMap,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!NodeIdToVoteAccountsMap {
+    allocator: Allocator,
+) Allocator.Error!NodeIdToVoteAccountsMap {
     var cloned: NodeIdToVoteAccountsMap = .{};
     errdefer nodeIdToVoteAccountsMapDeinit(cloned, allocator);
 
@@ -335,10 +340,10 @@ pub fn nodeIdToVoteAccountsMapClone(
 }
 
 pub fn nodeIdToVoteAccountsMapRandom(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     random: std.Random,
     max_list_entries: usize,
-) std.mem.Allocator.Error!NodeIdToVoteAccountsMap {
+) Allocator.Error!NodeIdToVoteAccountsMap {
     var node_id_to_vote_accounts = NodeIdToVoteAccountsMap.Managed.init(allocator);
     errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts.unmanaged, allocator);
 
@@ -347,7 +352,7 @@ pub fn nodeIdToVoteAccountsMapRandom(
         random,
         random.uintAtMost(usize, max_list_entries),
         struct {
-            allocator: std.mem.Allocator,
+            allocator: Allocator,
             max_list_entries: usize,
 
             pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
@@ -370,10 +375,10 @@ pub fn nodeIdToVoteAccountsMapRandom(
 pub const EpochAuthorizedVoters = std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey);
 
 pub fn epochAuthorizedVotersRandom(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     random: std.Random,
     max_list_entries: usize,
-) std.mem.Allocator.Error!EpochAuthorizedVoters {
+) Allocator.Error!EpochAuthorizedVoters {
     var epoch_authorized_voters = EpochAuthorizedVoters.Managed.init(allocator);
     errdefer epoch_authorized_voters.deinit();
 
@@ -398,10 +403,28 @@ pub fn epochAuthorizedVotersRandom(
 pub const VersionedEpochStake = union(enum(u32)) {
     current: Current,
 
-    pub fn deinit(ves: VersionedEpochStake, allocator: std.mem.Allocator) void {
-        switch (ves) {
+    pub fn deinit(self: VersionedEpochStake, allocator: Allocator) void {
+        switch (self) {
             .current => |current| current.deinit(allocator),
         }
+    }
+
+    pub fn initRandom(
+        allocator: Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) Allocator.Error!VersionedEpochStake {
+        // randomly generate the tag otherwise
+        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1);
+        return .{
+            .current = try Current.initRandom(allocator, random, max_list_entries),
+        };
+    }
+
+    pub fn clone(self: *const VersionedEpochStake, allocator: Allocator) !VersionedEpochStake {
+        return switch (self.*) {
+            .current => |current| .{ .current = try current.clone(allocator) },
+        };
     }
 
     pub const Current = struct {
@@ -410,18 +433,18 @@ pub const VersionedEpochStake = union(enum(u32)) {
         node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
         epoch_authorized_voters: EpochAuthorizedVoters,
 
-        pub fn deinit(current: Current, allocator: std.mem.Allocator) void {
-            current.stakes.deinit(allocator);
-            nodeIdToVoteAccountsMapDeinit(current.node_id_to_vote_accounts, allocator);
-            var epoch_authorized_voters = current.epoch_authorized_voters;
+        pub fn deinit(self: Current, allocator: Allocator) void {
+            self.stakes.deinit(allocator);
+            nodeIdToVoteAccountsMapDeinit(self.node_id_to_vote_accounts, allocator);
+            var epoch_authorized_voters = self.epoch_authorized_voters;
             epoch_authorized_voters.deinit(allocator);
         }
 
         pub fn initRandom(
-            allocator: std.mem.Allocator,
+            allocator: Allocator,
             random: std.Random,
             max_list_entries: usize,
-        ) std.mem.Allocator.Error!Current {
+        ) Allocator.Error!Current {
             const stakes = try Stakes(Stake).initRandom(allocator, random, max_list_entries);
             errdefer stakes.deinit(allocator);
 
@@ -443,19 +466,25 @@ pub const VersionedEpochStake = union(enum(u32)) {
                 .epoch_authorized_voters = epoch_authorized_voters,
             };
         }
-    };
 
-    pub fn initRandom(
-        allocator: std.mem.Allocator,
-        random: std.Random,
-        max_list_entries: usize,
-    ) std.mem.Allocator.Error!VersionedEpochStake {
-        // randomly generate the tag otherwise
-        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1);
-        return .{
-            .current = try Current.initRandom(allocator, random, max_list_entries),
-        };
-    }
+        pub fn clone(self: *const Current, allocator: Allocator) !Current {
+            const stakes = try self.stakes.clone(allocator);
+
+            const node_id_to_vote_accounts =
+                try cloneMapAndValues(allocator, self.node_id_to_vote_accounts);
+            errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts);
+
+            const epoch_authorized_voters = try self.epoch_authorized_voters.clone(allocator);
+            errdefer epoch_authorized_voters.deinit(allocator);
+
+            return .{
+                .stakes = stakes,
+                .total_stake = self.total_stake,
+                .node_id_to_vote_accounts = node_id_to_vote_accounts,
+                .epoch_authorized_voters = epoch_authorized_voters,
+            };
+        }
+    };
 };
 
 /// Analogous to [StakeHistoryEntry](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L17)
@@ -493,9 +522,9 @@ pub const EpochAndStakeHistory = []const EpochAndStakeHistoryEntry;
 
 pub fn stakeHistoryRandom(
     random: std.Random,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     max_list_entries: usize,
-) std.mem.Allocator.Error!EpochAndStakeHistory {
+) Allocator.Error!EpochAndStakeHistory {
     const stake_history_len = random.uintAtMost(usize, max_list_entries);
 
     const stake_history = try allocator.alloc(EpochAndStakeHistoryEntry, stake_history_len);
@@ -511,7 +540,7 @@ pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeA
 
 pub fn stakeAndVoteAccountsMapDeinit(
     map: StakeAndVoteAccountsMap,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 ) void {
     var copy = map;
     for (copy.values()) |stake_and_vote_account| {
@@ -523,8 +552,8 @@ pub fn stakeAndVoteAccountsMapDeinit(
 
 pub fn stakeAndVoteAccountsMapClone(
     map: StakeAndVoteAccountsMap,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!StakeAndVoteAccountsMap {
+    allocator: Allocator,
+) Allocator.Error!StakeAndVoteAccountsMap {
     var cloned: StakeAndVoteAccountsMap = .{};
     errdefer stakeAndVoteAccountsMapDeinit(cloned, allocator);
 
@@ -540,9 +569,9 @@ pub fn stakeAndVoteAccountsMapClone(
 
 pub fn stakeAndVoteAccountsMapRandom(
     random: std.Random,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     max_list_entries: usize,
-) std.mem.Allocator.Error!StakeAndVoteAccountsMap {
+) Allocator.Error!StakeAndVoteAccountsMap {
     var result: StakeAndVoteAccountsMap = .{};
     errdefer stakeAndVoteAccountsMapDeinit(result, allocator);
 
@@ -581,7 +610,7 @@ pub const VoteAccounts = struct {
 
     pub fn deinit(
         vote_accounts: VoteAccounts,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
     ) void {
         var copy = vote_accounts;
 
@@ -598,8 +627,8 @@ pub const VoteAccounts = struct {
 
     pub fn clone(
         vote_accounts: VoteAccounts,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!VoteAccounts {
+        allocator: Allocator,
+    ) Allocator.Error!VoteAccounts {
         const accounts = try stakeAndVoteAccountsMapClone(vote_accounts.accounts, allocator);
         errdefer stakeAndVoteAccountsMapDeinit(accounts, allocator);
 
@@ -613,7 +642,7 @@ pub const VoteAccounts = struct {
         };
     }
 
-    pub fn stakedNodes(self: *VoteAccounts, allocator: std.mem.Allocator) !*const StakedNodesMap {
+    pub fn stakedNodes(self: *VoteAccounts, allocator: Allocator) !*const StakedNodesMap {
         if (self.staked_nodes) |*staked_nodes| {
             return staked_nodes;
         }
@@ -635,9 +664,9 @@ pub const VoteAccounts = struct {
 
     pub fn initRandom(
         random: std.Random,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         max_list_entries: usize,
-    ) std.mem.Allocator.Error!VoteAccounts {
+    ) Allocator.Error!VoteAccounts {
         var stakes_vote_accounts = StakeAndVoteAccountsMap.Managed.init(allocator);
         errdefer stakes_vote_accounts.deinit();
 
@@ -651,7 +680,7 @@ pub const VoteAccounts = struct {
             random,
             random.uintAtMost(usize, max_list_entries),
             struct {
-                allocator: std.mem.Allocator,
+                allocator: Allocator,
                 max_list_entries: usize,
 
                 pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
@@ -710,14 +739,14 @@ pub const VoteAccount = struct {
     pub const @"!bincode-config:vote_state" =
         bincode.FieldConfig(?anyerror!VoteState){ .skip = true };
 
-    pub fn deinit(vote_account: VoteAccount, allocator: std.mem.Allocator) void {
+    pub fn deinit(vote_account: VoteAccount, allocator: Allocator) void {
         vote_account.account.deinit(allocator);
     }
 
     pub fn clone(
         vote_account: VoteAccount,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!VoteAccount {
+        allocator: Allocator,
+    ) Allocator.Error!VoteAccount {
         const account = try vote_account.account.cloneOwned(allocator);
         errdefer account.deinit(allocator);
         return .{
@@ -749,10 +778,10 @@ pub const VoteAccount = struct {
 
     pub fn initRandom(
         random: std.Random,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         max_list_entries: usize,
         comptime RandomErrorSet: type,
-    ) std.mem.Allocator.Error!VoteAccount {
+    ) Allocator.Error!VoteAccount {
         const account =
             try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries));
         errdefer account.deinit(allocator);
