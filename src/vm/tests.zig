@@ -4,7 +4,9 @@ const sig = @import("../sig.zig");
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;
 const syscalls = sig.vm.syscalls;
+const executor = sig.runtime.executor;
 
+const InstructionInfo = sig.runtime.InstructionInfo;
 const Elf = sig.vm.elf.Elf;
 const Executable = sig.vm.Executable;
 const BuiltinProgram = sig.vm.BuiltinProgram;
@@ -2335,24 +2337,43 @@ pub fn testElfWithSyscalls(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    const ec, const sc, var context = try createExecutionContexts(
+    const ec, const sc, var tc = try createExecutionContexts(
         allocator,
         prng.random(),
-        .{ .compute_meter = expected[1] },
+        .{
+            .accounts = &.{
+                .{ .pubkey = sig.runtime.program.system_program.ID },
+            },
+            .compute_meter = expected[1],
+        },
     );
     defer {
         ec.deinit();
         allocator.destroy(ec);
         sc.deinit();
         allocator.destroy(sc);
+        tc.deinit();
     }
+
+    const instr_info = InstructionInfo{
+        .program_meta = .{
+            .index_in_transaction = 0,
+            .pubkey = sig.runtime.program.system_program.ID,
+        },
+        .account_metas = .{},
+        .instruction_data = &.{},
+        .initial_account_lamports = 0,
+    };
+
+    try executor.pushInstruction(&tc, instr_info);
+
     var vm = try Vm.init(
         allocator,
         &executable,
         m,
         &loader,
         stack_memory.len,
-        &context,
+        &tc,
     );
     defer vm.deinit();
 
