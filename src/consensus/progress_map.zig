@@ -281,17 +281,19 @@ pub const ForkProgress = struct {
         return new_progress;
     }
 
+    pub const InitParams = struct {
+        /// Should usually be `.now()`.
+        now: sig.time.Instant,
+        last_entry: Hash,
+        prev_leader_slot: ?Slot,
+        validator_stake_info: ?ValidatorStakeInfo,
+        num_blocks_on_fork: u64,
+        num_dropped_blocks_on_fork: u64,
+    };
+
     pub fn init(
         allocator: std.mem.Allocator,
-        params: struct {
-            /// Should usually be `.now()`.
-            now: sig.time.Instant,
-            last_entry: Hash,
-            prev_leader_slot: ?Slot,
-            validator_stake_info: ?ValidatorStakeInfo,
-            num_blocks_on_fork: u64,
-            num_dropped_blocks_on_fork: u64,
-        },
+        params: InitParams,
     ) std.mem.Allocator.Error!ForkProgress {
         const is_leader_slot: bool, //
         const propagated_validators_stake: u64, //
@@ -449,6 +451,18 @@ pub const PropagatedStats = struct {
     slot_vote_tracker: ?stubs.Arc(stubs.RwLock(cluster_info_vote_listener.SlotVoteTracker)),
     cluster_slot_pubkeys: ?stubs.Arc(stubs.RwLock(cluser_slots_service.SlotPubkeys)),
     total_epoch_stake: u64,
+
+    pub const EMPTY_ZEROES: PropagatedStats = .{
+        .propagated_validators = .{},
+        .propagated_node_ids = .{},
+        .propagated_validators_stake = 0,
+        .is_propagated = false,
+        .is_leader_slot = false,
+        .prev_leader_slot = null,
+        .slot_vote_tracker = null,
+        .cluster_slot_pubkeys = null,
+        .total_epoch_stake = 0,
+    };
 
     pub fn deinit(self: PropagatedStats, allocator: std.mem.Allocator) void {
         var propagated_validators = self.propagated_validators;
@@ -1292,6 +1306,218 @@ test "timings.ExecuteDetailsTimings.eql" {
     const last_key = edt2.per_program_timings.map.keys()[edt2.per_program_timings.map.count() - 1];
     edt2.per_program_timings.map.fetchOrderedRemove(last_key).?.value.deinit(allocator);
     try std.testing.expect(!edt.eql(&edt2));
+}
+
+test "addVotePubkey" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(608159);
+    const random = prng.random();
+
+    var stats = PropagatedStats.EMPTY_ZEROES;
+    defer stats.deinit(allocator);
+
+    const vote_pubkey1 = Pubkey.initRandom(random);
+
+    // Add a vote pubkey, the number of references in all_pubkeys
+    // should be 2
+    try std.testing.expectEqual(true, try stats.addVotePubkey(allocator, vote_pubkey1, 1));
+    try std.testing.expectEqual(true, stats.propagated_validators.contains(vote_pubkey1));
+    try std.testing.expectEqual(1, stats.propagated_validators_stake);
+
+    // Adding it again should change no state since the key already existed
+    try std.testing.expectEqual(false, try stats.addVotePubkey(allocator, vote_pubkey1, 1));
+    try std.testing.expectEqual(true, stats.propagated_validators.contains(vote_pubkey1));
+    try std.testing.expectEqual(1, stats.propagated_validators_stake);
+
+    // Adding another pubkey should succeed
+    const vote_pubkey2 = Pubkey.initRandom(random);
+    try std.testing.expectEqual(true, try stats.addVotePubkey(allocator, vote_pubkey2, 2));
+    try std.testing.expectEqual(true, stats.propagated_validators.contains(vote_pubkey2));
+    try std.testing.expectEqual(3, stats.propagated_validators_stake);
+}
+
+test "addNodePubkeyInternal" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(608159);
+    const random = prng.random();
+
+    const num_vote_accounts = 10;
+    const staked_vote_accounts = 5;
+
+    const vote_account_pubkeys1: [num_vote_accounts]Pubkey = blk: {
+        var pubkeys: [num_vote_accounts]Pubkey = undefined;
+        for (&pubkeys) |*vap| vap.* = Pubkey.initRandom(random);
+        break :blk pubkeys;
+    };
+
+    var epoch_vote_accounts: sig.accounts_db.snapshots.StakeAndVoteAccountsMap = .{};
+    defer sig.accounts_db.snapshots.stakeAndVoteAccountsMapDeinit(epoch_vote_accounts, allocator);
+    for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
+        try epoch_vote_accounts.ensureTotalCapacity(allocator, 1);
+        const VoteAccount = sig.accounts_db.snapshots.VoteAccount;
+        const vote_account = try VoteAccount.initRandom(
+            random,
+            allocator,
+            8,
+            error{ RandomErrorA, RandomErrorB, RandomErrorC },
+        );
+        errdefer comptime unreachable;
+        epoch_vote_accounts.putAssumeCapacity(pubkey, .{ 1, vote_account });
+    }
+    var stats = PropagatedStats.EMPTY_ZEROES;
+    defer stats.deinit(allocator);
+
+    const node_pubkey1 = Pubkey.initRandom(random);
+
+    // Add a vote pubkey, the number of references in all_pubkeys
+    // should be 2
+    try stats.addNodePubkeyInternal(
+        allocator,
+        node_pubkey1,
+        &vote_account_pubkeys1,
+        epoch_vote_accounts,
+    );
+    try std.testing.expectEqual(true, stats.propagated_node_ids.contains(node_pubkey1));
+    try std.testing.expectEqual(staked_vote_accounts, stats.propagated_validators_stake);
+
+    // Adding it again should not change any state
+    try stats.addNodePubkeyInternal(
+        allocator,
+        node_pubkey1,
+        &vote_account_pubkeys1,
+        epoch_vote_accounts,
+    );
+    try std.testing.expectEqual(true, stats.propagated_node_ids.contains(node_pubkey1));
+    try std.testing.expectEqual(staked_vote_accounts, stats.propagated_validators_stake);
+
+    // Adding another pubkey with same vote accounts should succeed, but stake
+    // shouldn't increase
+    const node_pubkey2 = Pubkey.initRandom(random);
+    try stats.addNodePubkeyInternal(
+        allocator,
+        node_pubkey2,
+        &vote_account_pubkeys1,
+        epoch_vote_accounts,
+    );
+    try std.testing.expectEqual(true, stats.propagated_node_ids.contains(node_pubkey2));
+    try std.testing.expectEqual(staked_vote_accounts, stats.propagated_validators_stake);
+
+    // Adding another pubkey with different vote accounts should succeed
+    // and increase stake
+    const node_pubkey3 = Pubkey.initRandom(random);
+    const vote_account_pubkeys2: [num_vote_accounts]Pubkey = blk: {
+        var pubkeys: [num_vote_accounts]Pubkey = undefined;
+        for (&pubkeys) |*vap| vap.* = Pubkey.initRandom(random);
+        break :blk pubkeys;
+    };
+
+    sig.accounts_db.snapshots.stakeAndVoteAccountsMapClearRetainingCapacity(
+        &epoch_vote_accounts,
+        allocator,
+    );
+    for (vote_account_pubkeys2[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
+        try epoch_vote_accounts.ensureTotalCapacity(allocator, 1);
+        const VoteAccount = sig.accounts_db.snapshots.VoteAccount;
+        const vote_account = try VoteAccount.initRandom(
+            random,
+            allocator,
+            8,
+            error{ RandomErrorA, RandomErrorB, RandomErrorC },
+        );
+        errdefer comptime unreachable;
+        epoch_vote_accounts.putAssumeCapacity(pubkey, .{ 1, vote_account });
+    }
+
+    try stats.addNodePubkeyInternal(
+        allocator,
+        node_pubkey3,
+        &vote_account_pubkeys2,
+        epoch_vote_accounts,
+    );
+    try std.testing.expectEqual(true, stats.propagated_node_ids.contains(node_pubkey3));
+    try std.testing.expectEqual(2 * staked_vote_accounts, stats.propagated_validators_stake);
+}
+
+test testForkProgressIsPropagatedOnInit {
+    // If the given validator_stake_info == null, then this is not
+    // a leader slot and is_propagated == false
+    try testForkProgressIsPropagatedOnInit(false, .{
+        .now = sig.time.Instant.now(),
+        .last_entry = Hash.ZEROES,
+        .prev_leader_slot = 9,
+        .validator_stake_info = null,
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    });
+
+    // If the stake is zero, then threshold is always achieved
+    try testForkProgressIsPropagatedOnInit(true, .{
+        .now = sig.time.Instant.now(),
+        .last_entry = Hash.ZEROES,
+        .prev_leader_slot = 9,
+        .validator_stake_info = blk: {
+            var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+            validator_stake_info.total_epoch_stake = 0;
+            break :blk validator_stake_info;
+        },
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    });
+
+    // If the stake is non zero, then threshold is not achieved unless
+    // validator has enough stake by itself to pass threshold
+    try testForkProgressIsPropagatedOnInit(false, .{
+        .now = sig.time.Instant.now(),
+        .last_entry = Hash.ZEROES,
+        .prev_leader_slot = 9,
+        .validator_stake_info = blk: {
+            var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+            validator_stake_info.total_epoch_stake = 2;
+            break :blk validator_stake_info;
+        },
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    });
+
+    // Give the validator enough stake by itself to pass threshold
+    try testForkProgressIsPropagatedOnInit(true, .{
+        .now = sig.time.Instant.now(),
+        .last_entry = Hash.ZEROES,
+        .prev_leader_slot = 9,
+        .validator_stake_info = blk: {
+            var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+            validator_stake_info.stake = 1;
+            validator_stake_info.total_epoch_stake = 2;
+            break :blk validator_stake_info;
+        },
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    });
+
+    // Check that the default ValidatorStakeInfo::default() constructs a ForkProgress
+    // with is_propagated == false, otherwise propagation tests will fail to run
+    // the proper checks (most will auto-pass without checking anything)
+    try testForkProgressIsPropagatedOnInit(false, .{
+        .now = sig.time.Instant.now(),
+        .last_entry = Hash.ZEROES,
+        .prev_leader_slot = 9,
+        .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+        .num_blocks_on_fork = 0,
+        .num_dropped_blocks_on_fork = 0,
+    });
+}
+
+fn testForkProgressIsPropagatedOnInit(expected: bool, params: ForkProgress.InitParams) !void {
+    const progress = try ForkProgress.init(std.testing.allocator, params);
+    defer progress.deinit(std.testing.allocator);
+    try std.testing.expectEqual(expected, progress.propagated_stats.is_propagated);
+}
+
+test "is_propagated" {
+    // TODO: implement the "test_is_propagated" from agave after implementing missing methods
+    return error.SkipZigTest;
 }
 
 /// NOTE: Used in tests for generating dummy data.
