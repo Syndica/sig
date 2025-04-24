@@ -32,11 +32,6 @@ pub const LatestValidatorVotesForFrozenBanks = struct {
 pub const VoteAccount = struct {};
 pub const StakedAccount = struct { stake: u64, account: VoteAccount };
 const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
-<<<<<<< HEAD
-=======
-// TODO this might already exist as StakeAndVoteAccountsMap
-pub const VoteAccountsHashMap = std.AutoHashMap(Pubkey, StakedAccount);
->>>>>>> e0c3d316 (All methods added. Fix up to follow)
 pub const ExpirationSlot = Slot;
 const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
     ExpirationSlot,

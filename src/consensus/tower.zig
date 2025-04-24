@@ -33,8 +33,6 @@ const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
 const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
-const RcBank = sig.sync.Rc(Bank);
-
 const UnixTimestamp = i64;
 
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
