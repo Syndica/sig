@@ -3,6 +3,8 @@ const sig = @import("../../sig.zig");
 
 const memory = sig.vm.memory;
 const syscalls = sig.vm.syscalls;
+
+const SyscallError = sig.vm.SyscallError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
 const Error = syscalls.Error;
 const MemoryMap = sig.vm.memory.MemoryMap;
@@ -212,8 +214,13 @@ fn iterateMemoryPairs(
 }
 
 const MemmoveContext = struct {
+    // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this symbol:
+    // https://github.com/ziglang/zig/blob/79460d4a3eef8eb927b02a7eda8bc9999a766672/lib/compiler_rt/memmove.zig#L9-L22
+    extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.C) ?[*]u8;
+
     fn run(_: *@This(), dst: []u8, src: []const u8) !void {
-        @memcpy(dst, src);
+        std.debug.assert(dst.len == src.len);
+        _ = @This().memmove(dst.ptr, src.ptr, src.len);
     }
 };
 
@@ -225,7 +232,7 @@ fn memmoveNonContigious(
     memory_map: *MemoryMap,
     resize_area: bool,
 ) !void {
-    const reverse = (dst_addr -| src_addr) < len;
+    const reverse = (dst_addr -% src_addr) < len;
     var ctx: MemmoveContext = .{};
     return iterateMemoryPairs(
         dst_addr,
@@ -308,6 +315,13 @@ fn memcmpNonContigious(
     return ctx.result;
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L8-L15
+fn consumeMemoryCompute(tc: *TransactionContext, length: u64) !void {
+    const budget = tc.compute_budget;
+    const cost = @max(budget.mem_op_base_cost, length / budget.cpi_bytes_per_unit);
+    try tc.consumeCompute(cost);
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L130-L162
 pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const dst_addr = registers.get(.r1);
@@ -334,13 +348,17 @@ pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/dst/syscalls/mem_ops.rs#L31-L52
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L31-L52
 pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const dst_addr = registers.get(.r1);
     const src_addr = registers.get(.r2);
     const len = registers.get(.r3);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L43
+    const disjoint = (src_addr + len <= dst_addr) or (dst_addr + len <= src_addr);
+    if (!disjoint) {
+        return SyscallError.CopyOverlapping;
+    }
+
     try consumeMemoryCompute(tc, len);
 
     const feature_set = tc.sc.ec.feature_set;
@@ -358,6 +376,32 @@ pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
         const dst_host = try memory_map.vmap(.mutable, dst_addr, len);
         const src_host = try memory_map.vmap(.constant, src_addr, len);
         @memcpy(dst_host, src_host);
+    }
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L54-L70
+pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
+    const dst_addr = registers.get(.r1);
+    const src_addr = registers.get(.r2);
+    const len = registers.get(.r3);
+
+    try consumeMemoryCompute(tc, len);
+
+    const feature_set = tc.sc.ec.feature_set;
+    if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
+        const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+        try memmoveNonContigious(
+            dst_addr,
+            src_addr,
+            len,
+            tc.serialized_accounts.constSlice(),
+            memory_map,
+            ic.getCheckAligned(),
+        );
+    } else {
+        const dst_host = try memory_map.vmap(.mutable, dst_addr, len);
+        const src_host = try memory_map.vmap(.constant, src_addr, len);
+        _ = MemmoveContext.memmove(dst_host.ptr, src_host.ptr, len);
     }
 }
 
@@ -402,13 +446,6 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
         memcmp_ctx.run(a, b) catch {};
         cmp_result.* = memcmp_ctx.result;
     }
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L8-L15
-fn consumeMemoryCompute(tc: *TransactionContext, length: u64) !void {
-    const budget = tc.compute_budget;
-    const cost = @max(budget.mem_op_base_cost, length / budget.cpi_bytes_per_unit);
-    try tc.consumeCompute(cost);
 }
 
 test "chunk iterator no regions" {

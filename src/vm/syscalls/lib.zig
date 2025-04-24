@@ -136,7 +136,11 @@ pub fn register(
         memcpy,
     );
 
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_memmove_", memmove,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_memmove_",
+        memmove,
+    );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
@@ -337,6 +341,7 @@ pub fn logData(
 pub const memcpy = memops.memcpy;
 pub const memset = memops.memset;
 pub const memcmp = memops.memcmp;
+pub const memmove = memops.memmove;
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
