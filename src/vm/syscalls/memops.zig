@@ -47,12 +47,12 @@ const MemoryChunkIterator = struct {
         };
     }
 
-    fn next(self: *MemoryChunkIterator) !?Chunk {
+    fn next(self: *MemoryChunkIterator, comptime access: memory.MemoryState) !?Chunk {
         if (self.start == self.end) return null;
 
         const region = switch (self.reversed) {
-            true => try self.memory_map.region(.constant, self.end -| 1),
-            false => try self.memory_map.region(.constant, self.start),
+            true => try self.memory_map.region(access, self.end -| 1),
+            false => try self.memory_map.region(access, self.start),
         }.*;
 
         var region_is_account: bool = false;
@@ -179,10 +179,10 @@ fn iterateMemoryPairs(
     while (true) {
         // If we're still in a chunk, select that. Otherwise try to get the next chunk, and
         // if that fails, break out of the loop because we're done.
-        src_chunk = src_chunk orelse (try src_iter.next()) orelse break;
+        src_chunk = src_chunk orelse (try src_iter.next(src_state)) orelse break;
         const src_region, const src_chunk_addr, const src_remaining = src_chunk.?;
 
-        dst_chunk = dst_chunk orelse (try dst_iter.next()) orelse break;
+        dst_chunk = dst_chunk orelse (try dst_iter.next(dst_state)) orelse break;
         const dst_region, const dst_chunk_addr, const dst_remaining = dst_chunk.?;
 
         const chunk_len = @min(src_remaining, dst_remaining);
@@ -266,7 +266,7 @@ fn memsetNonContigious(
         false,
     );
 
-    while (try dst_iter.next()) |chunk| {
+    while (try dst_iter.next(.mutable)) |chunk| {
         const dst_region, const dst_vm_addr, const dst_len = chunk;
         const dst_host = try memory_map.mapRegion(.mutable, dst_region, dst_vm_addr, dst_len);
         @memset(dst_host, c);
