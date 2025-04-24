@@ -204,7 +204,7 @@ pub const InstructionError = error{
     InvalidAccountOwner,
 
     /// Program arithmetic overflowed
-    ArithmeticOverflow,
+    ProgramArithmeticOverflow,
 
     /// Unsupported sysvar
     UnsupportedSysvar,
@@ -276,7 +276,7 @@ pub fn intFromInstructionError(err: InstructionError) i32 {
         error.BorshIoError => return 45,
         error.AccountNotRentExempt => return 46,
         error.InvalidAccountOwner => return 47,
-        error.ArithmeticOverflow => return 48,
+        error.ProgramArithmeticOverflow => return 48,
         error.UnsupportedSysvar => return 49,
         error.IllegalOwner => return 50,
         error.MaxAccountsDataAllocationsExceeded => return 51,

@@ -386,7 +386,7 @@ fn extendLookupTable(
             usize,
             LOOKUP_TABLE_META_SIZE,
             new_table_addresses_len *| Pubkey.SIZE,
-        ) catch return error.ArithmeticOverflow;
+        ) catch return InstructionError.ProgramArithmeticOverflow;
 
         // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L307
         try AddressLookupTable.overwriteMetaData(

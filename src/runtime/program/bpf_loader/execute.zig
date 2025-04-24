@@ -1444,6 +1444,7 @@ pub fn deployProgram(
         source,
         &syscalls,
         // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L290
+        // TODO: This should not be hardcoded
         .{
             .max_call_depth = 64,
             .stack_frame_size = 4096,

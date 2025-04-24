@@ -120,7 +120,7 @@ pub const BorrowedAccount = struct {
             u64,
             self.account.lamports,
             lamports,
-        ) catch return InstructionError.ArithmeticOverflow);
+        ) catch return InstructionError.ProgramArithmeticOverflow);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L808
@@ -129,7 +129,7 @@ pub const BorrowedAccount = struct {
             u64,
             self.account.lamports,
             lamports,
-        ) catch return InstructionError.ArithmeticOverflow);
+        ) catch return InstructionError.ProgramArithmeticOverflow);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L817

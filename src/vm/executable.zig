@@ -919,10 +919,11 @@ pub const BuiltinProgram = struct {
     functions: Registry(syscalls.Syscall) = .{},
 
     pub fn deinit(
-        self: *BuiltinProgram,
+        self: BuiltinProgram,
         allocator: std.mem.Allocator,
     ) void {
-        self.functions.deinit(allocator);
+        var copy = self;
+        copy.functions.deinit(allocator);
     }
 };
 

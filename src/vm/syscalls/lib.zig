@@ -1,10 +1,14 @@
 const phash = @import("poseidon");
 const std = @import("std");
+const cpi = @import("cpi.zig");
 const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
-const cpi = @import("cpi.zig");
-const features = sig.runtime.features;
 
+const memory = sig.vm.memory;
+const features = sig.runtime.features;
+const stable_log = sig.runtime.stable_log;
+
+const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
@@ -12,38 +16,13 @@ const BuiltinProgram = sig.vm.BuiltinProgram;
 const FeatureSet = sig.runtime.features.FeatureSet;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
-const InstructionError = sig.core.instruction.InstructionError;
 
-pub const Error = error{
-    OutOfMemory,
-    InvalidVirtualAddress,
-    AccessNotMapped,
-    SyscallAbort,
-    AccessViolation,
-    StackAccessViolation,
-    Overflow,
-    Underflow,
-    InvalidLength,
-    NonCanonical,
-    Unexpected,
-    ComputationalBudgetExceeded,
-    ReturnDataTooLarge,
-    BadSeeds,
-    TooManySigners,
-    UnalignedPointer,
-    InvalidPointer,
-    TooManyAccounts,
-    InstructionTooLarge,
-    MaxInstructionDataLenExceeded,
-    MaxInstructionAccountsExceeded,
-    MaxInstructionAccountInfosExceeded,
-    ProgramNotSupported,
-} || std.fs.File.WriteError || InstructionError || sig.vm.memory.RegionError;
+pub const Error = sig.vm.ExecutionError;
 
 pub const Syscall = *const fn (
     *TransactionContext,
     *MemoryMap,
-    RegisterMap,
+    *RegisterMap,
 ) Error!void;
 
 pub const Entry = struct {
@@ -108,6 +87,13 @@ pub fn register(
         allocator,
         "sol_log_compute_units_",
         logComputeUnits,
+    );
+
+    // Log Data
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_log_data",
+        logData,
     );
 
     // Program derived addresses
@@ -238,32 +224,35 @@ pub fn register(
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake,);
     // }
 
-    // Log Data
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_log_data", logData,);
-
     return syscalls;
 }
 
 // logging
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
-pub fn log(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const vm_addr = registers.get(.r1);
     const len = registers.get(.r2);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L15-L19
-    const cost = @max(ctx.compute_budget.syscall_base_cost, len);
-    try ctx.consumeCompute(cost);
+    try tc.consumeCompute(@max(tc.compute_budget.syscall_base_cost, len));
 
-    const host_addr = try mmap.vmap(.constant, vm_addr, len);
-    const string = std.mem.sliceTo(host_addr, 0);
-    try ctx.log("{s}", .{string});
+    const message = try memory_map.translateSlice(
+        u8,
+        .constant,
+        vm_addr,
+        len,
+        try tc.getCheckAligned(),
+    );
+
+    if (!std.unicode.utf8ValidateSlice(message)) {
+        return SyscallError.InvalidString;
+    }
+
+    try stable_log.programLog(tc, "{s}", .{message});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
-pub fn log64(ctx: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Error!void {
-    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L47-L48
-    const cost = ctx.compute_budget.log_64_units;
-    try ctx.consumeCompute(cost);
+pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: *RegisterMap) Error!void {
+    try tc.consumeCompute(tc.compute_budget.log_64_units);
 
     const arg1 = registers.get(.r1);
     const arg2 = registers.get(.r2);
@@ -271,31 +260,77 @@ pub fn log64(ctx: *TransactionContext, _: *MemoryMap, registers: RegisterMap) Er
     const arg4 = registers.get(.r4);
     const arg5 = registers.get(.r5);
 
-    try ctx.log(
-        "0x{x} 0x{x} 0x{x} 0x{x} 0x{x}",
+    try stable_log.programLog(
+        tc,
+        "0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}",
         .{ arg1, arg2, arg3, arg4, arg5 },
     );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
-pub fn logPubkey(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
-    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L94-L95
-    const cost = ctx.compute_budget.log_pubkey_units;
-    try ctx.consumeCompute(cost);
+pub fn logPubkey(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const vm_addr = registers.get(.r1);
 
-    const pubkey_addr = registers.get(.r1);
-    const pubkey_bytes = try mmap.vmap(.constant, pubkey_addr, @sizeOf(Pubkey));
+    try tc.consumeCompute(tc.compute_budget.log_pubkey_units);
+
+    const pubkey_bytes = try memory_map.translateSlice(
+        u8,
+        .constant,
+        vm_addr,
+        @sizeOf(Pubkey),
+        try tc.getCheckAligned(),
+    );
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
-    try ctx.log("log: {}", .{pubkey});
+
+    try stable_log.programLog(tc, "{}", .{pubkey});
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
-pub fn logComputeUnits(ctx: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
-    // [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L70-L71
-    const cost = ctx.compute_budget.syscall_base_cost;
-    try ctx.consumeCompute(cost);
+pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+    try tc.log("Program consumption: {} units remaining", .{tc.compute_meter});
+}
 
-    try ctx.log("TODO: compute budget calculations", .{});
+/// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/logging.rs#L107
+pub fn logData(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const vm_addr = registers.get(.r1);
+    const len = registers.get(.r2);
+
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+
+    const vm_messages = try memory_map.translateSlice(
+        cpi.VmSlice,
+        .constant,
+        vm_addr,
+        len,
+        try tc.getCheckAligned(),
+    );
+
+    var cost = tc.compute_budget.syscall_base_cost *| vm_messages.len;
+    for (vm_messages) |msg| cost +|= msg.len;
+    try tc.consumeCompute(cost);
+
+    var messages = try tc.allocator.alloc([]const u8, vm_messages.len);
+    defer tc.allocator.free(messages);
+    for (vm_messages, 0..) |msg, i| {
+        messages[i] = try memory_map.translateSlice(
+            u8,
+            .constant,
+            msg.ptr,
+            msg.len,
+            try tc.getCheckAligned(),
+        );
+    }
+
+    try stable_log.programData(tc, messages);
 }
 
 // memory operators
@@ -304,7 +339,7 @@ pub const memset = memops.memset;
 pub const memcmp = memops.memcmp;
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
-pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
+pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     @panic("TODO: implement allocFree syscall");
 }
 
@@ -312,9 +347,13 @@ pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!vo
 pub const MAX_RETURN_DATA: usize = 1024;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/4f68141ba70b7574da0bc185ef5d08fe33d19887/programs/bpf_loader/src/syscalls/mod.rs#L1450
-pub fn setReturnData(ctx: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) Error!void {
-    const addr = rm.get(.r1);
-    const len = rm.get(.r2);
+pub fn setReturnData(
+    ctx: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const addr = registers.get(.r1);
+    const len = registers.get(.r2);
 
     const cost = if (ctx.compute_budget.cpi_bytes_per_unit > 0)
         (len / ctx.compute_budget.cpi_bytes_per_unit) +| ctx.compute_budget.syscall_base_cost
@@ -331,7 +370,7 @@ pub fn setReturnData(ctx: *TransactionContext, mm: *MemoryMap, rm: RegisterMap) 
     const return_data = if (len == 0)
         empty_return_data
     else
-        try mm.vmap(.constant, addr, len);
+        try memory_map.vmap(.constant, addr, len);
 
     if (ctx.instruction_stack.len == 0) return error.CallDepth;
     const ic = ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
@@ -352,58 +391,72 @@ const Slice = extern struct {
     len: u64,
 };
 
-pub fn poseidon(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn poseidon(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
     // const parameters: Parameters = @enumFromInt(registers.get(.r1));
     const endianness: std.builtin.Endian = @enumFromInt(registers.get(.r2));
     const addr = registers.get(.r3);
     const len = registers.get(.r4);
     const result_addr = registers.get(.r5);
 
-    if (len > 12) {
-        return error.InvalidLength;
-    }
+    if (len > 12) return error.InvalidLength;
 
-    const budget = ctx.compute_budget;
-    // TODO: Agave logs a specific message when this overflows.
-    // https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1923-L1926
-    const cost = try budget.poseidonCost(len);
-    try ctx.consumeCompute(cost);
+    const budget = tc.compute_budget;
+    const cost = budget.poseidonCost(@intCast(len));
+    try tc.consumeCompute(cost);
 
-    const hash_result = try mmap.vmap(.mutable, result_addr, 32);
-    const input_bytes = try mmap.vmap(
+    const hash_result = try memory_map.vmap(.mutable, result_addr, 32);
+    const input_bytes = try memory_map.vmap(
         .constant,
         addr,
         len * @sizeOf(Slice),
     );
     const inputs = std.mem.bytesAsSlice(Slice, input_bytes);
 
+    // Agave handles poseidon errors in an annoying way.
+    // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
+    // It is acitvated on all clusters, we still check for activation here and panic if it is not active.
+    // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
     var hasher = phash.Hasher.init(endianness);
     for (inputs) |input| {
-        const slice = try mmap.vmap(
+        const slice = try memory_map.vmap(
             .constant,
             @intFromPtr(input.addr),
             input.len,
         );
-        try hasher.append(slice[0..32]);
+        hasher.append(slice[0..32]) catch {
+            if (tc.ec.feature_set.active.contains(
+                features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
+            )) {
+                registers.set(.r0, 1);
+                return;
+            } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
+        };
     }
-    const result = try hasher.finish();
+    const result = hasher.finish();
     @memcpy(hash_result, &result);
 }
 
 // special
-pub fn abort(_: *TransactionContext, _: *MemoryMap, _: RegisterMap) Error!void {
-    return error.SyscallAbort;
+pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
+    return SyscallError.Abort;
 }
 
-pub fn panic(ctx: *TransactionContext, mmap: *MemoryMap, registers: RegisterMap) Error!void {
+pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const file = registers.get(.r1);
     const len = registers.get(.r2);
-    // const line = registers.get(.r3);
-    // const column = registers.get(.r4);
 
-    const message = try mmap.vmap(.constant, file, len);
-    try ctx.log("panic: {s}", .{message});
-    return error.SyscallAbort;
+    try ctx.consumeCompute(len);
+
+    const message = try memory_map.vmap(.constant, file, len);
+    if (!std.unicode.utf8ValidateSlice(message)) {
+        return SyscallError.InvalidString;
+    }
+
+    return SyscallError.Panic;
 }
 
 test poseidon {
@@ -420,12 +473,12 @@ test poseidon {
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
-pub fn invokeSignedC(ctx: *TransactionContext, mmap: *MemoryMap, rm: RegisterMap) Error!void {
+pub fn invokeSignedC(ctx: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
     return invokeSigned(cpi.AccountInfoC, ctx, mmap, rm);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
-pub fn invokeSignedRust(ctx: *TransactionContext, mmap: *MemoryMap, rm: RegisterMap) Error!void {
+pub fn invokeSignedRust(ctx: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
     return invokeSigned(cpi.AccountInfoRust, ctx, mmap, rm);
 }
 
@@ -433,7 +486,7 @@ fn invokeSigned(
     comptime AccountInfoType: type,
     ctx: *TransactionContext,
     mmap: *MemoryMap,
-    registers: RegisterMap,
+    registers: *RegisterMap,
 ) Error!void {
     const instruction_addr = registers.get(.r1);
     const account_infos_addr = registers.get(.r2);
