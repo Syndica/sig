@@ -13,8 +13,11 @@ const std = @import("std");
 pub fn OnceCell(comptime T: type) type {
     return struct {
         value: T = undefined,
-        started: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-        finished: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        status: std.atomic.Value(u8) = std.atomic.Value(u8).init(vacant),
+
+        const vacant: u8 = 0;
+        const writing: u8 = 1;
+        const occupied: u8 = 2;
 
         const Self = @This();
 
@@ -30,9 +33,9 @@ pub fn OnceCell(comptime T: type) type {
             initLogic: anytype,
             init_args: anytype,
         ) error{AlreadyInitialized}!*T {
-            if (!self.acquire()) return error.AlreadyInitialized;
+            if (!self.acquireWriteLock()) return error.AlreadyInitialized;
             self.value = @call(.auto, initLogic, init_args);
-            self.finished.store(true, .release);
+            self.status.store(occupied, .release);
             return &self.value;
         }
 
@@ -40,10 +43,10 @@ pub fn OnceCell(comptime T: type) type {
         /// Returns error if it was already initialized.
         /// Blocks while other threads are in the process of initialization.
         pub fn tryInit(self: *Self, initLogic: anytype, init_args: anytype) !*T {
-            if (!self.acquire()) return error.AlreadyInitialized;
-            errdefer self.started.store(false, .release);
+            if (!self.acquireWriteLock()) return error.AlreadyInitialized;
+            errdefer self.status.store(vacant, .release);
             self.value = try @call(.auto, initLogic, init_args);
-            self.finished.store(true, .release);
+            self.status.store(occupied, .release);
             return &self.value;
         }
 
@@ -51,9 +54,9 @@ pub fn OnceCell(comptime T: type) type {
         /// Otherwise initializes the value and returns it.
         /// Blocks while other threads are in the process of initialization.
         pub fn getOrInit(self: *Self, initLogic: anytype, init_args: anytype) *T {
-            if (self.acquire()) {
+            if (self.acquireWriteLock()) {
                 self.value = @call(.auto, initLogic, init_args);
-                self.finished.store(true, .release);
+                self.status.store(occupied, .release);
             }
             return &self.value;
         }
@@ -62,10 +65,10 @@ pub fn OnceCell(comptime T: type) type {
         /// Otherwise tries to initialize the value and returns it, or return error if it fails.
         /// Blocks while other threads are in the process of initialization.
         pub fn getOrTryInit(self: *Self, initLogic: anytype, init_args: anytype) !*T {
-            if (self.acquire()) {
-                errdefer self.started.store(false, .release);
+            if (self.acquireWriteLock()) {
+                errdefer self.status.store(vacant, .release);
                 self.value = try @call(.auto, initLogic, init_args);
-                self.finished.store(true, .release);
+                self.status.store(occupied, .release);
             }
             return &self.value;
         }
@@ -75,59 +78,58 @@ pub fn OnceCell(comptime T: type) type {
         /// - true if write lock is acquired.
         /// - false if write lock is not acquirable because a write was already completed.
         /// - waits if another thread has a write in progress. if the other thread fails, this may acquire the lock.
-        fn acquire(self: *Self) bool {
-            while (self.started.cmpxchgWeak(false, true, .acquire, .monotonic)) |_| {
-                if (self.finished.load(.acquire)) {
+        fn acquireWriteLock(self: *Self) bool {
+            while (self.status.cmpxchgWeak(vacant, writing, .acquire, .monotonic)) |current| {
+                if (current == occupied) {
                     return false;
                 }
             }
             return true;
         }
 
-        /// Returns the value if initialized.
+        /// Returns a mutable pointer to the value if initialized.
         /// Returns error if not initialized.
         /// Blocks while other threads are in the process of initialization.
         pub fn get(self: *Self) error{NotInitialized}!*T {
-            if (self.finished.load(.acquire)) {
-                return &self.value;
-            }
-            while (self.started.load(.monotonic)) {
-                if (self.finished.load(.acquire)) {
-                    return &self.value;
+            while (true) {
+                switch (self.status.load(.acquire)) {
+                    vacant => return error.NotInitialized,
+                    writing => std.atomic.spinLoopHint(),
+                    occupied => return &self.value,
+                    else => unreachable,
                 }
             }
-            return error.NotInitialized;
         }
     };
 }
 
-test "sync.once_cell: init returns correctly" {
+test "init returns correctly" {
     var oc = OnceCell(u64).init();
     const x = try oc.initialize(returns(10), .{});
     try std.testing.expect(10 == x.*);
 }
 
-test "sync.once_cell: cannot get uninitialized" {
+test "cannot get uninitialized" {
     var oc = OnceCell(u64).init();
     if (oc.get()) |_| {
         try std.testing.expect(false);
     } else |_| {}
 }
 
-test "sync.once_cell: can get initialized" {
+test "can get initialized" {
     var oc = OnceCell(u64).init();
     _ = try oc.initialize(returns(10), .{});
     const x = try oc.get();
     try std.testing.expect(10 == x.*);
 }
 
-test "sync.once_cell: tryInit returns error on failure" {
+test "tryInit returns error on failure" {
     var oc = OnceCell(u64).init();
     const err = oc.tryInit(returnErr, .{});
     try std.testing.expectError(error.TestErr, err);
 }
 
-test "sync.once_cell: tryInit works on success" {
+test "tryInit works on success" {
     var oc = OnceCell(u64).init();
     const x1 = try oc.tryInit(returnNotErr(10), .{});
     const x2 = try oc.get();
@@ -135,7 +137,7 @@ test "sync.once_cell: tryInit works on success" {
     try std.testing.expect(10 == x2.*);
 }
 
-test "sync.once_cell: tryInit returns error if initialized" {
+test "tryInit returns error if initialized" {
     var oc = OnceCell(u64).init();
     const x1 = try oc.tryInit(returnNotErr(10), .{});
     const err = oc.tryInit(returnNotErr(11), .{});
@@ -145,7 +147,7 @@ test "sync.once_cell: tryInit returns error if initialized" {
     try std.testing.expect(10 == x2.*);
 }
 
-test "sync.once_cell: getOrInit can initialize when needed" {
+test "getOrInit can initialize when needed" {
     var oc = OnceCell(u64).init();
     const x1 = oc.getOrInit(returns(10), .{});
     const x2 = try oc.get();
@@ -153,7 +155,7 @@ test "sync.once_cell: getOrInit can initialize when needed" {
     try std.testing.expect(10 == x2.*);
 }
 
-test "sync.once_cell: getOrInit uses already initialized value" {
+test "getOrInit uses already initialized value" {
     var oc = OnceCell(u64).init();
     const x1 = oc.getOrInit(returns(10), .{});
     const x2 = oc.getOrInit(returns(11), .{});
@@ -161,13 +163,13 @@ test "sync.once_cell: getOrInit uses already initialized value" {
     try std.testing.expect(10 == x2.*);
 }
 
-test "sync.once_cell: getOrTryInit returns error on failure" {
+test "getOrTryInit returns error on failure" {
     var oc = OnceCell(u64).init();
     const err = oc.getOrTryInit(returnErr, .{});
     try std.testing.expectError(error.TestErr, err);
 }
 
-test "sync.once_cell: getOrTryInit works on success" {
+test "getOrTryInit works on success" {
     var oc = OnceCell(u64).init();
     const x1 = try oc.getOrTryInit(returnNotErr(10), .{});
     const x2 = try oc.get();
@@ -175,7 +177,7 @@ test "sync.once_cell: getOrTryInit works on success" {
     try std.testing.expect(10 == x2.*);
 }
 
-test "sync.once_cell: getOrTryInit uses already initialized value" {
+test "getOrTryInit uses already initialized value" {
     var oc = OnceCell(u64).init();
     const x1 = try oc.getOrTryInit(returnNotErr(10), .{});
     const x2 = try oc.getOrTryInit(returnNotErr(11), .{});
