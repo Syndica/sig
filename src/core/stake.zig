@@ -83,7 +83,7 @@ pub const EpochStakes = struct {
 
     pub fn deinit(epoch_stakes: EpochStakes, allocator: Allocator) void {
         epoch_stakes.stakes.deinit(allocator);
-        nodeIdToVoteAccountsMapDeinit(epoch_stakes.node_id_to_vote_accounts, allocator);
+        deinitMapAndValues(allocator, epoch_stakes.node_id_to_vote_accounts);
 
         var epoch_authorized_voters = epoch_stakes.epoch_authorized_voters;
         epoch_authorized_voters.deinit(allocator);
@@ -96,11 +96,9 @@ pub const EpochStakes = struct {
         const stakes = try epoch_stakes.stakes.clone(allocator);
         errdefer stakes.deinit(allocator);
 
-        const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapClone(
-            epoch_stakes.node_id_to_vote_accounts,
-            allocator,
-        );
-        errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
+        const node_id_to_vote_accounts =
+            try cloneMapAndValues(allocator, epoch_stakes.node_id_to_vote_accounts);
+        errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts);
 
         var epoch_authorized_voters = try epoch_stakes.epoch_authorized_voters.clone(allocator);
         errdefer epoch_authorized_voters.deinit(allocator);
@@ -125,7 +123,7 @@ pub const EpochStakes = struct {
 
         const node_id_to_vote_accounts =
             try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
-        errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
+        errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts);
 
         var epoch_authorized_voters =
             try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
@@ -313,39 +311,13 @@ pub const NodeVoteAccounts = struct {
 /// Analogous to [NodeIdToVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L9)
 pub const NodeIdToVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, NodeVoteAccounts);
 
-pub fn nodeIdToVoteAccountsMapDeinit(
-    map: NodeIdToVoteAccountsMap,
-    allocator: Allocator,
-) void {
-    for (map.values()) |*node_vote_accounts| {
-        node_vote_accounts.deinit(allocator);
-    }
-    var copy = map;
-    copy.deinit(allocator);
-}
-
-pub fn nodeIdToVoteAccountsMapClone(
-    map: NodeIdToVoteAccountsMap,
-    allocator: Allocator,
-) Allocator.Error!NodeIdToVoteAccountsMap {
-    var cloned: NodeIdToVoteAccountsMap = .{};
-    errdefer nodeIdToVoteAccountsMapDeinit(cloned, allocator);
-
-    try cloned.ensureTotalCapacity(allocator, map.count());
-    for (map.keys(), map.values()) |key, value| {
-        cloned.putAssumeCapacityNoClobber(key, try value.clone(allocator));
-    }
-
-    return cloned;
-}
-
 pub fn nodeIdToVoteAccountsMapRandom(
     allocator: Allocator,
     random: std.Random,
     max_list_entries: usize,
 ) Allocator.Error!NodeIdToVoteAccountsMap {
     var node_id_to_vote_accounts = NodeIdToVoteAccountsMap.Managed.init(allocator);
-    errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts.unmanaged, allocator);
+    errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts.unmanaged);
 
     try sig.rand.fillHashmapWithRng(
         &node_id_to_vote_accounts,
@@ -435,7 +407,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
 
         pub fn deinit(self: Current, allocator: Allocator) void {
             self.stakes.deinit(allocator);
-            nodeIdToVoteAccountsMapDeinit(self.node_id_to_vote_accounts, allocator);
+            deinitMapAndValues(allocator, self.node_id_to_vote_accounts);
             var epoch_authorized_voters = self.epoch_authorized_voters;
             epoch_authorized_voters.deinit(allocator);
         }
@@ -453,7 +425,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
                 random,
                 max_list_entries,
             );
-            errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
+            errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts);
 
             var epoch_authorized_voters =
                 try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
@@ -469,6 +441,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
 
         pub fn clone(self: *const Current, allocator: Allocator) !Current {
             const stakes = try self.stakes.clone(allocator);
+            errdefer stakes.deinit(allocator);
 
             const node_id_to_vote_accounts =
                 try cloneMapAndValues(allocator, self.node_id_to_vote_accounts);
