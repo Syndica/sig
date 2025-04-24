@@ -464,7 +464,7 @@ test "loadTransactionAccounts empty transaction" {
         100_000,
         &account_loader,
         &runtime.FeatureSet.EMPTY,
-        &runtime.rent_collector.defaultCollector(0),
+        &sig.core.rent_collector.defaultCollector(0),
     );
 }
 
@@ -494,7 +494,7 @@ test "loadTransactionAccounts sysvar instruction" {
         100_000,
         &account_loader,
         &runtime.FeatureSet.EMPTY,
-        &runtime.rent_collector.defaultCollector(0),
+        &sig.core.rent_collector.defaultCollector(0),
     );
     try std.testing.expectEqual(0, loaded.collected_rent);
 
@@ -611,7 +611,7 @@ test "load accounts rent paid" {
         64 * 1024 * 1024,
         &account_loader,
         &runtime.FeatureSet.EMPTY,
-        &runtime.rent_collector.defaultCollector(0),
+        &sig.core.rent_collector.defaultCollector(0),
     );
 
     var found: usize = 0;

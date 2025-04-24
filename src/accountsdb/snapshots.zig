@@ -14,14 +14,14 @@ const Epoch = sig.core.time.Epoch;
 const Hash = sig.core.hash.Hash;
 const InstructionError = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.pubkey.Pubkey;
+const Rent = sig.core.genesis_config.Rent;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
+const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
-const Rent = sig.core.genesis_config.Rent;
-const UnixTimestamp = sig.core.genesis_config.UnixTimestamp;
 
 const Logger = sig.trace.Logger;
 

@@ -1,10 +1,30 @@
+//! This file represents the data stored in agave's `Bank` struct. Sig does not
+//! have an analogous struct because `Bank` is a massive disorganized struct
+//! without unbounded responsibilities that makes the code hard to understand
+//! and makes dependencies difficult to manage.
+//!
+//! Instead we have more granular, digestible structs with clear scopes, like
+//! SlotConstants, SlotState, and EpochConstants. These store much of the same
+//! data that's stored in agave's Bank. Other heavyweight fields from agave's
+//! Bank like like `BankRc` (containing a pointer to accountsdb) and
+//! `TransactionBatchProcessor` are not included in any "bank" struct in sig.
+//! Instead, those large dependencies are managed independently. 
+//!
+//! The philosophy is that breaking the Bank into separate pieces will enable us
+//! to write code with a more minimal, clearer set of dependencies, to make the
+//! code easier to understand and maintain.
+
 const std = @import("std");
 const sig = @import("../sig.zig");
 
 const core = sig.core;
 
+const Allocator = std.heap.Allocator;
+const Atomic = std.atomic.Value;
+
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
 const Hash = core.hash.Hash;
+const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 
@@ -16,11 +36,127 @@ const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
 const Stakes = core.stake.Stakes;
+const Delegation = core.stake.Delegation;
 const EpochStakeMap = core.stake.EpochStakeMap;
 const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
 const epochStakeMapRandom = core.stake.epochStakeMapRandom;
 
+/// Information about a slot that is determined when the slot is initialized and
+/// then never changes.
+///
+/// Contains the intersection of data from agave's Bank and firedancer's
+/// fd_slot_bank, excluding data that is epoch-scoped or not constant during a
+/// slot.
+///
+/// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
+/// [fd_slot_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L2270)
+pub const SlotConstants = struct {
+    /// The number of the slot this represents.
+    slot: Slot,
+
+    /// The slot that this one builds off of. `parent_slot == slot - 1`, unless
+    /// there is forking or skipped slots.
+    parent_slot: Slot,
+
+    /// Hash of this Bank's parent's state
+    parent_hash: Hash,
+
+    /// Total number of blocks produced up to this slot
+    block_height: u64,
+
+    hard_forks: HardForks,
+
+    /// A tick height above this should not be allowed during this slot.
+    max_tick_height: u64,
+
+    /// The fees requirements to use for transactions in this slot.
+    fee_rate_governor: FeeRateGovernor,
+
+    /// Whether and how epoch rewards should be distributed in this slot.
+    epoch_reward_status: EpochRewardStatus,
+
+    pub fn deinit(self: SlotConstants, allocator: Allocator) void {
+        self.hard_forks.deinit(allocator);
+        self.epoch_reward_status.deinit(allocator);
+    }
+};
+
+/// Information about a slot that evolves as the slot is executed, but should
+/// typically become frozen once execution is complete.
+///
+/// Contains the intersection of data from agave's Bank and firedancer's
+/// fd_slot_bank, excluding data that is constant during a slot.
+///
+/// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
+/// [fd_slot_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L2270)
+pub const SlotState = struct {
+    /// Hash of this Bank's state. Only meaningful after freezing.
+    hash: sig.sync.RwMux(?Hash),
+
+    /// Total capitalization, used to calculate inflation.
+    capitalization: Atomic(u64),
+
+    /// The number of committed transactions since genesis.
+    transaction_count: Atomic(u64),
+
+    /// Total number of ticks in history including those from this slot.
+    tick_height: Atomic(u64),
+
+    /// Total amount of rent collected so far during this slot.
+    collected_rent: Atomic(u64),
+
+    /// The lattice hash of all accounts
+    ///
+    /// The value is only meaningful after freezing.
+    accounts_lt_hash: sig.sync.Mux(LtHash),
+
+    pub fn isFrozen(self: *const SlotState) bool {
+        return self.hash.read().get() != null;
+    }
+
+    pub fn tickHeight(self: *const SlotState) u64 {
+        return self.tick_height.load(.monotonic);
+    }
+};
+
+/// Constant information about an epoch that is determined before the epoch
+/// starts.
+///
+/// Contains the intersection of epoch-scoped fields from agave's Bank and
+/// firedancer's fd_epoch_bank.
+///
+/// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
+/// [fd_epoch_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L1906)
+pub const EpochConstants = struct {
+    /// The number of hashes in each tick. Null means hashing is disabled.
+    hashes_per_tick: ?u64,
+
+    /// The number of ticks for each slot in this epoch.
+    ticks_per_slot: u64,
+
+    /// target length of a slot, used to estimate timings.
+    ns_per_slot: u128,
+
+    /// genesis time, used for computed clock.
+    genesis_creation_time: UnixTimestamp,
+
+    /// The number of slots per year, used for inflation.
+    slots_per_year: f64,
+
+    /// The schedule describing all epochs.
+    schedule: EpochSchedule,
+
+    /// The pre-determined stakes assigned to this epoch.
+    stakes: Stakes(Delegation),
+
+    pub fn deinit(self: EpochConstants, allocator: Allocator) void {
+        self.stakes.deinit(allocator);
+    }
+};
+
+/// Used for serialization of aggregated bank data, for example in snapshots.
+///
 /// Analogous to [DeserializableVersionedBank](https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L134).
 pub const BankFields = struct {
     blockhash_queue: BlockhashQueue,
@@ -52,7 +188,7 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes(.delegation),
+    stakes: Stakes(Delegation),
     unused_accounts: UnusedAccounts,
     epoch_stakes: EpochStakeMap,
     is_delta: bool,
@@ -160,7 +296,7 @@ pub const BankFields = struct {
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
+        const stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries);
         errdefer stakes.deinit(allocator);
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
@@ -184,7 +320,7 @@ pub const BankFields = struct {
             .hashes_per_tick = if (random.boolean()) random.int(u64) else null,
             .ticks_per_slot = random.int(u64),
             .ns_per_slot = random.int(u128),
-            .genesis_creation_time = random.int(sig.core.genesis_config.UnixTimestamp),
+            .genesis_creation_time = random.int(sig.core.UnixTimestamp),
             .slots_per_year = random.float(f64),
             .accounts_data_len = random.int(u64),
             .slot = random.int(Slot),
@@ -314,15 +450,15 @@ pub const HardForks = struct {
 
     pub const SlotAndCount = struct { Slot, usize };
 
-    pub fn deinit(hard_forks: HardForks, allocator: std.mem.Allocator) void {
-        allocator.free(hard_forks.items);
+    pub fn deinit(self: HardForks, allocator: std.mem.Allocator) void {
+        allocator.free(self.items);
     }
 
     pub fn clone(
-        hard_forks: HardForks,
+        self: HardForks,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!HardForks {
-        return .{ .items = try allocator.dupe(SlotAndCount, hard_forks.items) };
+        return .{ .items = try allocator.dupe(SlotAndCount, self.items) };
     }
 
     pub fn initRandom(
@@ -332,15 +468,15 @@ pub const HardForks = struct {
     ) std.mem.Allocator.Error!HardForks {
         const hard_forks_len = random.uintAtMost(usize, max_list_entries);
 
-        const hard_forks = try allocator.alloc(SlotAndCount, hard_forks_len);
-        errdefer allocator.free(hard_forks);
+        const self = try allocator.alloc(SlotAndCount, hard_forks_len);
+        errdefer allocator.free(self);
 
-        for (hard_forks) |*hard_fork| hard_fork.* = .{
+        for (self) |*hard_fork| hard_fork.* = .{
             random.int(Slot),
             random.int(usize),
         };
 
-        return .{ .items = hard_forks };
+        return .{ .items = self };
     }
 };
 
@@ -383,24 +519,24 @@ pub const UnusedAccounts = struct {
         .unused3 = .{},
     };
 
-    pub fn deinit(unused_accounts: UnusedAccounts, allocator: std.mem.Allocator) void {
-        var copy = unused_accounts;
+    pub fn deinit(self: UnusedAccounts, allocator: std.mem.Allocator) void {
+        var copy = self;
         copy.unused1.deinit(allocator);
         copy.unused2.deinit(allocator);
         copy.unused3.deinit(allocator);
     }
 
     pub fn clone(
-        unused_accounts: UnusedAccounts,
+        self: UnusedAccounts,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!UnusedAccounts {
-        var unused1 = try unused_accounts.unused1.clone(allocator);
+        var unused1 = try self.unused1.clone(allocator);
         errdefer unused1.deinit(allocator);
 
-        var unused2 = try unused_accounts.unused2.clone(allocator);
+        var unused2 = try self.unused2.clone(allocator);
         errdefer unused2.deinit(allocator);
 
-        var unused3 = try unused_accounts.unused3.clone(allocator);
+        var unused3 = try self.unused3.clone(allocator);
         errdefer unused3.deinit(allocator);
 
         return .{
@@ -415,17 +551,17 @@ pub const UnusedAccounts = struct {
         allocator: std.mem.Allocator,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!UnusedAccounts {
-        var unused_accounts: UnusedAccounts = .{
+        var self: UnusedAccounts = .{
             .unused1 = .{},
             .unused2 = .{},
             .unused3 = .{},
         };
-        errdefer unused_accounts.deinit(allocator);
+        errdefer self.deinit(allocator);
 
         inline for (@typeInfo(UnusedAccounts).Struct.fields) |field| {
             const hm_info = sig.utils.types.hashMapInfo(field.type).?;
 
-            const ptr = &@field(unused_accounts, field.name);
+            const ptr = &@field(self, field.name);
             var managed = ptr.promote(allocator);
             defer ptr.* = managed.unmanaged;
 
@@ -450,6 +586,50 @@ pub const UnusedAccounts = struct {
             );
         }
 
-        return unused_accounts;
+        return self;
     }
+};
+
+pub const EpochRewardStatus = union(enum) {
+    /// this bank is in the reward phase.
+    /// Contents are the start point for epoch reward calculation,
+    /// i.e. parent_slot and parent_block height for the starting
+    /// block of the current epoch.
+    active: StartBlockHeightAndRewards,
+    /// this bank is outside of the rewarding phase.
+    inactive,
+
+    pub fn deinit(self: EpochRewardStatus, allocator: Allocator) void {
+        switch (self) {
+            .active => |s| s.deinit(allocator),
+            .inactive => {},
+        }
+    }
+};
+
+pub const StartBlockHeightAndRewards = struct {
+    /// the block height of the slot at which rewards distribution began
+    distribution_starting_block_height: u64,
+    /// calculated epoch rewards pending distribution, outer Vec is by partition (one partition per block)
+    stake_rewards_by_partition: []const []const PartitionedStakeReward, // TODO lifetime
+
+    pub fn deinit(self: StartBlockHeightAndRewards, allocator: Allocator) void {
+        for (self.stake_rewards_by_partition) |buf| {
+            allocator.free(buf);
+        }
+        allocator.free(self.stake_rewards_by_partition);
+    }
+};
+
+const PartitionedStakeRewards = []const PartitionedStakeReward;
+
+pub const PartitionedStakeReward = struct {
+    /// Stake account address
+    stake_pubkey: Pubkey,
+    /// `Stake` state to be stored in account
+    stake: core.stake.Stake,
+    /// Stake reward for recording in the Bank on distribution
+    stake_reward: u64,
+    /// Vote commission for recording reward info
+    commission: u8,
 };
