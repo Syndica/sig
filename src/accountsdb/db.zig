@@ -3805,6 +3805,34 @@ test "write and read an account" {
     try std.testing.expect(accounts[0].equals(&account_2));
 }
 
+test "load and validate BankFields from test snapshot" {
+    const allocator = std.testing.allocator;
+
+    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{});
+    defer test_data_dir.close();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapdir = tmp_dir_root.dir;
+
+    const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+
+    const boundedFmt = sig.utils.fmt.boundedFmt;
+    const full_manifest_path = boundedFmt("snapshots/{0}/{0}", .{snapshot_files.full.slot});
+    const full_manifest_file = try snapdir.openFile(full_manifest_path.constSlice(), .{});
+    defer full_manifest_file.close();
+
+    const full_manifest = try SnapshotManifest.readFromFile(allocator, full_manifest_file);
+    defer full_manifest.deinit(allocator);
+
+    // use the genesis to verify loading
+    const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
+    const genesis_config = try sig.core.GenesisConfig.init(allocator, genesis_path);
+    defer genesis_config.deinit(allocator);
+
+    try full_manifest.bank_fields.validate(&genesis_config);
+}
+
 test "load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 

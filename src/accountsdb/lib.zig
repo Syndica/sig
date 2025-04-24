@@ -1,5 +1,4 @@
 pub const accounts_file = @import("accounts_file.zig");
-pub const bank = @import("bank.zig");
 pub const buffer_pool = @import("buffer_pool.zig");
 pub const db = @import("db.zig");
 pub const download = @import("download.zig");
@@ -10,7 +9,6 @@ pub const snapshots = @import("snapshots.zig");
 pub const swiss_map = @import("swiss_map.zig");
 
 pub const AccountsDB = db.AccountsDB;
-pub const Bank = bank.Bank;
 pub const FullAndIncrementalManifest = snapshots.FullAndIncrementalManifest;
 
 pub const Manifest = snapshots.Manifest;

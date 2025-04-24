@@ -6,7 +6,6 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const Bank = sig.accounts_db.Bank;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
@@ -1907,7 +1906,7 @@ fn loadSnapshot(
 
     logger.info().log("validating bank...");
 
-    try Bank.validateBankFields(&collapsed_manifest.bank_fields, &genesis_config);
+    try collapsed_manifest.bank_fields.validate(&genesis_config);
 
     if (options.metadata_only) {
         logger.info().log("accounts-db setup done...");

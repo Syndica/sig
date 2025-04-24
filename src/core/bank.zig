@@ -8,7 +8,7 @@
 //! data that's stored in agave's Bank. Other heavyweight fields from agave's
 //! Bank like like `BankRc` (containing a pointer to accountsdb) and
 //! `TransactionBatchProcessor` are not included in any "bank" struct in sig.
-//! Instead, those large dependencies are managed independently. 
+//! Instead, those large dependencies are managed independently.
 //!
 //! The philosophy is that breaking the Bank into separate pieces will enable us
 //! to write code with a more minimal, clearer set of dependencies, to make the
@@ -241,6 +241,48 @@ pub const BankFields = struct {
         cloned.unused_accounts = unused_accounts;
         cloned.epoch_stakes = epoch_stakes;
         return cloned;
+    }
+
+    pub fn validate(
+        self: *const BankFields,
+        genesis_config: *const sig.core.GenesisConfig,
+    ) !void {
+        // self validation
+        if (self.max_tick_height != (self.slot + 1) * self.ticks_per_slot) {
+            return error.InvalidBankFields;
+        }
+        if (self.epoch_schedule.getEpoch(self.slot) != self.epoch) {
+            return error.InvalidBankFields;
+        }
+
+        // cross validation against genesis
+        if (genesis_config.creation_time != self.genesis_creation_time) {
+            return error.BankAndGenesisMismatch;
+        }
+        if (genesis_config.ticks_per_slot != self.ticks_per_slot) {
+            return error.BankAndGenesisMismatch;
+        }
+        const genesis_ns_per_slot = genesis_config.poh_config.target_tick_duration.nanos *
+            @as(u128, genesis_config.ticks_per_slot);
+        if (self.ns_per_slot != genesis_ns_per_slot) {
+            return error.BankAndGenesisMismatch;
+        }
+
+        const genesis_slots_per_year = yearsAsSlots(1, //
+            genesis_config.poh_config.target_tick_duration.nanos, self.ticks_per_slot);
+        if (genesis_slots_per_year != self.slots_per_year) {
+            return error.BankAndGenesisMismatch;
+        }
+        if (!std.meta.eql(self.epoch_schedule, genesis_config.epoch_schedule)) {
+            return error.BankAndGenesisMismatch;
+        }
+    }
+
+    fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 {
+        const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
+        return years * SECONDS_PER_YEAR *
+            (1_000_000_000.0 / @as(f64, @floatFromInt(tick_duration_ns))) /
+            @as(f64, @floatFromInt(ticks_per_slot));
     }
 
     pub fn getStakedNodes(
