@@ -96,7 +96,6 @@ pub const LatestValidatorVotesForFrozenBanks = struct {
 pub const VoteAccount = struct {};
 pub const StakedAccount = struct { stake: u64, account: VoteAccount };
 const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
-pub const VoteAccountsHashMap = std.AutoHashMap(Pubkey, StakedAccount);
 pub const ExpirationSlot = Slot;
 const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
     ExpirationSlot,

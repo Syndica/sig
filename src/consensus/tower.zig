@@ -24,12 +24,13 @@ const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerSync = sig.runtime.program.vote_program.state.TowerSync;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const Vote = sig.runtime.program.vote_program.state.Vote;
-const VoteAccountsHashMap = sig.consensus.unimplemented.VoteAccountsHashMap;
 const VoteState = sig.runtime.program.vote_program.state.VoteState;
 const VoteStateUpdate = sig.runtime.program.vote_program.state.VoteStateUpdate;
 const VoteStateVersions = sig.runtime.program.vote_program.state.VoteStateVersions;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
+// TODO Question: Should this be moved to a more appropitate location, and not `accounts_db.snapshots.`
+const StakeAndVoteAccountsMap = sig.accounts_db.snapshots.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 
@@ -570,7 +571,7 @@ pub const Tower = struct {
         descendants: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
-        epoch_vote_accounts: *const VoteAccountsHashMap,
+        epoch_vote_accounts: *const StakeAndVoteAccountsMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         heaviest_subtree_fork_choice: *const HeaviestSubtreeForkChoice,
     ) !SwitchForkDecision {
@@ -792,7 +793,7 @@ pub const Tower = struct {
                     {
                         const stake =
                             if (epoch_vote_accounts.get(vote_account.pubkey)) |staked_account|
-                            staked_account.stake
+                            staked_account[0]
                         else
                             0;
                         locked_out_stake += stake;
@@ -852,7 +853,7 @@ pub const Tower = struct {
 
                 if (is_valid) {
                     const stake_entry = epoch_vote_accounts.get(vote_account_pubkey);
-                    const stake = if (stake_entry) |entry_stake| entry_stake.stake else 0;
+                    const stake = if (stake_entry) |entry_stake| entry_stake[0] else 0;
                     locked_out_stake += stake;
 
                     const stake_ratio = @as(f64, @floatFromInt(locked_out_stake)) /
@@ -880,7 +881,7 @@ pub const Tower = struct {
         descendants: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
-        epoch_vote_accounts: *const VoteAccountsHashMap,
+        epoch_vote_accounts: *const StakeAndVoteAccountsMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         heaviest_subtree_fork_choice: *const HeaviestSubtreeForkChoice,
     ) !SwitchForkDecision {
@@ -1318,7 +1319,7 @@ pub const Tower = struct {
         logger: Logger,
         vote_account_pubkey: *const Pubkey,
         bank_slot: Slot,
-        vote_accounts: *const VoteAccountsHashMap,
+        vote_accounts: *const StakeAndVoteAccountsMap,
         ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
         get_frozen_hash: fn (Slot) ?Hash,
         latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
