@@ -466,7 +466,7 @@ test "chunk iterator no regions" {
         true,
         false,
     );
-    try std.testing.expectError(error.AccessViolation, src_chunk_iter.next());
+    try std.testing.expectError(error.AccessViolation, src_chunk_iter.next(.constant));
 }
 
 test "chunk iterator out of bounds upper" {
@@ -508,7 +508,7 @@ test "chunk iterator out of bounds" {
             true,
             false,
         );
-        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next());
+        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next(.constant));
     }
 
     {
@@ -520,8 +520,8 @@ test "chunk iterator out of bounds" {
             true,
             false,
         );
-        _ = try src_chunk_iter.next();
-        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next());
+        _ = try src_chunk_iter.next(.constant);
+        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next(.constant));
     }
 
     {
@@ -533,7 +533,7 @@ test "chunk iterator out of bounds" {
             true,
             true,
         );
-        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next());
+        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next(.constant));
     }
 
     {
@@ -545,8 +545,8 @@ test "chunk iterator out of bounds" {
             true,
             true,
         );
-        _ = try src_chunk_iter.next();
-        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next());
+        _ = try src_chunk_iter.next(.constant);
+        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next(.constant));
     }
 }
 
@@ -569,7 +569,7 @@ test "chunk iterator one" {
             true,
             false,
         );
-        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next());
+        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next(.constant));
     }
 
     {
@@ -581,7 +581,7 @@ test "chunk iterator one" {
             true,
             false,
         );
-        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next());
+        try std.testing.expectError(error.AccessViolation, src_chunk_iter.next(.constant));
     }
 
     {
@@ -604,9 +604,9 @@ test "chunk iterator one" {
                 );
 
                 if (len == 0) {
-                    try std.testing.expectEqual(null, try iter.next());
+                    try std.testing.expectEqual(null, try iter.next(.constant));
                 } else {
-                    _, const chunk_addr, const chunk_len = (try iter.next()).?;
+                    _, const chunk_addr, const chunk_len = (try iter.next(.constant)).?;
                     try std.testing.expectEqual(vm_addr, chunk_addr);
                     try std.testing.expectEqual(len, chunk_len);
                 }
@@ -649,7 +649,7 @@ test "chunk iterator two" {
 
             const result = blk: {
                 var list: std.ArrayListUnmanaged(Chunk) = .{};
-                while (try iter.next()) |chunk| {
+                while (try iter.next(.constant)) |chunk| {
                     try list.append(allocator, chunk);
                 }
                 break :blk try list.toOwnedSlice(allocator);
