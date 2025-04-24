@@ -380,10 +380,10 @@ pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L54-L70
-pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
-    const dst_addr = registers.get(.r1);
-    const src_addr = registers.get(.r2);
-    const len = registers.get(.r3);
+pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, reg_map: *RegisterMap) Error!void {
+    const dst_addr = reg_map.get(.r1);
+    const src_addr = reg_map.get(.r2);
+    const len = reg_map.get(.r3);
 
     try consumeMemoryCompute(tc, len);
 
