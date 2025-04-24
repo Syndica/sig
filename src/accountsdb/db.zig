@@ -1427,7 +1427,7 @@ pub const AccountsDB = struct {
         // TODO: get rid of this once `generateFullSnapshot` can actually
         // derive this data correctly by itself.
         var prng = std.Random.DefaultPrng.init(1234);
-        var tmp_bank_fields = try BankFields.initRandom(self.allocator, prng.random(), 128);
+        var tmp_bank_fields = try BankFields.initRandom(self.allocator, prng.random(), 8, 128);
         defer tmp_bank_fields.deinit(self.allocator);
 
         while (!exit.load(.acquire)) {
@@ -4541,7 +4541,7 @@ test "generate snapshot & update gossip snapshot hashes" {
         false,
     )).deinit(allocator);
 
-    var bank_fields = try BankFields.initRandom(allocator, random, 128);
+    var bank_fields = try BankFields.initRandom(allocator, random, 8, 128);
     defer bank_fields.deinit(allocator);
 
     const full_slot = full_inc_manifest.full.accounts_db_fields.slot;
