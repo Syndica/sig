@@ -1671,11 +1671,12 @@ pub const Tower = struct {
     /// super refresh to vote at the tip.
     pub fn lastVoteAbleToLand(
         self: *const Tower,
-        reset_bank: ?*const Bank,
+        reset_slot: ?Slot,
         progress: *const ProgressMap,
+        slot_history: *const SlotHistory,
     ) bool {
-        const heaviest_bank_on_same_voted_fork = reset_bank orelse {
-            // No reset bank means we are in the middle of dump & repair. Last vote
+        const heaviest_slot = reset_slot orelse {
+            // No reset slot means we are in the middle of dump & repair. Last vote
             // landing is irrelevant.
             return true;
         };
@@ -1686,7 +1687,7 @@ pub const Tower = struct {
         };
 
         const my_latest_landed_vote_slot = progress.myLatestLandedVote(
-            heaviest_bank_on_same_voted_fork.bank_fields.slot,
+            heaviest_slot,
         ) orelse {
             // We've either never landed a vote or fork has been pruned or is in the
             // middle of dump & repair. Either way, no need to super refresh.
@@ -1702,7 +1703,7 @@ pub const Tower = struct {
             // 2. Already voting at the tip
             (last_voted_slot >= my_latest_landed_vote_slot) or
             // 3. Last vote is within slot hashes, regular refresh is enough
-            heaviest_bank_on_same_voted_fork.isInSlotHashesHistory(&last_voted_slot);
+            slot_history.check(last_voted_slot) == .found;
     }
 
     /// Handles fork selection when switch threshold fails.
@@ -1715,15 +1716,16 @@ pub const Tower = struct {
     pub fn recheckForkDecisionFailedSwitchThreshold(
         self: *const Tower,
         allocator: std.mem.Allocator,
-        reset_bank: ?*const Bank,
+        reset_slot: ?Slot,
         progress: *const ProgressMap,
         heaviest_bank_slot: Slot,
         failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
         switch_proof_stake: u64,
         total_stake: u64,
         switch_fork_decision: SwitchForkDecision,
+        slot_history: *const SlotHistory,
     ) !SwitchForkDecision {
-        if (!self.lastVoteAbleToLand(reset_bank, progress)) {
+        if (!self.lastVoteAbleToLand(reset_slot, progress, slot_history)) {
             // If we reach here, these assumptions are true:
             // 1. We can't switch because of threshold
             // 2. Our last vote is now outside slot hashes history of the tip of fork
@@ -1758,7 +1760,7 @@ pub const Tower = struct {
         ,
             .{
                 heaviest_bank_slot,
-                if (reset_bank) |b| b.bank_fields.slot else null,
+                if (reset_slot) |slot| slot else null,
                 switch_proof_stake,
                 @as(f64, @floatFromInt(total_stake)) * SWITCH_FORK_THRESHOLD,
                 total_stake,
@@ -1788,18 +1790,20 @@ pub const Tower = struct {
         switch_proof_stake: u64,
         total_stake: u64,
         initial_switch_fork_decision: SwitchForkDecision,
+        slot_history: *const SlotHistory,
     ) !CandidateVoteAndResetBanks {
         // If our last vote is unable to land (even through normal refresh), then we
         // temporarily "super" refresh our vote to the tip of our last voted fork.
         const final_switch_fork_decision = try self.recheckForkDecisionFailedSwitchThreshold(
             allocator,
-            if (heaviest_bank_on_same_voted_fork) |bank| bank else null,
+            if (heaviest_bank_on_same_voted_fork) |bank| bank.bank_fields.slot else null,
             progress,
             heaviest_bank.bank_fields.slot,
             failure_reasons,
             switch_proof_stake,
             total_stake,
             initial_switch_fork_decision,
+            slot_history,
         );
 
         const candidate_vote_bank = if (final_switch_fork_decision.canVote())
@@ -1828,6 +1832,7 @@ pub const Tower = struct {
         progress: *const ProgressMap,
         failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
         initial_switch_fork_decision: SwitchForkDecision,
+        slot_history: *const SlotHistory,
     ) !CandidateVoteAndResetBanks {
         return switch (initial_switch_fork_decision) {
             .failed_switch_threshold => |data| try self.selectCandidatesFailedSwitch(
@@ -1839,6 +1844,7 @@ pub const Tower = struct {
                 data[0],
                 data[1],
                 initial_switch_fork_decision,
+                slot_history,
             ),
             .failed_switch_duplicate_rollback => |latest_duplicate_ancestor| blk: {
                 break :blk try Tower
@@ -1955,6 +1961,7 @@ pub const Tower = struct {
         progress: *const ProgressMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         fork_choice: *const HeaviestSubtreeForkChoice,
+        slot_history: *const SlotHistory,
     ) !SelectVoteAndResetForkResult {
         // Initialize result with failure list
         var failure_reasons = try std.ArrayListUnmanaged(HeaviestForkFailures).initCapacity(
@@ -1989,6 +1996,7 @@ pub const Tower = struct {
             progress,
             &failure_reasons,
             initial_decision,
+            slot_history,
         );
 
         // Handle no viable candidate case
