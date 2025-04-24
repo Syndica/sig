@@ -20,7 +20,7 @@ const stubs = struct {
     const VoteAccountUnused = struct {};
 
     const Bank = struct {
-        data: sig.accounts_db.snapshots.BankFields,
+        data: sig.core.BankFields,
 
         fn isFrozen(self: Bank) bool {
             return !self.data.hash.eql(Hash.ZEROES);
@@ -58,7 +58,7 @@ const stubs = struct {
         fn epochVoteAccounts(
             self: Bank,
             epoch: Epoch,
-        ) ?*const sig.accounts_db.snapshots.StakeAndVoteAccountsMap {
+        ) ?*const sig.core.stake.StakeAndVoteAccountsMap {
             const epoch_stakes = self.data.epoch_stakes.getPtr(epoch) orelse return null;
             return &epoch_stakes.stakes.vote_accounts.accounts;
         }
@@ -105,8 +105,8 @@ const replay_stage = struct {
             const self_norm_num = @as(NormalizedNum, self.numerator) * fraction_denom;
 
             const NormalizedDenom =
-                std.math.IntFittingRange(0, std.math.maxInt(Num) * 3);
-            const frac_norm_num = self.numerator * @as(NormalizedDenom, fraction_num);
+                std.math.IntFittingRange(0, std.math.maxInt(Num) * self.denominator);
+            const frac_norm_num = fraction_num * @as(NormalizedDenom, self.denominator);
 
             return std.math.order(self_norm_num, frac_norm_num);
         }
@@ -574,9 +574,9 @@ pub const PropagatedStats = struct {
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         vote_account_pubkeys: []const Pubkey,
-        epoch_vote_accounts: sig.accounts_db.snapshots.StakeAndVoteAccountsMap,
+        epoch_vote_accounts: sig.core.stake.StakeAndVoteAccountsMap,
     ) std.mem.Allocator.Error!void {
-        try self.propagated_node_ids.put(allocator, node_pubkey);
+        try self.propagated_node_ids.put(allocator, node_pubkey, {});
 
         try self.propagated_validators.ensureUnusedCapacity(allocator, vote_account_pubkeys.len);
         for (vote_account_pubkeys) |vote_account_pubkey| {
@@ -1183,7 +1183,7 @@ test "ForkProgress.init" {
 
     const now = sig.time.Instant.now();
     var bank: stubs.Bank = .{
-        .data = try sig.accounts_db.snapshots.BankFields.initRandom(allocator, random, 128),
+        .data = try sig.core.BankFields.initRandom(allocator, random, 128),
     };
     defer bank.data.deinit(allocator);
     bank.data.hash = Hash.ZEROES;
@@ -1352,11 +1352,11 @@ test "addNodePubkeyInternal" {
         break :blk pubkeys;
     };
 
-    var epoch_vote_accounts: sig.accounts_db.snapshots.StakeAndVoteAccountsMap = .{};
-    defer sig.accounts_db.snapshots.stakeAndVoteAccountsMapDeinit(epoch_vote_accounts, allocator);
+    var epoch_vote_accounts: sig.core.stake.StakeAndVoteAccountsMap = .{};
+    defer sig.core.stake.stakeAndVoteAccountsMapDeinit(epoch_vote_accounts, allocator);
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
         try epoch_vote_accounts.ensureTotalCapacity(allocator, 1);
-        const VoteAccount = sig.accounts_db.snapshots.VoteAccount;
+        const VoteAccount = sig.core.stake.VoteAccount;
         const vote_account = try VoteAccount.initRandom(
             random,
             allocator,
@@ -1413,13 +1413,13 @@ test "addNodePubkeyInternal" {
         break :blk pubkeys;
     };
 
-    sig.accounts_db.snapshots.stakeAndVoteAccountsMapClearRetainingCapacity(
+    sig.core.stake.stakeAndVoteAccountsMapClearRetainingCapacity(
         &epoch_vote_accounts,
         allocator,
     );
     for (vote_account_pubkeys2[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
         try epoch_vote_accounts.ensureTotalCapacity(allocator, 1);
-        const VoteAccount = sig.accounts_db.snapshots.VoteAccount;
+        const VoteAccount = sig.core.stake.VoteAccount;
         const vote_account = try VoteAccount.initRandom(
             random,
             allocator,
