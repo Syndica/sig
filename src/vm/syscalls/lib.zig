@@ -244,7 +244,7 @@ pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Register
         .constant,
         vm_addr,
         len,
-        try tc.getCheckAligned(),
+        tc.getCheckAligned(),
     );
 
     if (!std.unicode.utf8ValidateSlice(message)) {
@@ -286,7 +286,7 @@ pub fn logPubkey(
         .constant,
         vm_addr,
         @sizeOf(Pubkey),
-        try tc.getCheckAligned(),
+        tc.getCheckAligned(),
     );
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
 
@@ -315,7 +315,7 @@ pub fn logData(
         .constant,
         vm_addr,
         len,
-        try tc.getCheckAligned(),
+        tc.getCheckAligned(),
     );
 
     var cost = tc.compute_budget.syscall_base_cost *| vm_messages.len;
@@ -330,7 +330,7 @@ pub fn logData(
             .constant,
             msg.ptr,
             msg.len,
-            try tc.getCheckAligned(),
+            tc.getCheckAligned(),
         );
     }
 

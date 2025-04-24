@@ -332,7 +332,7 @@ pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     try consumeMemoryCompute(tc, len);
 
     const feature_set = tc.sc.ec.feature_set;
-    const check_aligned = try tc.getCheckAligned();
+    const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
         try memsetNonContigious(
             dst_addr,
@@ -369,7 +369,7 @@ pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     }
 
     const feature_set = tc.sc.ec.feature_set;
-    const check_aligned = try tc.getCheckAligned();
+    const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
         try memmoveNonContigious(
             dst_addr,
@@ -395,7 +395,7 @@ pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, reg_map: *Regist
     try consumeMemoryCompute(tc, len);
 
     const feature_set = tc.sc.ec.feature_set;
-    const check_aligned = try tc.getCheckAligned();
+    const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
         try memmoveNonContigious(
             dst_addr,
