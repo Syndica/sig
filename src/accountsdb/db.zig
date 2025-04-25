@@ -16,13 +16,14 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
+const BankFields = sig.core.BankFields;
+
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const StatusCache = sig.accounts_db.StatusCache;
 
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
 const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
 const FullAndIncrementalManifest = sig.accounts_db.snapshots.FullAndIncrementalManifest;
@@ -1427,7 +1428,7 @@ pub const AccountsDB = struct {
         // TODO: get rid of this once `generateFullSnapshot` can actually
         // derive this data correctly by itself.
         var prng = std.Random.DefaultPrng.init(1234);
-        var tmp_bank_fields = try BankFields.initRandom(self.allocator, prng.random(), 8, 128);
+        var tmp_bank_fields = try BankFields.initRandom(self.allocator, prng.random(), 128);
         defer tmp_bank_fields.deinit(self.allocator);
 
         while (!exit.load(.acquire)) {
@@ -3804,6 +3805,34 @@ test "write and read an account" {
     try std.testing.expect(accounts[0].equals(&account_2));
 }
 
+test "load and validate BankFields from test snapshot" {
+    const allocator = std.testing.allocator;
+
+    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{});
+    defer test_data_dir.close();
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapdir = tmp_dir_root.dir;
+
+    const snapshot_files = try sig.accounts_db.db.findAndUnpackTestSnapshots(1, snapdir);
+
+    const boundedFmt = sig.utils.fmt.boundedFmt;
+    const full_manifest_path = boundedFmt("snapshots/{0}/{0}", .{snapshot_files.full.slot});
+    const full_manifest_file = try snapdir.openFile(full_manifest_path.constSlice(), .{});
+    defer full_manifest_file.close();
+
+    const full_manifest = try SnapshotManifest.readFromFile(allocator, full_manifest_file);
+    defer full_manifest.deinit(allocator);
+
+    // use the genesis to verify loading
+    const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
+    const genesis_config = try sig.core.GenesisConfig.init(allocator, genesis_path);
+    defer genesis_config.deinit(allocator);
+
+    try full_manifest.bank_fields.validate(&genesis_config);
+}
+
 test "load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
@@ -4541,7 +4570,7 @@ test "generate snapshot & update gossip snapshot hashes" {
         false,
     )).deinit(allocator);
 
-    var bank_fields = try BankFields.initRandom(allocator, random, 8, 128);
+    var bank_fields = try BankFields.initRandom(allocator, random, 128);
     defer bank_fields.deinit(allocator);
 
     const full_slot = full_inc_manifest.full.accounts_db_fields.slot;

@@ -9,9 +9,10 @@ const Account = sig.core.Account;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const Pubkey = sig.core.Pubkey;
+const UnixTimestamp = sig.core.UnixTimestamp;
+
 pub const Rent = sig.runtime.sysvar.Rent;
 
-pub const UnixTimestamp = i64;
 pub const String = std.ArrayList(u8);
 
 pub const RustDuration = struct {

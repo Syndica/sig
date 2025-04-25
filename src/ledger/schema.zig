@@ -117,7 +117,7 @@ pub const schema = struct {
     pub const blocktime: ColumnFamily = .{
         .name = "blocktime",
         .Key = Slot,
-        .Value = meta.UnixTimestamp,
+        .Value = sig.core.UnixTimestamp,
     };
     /// Tracks the rate that the ledger is progressing, in terms of slots and transactions.
     pub const perf_samples: ColumnFamily = .{

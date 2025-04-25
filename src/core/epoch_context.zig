@@ -1,8 +1,12 @@
 const std = @import("std");
 const core = @import("lib.zig");
 
-/// constant data about a particular epoch.
-/// this can be computed before the epoch begins, and does not change during the epoch
+/// constant data about a particular epoch. this can be computed before the
+/// epoch begins, and does not change during the epoch
+///
+/// This is a lean alternative to EpochConstants that is kept around because it
+/// is easier to populate. Eventually, we may want to replace this with
+/// EpochConstants.
 pub const EpochContext = struct {
     /// the staked nodes for this particular cluster to use for the leader schedule and turbine tree
     staked_nodes: std.AutoArrayHashMapUnmanaged(core.Pubkey, u64),

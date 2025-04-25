@@ -103,3 +103,10 @@ pub const Hash = extern struct {
         return .{ .data = data };
     }
 };
+
+/// A 16-bit, 1024 element lattice-based incremental hash based on blake3
+pub const LtHash = struct {
+    data: [NUM_ELEMENTS]u16,
+
+    pub const NUM_ELEMENTS: usize = 1024;
+};

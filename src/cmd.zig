@@ -6,13 +6,12 @@ const config = @import("config.zig");
 const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const Bank = sig.accounts_db.Bank;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
+const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
 const FullAndIncrementalManifest = sig.accounts_db.FullAndIncrementalManifest;
-const GenesisConfig = sig.accounts_db.GenesisConfig;
+const GenesisConfig = sig.core.GenesisConfig;
 const GeyserWriter = sig.geyser.GeyserWriter;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
@@ -1929,7 +1928,7 @@ fn loadSnapshot(
 
     logger.info().log("validating bank...");
 
-    try Bank.validateBankFields(&collapsed_manifest.bank_fields, &genesis_config);
+    try collapsed_manifest.bank_fields.validate(&genesis_config);
 
     if (options.metadata_only) {
         logger.info().log("accounts-db setup done...");
