@@ -19,17 +19,19 @@ pub fn loadTransactionAccounts(
     allocator: std.mem.Allocator,
     tx: *const sig.core.Transaction,
     requested_max_total_data_size: u32, // should be inside the tx?
-    account_loader: *AccountLoader(.AccountsDb),
+    account_loader: *AccountLoader(.Mocked),
     features: *const runtime.FeatureSet,
+    rent_collector: *const RentCollector,
 ) !LoadedAccounts {
     std.debug.assert(tx.msg.account_keys.len <= 128); // TODO: this should be sanitised earlier
     return try loadTransactionAccountsInner(
-        .AccountsDb,
+        .Mocked,
         allocator,
         tx,
         requested_max_total_data_size,
         account_loader,
         features,
+        rent_collector,
     );
 }
 
@@ -57,10 +59,10 @@ const BankKind = enum {
     }
 };
 
-const MockedBank = struct {
+pub const MockedBank = struct {
     allocator: std.mem.Allocator,
     slot: Slot,
-    accounts: std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account),
+    accounts: std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account) = .{},
     rent_collector: RentCollector,
 
     fn deinit(self: *MockedBank) void {
@@ -157,18 +159,18 @@ pub fn AccountLoader(comptime bank_kind: BankKind) type {
         features: *const runtime.FeatureSet,
 
         // note: no account overrides implemented here
-        fn newWithCacheCapacity(
+        pub fn newWithCacheCapacity(
             allocator: std.mem.Allocator,
-            bank: Bank(bank_kind),
+            bank: bank_kind.T(),
             features: *const runtime.FeatureSet,
             capacity: usize,
         ) !Self {
             var account_cache: Cache = .{};
-            account_cache.ensureUnusedCapacity(allocator, capacity);
+            try account_cache.ensureUnusedCapacity(allocator, capacity);
             return .{
                 .allocator = allocator,
                 .account_cache = account_cache,
-                .bank = bank,
+                .bank = .{ .inner = bank },
                 .features = features,
             };
         }
