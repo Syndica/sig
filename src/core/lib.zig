@@ -22,6 +22,7 @@ pub const ClusterType = genesis_config.ClusterType;
 pub const Entry = entry.Entry;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
 pub const EpochContext = epoch_context.EpochContext;
+pub const EpochConstants = bank.EpochConstants;
 pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const HardForks = hard_forks.HardForks;
 pub const HardFork = HardForks.Fork;
@@ -31,6 +32,8 @@ pub const Nonce = shred.Nonce;
 pub const Pubkey = pubkey.Pubkey;
 pub const ShredVersion = shred.ShredVersion;
 pub const Signature = signature.Signature;
+pub const SlotConstants = bank.SlotConstants;
+pub const SlotState = bank.SlotState;
 pub const Transaction = transaction.Transaction;
 
 pub const Epoch = time.Epoch;
