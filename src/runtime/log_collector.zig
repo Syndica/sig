@@ -39,7 +39,7 @@ pub const LogCollector = struct {
 
     pub fn collectCloned(self: LogCollector, allocator: std.mem.Allocator) ![]const []const u8 {
         const buf = try allocator.alloc([]const u8, self.messages.items.len);
-        defer allocator.free(buf);
+        errdefer allocator.free(buf);
 
         for (buf, self.messages.items, 0..) |*out_msg, in_msg, i| {
             errdefer {
