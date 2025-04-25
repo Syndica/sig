@@ -1164,6 +1164,20 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    const replay_thread = try app_base.spawnService(
+        "replay",
+        sig.replay.service.run,
+        .{.{
+            .allocator = allocator,
+            .logger = app_base.logger.unscoped(),
+            .exit = app_base.exit,
+            .blockstore_reader = blockstore_reader,
+            .accounts_db = &loaded_snapshot.accounts_db,
+            .epoch_schedule = bank_fields.epoch_schedule,
+        }},
+    );
+
+    replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
@@ -1284,18 +1298,6 @@ fn shredNetwork(
     });
     defer shred_network_manager.deinit();
 
-    const replay_thread = try app_base.spawnService(
-        "replay",
-        sig.replay.service.run,
-        .{.{
-            .allocator = allocator,
-            .logger = app_base.logger.unscoped(),
-            .exit = app_base.exit,
-            .blockstore_reader = blockstore_reader,
-        }},
-    );
-
-    replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();

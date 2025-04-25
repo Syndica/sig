@@ -108,7 +108,7 @@ pub const TransactionVerifyAndHasher = struct {
         pub fn run(self: *Task) !void {
             for (self.input, 0..) |entry, i| {
                 const replay_entry = &self.output[i];
-                replay_entry.* = if (entry.transactions.len == 0)
+                replay_entry.* = if (entry.transactions.items.len == 0)
                     .{ .tick = entry.hash }
                 else
                     .{ .transactions = self.list_recycler.get() };
