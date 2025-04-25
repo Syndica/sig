@@ -70,6 +70,7 @@ pub const MockedBank = struct {
     }
 };
 
+// TODO: if we're splitting up the bank, we might as well just take a "getAccount" fn.
 fn Bank(comptime kind: BankKind) type {
     return struct {
         inner: kind.T(),
