@@ -9,13 +9,23 @@ const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 const ProcessingEnv = struct {
+    // replace with blockhash queue?
     blockhash: sig.core.Hash,
     blockhash_lamports_per_signature: u64,
+
     epoch_total_stake: u64,
     rent_collector: *const sig.runtime.rent_collector.RentCollector,
     slot_context: *const sig.runtime.SlotContext,
 
-    fn testingDefault() ProcessingEnv {
+    // if we take this out, we could reuse the struct for all batches in the same slot?
+    raw_transactions: []const sig.core.Transaction, // TODO: assuming sanitized already (!)
+
+    bank: sig.runtime.account_loader.MockedBank, // TODO: maybe could just have accountsdb, "Bank" is a bit much
+
+    fn testingDefault(
+        transactions: []const sig.core.Transaction,
+        bank: sig.runtime.account_loader.MockedBank,
+    ) ProcessingEnv {
         const epoch_context: sig.runtime.EpochContext = .{
             .allocator = std.testing.failing_allocator,
             .feature_set = sig.runtime.FeatureSet.EMPTY,
@@ -31,6 +41,8 @@ const ProcessingEnv = struct {
                 .sysvar_cache = .{},
                 .ec = &epoch_context,
             },
+            .raw_transactions = transactions,
+            .bank = bank,
         };
     }
 };
@@ -58,15 +70,20 @@ const TransactionResult = struct {
 const Output = struct {
     // .len == raw_instructions.len
     processing_results: []const TransactionResult,
+
+    fn deinit(self: Output, allocator: std.mem.Allocator) void {
+        for (self.processing_results) |result| {
+            if (result.logs) |log| {
+                for (log) |log_line| allocator.free(log_line);
+                allocator.free(log);
+            }
+        }
+        allocator.free(self.processing_results);
+    }
 };
 
 // simplified ~= agave's load_and_execute_sanitized_transactions
-pub fn loadAndExecuteBatch(
-    gpa_allocator: std.mem.Allocator,
-    env: *const ProcessingEnv,
-    bank: sig.runtime.account_loader.MockedBank,
-    raw_transactions: []const sig.core.Transaction, // TODO: assuming sanitized already (!)
-) !Output {
+pub fn loadAndExecuteBatch(gpa_allocator: std.mem.Allocator, env: ProcessingEnv) !Output {
     var batch_arena = std.heap.ArenaAllocator.init(gpa_allocator);
     defer batch_arena.deinit();
 
@@ -75,11 +92,11 @@ pub fn loadAndExecuteBatch(
     // largest-case capacity estimate
     var loader = try AccountLoader(.Mocked).newWithCacheCapacity(
         allocator,
-        bank,
+        env.bank,
         &env.slot_context.ec.feature_set,
         account_keys_sum: {
             var sum: usize = 0;
-            for (raw_transactions) |tx| sum += tx.msg.account_keys.len;
+            for (env.raw_transactions) |tx| sum += tx.msg.account_keys.len;
             break :account_keys_sum sum;
         },
     );
@@ -87,17 +104,17 @@ pub fn loadAndExecuteBatch(
     // incorrect - transaction details should contain this as a field
     const requested_max_total_data_size = 100 * 1024 * 1024;
 
-    const transaction_result = try gpa_allocator.alloc(TransactionResult, raw_transactions.len);
+    const transaction_result = try gpa_allocator.alloc(TransactionResult, env.raw_transactions.len);
     errdefer gpa_allocator.free(transaction_result);
 
     // transactions must be executed in order
-    for (raw_transactions, 0..) |tx, tx_idx| {
+    for (env.raw_transactions, 0..) |tx, tx_idx| {
+        transaction_result[tx_idx].logs = null;
         // now would be a great time to *validate_transaction_nonce_and_fee_payer*
         // not doing it yet. Pretending it's valid for now.
 
         // TODO: this loop needs a bunch more error handling
 
-        transaction_result[tx_idx].logs = null;
         const loaded_accounts = account_loader.loadTransactionAccounts(
             allocator,
             &tx,
@@ -112,7 +129,7 @@ pub fn loadAndExecuteBatch(
 
         const accounts = loaded_accounts.accounts_buf[0..tx.msg.account_keys.len];
 
-        var ctx = try makeTransactionContext(allocator, env, accounts, &tx);
+        var ctx = try makeTransactionContext(allocator, &env, accounts, &tx);
 
         defer transaction_result[tx_idx].logs = blk: {
             if (ctx.log_collector) |logger| {
@@ -123,7 +140,7 @@ pub fn loadAndExecuteBatch(
 
         executeLoadedTransaction(
             allocator,
-            env,
+            &env,
             &ctx,
             accounts,
             &tx,
@@ -167,11 +184,9 @@ fn makeTransactionContext(
         .custom_error = null,
         .log_collector = sig.runtime.LogCollector.init(null), // TODO: should probably limit this
         .prev_blockhash = env.blockhash,
-
+        .serialized_accounts = .{},
         .prev_lamports_per_signature = env.blockhash_lamports_per_signature,
-        // I'll find where to get this later
-        .compute_budget = undefined,
-        .serialized_accounts = undefined, // serialized means?
+        .compute_budget = undefined, // TODO: plumb this through
     };
 }
 
@@ -185,7 +200,8 @@ fn executeLoadedTransaction(
 ) !void {
     _ = env;
     errdefer {
-        ctx.log("trace: {?}\n", .{@errorReturnTrace()}) catch {};
+        if (@errorReturnTrace()) |trace|
+            ctx.log("trace: {}\n", .{trace}) catch {};
     }
 
     const lamports_before_tx = blk: {
@@ -245,15 +261,21 @@ test {
     std.testing.refAllDecls(@This());
 
     const allocator = std.testing.allocator;
-    const env = ProcessingEnv.testingDefault();
 
     var bank = sig.runtime.account_loader.MockedBank{
         .allocator = allocator,
-        .rent_collector = env.rent_collector.*,
+        .rent_collector = sig.runtime.rent_collector.defaultCollector(1),
         .slot = 1,
     };
     defer bank.accounts.deinit(allocator);
     try bank.accounts.put(allocator, sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID, .{
+        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        .executable = true,
+        .data = .{ .empty = .{ .len = 0 } },
+        .lamports = 1,
+        .rent_epoch = sig.runtime.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+    });
+    try bank.accounts.put(allocator, sig.runtime.program.vote_program.ID, .{
         .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         .executable = true,
         .data = .{ .empty = .{ .len = 0 } },
@@ -320,13 +342,35 @@ test {
         .signatures = &.{},
     };
 
-    const result = try loadAndExecuteBatch(allocator, &env, bank, &.{ tx1, tx2, tx3, tx4 });
-    defer allocator.free(result.processing_results);
+    // program that should fail
+    const tx5 = sig.core.Transaction{
+        .msg = .{
+            .account_keys = &.{sig.runtime.program.vote_program.ID},
+            .instructions = &.{
+                .{ .program_index = 0, .account_indexes = &.{0}, .data = "" },
+            },
+            .signature_count = 1,
+            .readonly_signed_count = 1,
+            .readonly_unsigned_count = 0,
+            .recent_blockhash = sig.core.Hash.ZEROES,
+        },
+        .version = .legacy,
+        .signatures = &.{},
+    };
 
-    for (result.processing_results, 0..) |res, i| {
+    const env = ProcessingEnv.testingDefault(&.{ tx1, tx2, tx3, tx4, tx5 }, bank);
+
+    const output = try loadAndExecuteBatch(allocator, env);
+    defer output.deinit(allocator);
+
+    for (output.processing_results, 0..) |res, i| {
         std.debug.print("tx{} - err?: {?}\n", .{ i, res.err });
         if (res.logs) |logs| {
-            for (logs) |log| std.debug.print("\t{s}\n", .{log});
+            if (logs.len > 0) {
+                std.debug.print("log{{ \n", .{});
+                for (logs, 0..) |log, log_idx| std.debug.print("\t{: >3}: {s}\n", .{ log_idx, log });
+                std.debug.print("}}\n", .{});
+            }
         }
     }
 }
