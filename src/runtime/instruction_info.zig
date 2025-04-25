@@ -109,11 +109,14 @@ pub const InstructionInfo = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        if (self.instruction_data.len > Transaction.MAX_BYTES)
-            return InstructionError.InvalidInstructionData;
-        return bincode.readFromSlice(allocator, T, self.instruction_data, .{}) catch {
+        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
+            self.instruction_data.len,
+            Transaction.MAX_BYTES,
+        )]);
+        const data = bincode.read(allocator, T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
+        return data;
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
@@ -124,34 +127,3 @@ pub const InstructionInfo = struct {
         if (self.account_metas.len < minimum_accounts) return InstructionError.NotEnoughAccountKeys;
     }
 };
-
-test "deserializeInstruction: invalid instruction data" {
-    const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
-
-    const DummyInstruction = struct { data: []const u8 };
-
-    const dummy_instruction: DummyInstruction = .{
-        .data = &[_]u8{0} ** (Transaction.MAX_BYTES + 10),
-    };
-
-    const instruction_info: InstructionInfo = .{
-        .program_meta = .{
-            .pubkey = Pubkey.initRandom(prng.random()),
-            .index_in_transaction = 0,
-        },
-        .account_metas = .{},
-        .instruction_data = try bincode.writeAlloc(
-            allocator,
-            dummy_instruction,
-            .{},
-        ),
-        .initial_account_lamports = 0,
-    };
-    defer instruction_info.deinit(allocator);
-
-    try std.testing.expectError(
-        InstructionError.InvalidInstructionData,
-        instruction_info.deserializeInstruction(allocator, u32),
-    );
-}

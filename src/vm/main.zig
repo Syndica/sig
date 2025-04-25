@@ -105,35 +105,41 @@ pub fn main() !void {
         .allocator = gpa,
         .feature_set = FeatureSet.EMPTY,
     };
+    defer ec.deinit();
 
     const sc = SlotContext{
+        .allocator = gpa,
         .ec = &ec,
         .sysvar_cache = .{},
     };
+    defer sc.deinit();
 
-    var context: TransactionContext = .{
+    var tc: TransactionContext = .{
         .allocator = gpa,
         .ec = &ec,
         .sc = &sc,
         .accounts = &.{},
+        .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
         .accounts_resize_delta = 0,
         .return_data = .{},
         .custom_error = null,
         .log_collector = null,
-        .compute_meter = std.math.maxInt(u64),
+        .compute_meter = cmd.limit,
         .prev_blockhash = Hash.ZEROES,
         .prev_lamports_per_signature = 0,
         .compute_budget = ComputeBudget.default(1_400_000),
     };
+    defer tc.deinit();
+
     var vm = try Vm.init(
         gpa,
         &executable,
         m,
         &loader,
         stack_memory.len,
-        &context,
+        &tc,
     );
     defer vm.deinit();
     const result, const instruction_count = vm.run();
@@ -145,6 +151,7 @@ const Cmd = struct {
     input_path: ?[]const u8,
     assemble: bool,
     version: sbpf.Version,
+    limit: u64,
 
     const cmd_info: cli.CommandInfo(@This()) = .{
         .help = .{
@@ -175,6 +182,14 @@ const Cmd = struct {
                 .default_value = .v3,
                 .config = {},
                 .help = "sBPF version to execute under",
+            },
+            .limit = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .l,
+                .default_value = std.math.maxInt(u64),
+                .config = {},
+                .help = "number of compute units that can be used",
             },
         },
     };

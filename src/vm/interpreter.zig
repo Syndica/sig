@@ -1,15 +1,15 @@
 const std = @import("std");
-const lib = @import("lib.zig");
-const sbpf = @import("sbpf.zig");
-const memory = @import("memory.zig");
-const syscalls = @import("syscalls.zig");
-const transaction_context = @import("../runtime/transaction_context.zig");
+const sig = @import("../sig.zig");
+
+const sbpf = sig.vm.sbpf;
+const memory = sig.vm.memory;
+const syscalls = sig.vm.syscalls;
 
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
-const Executable = lib.Executable;
-const BuiltinProgram = lib.BuiltinProgram;
-const TransactionContext = transaction_context.TransactionContext;
+const Executable = sig.vm.Executable;
+const BuiltinProgram = sig.vm.BuiltinProgram;
+const TransactionContext = sig.runtime.TransactionContext;
 
 pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
 
@@ -70,6 +70,7 @@ pub const Vm = struct {
 
     pub fn deinit(self: *Vm) void {
         self.call_frames.deinit(self.allocator);
+        self.memory_map.deinit(self.allocator);
     }
 
     pub fn run(self: *Vm) struct { Result, u64 } {
@@ -558,7 +559,11 @@ pub const Vm = struct {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
-                        try entry.value(self.transaction_context, &self.memory_map, self.registers);
+                        try entry.value(
+                            self.transaction_context,
+                            &self.memory_map,
+                            &self.registers,
+                        );
                     } else {
                         @panic("TODO: detect invalid syscall in verifier");
                     }
@@ -594,7 +599,7 @@ pub const Vm = struct {
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                         resolved = true;
                         const builtin_fn = entry.value;
-                        try builtin_fn(self.transaction_context, &self.memory_map, self.registers);
+                        try builtin_fn(self.transaction_context, &self.memory_map, &self.registers);
                     }
                 }
 
@@ -668,7 +673,9 @@ pub const Vm = struct {
         }
 
         if (!self.executable.version.enableDynamicStackFrames()) {
-            self.registers.getPtr(.r10).* += self.executable.config.stack_frame_size;
+            const scale: u64 = if (self.executable.config.enable_stack_frame_gaps) 2 else 1;
+            const stack_frame_size = self.executable.config.stack_frame_size * scale;
+            self.registers.getPtr(.r10).* += stack_frame_size;
         }
     }
 

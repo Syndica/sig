@@ -1,6 +1,9 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 const sbpf = @import("sbpf.zig");
 const exe = @import("executable.zig");
+
+const SyscallError = sig.vm.SyscallError;
 
 /// Virtual address of the bytecode region (in SBPFv3)
 pub const BYTECODE_START: u64 = 0x000000000;
@@ -30,14 +33,14 @@ pub const MemoryMap = union(enum) {
         config: exe.Config,
     ) (error{OutOfMemory} || InitError)!MemoryMap {
         return if (config.aligned_memory_mapping)
-            .{ .aligned = try AlignedMemoryMap.init(regions, version, config) }
+            .{ .aligned = try AlignedMemoryMap.init(allocator, regions, version, config) }
         else
             .{ .unaligned = try UnalignedMemoryMap.init(allocator, regions, version, config) };
     }
 
     pub fn deinit(self: *const MemoryMap, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .aligned => {},
+            .aligned => |aligned| aligned.deinit(allocator),
             .unaligned => |unaligned| unaligned.deinit(allocator),
         }
     }
@@ -45,7 +48,7 @@ pub const MemoryMap = union(enum) {
     fn findRegion(
         self: MemoryMap,
         vm_addr: u64,
-    ) !Region {
+    ) !*Region {
         return switch (self) {
             .aligned => |aligned| try aligned.findRegion(vm_addr),
             .unaligned => |unaligned| try unaligned.findRegion(vm_addr),
@@ -56,7 +59,7 @@ pub const MemoryMap = union(enum) {
         self: MemoryMap,
         comptime access_type: MemoryState,
         vm_addr: u64,
-    ) RegionError!Region {
+    ) RegionError!*Region {
         const found_region = try self.findRegion(vm_addr);
         if (found_region.isValidAccess(access_type, vm_addr)) return found_region;
 
@@ -76,6 +79,81 @@ pub const MemoryMap = union(enum) {
         return switch (self) {
             .aligned => |aligned| aligned.vmap(state, vm_addr, len),
             .unaligned => |unaligned| unaligned.vmap(state, vm_addr, len),
+        };
+    }
+
+    pub fn mapRegion(
+        self: MemoryMap,
+        comptime state: MemoryState,
+        reg: Region,
+        vm_addr: u64,
+        len: u64,
+    ) AccessError!state.Slice() {
+        return switch (self) {
+            .aligned => |aligned| aligned.mapRegion(state, reg, vm_addr, len),
+            .unaligned => |unaligned| unaligned.mapRegion(state, reg, vm_addr, len),
+        };
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L604
+    pub fn translate(
+        memory_map: *const MemoryMap,
+        comptime state: MemoryState,
+        vm_addr: u64,
+        len: u64,
+    ) !u64 {
+        const slice = try memory_map.vmap(state, vm_addr, len);
+        return @intFromPtr(slice.ptr);
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L616
+    pub fn translateType(
+        memory_map: *const MemoryMap,
+        comptime T: type,
+        comptime state: MemoryState,
+        vm_addr: u64,
+        check_aligned: bool,
+    ) !(switch (state) {
+        .mutable => *T,
+        .constant => *const T,
+    }) {
+        const host_addr = try memory_map.translate(state, vm_addr, @sizeOf(T));
+        if (!check_aligned) {
+            return @ptrFromInt(host_addr);
+        } else if (host_addr % @alignOf(T) != 0) {
+            return SyscallError.UnalignedPointer;
+        } else {
+            return @ptrFromInt(host_addr);
+        }
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L647
+    pub fn translateSlice(
+        memory_map: *const MemoryMap,
+        comptime T: type,
+        comptime state: MemoryState,
+        vm_addr: u64,
+        len: u64,
+        check_aligned: bool,
+    ) !(switch (state) {
+        .mutable => []T,
+        .constant => []const T,
+    }) {
+        if (len == 0) {
+            return &.{}; // &mut []
+        }
+
+        const total_size = len *| @sizeOf(T);
+        _ = std.math.cast(isize, total_size) orelse return SyscallError.InvalidLength;
+
+        const host_addr = try memory_map.translate(state, vm_addr, total_size);
+        if (check_aligned and host_addr % @alignOf(T) != 0) {
+            return SyscallError.UnalignedPointer;
+        }
+
+        return switch (state) {
+            .mutable => @as([*]T, @ptrFromInt(host_addr))[0..len],
+            .constant => @as([*]const T, @ptrFromInt(host_addr))[0..len],
         };
     }
 };
@@ -114,15 +192,31 @@ const HostMemory = union(MemoryState) {
 pub const Region = struct {
     host_memory: HostMemory,
     vm_addr_start: u64,
+    vm_gap_shift: std.math.Log2Int(u64),
     vm_addr_end: u64,
 
     pub fn init(comptime state: MemoryState, slice: state.Slice(), vm_addr: u64) Region {
-        const vm_addr_end = vm_addr +| slice.len;
+        return initGapped(state, slice, vm_addr, 0);
+    }
 
+    pub fn initGapped(
+        comptime state: MemoryState,
+        slice: state.Slice(),
+        vm_addr: u64,
+        vm_gap_size: u64,
+    ) Region {
+        var vm_addr_end: u64 = vm_addr +| slice.len;
+        var vm_gap_shift: u64 = @sizeOf(u64) * 8 - 1;
+        if (vm_gap_size > 0) {
+            vm_addr_end +|= slice.len;
+            vm_gap_shift -|= @clz(vm_gap_size);
+            std.debug.assert(vm_gap_size == @as(u64, 1) << @intCast(vm_gap_shift));
+        }
         return .{
             .host_memory = @unionInit(HostMemory, @tagName(state), slice),
             .vm_addr_start = vm_addr,
             .vm_addr_end = vm_addr_end,
+            .vm_gap_shift = @intCast(vm_gap_shift),
         };
     }
 
@@ -153,7 +247,13 @@ pub const Region = struct {
 
         const host_slice = self.hostSlice(state) orelse return null;
         const begin_offset = vm_addr -| self.vm_addr_start;
-        if (begin_offset +| len <= host_slice.len) return host_slice[begin_offset..][0..len];
+
+        const is_in_gap = @as(u1, @truncate(begin_offset >> self.vm_gap_shift)) != 0;
+        const gap_mask: u64 = ~@as(u64, 0) << self.vm_gap_shift;
+        const gapped_offset = ((begin_offset & gap_mask) >> 1) | (begin_offset & ~gap_mask);
+        const end_offset = gapped_offset +| len;
+
+        if (end_offset <= host_slice.len and !is_in_gap) return host_slice[gapped_offset..][0..len];
 
         return null;
     }
@@ -164,6 +264,7 @@ pub const Region = struct {
     }
 
     fn regionsOverlap(sorted_regions: []const Region) bool {
+        if (sorted_regions.len < 2) return false;
         var iter = std.mem.window(Region, sorted_regions, 2, 1);
 
         while (iter.next()) |region_pair| {
@@ -183,33 +284,38 @@ pub const Region = struct {
 
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L551
 pub const AlignedMemoryMap = struct {
-    regions: []const Region,
+    regions: []Region,
     version: sbpf.Version,
     config: exe.Config,
 
     fn init(
+        allocator: std.mem.Allocator,
         regions: []const Region,
         version: sbpf.Version,
         config: exe.Config,
-    ) InitError!AlignedMemoryMap {
+    ) (error{OutOfMemory} || InitError)!AlignedMemoryMap {
         for (regions, 1..) |reg, index| {
             if (reg.vm_addr_start >> VIRTUAL_ADDRESS_BITS != index) {
                 return error.InvalidMemoryRegion;
             }
         }
         return .{
-            .regions = regions,
+            .regions = try allocator.dupe(Region, regions),
             .version = version,
             .config = config,
         };
     }
 
-    fn findRegion(self: *const AlignedMemoryMap, vm_addr: u64) !Region {
+    fn deinit(self: *const AlignedMemoryMap, allocator: std.mem.Allocator) void {
+        allocator.free(self.regions);
+    }
+
+    fn findRegion(self: *const AlignedMemoryMap, vm_addr: u64) !*Region {
         const err = accessViolation(vm_addr, self.version, self.config);
 
         const index = vm_addr >> VIRTUAL_ADDRESS_BITS;
         if (index == 0 or index > self.regions.len) return err;
-        const reg = self.regions[index - 1];
+        const reg = &self.regions[index - 1];
         if (vm_addr >= reg.vm_addr_start and vm_addr < reg.vm_addr_end) {
             return reg;
         }
@@ -224,6 +330,16 @@ pub const AlignedMemoryMap = struct {
         len: u64,
     ) AccessError!state.Slice() {
         const reg = try self.findRegion(vm_addr);
+        return self.mapRegion(state, reg.*, vm_addr, len);
+    }
+
+    fn mapRegion(
+        self: *const AlignedMemoryMap,
+        comptime state: MemoryState,
+        reg: Region,
+        vm_addr: u64,
+        len: u64,
+    ) AccessError!state.Slice() {
         return reg.translate(state, vm_addr, len) orelse
             return accessViolation(vm_addr, self.version, self.config);
     }
@@ -286,6 +402,7 @@ const UnalignedMemoryMap = struct {
         @memset(etyzinger_regions, .{
             .vm_addr_start = 0,
             .vm_addr_end = 0,
+            .vm_gap_shift = 0,
             .host_memory = .{ .constant = "" },
         });
 
@@ -340,7 +457,7 @@ const UnalignedMemoryMap = struct {
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L293
     // NOTE: agave-like cache unimplemented. Does not seem necessary.
-    fn findRegion(self: *const UnalignedMemoryMap, vm_addr: u64) !Region {
+    fn findRegion(self: *const UnalignedMemoryMap, vm_addr: u64) !*Region {
         var index: usize = 1;
         while (index <= self.region_addresses.len) {
             std.debug.assert(index > 0); // safe: index started at 1 and only increases.
@@ -351,7 +468,7 @@ const UnalignedMemoryMap = struct {
         return if (index == 0)
             accessViolation(vm_addr, self.version, self.config)
         else
-            self.regions[index - 1];
+            &self.regions[index - 1];
     }
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L323
@@ -362,7 +479,17 @@ const UnalignedMemoryMap = struct {
         len: u64,
     ) AccessError!access_type.Slice() {
         const reg = try self.findRegion(vm_addr);
-        return reg.translate(access_type, vm_addr, len) orelse
+        return self.mapRegion(access_type, reg.*, vm_addr, len);
+    }
+
+    fn mapRegion(
+        self: *const UnalignedMemoryMap,
+        comptime state: MemoryState,
+        reg: Region,
+        vm_addr: u64,
+        len: u64,
+    ) AccessError!state.Slice() {
+        return reg.translate(state, vm_addr, len) orelse
             return accessViolation(vm_addr, self.version, self.config);
     }
 };
@@ -374,8 +501,9 @@ test "aligned vmap" {
     var program_mem: [4]u8 = .{0xFF} ** 4;
     var stack_mem: [4]u8 = .{0xDD} ** 4;
 
-    const m = try MemoryMap.init(
-        std.testing.failing_allocator,
+    const allocator = std.testing.allocator; // needed for regions dupe
+    var m = try MemoryMap.init(
+        allocator,
         &.{
             Region.init(.mutable, &program_mem, RODATA_START),
             Region.init(.constant, &stack_mem, STACK_START),
@@ -383,6 +511,7 @@ test "aligned vmap" {
         .v3,
         .{},
     );
+    defer m.deinit(allocator);
 
     try expectEqual(
         program_mem[0..1],
@@ -416,8 +545,9 @@ test "aligned region" {
     var program_mem: [4]u8 = .{0xFF} ** 4;
     var stack_mem: [4]u8 = .{0xDD} ** 4;
 
-    const m = try MemoryMap.init(
-        std.testing.failing_allocator,
+    const allocator = std.testing.allocator; // needed for regions dupe
+    var m = try MemoryMap.init(
+        allocator,
         &.{
             Region.init(.mutable, &program_mem, RODATA_START),
             Region.init(.constant, &stack_mem, STACK_START),
@@ -425,6 +555,7 @@ test "aligned region" {
         .v3,
         .{},
     );
+    defer m.deinit(allocator);
 
     try expectError(error.AccessViolation, m.region(.constant, RODATA_START - 1));
     try expectEqual(&program_mem, (try m.region(.constant, RODATA_START)).hostSlice(.constant));
@@ -554,4 +685,36 @@ test "unaligned region" {
     try expectEqual(&mem2, (try map.region(.constant, INPUT_START + 4)).hostSlice(.constant));
     try expectEqual(&mem2, (try map.region(.constant, INPUT_START + 7)).hostSlice(.constant));
     try expectError(error.AccessViolation, map.region(.constant, INPUT_START + 8));
+}
+
+test "empty unaligned memory map" {
+    const allocator = std.testing.failing_allocator;
+    var mmap = try MemoryMap.init(
+        allocator,
+        &.{},
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer mmap.deinit(allocator);
+}
+
+test "gapped map" {
+    const allocator = std.testing.allocator;
+    inline for (.{ true, false }) |aligned| {
+        var mem1: [8]u8 = .{0xFF} ** 8;
+        var map = try MemoryMap.init(allocator, &.{
+            Region.init(.constant, &(.{0} ** 8), RODATA_START),
+            Region.initGapped(.mutable, &mem1, STACK_START, 2),
+        }, .v3, .{ .aligned_memory_mapping = aligned });
+        defer map.deinit(allocator);
+
+        for (0..4) |frame| {
+            const address = STACK_START + frame * 4;
+            _ = try map.region(.constant, address);
+            _ = try map.vmap(.constant, address, 2);
+            try expectError(error.AccessViolation, map.vmap(.constant, address + 2, 2));
+            try expectEqualSlices(u8, try map.vmap(.constant, address, 2), &.{ 0xFF, 0xFF });
+            try expectError(error.AccessViolation, map.vmap(.constant, address + 2, 2));
+        }
+    }
 }

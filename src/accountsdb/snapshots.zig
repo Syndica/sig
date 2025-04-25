@@ -4,6 +4,7 @@ const std = @import("std");
 const zstd = @import("zstd");
 const sig = @import("../sig.zig");
 const base58 = @import("base58");
+const tracy = @import("tracy");
 
 const bincode = sig.bincode;
 
@@ -16,6 +17,7 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
+pub const RentCollector = sig.runtime.rent_collector.RentCollector;
 
 const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
 const FileId = sig.accounts_db.accounts_file.FileId;
@@ -66,14 +68,18 @@ pub const EpochAndStakeHistory = []const EpochAndStakeHistoryEntry;
 pub fn stakeHistoryRandom(
     random: std.Random,
     allocator: std.mem.Allocator,
+    min_list_entries: usize,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!EpochAndStakeHistory {
-    const stake_history_len = random.uintAtMost(usize, max_list_entries);
+    const len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
 
-    const stake_history = try allocator.alloc(EpochAndStakeHistoryEntry, stake_history_len);
+    const stake_history = try allocator.alloc(EpochAndStakeHistoryEntry, len);
     errdefer allocator.free(stake_history);
 
-    for (stake_history) |*entry| entry.* = EpochAndStakeHistoryEntry.initRandom(random);
+    for (stake_history) |*entry| {
+        entry.* = EpochAndStakeHistoryEntry.initRandom(random);
+    }
+
     return stake_history;
 }
 
@@ -208,60 +214,53 @@ pub const VoteAccounts = struct {
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
+        min_list_entries: usize,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!VoteAccounts {
-        var stakes_vote_accounts = StakeAndVoteAccountsMap.Managed.init(allocator);
-        errdefer stakes_vote_accounts.deinit();
-
-        errdefer for (stakes_vote_accounts.values()) |pair| {
+        var vote_accounts: StakeAndVoteAccountsMap = .{};
+        errdefer vote_accounts.deinit(allocator);
+        errdefer for (vote_accounts.values()) |pair| {
             _, const vote_account = pair;
             vote_account.account.deinit(allocator);
         };
 
-        try sig.rand.fillHashmapWithRng(&stakes_vote_accounts, random, random.uintAtMost(usize, max_list_entries), struct {
-            allocator: std.mem.Allocator,
-            max_list_entries: usize,
-
-            pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
-                return Pubkey.initRandom(rand);
-            }
-            pub fn randomValue(ctx: @This(), rand: std.Random) !StakeAndVoteAccount {
-                const vote_account: VoteAccount = try VoteAccount.initRandom(
-                    rand,
-                    ctx.allocator,
-                    ctx.max_list_entries,
-                    error{ RandomError1, RandomError2, RandomError3 },
-                );
-                errdefer vote_account.deinit(ctx.allocator);
-                return .{ rand.int(u64), vote_account };
-            }
-        }{
-            .allocator = allocator,
-            .max_list_entries = max_list_entries,
-        });
-
-        var stakes_maybe_staked_nodes = if (random.boolean()) std.AutoArrayHashMap(Pubkey, u64).init(allocator) else null;
-        errdefer if (stakes_maybe_staked_nodes) |*staked_nodes| staked_nodes.deinit();
-
-        if (stakes_maybe_staked_nodes) |*staked_nodes| {
-            try sig.rand.fillHashmapWithRng(
-                staked_nodes,
+        const vote_accounts_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+        try vote_accounts.ensureTotalCapacity(allocator, vote_accounts_len);
+        for (0..vote_accounts_len) |_| {
+            const value_ptr = while (true) {
+                const gop = vote_accounts.getOrPutAssumeCapacity(Pubkey.initRandom(random));
+                if (gop.found_existing) continue;
+                break gop.value_ptr;
+            };
+            value_ptr.* = .{ random.int(u64), try VoteAccount.initRandom(
                 random,
-                random.uintAtMost(usize, max_list_entries),
-                struct {
-                    pub fn randomKey(rand: std.Random) !Pubkey {
-                        return Pubkey.initRandom(rand);
-                    }
-                    pub fn randomValue(rand: std.Random) !u64 {
-                        return rand.int(u64);
-                    }
-                },
-            );
+                allocator,
+                min_list_entries,
+                max_list_entries,
+                error{ RandomError1, RandomError2, RandomError3 },
+            ) };
+        }
+
+        var maybe_staked_nodes: ?StakedNodesMap = if (random.boolean()) .{} else null;
+        errdefer if (maybe_staked_nodes) |*staked_nodes| staked_nodes.deinit(allocator);
+
+        if (maybe_staked_nodes) |*staked_nodes| {
+            const staked_nodes_len =
+                random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+            try staked_nodes.ensureTotalCapacity(allocator, staked_nodes_len);
+            for (0..staked_nodes_len) |_| {
+                const value_ptr = while (true) {
+                    const gop = staked_nodes.getOrPutAssumeCapacity(Pubkey.initRandom(random));
+                    if (gop.found_existing) continue;
+                    break gop.value_ptr;
+                };
+                value_ptr.* = random.int(u64);
+            }
         }
 
         return .{
-            .accounts = stakes_vote_accounts.unmanaged,
-            .staked_nodes = if (stakes_maybe_staked_nodes) |staked_nodes| staked_nodes.unmanaged else null,
+            .accounts = vote_accounts,
+            .staked_nodes = if (maybe_staked_nodes) |staked_nodes| staked_nodes else null,
         };
     }
 };
@@ -270,7 +269,9 @@ pub const VoteAccount = struct {
     account: Account,
     vote_state: ?anyerror!VoteState = null,
 
-    pub const @"!bincode-config:vote_state" = bincode.FieldConfig(?anyerror!VoteState){ .skip = true };
+    pub const @"!bincode-config:vote_state": bincode.FieldConfig(?anyerror!VoteState) = .{
+        .skip = true,
+    };
 
     pub fn deinit(vote_account: VoteAccount, allocator: std.mem.Allocator) void {
         vote_account.account.deinit(allocator);
@@ -312,13 +313,17 @@ pub const VoteAccount = struct {
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
-        max_list_entries: usize,
+        min_data_len: usize,
+        max_data_len: usize,
         comptime RandomErrorSet: type,
     ) std.mem.Allocator.Error!VoteAccount {
-        const account = try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries));
+        const length = random.intRangeAtMost(usize, min_data_len, max_data_len);
+
+        const account = try Account.initRandom(allocator, random, length);
         errdefer account.deinit(allocator);
 
-        const vote_state: ?anyerror!VoteState = switch (random.enumValue(enum { null, err, value })) {
+        const VoteStateTag = enum { null, err, value };
+        const vote_state: ?anyerror!VoteState = switch (random.enumValue(VoteStateTag)) {
             .null => null,
             .err => @as(anyerror!VoteState, sig.rand.errorValue(random, RandomErrorSet)),
             .value => VoteState.initRandom(random),
@@ -351,7 +356,8 @@ test "deserialize VoteState.node_pubkey" {
         90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
     } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
     const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
-    const expected_pubkey = try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
+    const expected_pubkey =
+        try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
 }
 
@@ -375,23 +381,6 @@ pub const Delegation = struct {
             .activation_epoch = random.int(Epoch),
             .deactivation_epoch = random.int(Epoch),
             .deprecated_warmup_cooldown_rate = random.float(f64),
-        };
-    }
-};
-
-/// Analogous to [RentCollector](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/rent_collector.rs#L16)
-pub const RentCollector = struct {
-    epoch: Epoch,
-    epoch_schedule: EpochSchedule,
-    slots_per_year: f64,
-    rent: Rent,
-
-    pub fn initRandom(random: std.Random) RentCollector {
-        return .{
-            .epoch = random.int(Epoch),
-            .epoch_schedule = EpochSchedule.initRandom(random),
-            .slots_per_year = random.float(f64),
-            .rent = Rent.initRandom(random),
         };
     }
 };
@@ -429,21 +418,24 @@ pub const BlockhashQueueAges = std.AutoArrayHashMapUnmanaged(Hash, HashAge);
 pub fn blockhashQueueAgesRandom(
     random: std.Random,
     allocator: std.mem.Allocator,
+    min_list_entries: usize,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!BlockhashQueueAges {
-    var ages = BlockhashQueueAges.Managed.init(allocator);
-    errdefer ages.deinit();
+    var map: BlockhashQueueAges = .{};
+    errdefer map.deinit(allocator);
 
-    try sig.rand.fillHashmapWithRng(&ages, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(rand: std.Random) !Hash {
-            return Hash.initRandom(rand);
-        }
-        pub fn randomValue(rand: std.Random) !HashAge {
-            return HashAge.initRandom(rand);
-        }
-    });
+    const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+    try map.ensureTotalCapacity(allocator, map_len);
+    for (0..map_len) |_| {
+        const value_ptr = while (true) {
+            const gop = map.getOrPutAssumeCapacity(Hash.initRandom(random));
+            if (gop.found_existing) continue;
+            break gop.value_ptr;
+        };
+        value_ptr.* = HashAge.initRandom(random);
+    }
 
-    return ages.unmanaged;
+    return map;
 }
 
 /// Analogous to [BlockhashQueue](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L32)
@@ -479,14 +471,24 @@ pub const BlockhashQueue = struct {
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
-        max_list_entries: usize,
+        params: struct {
+            min_list_entries: usize,
+            max_list_entries: usize,
+            last_hash_can_be_null: bool,
+        },
     ) std.mem.Allocator.Error!BlockhashQueue {
-        var ages = try blockhashQueueAgesRandom(random, allocator, max_list_entries);
+        var ages = try blockhashQueueAgesRandom(
+            random,
+            allocator,
+            params.min_list_entries,
+            params.max_list_entries,
+        );
         errdefer ages.deinit(allocator);
 
+        const last_hash_is_null = !params.last_hash_can_be_null or random.boolean();
         return .{
             .last_hash_index = random.int(u64),
-            .last_hash = if (random.boolean()) Hash.initRandom(random) else null,
+            .last_hash = if (last_hash_is_null) Hash.initRandom(random) else null,
             .ages = ages,
             .max_age = random.int(usize),
         };
@@ -535,6 +537,7 @@ pub const UnusedAccounts = struct {
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
+        min_list_entries: usize,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!UnusedAccounts {
         var unused_accounts: UnusedAccounts = .{
@@ -545,24 +548,24 @@ pub const UnusedAccounts = struct {
         errdefer unused_accounts.deinit(allocator);
 
         inline for (@typeInfo(UnusedAccounts).Struct.fields) |field| {
-            const hm_info = sig.utils.types.hashMapInfo(field.type).?;
+            const map_info = sig.utils.types.hashMapInfo(field.type).?;
+            const map = &@field(unused_accounts, field.name);
 
-            const ptr = &@field(unused_accounts, field.name);
-            var managed = ptr.promote(allocator);
-            defer ptr.* = managed.unmanaged;
+            const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+            try map.ensureTotalCapacity(allocator, map_len);
 
-            try sig.rand.fillHashmapWithRng(&managed, random, random.uintAtMost(usize, max_list_entries), struct {
-                pub fn randomKey(rand: std.Random) !Pubkey {
-                    return Pubkey.initRandom(rand);
-                }
-                pub fn randomValue(rand: std.Random) !hm_info.Value {
-                    return switch (hm_info.Value) {
-                        u64 => rand.int(u64),
-                        void => {},
-                        else => @compileError("Unexpected value type: " ++ @typeName(hm_info.Value)),
-                    };
-                }
-            });
+            for (0..map_len) |_| {
+                const value_ptr = while (true) {
+                    const gop = map.getOrPutAssumeCapacity(Pubkey.initRandom(random));
+                    if (gop.found_existing) continue;
+                    break gop.value_ptr;
+                };
+                value_ptr.* = switch (map_info.Value) {
+                    u64 => random.int(u64),
+                    void => {},
+                    else => @compileError("Unexpected value type: " ++ @typeName(map_info.Value)),
+                };
+            }
         }
 
         return unused_accounts;
@@ -575,21 +578,24 @@ pub const Ancestors = std.AutoArrayHashMapUnmanaged(Slot, usize);
 pub fn ancestorsRandom(
     random: std.Random,
     allocator: std.mem.Allocator,
+    min_list_entries: usize,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!Ancestors {
-    var ancestors = Ancestors.Managed.init(allocator);
-    errdefer ancestors.deinit();
+    var map: Ancestors = .{};
+    errdefer map.deinit(allocator);
 
-    try sig.rand.fillHashmapWithRng(&ancestors, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(rand: std.Random) !Slot {
-            return rand.int(Slot);
-        }
-        pub fn randomValue(rand: std.Random) !usize {
-            return rand.int(usize);
-        }
-    });
+    const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+    try map.ensureTotalCapacity(allocator, map_len);
+    for (0..map_len) |_| {
+        const value_ptr = while (true) {
+            const gop = map.getOrPutAssumeCapacity(random.int(Slot));
+            if (gop.found_existing) continue;
+            break gop.value_ptr;
+        };
+        value_ptr.* = random.int(usize);
+    }
 
-    return ancestors.unmanaged;
+    return map;
 }
 
 pub const SlotAndCount = struct { Slot, usize };
@@ -612,11 +618,12 @@ pub const HardForks = struct {
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
+        min_list_entries: usize,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!HardForks {
-        const hard_forks_len = random.uintAtMost(usize, max_list_entries);
+        const len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
 
-        const hard_forks = try allocator.alloc(SlotAndCount, hard_forks_len);
+        const hard_forks = try allocator.alloc(SlotAndCount, len);
         errdefer allocator.free(hard_forks);
 
         for (hard_forks) |*hard_fork| hard_fork.* = .{
@@ -650,11 +657,18 @@ pub const NodeVoteAccounts = struct {
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
+        min_list_entries: usize,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!NodeVoteAccounts {
-        const vote_accounts = try allocator.alloc(Pubkey, random.uintLessThan(usize, max_list_entries));
+        const len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+
+        const vote_accounts = try allocator.alloc(Pubkey, len);
         errdefer allocator.free(vote_accounts);
-        for (vote_accounts) |*vote_account| vote_account.* = Pubkey.initRandom(random);
+
+        for (vote_accounts) |*vote_account| {
+            vote_account.* = Pubkey.initRandom(random);
+        }
+
         return .{
             .vote_accounts = vote_accounts,
             .total_stake = random.int(u64),
@@ -694,28 +708,33 @@ pub fn nodeIdToVoteAccountsMapClone(
 pub fn nodeIdToVoteAccountsMapRandom(
     allocator: std.mem.Allocator,
     random: std.Random,
-    max_list_entries: usize,
+    params: struct {
+        len: usize,
+        list_entries: struct {
+            min: usize,
+            max: usize,
+        },
+    },
 ) std.mem.Allocator.Error!NodeIdToVoteAccountsMap {
-    var node_id_to_vote_accounts = NodeIdToVoteAccountsMap.Managed.init(allocator);
-    errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts.unmanaged, allocator);
+    var map: NodeIdToVoteAccountsMap = .{};
+    errdefer nodeIdToVoteAccountsMapDeinit(map, allocator);
 
-    try sig.rand.fillHashmapWithRng(&node_id_to_vote_accounts, random, random.uintAtMost(usize, max_list_entries), struct {
-        allocator: std.mem.Allocator,
-        max_list_entries: usize,
+    try map.ensureTotalCapacity(allocator, params.len);
+    for (0..params.len) |_| {
+        const value_ptr = while (true) {
+            const gop = map.getOrPutAssumeCapacity(Pubkey.initRandom(random));
+            if (gop.found_existing) continue;
+            break gop.value_ptr;
+        };
+        value_ptr.* = try NodeVoteAccounts.initRandom(
+            random,
+            allocator,
+            params.list_entries.min,
+            params.list_entries.max,
+        );
+    }
 
-        pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
-            return Pubkey.initRandom(rand);
-        }
-
-        pub fn randomValue(ctx: @This(), rand: std.Random) !NodeVoteAccounts {
-            return try NodeVoteAccounts.initRandom(rand, ctx.allocator, ctx.max_list_entries);
-        }
-    }{
-        .allocator = allocator,
-        .max_list_entries = max_list_entries,
-    });
-
-    return node_id_to_vote_accounts.unmanaged;
+    return map;
 }
 
 /// Analogous to [EpochAuthorizedVoters](https://github.com/anza-xyz/agave/blob/42df56cac041077e471655579d6189a389c53882/runtime/src/epoch_stakes.rs#L10)
@@ -724,21 +743,29 @@ pub const EpochAuthorizedVoters = std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey);
 pub fn epochAuthorizedVotersRandom(
     allocator: std.mem.Allocator,
     random: std.Random,
-    max_list_entries: usize,
+    params: struct {
+        len: usize,
+        list_entries: struct {
+            min: usize,
+            max: usize,
+        },
+    },
 ) std.mem.Allocator.Error!EpochAuthorizedVoters {
-    var epoch_authorized_voters = EpochAuthorizedVoters.Managed.init(allocator);
-    errdefer epoch_authorized_voters.deinit();
+    var map: EpochAuthorizedVoters = .{};
+    errdefer map.deinit(allocator);
 
-    try sig.rand.fillHashmapWithRng(&epoch_authorized_voters, random, random.uintAtMost(usize, max_list_entries), struct {
-        pub fn randomKey(rand: std.Random) !Pubkey {
-            return Pubkey.initRandom(rand);
-        }
-        pub fn randomValue(rand: std.Random) !Pubkey {
-            return Pubkey.initRandom(rand);
-        }
-    });
+    const len = random.intRangeAtMost(usize, params.list_entries.min, params.list_entries.max);
+    try map.ensureTotalCapacity(allocator, len);
+    for (0..len) |_| {
+        const value_ptr = while (true) {
+            const gop = map.getOrPutAssumeCapacity(Pubkey.initRandom(random));
+            if (gop.found_existing) continue;
+            break gop.value_ptr;
+        };
+        value_ptr.* = Pubkey.initRandom(random);
+    }
 
-    return epoch_authorized_voters.unmanaged;
+    return map;
 }
 
 /// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
@@ -785,21 +812,39 @@ pub const EpochStakes = struct {
         /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
         /// for commentary on the runtime of this function.
         random: std.Random,
+        min_list_entries: usize,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!EpochStakes {
-        var result_stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
-        errdefer result_stakes.deinit(allocator);
+        const stakes = try Stakes(.delegation).initRandom(
+            allocator,
+            random,
+            min_list_entries,
+            max_list_entries,
+        );
+        errdefer stakes.deinit(allocator);
 
-        const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
-        errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
+        const niva = try nodeIdToVoteAccountsMapRandom(allocator, random, .{
+            .len = random.intRangeAtMost(usize, min_list_entries, max_list_entries),
+            .list_entries = .{
+                .min = min_list_entries,
+                .max = max_list_entries,
+            },
+        });
+        errdefer nodeIdToVoteAccountsMapDeinit(niva, allocator);
 
-        var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
+        var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, .{
+            .len = random.intRangeAtMost(usize, min_list_entries, max_list_entries),
+            .list_entries = .{
+                .min = min_list_entries,
+                .max = max_list_entries,
+            },
+        });
         errdefer epoch_authorized_voters.deinit(allocator);
 
         return .{
-            .stakes = result_stakes,
+            .stakes = stakes,
             .total_stake = random.int(u64),
-            .node_id_to_vote_accounts = node_id_to_vote_accounts,
+            .node_id_to_vote_accounts = niva,
             .epoch_authorized_voters = epoch_authorized_voters,
         };
     }
@@ -848,9 +893,12 @@ pub const StakeReward = struct {
 /// Analogous to [RewardInfo](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_info.rs#L5)
 pub const RewardInfo = struct {
     reward_type: RewardType,
-    lamports: i64, // Reward amount
-    post_balance: u64, // Account balance in lamports after `lamports` was applied
-    commission: ?u8, // Vote account commission when the reward was credited, only present for voting and staking rewards
+    /// Reward amount
+    lamports: i64,
+    /// Account balance in lamports after `lamports` was applied
+    post_balance: u64,
+    /// Vote account commission when the reward was credited, only present for voting and staking rewards
+    commission: ?u8,
 };
 
 /// Analogous to [RewardType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_type.rs#L7)
@@ -991,28 +1039,33 @@ pub fn Stakes(comptime delegation_elem: StakesDelegationElement) type {
             /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
             /// for commentary on the runtime of this function.
             random: std.Random,
+            min_list_entries: usize,
             max_list_entries: usize,
         ) std.mem.Allocator.Error!Self {
-            const vote_accounts = try VoteAccounts.initRandom(random, allocator, max_list_entries);
+            const vote_accounts =
+                try VoteAccounts.initRandom(random, allocator, min_list_entries, max_list_entries);
             errdefer vote_accounts.deinit(allocator);
 
             var delegations: DelegationsMap = .{};
             errdefer freeDelegations(allocator, delegations);
 
-            const delegations_count = random.uintAtMost(usize, max_list_entries);
-            try delegations.ensureTotalCapacity(allocator, delegations_count);
-
-            for (0..delegations_count) |_| {
-                const key = Pubkey.initRandom(random);
-                const gop = delegations.getOrPutAssumeCapacity(key);
-                if (gop.found_existing) continue;
-                gop.value_ptr.* = switch (delegation_elem) {
+            const delegations_len =
+                random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+            try delegations.ensureTotalCapacity(allocator, delegations_len);
+            for (0..delegations_len) |_| {
+                const value_ptr = while (true) {
+                    const gop = delegations.getOrPutAssumeCapacity(Pubkey.initRandom(random));
+                    if (gop.found_existing) continue;
+                    break gop.value_ptr;
+                };
+                value_ptr.* = switch (delegation_elem) {
                     .delegation, .stake => DelegationElem.initRandom(random),
                 };
             }
 
-            const history = try stakeHistoryRandom(random, allocator, max_list_entries);
-            errdefer history.deinit(allocator);
+            const history =
+                try stakeHistoryRandom(random, allocator, min_list_entries, max_list_entries);
+            errdefer allocator.free(history);
 
             return .{
                 .vote_accounts = vote_accounts,
@@ -1051,26 +1104,40 @@ pub const VersionedEpochStake = union(enum(u32)) {
         pub fn initRandom(
             allocator: std.mem.Allocator,
             random: std.Random,
+            min_list_entries: usize,
             max_list_entries: usize,
         ) std.mem.Allocator.Error!Current {
-            const stakes = try Stakes(.stake).initRandom(allocator, random, max_list_entries);
-            errdefer stakes.deinit(allocator);
-
-            const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(
+            const stakes = try Stakes(.stake).initRandom(
                 allocator,
                 random,
+                min_list_entries,
                 max_list_entries,
             );
-            errdefer nodeIdToVoteAccountsMapDeinit(node_id_to_vote_accounts, allocator);
+            errdefer stakes.deinit(allocator);
 
-            var epoch_authorized_voters = try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
-            errdefer epoch_authorized_voters.deinit(allocator);
+            const niva = try nodeIdToVoteAccountsMapRandom(allocator, random, .{
+                .len = random.intRangeAtMost(usize, min_list_entries, max_list_entries),
+                .list_entries = .{
+                    .min = min_list_entries,
+                    .max = max_list_entries,
+                },
+            });
+            errdefer nodeIdToVoteAccountsMapDeinit(niva, allocator);
+
+            var eav = try epochAuthorizedVotersRandom(allocator, random, .{
+                .len = random.intRangeAtMost(usize, min_list_entries, max_list_entries),
+                .list_entries = .{
+                    .min = min_list_entries,
+                    .max = max_list_entries,
+                },
+            });
+            errdefer eav.deinit(allocator);
 
             return .{
                 .stakes = stakes,
                 .total_stake = random.int(u64),
-                .node_id_to_vote_accounts = node_id_to_vote_accounts,
-                .epoch_authorized_voters = epoch_authorized_voters,
+                .node_id_to_vote_accounts = niva,
+                .epoch_authorized_voters = eav,
             };
         }
     };
@@ -1078,11 +1145,19 @@ pub const VersionedEpochStake = union(enum(u32)) {
     pub fn initRandom(
         allocator: std.mem.Allocator,
         random: std.Random,
+        min_list_entries: usize,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!VersionedEpochStake {
-        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1); // randomly generate the tag otherwise
+        comptime std.debug.assert( // randomly generate the tag otherwise
+            @typeInfo(VersionedEpochStake).Union.fields.len == 1,
+        );
         return .{
-            .current = try Current.initRandom(allocator, random, max_list_entries),
+            .current = try Current.initRandom(
+                allocator,
+                random,
+                min_list_entries,
+                max_list_entries,
+            ),
         };
     }
 };
@@ -1120,28 +1195,29 @@ pub fn epochStakeMapClone(
 pub fn epochStakeMapRandom(
     random: std.Random,
     allocator: std.mem.Allocator,
+    min_list_entries: usize,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!EpochStakeMap {
-    var epoch_stakes = EpochStakeMap.Managed.init(allocator);
-    errdefer epochStakeMapDeinit(epoch_stakes.unmanaged, allocator);
+    var map: EpochStakeMap = .{};
+    errdefer epochStakeMapDeinit(map, allocator);
 
-    try sig.rand.fillHashmapWithRng(&epoch_stakes, random, random.uintAtMost(usize, max_list_entries), struct {
-        allocator: std.mem.Allocator,
-        max_list_entries: usize,
+    const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+    try map.ensureTotalCapacity(allocator, map_len);
+    for (0..map_len) |_| {
+        const value_ptr = while (true) {
+            const gop = map.getOrPutAssumeCapacity(random.int(Epoch));
+            if (gop.found_existing) continue;
+            break gop.value_ptr;
+        };
+        value_ptr.* = try EpochStakes.initRandom(
+            allocator,
+            random,
+            min_list_entries,
+            max_list_entries,
+        );
+    }
 
-        pub fn randomKey(_: @This(), rand: std.Random) !Epoch {
-            return rand.int(Epoch);
-        }
-
-        pub fn randomValue(ctx: @This(), rand: std.Random) !EpochStakes {
-            return try EpochStakes.initRandom(ctx.allocator, rand, ctx.max_list_entries);
-        }
-    }{
-        .allocator = allocator,
-        .max_list_entries = max_list_entries,
-    });
-
-    return epoch_stakes.unmanaged;
+    return map;
 }
 
 /// Analogous to [DeserializableVersionedBank](https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L134).
@@ -1230,7 +1306,11 @@ pub const BankFields = struct {
         return cloned;
     }
 
-    pub fn getStakedNodes(self: *const BankFields, allocator: std.mem.Allocator, epoch: Epoch) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+    pub fn getStakedNodes(
+        self: *const BankFields,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
         const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
         return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
     }
@@ -1268,24 +1348,38 @@ pub const BankFields = struct {
         /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
         /// for commentary on the runtime of this function.
         random: std.Random,
+        min_list_entries: usize,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!BankFields {
-        var blockhash_queue = try BlockhashQueue.initRandom(random, allocator, max_list_entries);
+        const blockhash_queue = try BlockhashQueue.initRandom(random, allocator, .{
+            .min_list_entries = min_list_entries,
+            .max_list_entries = max_list_entries,
+            .last_hash_can_be_null = false,
+        });
         errdefer blockhash_queue.deinit(allocator);
 
-        var ancestors = try ancestorsRandom(random, allocator, max_list_entries);
+        var ancestors =
+            try ancestorsRandom(random, allocator, min_list_entries, max_list_entries);
         errdefer ancestors.deinit(allocator);
 
-        const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
+        const hard_forks =
+            try HardForks.initRandom(random, allocator, min_list_entries, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
+        const stakes = try Stakes(.delegation).initRandom(
+            allocator,
+            random,
+            min_list_entries,
+            max_list_entries,
+        );
         errdefer stakes.deinit(allocator);
 
-        const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
+        const unused_accounts =
+            try UnusedAccounts.initRandom(random, allocator, min_list_entries, max_list_entries);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapRandom(random, allocator, max_list_entries);
+        const epoch_stakes =
+            try epochStakeMapRandom(random, allocator, min_list_entries, max_list_entries);
         errdefer epochStakeMapDeinit(epoch_stakes, allocator);
 
         return .{
@@ -1381,7 +1475,13 @@ pub const ExtraFields = struct {
     pub fn initRandom(
         allocator: std.mem.Allocator,
         random: std.Random,
-        max_list_entries: usize,
+        params: struct {
+            versioned_epoch_stakes_len: usize,
+            list_entries: struct {
+                min: usize,
+                max: usize,
+            },
+        },
     ) std.mem.Allocator.Error!ExtraFields {
         var extra_fields: ExtraFields = INIT_EOF;
         errdefer extra_fields.deinit(allocator);
@@ -1407,15 +1507,22 @@ pub const ExtraFields = struct {
 
                 .versioned_epoch_stakes,
                 => {
-                    const entry_count = random.uintAtMost(usize, max_list_entries);
-                    try field_ptr.ensureTotalCapacity(allocator, entry_count);
-                    for (0..entry_count) |_| {
-                        const ves = try VersionedEpochStake.initRandom(
+                    try field_ptr.ensureTotalCapacity(
+                        allocator,
+                        params.versioned_epoch_stakes_len,
+                    );
+                    for (0..params.versioned_epoch_stakes_len) |_| {
+                        const value_ptr = while (true) {
+                            const gop = field_ptr.getOrPutAssumeCapacity(random.int(u64));
+                            if (gop.found_existing) continue;
+                            break gop.value_ptr;
+                        };
+                        value_ptr.* = try VersionedEpochStake.initRandom(
                             allocator,
                             random,
-                            max_list_entries,
+                            params.list_entries.min,
+                            params.list_entries.max,
                         );
-                        field_ptr.putAssumeCapacity(random.int(u64), ves);
                     }
                 },
 
@@ -2030,7 +2137,9 @@ pub const FullSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
 
-    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.zst");
+    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec(
+        "snapshot-{[slot]d}-{[hash]s}.tar.zst",
+    );
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .slot = std.math.maxInt(Slot),
@@ -2056,7 +2165,9 @@ pub const FullSnapshotFileInfo = struct {
     ) ParseFileNameTarZstError!FullSnapshotFileInfo {
         const snapshot_file_info, const extension_start = try parseFileBaseName(filename);
         if (extension_start == filename.len) return error.MissingExtension;
-        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) return error.InvalidExtension;
+        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) {
+            return error.InvalidExtension;
+        }
         return snapshot_file_info;
     }
 
@@ -2156,7 +2267,9 @@ pub const IncrementalSnapshotFileInfo = struct {
         };
     }
 
-    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst");
+    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec(
+        "incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst",
+    );
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .base_slot = std.math.maxInt(Slot),
@@ -2184,7 +2297,9 @@ pub const IncrementalSnapshotFileInfo = struct {
     ) ParseFileNameTarZstError!IncrementalSnapshotFileInfo {
         const snapshot_file_info, const extension_start = try parseFileBaseName(filename);
         if (extension_start == filename.len) return error.MissingExtension;
-        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) return error.InvalidExtension;
+        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) {
+            return error.InvalidExtension;
+        }
         return snapshot_file_info;
     }
 
@@ -2329,6 +2444,9 @@ pub const SnapshotFiles = struct {
     };
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, search_dir: std.fs.Dir) FindError!SnapshotFiles {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb SnapshotFiles.find" });
+        defer zone.deinit();
+
         var incremental_snapshots: std.ArrayListUnmanaged(IncrementalSnapshotFileInfo) = .{};
         defer incremental_snapshots.deinit(allocator);
 
@@ -2413,10 +2531,16 @@ pub const FullAndIncrementalManifest = struct {
         const logger = unscoped_logger.withScope("accounts_db.snapshot_manifest");
 
         const full_fields = blk: {
-            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full.slot});
+            const rel_path_bounded = sig.utils.fmt.boundedFmt(
+                "snapshots/{0}/{0}",
+                .{files.full.slot},
+            );
             const rel_path = rel_path_bounded.constSlice();
 
-            logger.info().logf("reading *full* snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf(
+                "reading *full* snapshot fields from: {s}",
+                .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
+            );
 
             const full_file = try snapshot_dir.openFile(rel_path, .{});
             defer full_file.close();
@@ -2426,9 +2550,15 @@ pub const FullAndIncrementalManifest = struct {
         errdefer full_fields.deinit(allocator);
 
         const incremental_fields = if (files.incremental_info) |inc_snap| blk: {
-            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_snap.slot});
+            const rel_path_bounded = sig.utils.fmt.boundedFmt(
+                "snapshots/{0}/{0}",
+                .{inc_snap.slot},
+            );
             const rel_path = rel_path_bounded.constSlice();
-            logger.info().logf("reading *incremental* snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf(
+                "reading *incremental* snapshot fields from: {s}",
+                .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
+            );
 
             const incremental_file = try snapshot_dir.openFile(rel_path, .{});
             defer incremental_file.close();
@@ -2559,28 +2689,50 @@ pub const generate = struct {
         const writer = counting_writer_state.writer();
 
         // write the version file
-        const version_str_bounded = sig.utils.fmt.boundedFmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+        const version_str_bounded = sig.utils.fmt.boundedFmt(
+            "{d}.{d}.{d}",
+            .{ version.major, version.minor, version.patch },
+        );
         const version_str = version_str_bounded.constSlice();
         try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
         try writer.writeAll(version_str);
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(
+            0,
+            sig.utils.tar.paddingBytes(counting_writer_state.bytes_written),
+        );
 
         // create the snapshots dir
         try sig.utils.tar.writeTarHeader(writer, .directory, "snapshots/", 0);
 
         // write the status cache
-        try sig.utils.tar.writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
+        try sig.utils.tar.writeTarHeader(
+            writer,
+            .regular,
+            "snapshots/status_cache",
+            bincode.sizeOf(status_cache, .{}),
+        );
         try bincode.write(writer, status_cache, .{});
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(
+            0,
+            sig.utils.tar.paddingBytes(counting_writer_state.bytes_written),
+        );
 
         // write the manifest
         const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot});
         try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
 
         const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot});
-        try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), bincode.sizeOf(manifest, .{}));
+        try sig.utils.tar.writeTarHeader(
+            writer,
+            .regular,
+            file_name_bounded.constSlice(),
+            bincode.sizeOf(manifest, .{}),
+        );
         try bincode.write(writer, manifest, .{});
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(
+            0,
+            sig.utils.tar.paddingBytes(counting_writer_state.bytes_written),
+        );
 
         std.debug.assert(counting_writer_state.bytes_written % 512 == 0);
     }
@@ -2593,9 +2745,21 @@ pub const generate = struct {
     /// Writes the account file header - follow this up by writing the file content to `archive_writer`,
     /// and then follow that up with `writeAccountFilePadding(archive_writer, file_info.length)`.
     /// Do this for each account file included in the snapshot.
-    pub fn writeAccountFileHeader(archive_writer: anytype, file_slot: Slot, file_info: AccountFileInfo) !void {
-        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ file_slot, file_info.id.toInt() });
-        try sig.utils.tar.writeTarHeader(archive_writer, .regular, name_bounded.constSlice(), file_info.length);
+    pub fn writeAccountFileHeader(
+        archive_writer: anytype,
+        file_slot: Slot,
+        file_info: AccountFileInfo,
+    ) !void {
+        const name_bounded = sig.utils.fmt.boundedFmt(
+            "accounts/{d}.{d}",
+            .{ file_slot, file_info.id.toInt() },
+        );
+        try sig.utils.tar.writeTarHeader(
+            archive_writer,
+            .regular,
+            name_bounded.constSlice(),
+            file_info.length,
+        );
     }
 
     pub fn writeAccountFilePadding(archive_writer: anytype, file_length: usize) !void {
@@ -2613,6 +2777,9 @@ pub fn parallelUnpackZstdTarBall(
     /// only used for progress estimation
     full_snapshot: bool,
 ) !void {
+    const zone = tracy.initZone(@src(), .{ .name = "accountsdb parallelUnpackZstdTarBall" });
+    defer zone.deinit();
+
     const file_size = (try file.stat()).size;
 
     // TODO: improve `zstd.Reader` to be capable of sourcing a stream of bytes
@@ -2653,32 +2820,52 @@ pub fn parallelUnpackZstdTarBall(
 test FullSnapshotFileInfo {
     try std.testing.expectEqualStrings(
         "snapshot-10-11111111111111111111111111111111.tar.zst",
-        FullSnapshotFileInfo.snapshotArchiveName(.{ .slot = 10, .hash = Hash.ZEROES }).constSlice(),
+        FullSnapshotFileInfo.snapshotArchiveName(.{
+            .slot = 10,
+            .hash = Hash.ZEROES,
+        }).constSlice(),
     );
 
     const snapshot_name = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
     const snapshot_info = try FullSnapshotFileInfo.parseFileNameTarZst(snapshot_name);
 
     try std.testing.expectEqual(269, snapshot_info.slot);
-    try std.testing.expectEqualStrings("EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn", snapshot_info.hash.base58String().constSlice());
+    try std.testing.expectEqualStrings(
+        "EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn",
+        snapshot_info.hash.base58String().constSlice(),
+    );
 
-    try std.testing.expectEqualStrings(snapshot_name, snapshot_info.snapshotArchiveName().constSlice());
+    try std.testing.expectEqualStrings(
+        snapshot_name,
+        snapshot_info.snapshotArchiveName().constSlice(),
+    );
 }
 
 test IncrementalSnapshotFileInfo {
     try std.testing.expectEqualStrings(
         "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zst",
-        IncrementalSnapshotFileInfo.snapshotArchiveName(.{ .base_slot = 10, .slot = 25, .hash = Hash.ZEROES }).constSlice(),
+        IncrementalSnapshotFileInfo.snapshotArchiveName(.{
+            .base_slot = 10,
+            .slot = 25,
+            .hash = Hash.ZEROES,
+        }).constSlice(),
     );
 
-    const snapshot_name = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
+    const snapshot_name =
+        "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
     const snapshot_info = try IncrementalSnapshotFileInfo.parseFileNameTarZst(snapshot_name);
 
     try std.testing.expectEqual(269, snapshot_info.base_slot);
     try std.testing.expectEqual(307, snapshot_info.slot);
-    try std.testing.expectEqualStrings("4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB", snapshot_info.hash.base58String().constSlice());
+    try std.testing.expectEqualStrings(
+        "4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB",
+        snapshot_info.hash.base58String().constSlice(),
+    );
 
-    try std.testing.expectEqualStrings(snapshot_name, snapshot_info.snapshotArchiveName().constSlice());
+    try std.testing.expectEqualStrings(
+        snapshot_name,
+        snapshot_info.snapshotArchiveName().constSlice(),
+    );
 }
 
 test "parse status cache" {
@@ -2720,7 +2907,10 @@ test "parse snapshot fields" {
 
     if (snapshot_files.incremental_info) |inc| {
         const inc_slot = inc.slot;
-        const inc_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_slot});
+        const inc_manifest_path_bounded = sig.utils.fmt.boundedFmt(
+            "snapshots/{0}/{0}",
+            .{inc_slot},
+        );
         const inc_manifest_path = inc_manifest_path_bounded.constSlice();
 
         const inc_manifest_file = try snapdir.openFile(inc_manifest_path, .{});

@@ -292,23 +292,29 @@ pub const AccountFile = struct {
 
     pub fn validate(
         self: *const Self,
-        metadata_allocator: std.mem.Allocator,
         buffer_pool: *BufferPool,
     ) !usize {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
         var account_bytes: usize = 0;
 
+        var buffer_pool_frame_buf: [BufferPool.MAX_READ_BYTES_ALLOCATED]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buffer_pool_frame_buf);
+        const allocator = fba.allocator();
+
         while (true) {
             const account = self.readAccount(
-                metadata_allocator,
+                allocator,
                 buffer_pool,
                 offset,
             ) catch |err| switch (err) {
                 error.EOF => break,
                 else => return err,
             };
-            defer account.deinit(metadata_allocator);
+            defer {
+                account.deinit(allocator);
+                fba.reset();
+            }
 
             try account.validate();
             offset = offset + account.len;
@@ -675,7 +681,7 @@ test "core.accounts_file: verify accounts file" {
     var accounts_file = try AccountFile.init(file, file_info, 10);
     defer accounts_file.deinit();
 
-    _ = try accounts_file.validate(std.testing.allocator, &bp);
+    _ = try accounts_file.validate(&bp);
 
     const account = try accounts_file.readAccount(std.testing.allocator, &bp, 0);
     defer account.deinit(std.testing.allocator);

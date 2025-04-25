@@ -1,5 +1,4 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 
 pub const chacha = @import("chacha.zig");
 pub const weighted_shuffle = @import("weighted_shuffle.zig");
@@ -121,38 +120,6 @@ pub fn errorValue(random: std.Random, comptime ErrorSet: type) ErrorSet {
     if (ErrorSet == anyerror) @compileError("Can't return a random instance of " ++ @typeName(anyerror));
     switch (random.enumValue(std.meta.FieldEnum(ErrorSet))) {
         inline else => |itag| return @field(ErrorSet, @tagName(itag)),
-    }
-}
-
-/// Empties the provided hashmap, and then fills it with `hm_len` entries,
-/// each with a randomly generated key and value (there will be exactly `hm_len`
-/// entries, no more and no less).
-pub fn fillHashmapWithRng(
-    /// `*std.ArrayHashMap(Key, Value, _, _)`
-    /// `*std.HashMap(Key, Value, _, _)`
-    hashmap: anytype,
-    random: std.Random,
-    /// The length to set the hashmap to.
-    hm_len: if (sig.utils.types.hashMapInfo(@TypeOf(hashmap.*))) |hm_info| hm_info.Size() else usize,
-    /// Expected to provide methods & fields/decls:
-    /// * `fn randomKey(context, random: std.Random) Key`
-    /// * `fn randomValue(context, random: std.Random) Value`
-    context: anytype,
-) !void {
-    const Hm = @TypeOf(hashmap.*);
-    const hm_info = sig.utils.types.hashMapInfo(Hm).?;
-
-    hashmap.clearRetainingCapacity();
-    try hashmap.ensureTotalCapacity(hm_len);
-
-    for (0..hm_len) |_| {
-        while (true) {
-            const new_key: hm_info.Key = try context.randomKey(random);
-            const gop = hashmap.getOrPutAssumeCapacity(new_key);
-            if (gop.found_existing) continue;
-            gop.value_ptr.* = try context.randomValue(random);
-            break;
-        }
     }
 }
 

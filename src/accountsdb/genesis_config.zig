@@ -9,6 +9,7 @@ const Account = sig.core.Account;
 const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const Pubkey = sig.core.Pubkey;
+pub const Rent = sig.runtime.sysvar.Rent;
 
 pub const UnixTimestamp = i64;
 pub const String = std.ArrayList(u8);
@@ -62,30 +63,6 @@ pub const FeeRateGovernor = struct {
             .target_signatures_per_slot = random.int(u64),
             .min_lamports_per_signature = random.int(u64),
             .max_lamports_per_signature = random.int(u64),
-            .burn_percent = random.uintAtMost(u8, 100),
-        };
-    }
-};
-
-/// Analogous to [Rent](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/rent.rs#L13)
-pub const Rent = extern struct {
-    /// Rental rate in lamports/byte-year.
-    lamports_per_byte_year: u64,
-
-    /// Amount of time (in years) a balance must include rent for the account to
-    /// be rent exempt.
-    exemption_threshold: f64,
-
-    /// The percentage of collected rent that is burned.
-    ///
-    /// Valid values are in the range [0, 100]. The remaining percentage is
-    /// distributed to validators.
-    burn_percent: u8,
-
-    pub fn initRandom(random: std.Random) Rent {
-        return .{
-            .lamports_per_byte_year = random.int(u64),
-            .exemption_threshold = random.float(f64),
             .burn_percent = random.uintAtMost(u8, 100),
         };
     }

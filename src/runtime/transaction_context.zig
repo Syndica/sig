@@ -17,6 +17,7 @@ const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const ComputeBudget = sig.runtime.ComputeBudget;
+const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
@@ -37,11 +38,18 @@ pub const EpochContext = struct {
 };
 
 pub const SlotContext = struct {
+    /// Allocator
+    allocator: std.mem.Allocator,
+
     /// Epoch Context
     ec: *const EpochContext,
 
     /// Sysvar Cache
     sysvar_cache: SysvarCache,
+
+    pub fn deinit(self: SlotContext) void {
+        self.sysvar_cache.deinit(self.allocator);
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
@@ -56,6 +64,11 @@ pub const TransactionContext = struct {
 
     /// Transaction accounts
     accounts: []TransactionContextAccount,
+    /// Used by CPI to access serialized account metadata.
+    serialized_accounts: std.BoundedArray(
+        SerializedAccountMetadata,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ),
 
     /// Instruction stack
     instruction_stack: InstructionStack,
@@ -120,6 +133,19 @@ pub const TransactionContext = struct {
     ) ?*TransactionContextAccount {
         if (index >= self.accounts.len) return null;
         return &self.accounts[index];
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d033f544a96a72c6c664e56871eb8a24b5/program-runtime/src/invoke_context.rs#L686
+    pub fn getCheckAligned(self: *TransactionContext) InstructionError!bool {
+        return (try self.getCurrentInstructionContext()).getCheckAligned();
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d033f544a96a72c6c664e56871eb8a24b5/transaction-context/src/lib.rs#L340
+    pub fn getCurrentInstructionContext(
+        self: *TransactionContext,
+    ) InstructionError!*InstructionContext {
+        if (self.instruction_stack.len == 0) return InstructionError.CallDepth;
+        return &self.instruction_stack.buffer[self.instruction_stack.len - 1];
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L646

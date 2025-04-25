@@ -204,7 +204,7 @@ pub const InstructionError = error{
     InvalidAccountOwner,
 
     /// Program arithmetic overflowed
-    ArithmeticOverflow,
+    ProgramArithmeticOverflow,
 
     /// Unsupported sysvar
     UnsupportedSysvar,
@@ -226,6 +226,65 @@ pub const InstructionError = error{
     // Note: For any new error added here an equivalent ProgramError and its
     // conversions must also be added
 };
+
+pub fn intFromInstructionError(err: InstructionError) i32 {
+    switch (err) {
+        error.GenericError => return 1,
+        error.InvalidArgument => return 2,
+        error.InvalidInstructionData => return 3,
+        error.InvalidAccountData => return 4,
+        error.AccountDataTooSmall => return 5,
+        error.InsufficientFunds => return 6,
+        error.IncorrectProgramId => return 7,
+        error.MissingRequiredSignature => return 8,
+        error.AccountAlreadyInitialized => return 9,
+        error.UninitializedAccount => return 10,
+        error.UnbalancedInstruction => return 11,
+        error.ModifiedProgramId => return 12,
+        error.ExternalAccountLamportSpend => return 13,
+        error.ExternalAccountDataModified => return 14,
+        error.ReadonlyLamportChange => return 15,
+        error.ReadonlyDataModified => return 16,
+        error.DuplicateAccountIndex => return 17,
+        error.ExecutableModified => return 18,
+        error.RentEpochModified => return 19,
+        error.NotEnoughAccountKeys => return 20,
+        error.AccountDataSizeChanged => return 21,
+        error.AccountNotExecutable => return 22,
+        error.AccountBorrowFailed => return 23,
+        error.AccountBorrowOutstanding => return 24,
+        error.DuplicateAccountOutOfSync => return 25,
+        error.Custom => return 26,
+        error.InvalidError => return 27,
+        error.ExecutableDataModified => return 28,
+        error.ExecutableLamportChange => return 29,
+        error.ExecutableAccountNotRentExempt => return 30,
+        error.UnsupportedProgramId => return 31,
+        error.CallDepth => return 32,
+        error.MissingAccount => return 33,
+        error.ReentrancyNotAllowed => return 34,
+        error.MaxSeedLengthExceeded => return 35,
+        error.InvalidSeeds => return 36,
+        error.InvalidRealloc => return 37,
+        error.ComputationalBudgetExceeded => return 38,
+        error.PrivilegeEscalation => return 39,
+        error.ProgramEnvironmentSetupFailure => return 40,
+        error.ProgramFailedToComplete => return 41,
+        error.ProgramFailedToCompile => return 42,
+        error.Immutable => return 43,
+        error.IncorrectAuthority => return 44,
+        error.BorshIoError => return 45,
+        error.AccountNotRentExempt => return 46,
+        error.InvalidAccountOwner => return 47,
+        error.ProgramArithmeticOverflow => return 48,
+        error.UnsupportedSysvar => return 49,
+        error.IllegalOwner => return 50,
+        error.MaxAccountsDataAllocationsExceeded => return 51,
+        error.MaxAccountsExceeded => return 52,
+        error.MaxInstructionTraceLengthExceeded => return 53,
+        error.BuiltinProgramsMustConsumeComputeUnits => return 54,
+    }
+}
 
 pub const InstructionErrorEnum = union(enum) {
     /// Deprecated! Use CustomError instead!

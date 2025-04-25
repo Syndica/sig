@@ -1,6 +1,7 @@
 //! all index related structs (account ref, simd hashmap, …)
 const std = @import("std");
 const sig = @import("../sig.zig");
+const tracy = @import("tracy");
 
 const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const Pubkey = sig.core.pubkey.Pubkey;
@@ -76,6 +77,7 @@ pub const AccountIndex = struct {
         pub const Tag = ReferenceAllocator.Tag;
         ram: struct { allocator: std.mem.Allocator },
         disk: struct { accountsdb_dir: std.fs.Dir },
+        parent: *ReferenceAllocator,
     };
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
 
@@ -111,10 +113,24 @@ pub const AccountIndex = struct {
                     .logger = logger.withScope(@typeName(DiskMemoryAllocator)),
                 };
 
-                break :blk .{ .disk = .{
-                    .dma = disk_allocator,
-                    .ptr_allocator = allocator,
-                } };
+                const tracing_disk_allocator = try allocator.create(tracy.TracingAllocator);
+                errdefer allocator.destroy(tracing_disk_allocator);
+                tracing_disk_allocator.* = .{
+                    .parent_allocator = disk_allocator.allocator(),
+                    .pool_name = "index",
+                };
+
+                break :blk .{
+                    .disk = .{
+                        .dma = disk_allocator,
+                        .ptr_allocator = allocator,
+                        .tracing = tracing_disk_allocator,
+                    },
+                };
+            },
+            .parent => |parent| blk: {
+                logger.info().log("using parent's reference allocator for account index");
+                break :blk .{ .parent = parent };
             },
         };
         errdefer reference_allocator.deinit();
@@ -132,7 +148,7 @@ pub const AccountIndex = struct {
         return .{
             .allocator = allocator,
             .logger = logger,
-            .pubkey_ref_map = try ShardedPubkeyRefMap.init(allocator, number_of_shards),
+            .pubkey_ref_map = try ShardedPubkeyRefMap.init(reference_allocator.get(), number_of_shards),
             .slot_reference_map = RwMux(SlotRefMap).init(SlotRefMap.init(allocator)),
             .reference_allocator = reference_allocator,
             .reference_manager = reference_manager,
@@ -172,6 +188,9 @@ pub const AccountIndex = struct {
     }
 
     pub fn expandRefCapacity(self: *Self, n: u64) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb AccountIndex.expandRefCapacity" });
+        defer zone.deinit();
+
         try self.reference_manager.expandCapacity(n);
     }
 
@@ -324,6 +343,9 @@ pub const AccountIndex = struct {
     }
 
     pub fn loadFromDisk(self: *Self, dir: std.fs.Dir) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb loadFromDisk" });
+        defer zone.deinit();
+
         // manager must be empty
         std.debug.assert(self.reference_manager.capacity == 0);
 
@@ -583,6 +605,9 @@ pub const ShardedPubkeyRefMap = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, number_of_shards: u64) !Self {
+        const zone = tracy.initZone(@src(), .{ .name = "ShardedPubkeyRefMap.init" });
+        defer zone.deinit();
+
         // shard the pubkey map into shards to reduce lock contention
         const shards = try allocator.alloc(RwPubkeyRefMap, number_of_shards);
         errdefer allocator.free(number_of_shards);
@@ -619,6 +644,9 @@ pub const ShardedPubkeyRefMap = struct {
     }
 
     pub fn ensureTotalAdditionalCapacity(self: *Self, shard_counts: []const u64) !void {
+        const zone = tracy.initZone(@src(), .{ .name = "ShardedPubkeyRefMap.ensureTotalAdditionalCapacity" });
+        defer zone.deinit();
+
         if (shard_counts.len != self.shards.len) {
             return error.ShardSizeMismatch;
         }
@@ -733,19 +761,25 @@ pub const PubkeyShardCalculator = struct {
 };
 
 pub const ReferenceAllocator = union(Tag) {
-    pub const Tag = enum { ram, disk };
-    /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
-    ram: std.mem.Allocator,
-    disk: struct {
+    pub const Tag = enum { ram, disk, parent };
+    pub const Disk = struct {
         dma: *DiskMemoryAllocator,
+        tracing: *tracy.TracingAllocator,
         // used for deinit() purposes
         ptr_allocator: std.mem.Allocator,
-    },
+    };
+
+    /// Used to AccountRef mmapped data on disk in ./index/bin (see see accountsdb/readme.md)
+    ram: std.mem.Allocator,
+    disk: Disk,
+    /// used for loading threads to access the parent's
+    parent: *ReferenceAllocator,
 
     pub fn get(self: ReferenceAllocator) std.mem.Allocator {
         return switch (self) {
-            .disk => self.disk.dma.allocator(),
+            .disk => self.disk.tracing.allocator(),
             .ram => self.ram,
+            .parent => self.parent.get(),
         };
     }
 
@@ -755,8 +789,10 @@ pub const ReferenceAllocator = union(Tag) {
                 var dir = disk.dma.dir;
                 dir.close();
                 disk.ptr_allocator.destroy(disk.dma);
+                disk.ptr_allocator.destroy(disk.tracing);
             },
             .ram => {},
+            .parent => {},
         }
     }
 };

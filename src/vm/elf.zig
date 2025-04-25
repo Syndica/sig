@@ -712,6 +712,7 @@ pub const Elf = struct {
         if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version) or
             @intFromEnum(sbpf_version) > @intFromEnum(config.maximum_version))
         {
+            // TODO: Conformance issue vs. agave-v2.1.0
             return error.VersionUnsupported;
         }
 

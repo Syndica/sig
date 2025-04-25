@@ -14,12 +14,20 @@ pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
+    const direct_mapping = ic.ec.feature_set.active.contains(
+        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    );
+
     var executable, var syscalls, const source = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
 
+        const feature_set = &ic.ec.feature_set.active;
+
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!ic.ec.feature_set.active.contains(
+        if (!feature_set.contains(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !program_account.account.executable)
@@ -29,11 +37,33 @@ pub fn execute(
         }
 
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
-        var syscalls = registerSyscalls(allocator, ic.tc) catch |err| {
+        var syscalls = vm.syscalls.register(
+            allocator,
+            &ic.tc.sc.ec.feature_set,
+            0,
+            false,
+        ) catch |err| {
             try ic.tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
         errdefer syscalls.deinit(allocator);
+
+        // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L357-L374
+        const min_sbpf_version: vm.sbpf.Version = if (!feature_set.contains(
+            features.DISABLE_SBPF_V0_EXECUTION,
+        ) or feature_set.contains(
+            features.REENABLE_SBPF_V0_EXECUTION,
+        )) .v0 else .v3;
+
+        const max_sbpf_version: vm.sbpf.Version = if (feature_set.contains(
+            features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION,
+        )) .v3 else if (feature_set.contains(
+            features.ENABLE_SBPF_V2_DEPLOYMENT_AND_EXECUTION,
+        )) .v2 else if (feature_set.contains(
+            features.ENABLE_SBPF_V1_DEPLOYMENT_AND_EXECUTION,
+        )) .v1 else .v0;
+
+        std.debug.assert(max_sbpf_version.gte(min_sbpf_version));
 
         // Clone required to prevent modification of underlying account elf
         const source = try allocator.dupe(u8, program_account.account.data);
@@ -44,7 +74,15 @@ pub fn execute(
             allocator,
             source,
             &syscalls,
-            .{},
+            .{
+                .max_call_depth = ic.tc.compute_budget.max_call_depth,
+                .stack_frame_size = ic.tc.compute_budget.stack_frame_size,
+                .enable_address_translation = true,
+                .enable_stack_frame_gaps = !direct_mapping,
+                .aligned_memory_mapping = !direct_mapping,
+                .minimum_version = min_sbpf_version,
+                .maximum_version = max_sbpf_version,
+            },
         ) catch |err| {
             try ic.tc.log("{s}", .{@errorName(err)});
             return InstructionError.InvalidAccountData;
@@ -60,14 +98,10 @@ pub fn execute(
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1583-L1584
     // TODO: jit
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
-    const direct_mapping = ic.ec.feature_set.active.contains(
-        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
-    );
-
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
-    const parameter_bytes, const regions, const accounts_metadata =
-        try serialize.serializeParameters(
+    const parameter_bytes, //
+    const regions, //
+    const accounts_metadata = try serialize.serializeParameters(
         allocator,
         ic,
         !direct_mapping,
@@ -75,8 +109,10 @@ pub fn execute(
     defer {
         allocator.free(parameter_bytes);
         allocator.free(regions);
-        allocator.free(accounts_metadata);
     }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/lib.rs#L278-L282
+    ic.tc.serialized_accounts = accounts_metadata;
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1604-L1617
     // TODO: save account addresses for access violation errors resolution
@@ -123,24 +159,20 @@ pub fn execute(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1658-L1731
-    const execute_error: ?InstructionError = blk: {
-        switch (result) {
-            .ok => |status| if (status != 0) {
-                // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
-                std.debug.print(
-                    "Program {} failed: {}\n",
-                    .{ ic.ixn_info.program_meta.pubkey, status },
-                );
-                @panic("sbpf error handling not implemented!");
-            } else {
-                break :blk null;
-            },
-            .err => |sbpf_err| {
-                // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1663-L1730
-                std.debug.print("Sbpf error: {}\n", .{sbpf_err});
-                @panic("sbpf error handling not implemented!");
-            },
-        }
+    const execute_error: ?InstructionError = switch (result) {
+        .ok => |status| if (status != 0) {
+            // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
+            std.debug.print(
+                "Program {} failed: {}\n",
+                .{ ic.ixn_info.program_meta.pubkey, status },
+            );
+            @panic("sbpf error handling not implemented!");
+        } else null,
+        .err => |sbpf_err| {
+            // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1663-L1730
+            std.debug.print("Sbpf error: {}\n", .{sbpf_err});
+            @panic("sbpf error handling not implemented!");
+        },
     };
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1750-L1756
@@ -150,7 +182,7 @@ pub fn execute(
             ic,
             !direct_mapping,
             parameter_bytes,
-            accounts_metadata,
+            accounts_metadata.constSlice(),
         )
     else
         execute_error;
@@ -162,7 +194,7 @@ pub fn execute(
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L299-L300
-fn initVm(
+pub fn initVm(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
     executable: *const vm.Executable,
@@ -193,9 +225,14 @@ fn initVm(
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L256-L280
     var mm_regions_array = std.ArrayList(vm.memory.Region).init(allocator);
     errdefer mm_regions_array.deinit();
+    const stack_gap: u64 = if (!executable.version.enableDynamicStackFrames() and
+        executable.config.enable_stack_frame_gaps)
+        executable.config.stack_frame_size
+    else
+        0;
     try mm_regions_array.appendSlice(&.{
         executable.getProgramRegion(),
-        vm.memory.Region.init(.mutable, stack, vm.memory.STACK_START),
+        vm.memory.Region.initGapped(.mutable, stack, vm.memory.STACK_START, stack_gap),
         vm.memory.Region.init(.mutable, heap, vm.memory.HEAP_START),
     });
     try mm_regions_array.appendSlice(regions);
@@ -206,6 +243,7 @@ fn initVm(
         executable.version,
         executable.config,
     );
+    errdefer memory_map.deinit(allocator);
 
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L280-L285
     // TODO: Set syscall context
@@ -219,7 +257,6 @@ fn initVm(
         stack.len,
         tc,
     );
-    errdefer sbpf_vm.deinit();
 
     return .{
         sbpf_vm,
@@ -227,180 +264,4 @@ fn initVm(
         heap,
         mm_regions,
     };
-}
-
-// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/syscalls/mod.rs#L335
-fn registerSyscalls(
-    allocator: std.mem.Allocator,
-    tc: *TransactionContext,
-) !vm.BuiltinProgram {
-    // TODO: Feature Activation
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/syscalls/mod.rs#L341-L374
-
-    // Register syscalls
-    var syscalls = vm.BuiltinProgram{};
-    errdefer syscalls.deinit(allocator);
-
-    // Abort
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "abort",
-        vm.syscalls.abort,
-    );
-
-    // Panic
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_panic_",
-        vm.syscalls.panic,
-    );
-
-    // Logging
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_",
-        vm.syscalls.log,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_64_",
-        vm.syscalls.log64,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_pubkey",
-        vm.syscalls.logPubkey,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_compute_units_",
-        vm.syscalls.logComputeUnits,
-    );
-
-    // Program derived addresses
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_create_program_address", vm.syscalls.createProgramAddress,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_try_find_program_address", vm.syscalls.createProgramAddress,);
-
-    // Sha256, Keccak256, Secp256k1Recover
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_sha256", vm.syscalls.sha256,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_keccak256", vm.syscalls.keccak256,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", vm.syscalls.secp256k1Recover,);
-
-    // Blake3
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.BLAKE3_SYSCALL_ENABLED)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_blake3", vm.syscalls.blake3,);
-    // }
-
-    // Elliptic Curve
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.CURVE25519_SYSCALL_ENABLED)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_validate_point", vm.syscalls.curveValidatePoint,);
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_group_op", vm.syscalls.curveGroupOp,);
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_multiscalar_mul", vm.syscalls.curveMultiscalarMul,);
-    // }
-
-    // Sysvars
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_clock_sysvar", vm.syscalls.getClockSysvar,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_schedule_sysvar", vm.syscalls.getEpochScheduleSysvar,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", vm.syscalls.getFeesSysvar,);
-    // if (!tc.sc.ec.feature_set.active.contains(feature_set.DISABLE_FEES_SYSVAR)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", vm.syscalls.getFeesSysvar,);
-    // }
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_rent_sysvar", vm.syscalls.getRentSysvar,);
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.LAST_RESTART_SLOT_SYSVAR)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_last_restart_slot", vm.syscalls.getLastRestartSlotSysvar,);
-    // }
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_rewards_sysvar", vm.syscalls.getEpochRewardsSysvar,);
-
-    // Memory
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memcpy_",
-        vm.syscalls.memcpy,
-    );
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_memmove_", vm.syscalls.memmove,);
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memset_",
-        vm.syscalls.memset,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memcmp_",
-        vm.syscalls.memcmp,
-    );
-
-    // Processed Sibling
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_processed_sibling_instruction", vm.syscalls.getProcessedSiblingInstruction,);
-
-    // Stack Height
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_stack_height", vm.syscalls.getStackHeight,);
-
-    // Return Data
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_set_return_data",
-        vm.syscalls.setReturnData,
-    );
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_return_data", vm.syscalls.getReturnData,);
-
-    // Cross Program Invocation
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_c", vm.syscalls.invokeSignedC,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_invoke_signed_rust", vm.syscalls.invokeSignedRust,);
-
-    // Memory Allocator
-    if (!tc.ec.feature_set.active.contains(
-        features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL,
-    )) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_alloc_free_",
-            vm.syscalls.allocFree,
-        );
-    }
-
-    // Alt_bn128
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_ALT_BN128_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", vm.syscalls.altBn128GroupOp,);
-    // }
-
-    // Big_mod_exp
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", vm.syscalls.bigModExp,);
-    // }
-
-    // Poseidon
-    if (tc.ec.feature_set.active.contains(
-        features.ENABLE_POSEIDON_SYSCALL,
-    )) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_poseidon",
-            vm.syscalls.poseidon,
-        );
-    }
-
-    // Remaining Compute Units
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_REMAINING_COMPUTE_UNITS_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_remaining_compute_units", vm.syscalls.remainingComputeUnits,);
-    // }
-
-    // Alt_bn_128_compression
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", vm.syscalls.altBn128Compression,);
-    // }
-
-    // Sysvar Getter
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_SYSVAR_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", vm.syscalls.getSysvar,);
-    // }
-
-    // Get Epoch Stake
-    // if (tc.sc.ec.feature_set.active.contains(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", vm.syscalls.getEpochStake,);
-    // }
-
-    // Log Data
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_log_data", vm.syscalls.logData,);
-
-    return syscalls;
 }

@@ -36,6 +36,16 @@ pub const EpochSchedule = extern struct {
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
     first_normal_slot: core.Slot,
 
+    pub const ID =
+        core.Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch
+        unreachable;
+
+    pub const DEFAULT = EpochSchedule.custom(
+        DEFAULT_SLOTS_PER_EPOCH,
+        DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
+        true,
+    ) catch unreachable;
+
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
     }
@@ -76,14 +86,6 @@ pub const EpochSchedule = extern struct {
             self.slots_per_epoch;
     }
 
-    pub fn default() !EpochSchedule {
-        return EpochSchedule.custom(
-            DEFAULT_SLOTS_PER_EPOCH,
-            DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,
-            true,
-        );
-    }
-
     pub fn custom(
         slots_per_epoch: u64,
         leader_schedule_slot_offset: u64,
@@ -94,8 +96,8 @@ pub const EpochSchedule = extern struct {
         var first_normal_slot: Slot = 0;
         if (warmup) {
             const next_power_of_two = try std.math.ceilPowerOfTwo(u64, slots_per_epoch);
-            const log2_slots_per_epoch = @clz(next_power_of_two) -| @clz(MINIMUM_SLOTS_PER_EPOCH);
-            first_normal_epoch = @intCast(log2_slots_per_epoch);
+            const log2_slots_per_epoch = @ctz(next_power_of_two) -| @ctz(MINIMUM_SLOTS_PER_EPOCH);
+            first_normal_epoch = log2_slots_per_epoch;
             first_normal_slot = next_power_of_two -| MINIMUM_SLOTS_PER_EPOCH;
         }
         return .{

@@ -3,6 +3,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
+const sysvar = sig.runtime.sysvar;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
@@ -24,7 +25,7 @@ pub const ExecuteContextsParams = struct {
     feature_set: []const FeatureParams = &.{},
 
     // Slot Context
-    sysvar_cache: SysvarCache = .{},
+    sysvar_cache: SysvarCacheParams = .{},
 
     // Transaction Context
     accounts: []const AccountParams = &.{},
@@ -40,6 +41,18 @@ pub const ExecuteContextsParams = struct {
     pub const FeatureParams = struct {
         pubkey: Pubkey,
         slot: Slot = 0,
+    };
+
+    pub const SysvarCacheParams = struct {
+        clock: ?sysvar.Clock = null,
+        epoch_schedule: ?sig.core.EpochSchedule = null,
+        epoch_rewards: ?sysvar.EpochRewards = null,
+        rent: ?sysvar.Rent = null,
+        last_restart_slot: ?sysvar.LastRestartSlot = null,
+        slot_hashes: ?sysvar.SlotHashes = null,
+        stake_history: ?sysvar.StakeHistory = null,
+        fees: ?sysvar.Fees = null,
+        recent_blockhashes: ?sysvar.RecentBlockhashes = null,
     };
 
     pub const AccountParams = struct {
@@ -65,31 +78,22 @@ pub fn createExecutionContexts(
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
-    // Create Feature Set
-    var features = FeatureSet{ .active = .{} };
-    errdefer features.deinit(allocator);
-
-    for (params.feature_set) |args| {
-        try features.active.put(
-            allocator,
-            args.pubkey,
-            args.slot,
-        );
-    }
-
     // Create Epoch Context
     const ec = try allocator.create(EpochContext);
     ec.* = .{
         .allocator = allocator,
-        .feature_set = features,
+        .feature_set = try createFeatureSet(allocator, params.feature_set),
     };
+    errdefer ec.deinit();
 
     // Create Slot Context
     const sc = try allocator.create(SlotContext);
     sc.* = .{
+        .allocator = allocator,
         .ec = ec,
-        .sysvar_cache = params.sysvar_cache,
+        .sysvar_cache = try createSysvarCache(allocator, params.sysvar_cache),
     };
+    errdefer sc.deinit();
 
     // Create Accounts
     var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
@@ -121,6 +125,7 @@ pub fn createExecutionContexts(
         .ec = ec,
         .sc = sc,
         .accounts = try accounts.toOwnedSlice(),
+        .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
         .return_data = return_data,
@@ -134,6 +139,83 @@ pub fn createExecutionContexts(
     };
 
     return .{ ec, sc, tc };
+}
+
+pub fn createFeatureSet(
+    allocator: std.mem.Allocator,
+    params: []const ExecuteContextsParams.FeatureParams,
+) !FeatureSet {
+    if (!builtin.is_test)
+        @compileError("createFeatureSet should only be called in test mode");
+
+    var feature_set = FeatureSet{ .active = .{} };
+    errdefer feature_set.deinit(allocator);
+
+    for (params) |args| {
+        try feature_set.active.put(
+            allocator,
+            args.pubkey,
+            args.slot,
+        );
+    }
+
+    return feature_set;
+}
+
+pub fn createSysvarCache(
+    allocator: std.mem.Allocator,
+    params: ExecuteContextsParams.SysvarCacheParams,
+) !SysvarCache {
+    if (!builtin.is_test)
+        @compileError("createSysvarCache should only be called in test mode");
+
+    var sysvar_cache = SysvarCache{};
+    errdefer sysvar_cache.deinit(allocator);
+
+    if (params.clock) |clock| {
+        sysvar_cache.clock = try bincode.writeAlloc(allocator, clock, .{});
+    }
+    if (params.epoch_schedule) |epoch_schedule| {
+        sysvar_cache.epoch_schedule = try bincode.writeAlloc(allocator, epoch_schedule, .{});
+    }
+    if (params.epoch_rewards) |epoch_rewards| {
+        sysvar_cache.epoch_rewards = try bincode.writeAlloc(allocator, epoch_rewards, .{});
+    }
+    if (params.rent) |rent| {
+        sysvar_cache.rent = try bincode.writeAlloc(allocator, rent, .{});
+    }
+    if (params.last_restart_slot) |last_restart_slot| {
+        sysvar_cache.last_restart_slot = try bincode.writeAlloc(allocator, last_restart_slot, .{});
+    }
+    if (params.slot_hashes) |slot_hashes| {
+        sysvar_cache.slot_hashes = try bincode.writeAlloc(allocator, slot_hashes, .{});
+        sysvar_cache.slot_hashes_obj = .{
+            .entries = try allocator.dupe(
+                sysvar.SlotHashes.Entry,
+                slot_hashes.entries,
+            ),
+        };
+    }
+    if (params.stake_history) |stake_history| {
+        sysvar_cache.stake_history = try bincode.writeAlloc(allocator, stake_history, .{});
+        sysvar_cache.stake_history_obj = .{
+            .entries = try allocator.dupe(
+                sysvar.StakeHistory.Entry,
+                stake_history.entries,
+            ),
+        };
+    }
+    sysvar_cache.fees = params.fees;
+    if (params.recent_blockhashes) |recent_blockhashes| {
+        sysvar_cache.recent_blockhashes = .{
+            .entries = try allocator.dupe(
+                sysvar.RecentBlockhashes.Entry,
+                recent_blockhashes.entries,
+            ),
+        };
+    }
+
+    return sysvar_cache;
 }
 
 pub fn createInstructionInfo(
@@ -231,16 +313,23 @@ pub fn expectTransactionContextEqual(
         return error.AccountsLengthMismatch;
 
     for (expected.accounts, 0..) |expected_account, index|
-        try expectTransactionAccountEqual(
+        expectTransactionAccountEqual(
             expected_account,
             actual.accounts[index],
-        );
+        ) catch |err| {
+            std.debug.print(
+                "TransactionContext accounts mismatch at index {}: {}\n",
+                .{ index, err },
+            );
+            return err;
+        };
 
     if (expected.accounts_resize_delta != actual.accounts_resize_delta)
         return error.AccountsResizeDeltaMismatch;
 
-    if (expected.compute_meter != actual.compute_meter)
+    if (expected.compute_meter != actual.compute_meter) {
         return error.ComputeMeterMismatch;
+    }
 
     if (expected.custom_error != actual.custom_error)
         return error.MaybeCustomErrorMismatch;

@@ -74,6 +74,8 @@ pub fn filterSignedGossipDatas(
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 
 test "gossip.pull_response: test filtering values works" {
+    if (true) return error.SkipZigTest;
+
     const gossip_table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
     defer {

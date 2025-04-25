@@ -44,9 +44,9 @@ pub fn programInvoke(
 /// That is, any program-generated output is guaranteed to be prefixed by "Program log: "
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L42
-pub fn programLog(tc: *TransactionContext, message: []const u8) !void {
+pub fn programLog(tc: *TransactionContext, comptime fmt: []const u8, args: anytype) !void {
     if (tc.log_collector) |*lc| {
-        try lc.log(tc.allocator, "Program log: {str}", .{message});
+        try lc.log(tc.allocator, "Program log: " ++ fmt, args);
     }
 }
 
@@ -74,7 +74,7 @@ pub fn programData(
             try encoded.appendSlice(tc.allocator, BASE_64_ENCODER.encode(buffer, chunk));
             try encoded.append(tc.allocator, ' ');
         }
-        _ = encoded.pop();
+        if (encoded.items.len > 0) _ = encoded.pop();
 
         try lc.log(
             tc.allocator,
@@ -141,10 +141,10 @@ pub fn programSuccess(tc: *TransactionContext, program_id: Pubkey) !void {
 pub fn programFailure(
     tc: *TransactionContext,
     program_id: Pubkey,
-    err: anytype,
+    err: []const u8,
 ) !void {
     if (tc.log_collector) |*lc| {
-        try lc.log(tc.allocator, "Program {} failed: {}", .{ program_id, err });
+        try lc.log(tc.allocator, "Program {} failed: {s}", .{ program_id, err });
     }
 }
 
@@ -164,6 +164,7 @@ test "stable_log" {
     defer {
         ec.deinit();
         allocator.destroy(ec);
+        sc.deinit();
         allocator.destroy(sc);
         tc.deinit();
     }
@@ -172,11 +173,11 @@ test "stable_log" {
         Pubkey.parseBase58String("SigDefau1tPubkey111111111111111111111111111") catch unreachable;
 
     try programInvoke(&tc, program_id, 0);
-    try programLog(&tc, "log");
+    try programLog(&tc, "{s}", .{"log"});
     try programData(&tc, &.{ "data0", "data1" });
     try programReturn(&tc, program_id, "return");
     try programSuccess(&tc, program_id);
-    try programFailure(&tc, program_id, error.Error);
+    try programFailure(&tc, program_id, "error");
 
     const expected: []const []const u8 = &.{
         "Program SigDefau1tPubkey111111111111111111111111111 invoke [0]",
@@ -184,7 +185,7 @@ test "stable_log" {
         "Program data: ZGF0YTA= ZGF0YTE=",
         "Program return: SigDefau1tPubkey111111111111111111111111111 cmV0dXJu",
         "Program SigDefau1tPubkey111111111111111111111111111 success",
-        "Program SigDefau1tPubkey111111111111111111111111111 failed: error.Error",
+        "Program SigDefau1tPubkey111111111111111111111111111 failed: error",
     };
     const actual = tc.log_collector.?.collect();
 

@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const cli = @import("cli");
 const sig = @import("sig.zig");
 const config = @import("config.zig");
+const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Bank = sig.accounts_db.Bank;
@@ -57,9 +58,18 @@ fn GpaOrCAllocator(comptime gpa_config: std.heap.GeneralPurposeAllocatorConfig) 
 }
 
 pub fn main() !void {
+    tracy.setThreadName("Main");
+    tracy.startupProfiler();
+    defer tracy.shutdownProfiler();
+
+    const zone = tracy.initZone(@src(), .{ .name = "main" });
+    defer zone.deinit();
+
     var gpa_state: GpaOrCAllocator(.{}) = .{};
     // defer _ = gpa_state.deinit();
-    const gpa = gpa_state.allocator();
+
+    var tracing_allocator = tracy.TracingAllocator.initNamed("gpa", gpa_state.allocator());
+    const gpa = tracing_allocator.allocator();
 
     var gossip_gpa_state: GpaOrCAllocator(.{ .stack_trace_frames = 100 }) = .{};
     // defer _ = gossip_gpa_state.deinit();
@@ -82,7 +92,7 @@ pub fn main() !void {
     current_config.log_level = cmd.log_level;
     current_config.metrics_port = cmd.metrics_port;
 
-    switch (cmd.subcmd) {
+    switch (cmd.subcmd orelse return error.MissingSubcommand) {
         .identity => try identity(gpa, current_config),
         .gossip => |params| {
             current_config.shred_version = params.shred_version;
@@ -181,7 +191,7 @@ const Cmd = struct {
     metrics_port: u16,
     log_file: ?[]const u8,
     tee_logs: bool,
-    subcmd: union(enum) {
+    subcmd: ?union(enum) {
         identity,
         gossip: Gossip,
         validator: Validator,
@@ -255,7 +265,7 @@ const Cmd = struct {
         },
     };
 
-    const shred_version_option: cli.OptionInfo(?u16) = .{
+    const shred_version_arg: cli.ArgumentInfo(?u16) = .{
         .kind = .named,
         .name_override = "shred-version",
         .alias = .none,
@@ -264,7 +274,7 @@ const Cmd = struct {
         .help = "The shred version for the network",
     };
 
-    const leader_schedule_option: cli.OptionInfo(?[]const u8) = .{
+    const leader_schedule_arg: cli.ArgumentInfo(?[]const u8) = .{
         .kind = .named,
         .name_override = "leader-schedule",
         .alias = .none,
@@ -273,7 +283,7 @@ const Cmd = struct {
         .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
     };
 
-    const gossip_cluster_option: cli.OptionInfo(?[]const u8) = .{
+    const gossip_cluster_arg: cli.ArgumentInfo(?[]const u8) = .{
         .kind = .named,
         .name_override = "cluster",
         .alias = .c,
@@ -282,7 +292,7 @@ const Cmd = struct {
         .help = "cluster to connect to - adds gossip entrypoints, sets default genesis file path",
     };
 
-    const snapshot_dir_option: cli.OptionInfo([]const u8) = .{
+    const snapshot_dir_arg: cli.ArgumentInfo([]const u8) = .{
         .kind = .named,
         .name_override = "snapshot-dir",
         .alias = .s,
@@ -293,7 +303,7 @@ const Cmd = struct {
             " - default: {VALIDATOR_DIR}/accounts_db",
     };
 
-    const genesis_file_path_option: cli.OptionInfo(?[]const u8) = .{
+    const genesis_file_path_arg: cli.ArgumentInfo(?[]const u8) = .{
         .kind = .named,
         .name_override = "genesis-file-path",
         .alias = .g,
@@ -303,7 +313,7 @@ const Cmd = struct {
             " defaults to 'data/genesis-files/<network>_genesis.bin' if --network option is set",
     };
 
-    const force_new_snapshot_download_option: cli.OptionInfo(bool) = .{
+    const force_new_snapshot_download_arg: cli.ArgumentInfo(bool) = .{
         .kind = .named,
         .name_override = "force-new-snapshot-download",
         .alias = .none,
@@ -312,13 +322,13 @@ const Cmd = struct {
         .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
     };
 
-    const GossipOptionsCommon = struct {
+    const GossipArgumentsCommon = struct {
         host: ?[]const u8,
         port: u16,
         entrypoints: []const []const u8,
         network: ?[]const u8,
 
-        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+        const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .host = .{
                 .kind = .named,
                 .name_override = "gossip-host",
@@ -344,21 +354,21 @@ const Cmd = struct {
                 .config = .string,
                 .help = "gossip address of the entrypoint validators",
             },
-            .network = gossip_cluster_option,
+            .network = gossip_cluster_arg,
         };
 
-        fn apply(opts: @This(), cfg: *config.Cmd) void {
-            cfg.gossip.host = opts.host;
-            cfg.gossip.port = opts.port;
-            cfg.gossip.entrypoints = opts.entrypoints;
-            cfg.gossip.cluster = opts.network;
+        fn apply(args: @This(), cfg: *config.Cmd) void {
+            cfg.gossip.host = args.host;
+            cfg.gossip.port = args.port;
+            cfg.gossip.entrypoints = args.entrypoints;
+            cfg.gossip.cluster = args.network;
         }
     };
-    const GossipOptionsNode = struct {
+    const GossipArgumentsNode = struct {
         spy_node: bool,
         dump: bool,
 
-        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+        const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .spy_node = .{
                 .kind = .named,
                 .name_override = "spy-node",
@@ -377,13 +387,13 @@ const Cmd = struct {
             },
         };
 
-        fn apply(opts: @This(), cfg: *config.Cmd) void {
-            cfg.gossip.spy_node = opts.spy_node;
-            cfg.gossip.dump = opts.dump;
+        fn apply(args: @This(), cfg: *config.Cmd) void {
+            cfg.gossip.spy_node = args.spy_node;
+            cfg.gossip.dump = args.dump;
         }
     };
 
-    const AccountsDbOptionsBase = struct {
+    const AccountsDbArgumentsBase = struct {
         use_disk_index: bool,
         n_threads_snapshot_load: u32,
         n_threads_snapshot_unpack: u16,
@@ -391,7 +401,7 @@ const Cmd = struct {
         number_of_index_shards: u64,
         accounts_per_file_estimate: u64,
 
-        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+        const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .use_disk_index = .{
                 .kind = .named,
                 .name_override = null,
@@ -445,20 +455,20 @@ const Cmd = struct {
             },
         };
 
-        fn apply(opts: @This(), cfg: *config.Cmd) void {
-            cfg.accounts_db.use_disk_index = opts.use_disk_index;
-            cfg.accounts_db.num_threads_snapshot_load = opts.n_threads_snapshot_load;
-            cfg.accounts_db.num_threads_snapshot_unpack = opts.n_threads_snapshot_unpack;
-            cfg.accounts_db.force_unpack_snapshot = opts.force_unpack_snapshot;
-            cfg.accounts_db.number_of_index_shards = opts.number_of_index_shards;
-            cfg.accounts_db.accounts_per_file_estimate = opts.accounts_per_file_estimate;
+        fn apply(args: @This(), cfg: *config.Cmd) void {
+            cfg.accounts_db.use_disk_index = args.use_disk_index;
+            cfg.accounts_db.num_threads_snapshot_load = args.n_threads_snapshot_load;
+            cfg.accounts_db.num_threads_snapshot_unpack = args.n_threads_snapshot_unpack;
+            cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
+            cfg.accounts_db.number_of_index_shards = args.number_of_index_shards;
+            cfg.accounts_db.accounts_per_file_estimate = args.accounts_per_file_estimate;
         }
     };
-    const AccountsDbOptionsDownload = struct {
+    const AccountsDbArgumentsDownload = struct {
         min_snapshot_download_speed_mb: u64,
         trusted_validators: []const []const u8,
 
-        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+        const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .min_snapshot_download_speed_mb = .{
                 .kind = .named,
                 .name_override = "min-snapshot-download-speed",
@@ -478,16 +488,16 @@ const Cmd = struct {
             },
         };
 
-        fn apply(opts: @This(), cfg: *config.Cmd) void {
-            cfg.accounts_db.min_snapshot_download_speed_mbs = opts.min_snapshot_download_speed_mb;
-            cfg.gossip.trusted_validators = opts.trusted_validators;
+        fn apply(args: @This(), cfg: *config.Cmd) void {
+            cfg.accounts_db.min_snapshot_download_speed_mbs = args.min_snapshot_download_speed_mb;
+            cfg.gossip.trusted_validators = args.trusted_validators;
         }
     };
-    const AccountsDbOptionsIndex = struct {
+    const AccountsDbArgumentsIndex = struct {
         fastload: bool,
         save_index: bool,
 
-        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+        const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .fastload = .{
                 .kind = .named,
                 .name_override = null,
@@ -506,19 +516,19 @@ const Cmd = struct {
             },
         };
 
-        fn apply(opts: @This(), cfg: *config.Cmd) void {
-            cfg.accounts_db.fastload = opts.fastload;
-            cfg.accounts_db.save_index = opts.save_index;
+        fn apply(args: @This(), cfg: *config.Cmd) void {
+            cfg.accounts_db.fastload = args.fastload;
+            cfg.accounts_db.save_index = args.save_index;
         }
     };
-    const RepairOptionsBase = struct {
+    const RepairArgumentsBase = struct {
         turbine_port: u16,
         repair_port: u16,
         test_repair_for_slot: ?Slot,
         max_shreds: u64,
         num_retransmit_threads: ?usize,
 
-        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+        const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .turbine_port = .{
                 .kind = .named,
                 .name_override = null,
@@ -566,20 +576,20 @@ const Cmd = struct {
             },
         };
 
-        fn apply(opts: @This(), cfg: *config.Cmd) void {
-            cfg.shred_network.turbine_recv_port = opts.turbine_port;
-            cfg.shred_network.repair_port = opts.repair_port;
-            cfg.shred_network.start_slot = opts.test_repair_for_slot;
-            cfg.turbine.num_retransmit_threads = opts.num_retransmit_threads;
-            cfg.max_shreds = opts.max_shreds;
+        fn apply(args: @This(), cfg: *config.Cmd) void {
+            cfg.shred_network.turbine_recv_port = args.turbine_port;
+            cfg.shred_network.repair_port = args.repair_port;
+            cfg.shred_network.start_slot = args.test_repair_for_slot;
+            cfg.turbine.num_retransmit_threads = args.num_retransmit_threads;
+            cfg.max_shreds = args.max_shreds;
         }
     };
-    const GeyserOptionsBase = struct {
+    const GeyserArgumentsBase = struct {
         enable: bool,
         pipe_path: []const u8,
         writer_fba_bytes: usize,
 
-        const cmd_info: cli.OptionInfoGroup(@This()) = .{
+        const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .enable = .{
                 .kind = .named,
                 .name_override = "enable-geyser",
@@ -606,10 +616,10 @@ const Cmd = struct {
             },
         };
 
-        fn apply(opts: @This(), cfg: *config.Cmd) void {
-            cfg.geyser.enable = opts.enable;
-            cfg.geyser.pipe_path = opts.pipe_path;
-            cfg.geyser.writer_fba_bytes = opts.writer_fba_bytes;
+        fn apply(args: @This(), cfg: *config.Cmd) void {
+            cfg.geyser.enable = args.enable;
+            cfg.geyser.pipe_path = args.pipe_path;
+            cfg.geyser.writer_fba_bytes = args.writer_fba_bytes;
         }
     };
 
@@ -627,8 +637,8 @@ const Cmd = struct {
 
     const Gossip = struct {
         shred_version: ?u16,
-        gossip_base: GossipOptionsCommon,
-        gossip_node: GossipOptionsNode,
+        gossip_base: GossipArgumentsCommon,
+        gossip_node: GossipArgumentsNode,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -636,9 +646,9 @@ const Cmd = struct {
                 .long = "Start Solana gossip client on specified port.",
             },
             .sub = .{
-                .shred_version = shred_version_option,
-                .gossip_base = GossipOptionsCommon.cmd_info,
-                .gossip_node = GossipOptionsNode.cmd_info,
+                .shred_version = shred_version_arg,
+                .gossip_base = GossipArgumentsCommon.cmd_info,
+                .gossip_node = GossipArgumentsNode.cmd_info,
             },
         };
     };
@@ -646,16 +656,16 @@ const Cmd = struct {
     const Validator = struct {
         shred_version: ?u16,
         leader_schedule: ?[]const u8,
-        gossip_base: GossipOptionsCommon,
-        gossip_node: GossipOptionsNode,
-        repair: RepairOptionsBase,
+        gossip_base: GossipArgumentsCommon,
+        gossip_node: GossipArgumentsNode,
+        repair: RepairArgumentsBase,
         snapshot_dir: []const u8,
         genesis_file_path: ?[]const u8,
-        accountsdb_base: AccountsDbOptionsBase,
-        accountsdb_download: AccountsDbOptionsDownload,
+        accountsdb_base: AccountsDbArgumentsBase,
+        accountsdb_download: AccountsDbArgumentsDownload,
         force_new_snapshot_download: bool,
-        accountsdb_index: AccountsDbOptionsIndex,
-        geyser: GeyserOptionsBase,
+        accountsdb_index: AccountsDbArgumentsIndex,
+        geyser: GeyserArgumentsBase,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -663,18 +673,18 @@ const Cmd = struct {
                 .long = "Start a full Solana validator client.",
             },
             .sub = .{
-                .shred_version = shred_version_option,
-                .leader_schedule = leader_schedule_option,
-                .gossip_base = GossipOptionsCommon.cmd_info,
-                .gossip_node = GossipOptionsNode.cmd_info,
-                .repair = RepairOptionsBase.cmd_info,
-                .snapshot_dir = snapshot_dir_option,
-                .genesis_file_path = genesis_file_path_option,
-                .accountsdb_base = AccountsDbOptionsBase.cmd_info,
-                .accountsdb_download = AccountsDbOptionsDownload.cmd_info,
-                .force_new_snapshot_download = force_new_snapshot_download_option,
-                .accountsdb_index = AccountsDbOptionsIndex.cmd_info,
-                .geyser = GeyserOptionsBase.cmd_info,
+                .shred_version = shred_version_arg,
+                .leader_schedule = leader_schedule_arg,
+                .gossip_base = GossipArgumentsCommon.cmd_info,
+                .gossip_node = GossipArgumentsNode.cmd_info,
+                .repair = RepairArgumentsBase.cmd_info,
+                .snapshot_dir = snapshot_dir_arg,
+                .genesis_file_path = genesis_file_path_arg,
+                .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
+                .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
+                .force_new_snapshot_download = force_new_snapshot_download_arg,
+                .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
+                .geyser = GeyserArgumentsBase.cmd_info,
             },
         };
     };
@@ -682,9 +692,9 @@ const Cmd = struct {
     const ShredNetwork = struct {
         shred_version: ?u16,
         leader_schedule: ?[]const u8,
-        gossip_base: GossipOptionsCommon,
-        gossip_node: GossipOptionsNode,
-        repair: RepairOptionsBase,
+        gossip_base: GossipArgumentsCommon,
+        gossip_node: GossipArgumentsNode,
+        repair: RepairArgumentsBase,
         dump_shred_tracker: bool,
         /// TODO: Remove when no longer needed
         overwrite_stake_for_testing: bool,
@@ -708,11 +718,11 @@ const Cmd = struct {
                 ,
             },
             .sub = .{
-                .shred_version = shred_version_option,
-                .leader_schedule = leader_schedule_option,
-                .gossip_base = GossipOptionsCommon.cmd_info,
-                .gossip_node = GossipOptionsNode.cmd_info,
-                .repair = RepairOptionsBase.cmd_info,
+                .shred_version = shred_version_arg,
+                .leader_schedule = leader_schedule_arg,
+                .gossip_base = GossipArgumentsCommon.cmd_info,
+                .gossip_node = GossipArgumentsNode.cmd_info,
+                .repair = RepairArgumentsBase.cmd_info,
                 .dump_shred_tracker = .{
                     .kind = .named,
                     .name_override = "dump-shred-tracker",
@@ -753,8 +763,8 @@ const Cmd = struct {
     const SnapshotDownload = struct {
         shred_version: ?u16,
         snapshot_dir: []const u8,
-        accountsdb_download: AccountsDbOptionsDownload,
-        gossip_base: GossipOptionsCommon,
+        accountsdb_download: AccountsDbArgumentsDownload,
+        gossip_base: GossipArgumentsCommon,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -762,10 +772,10 @@ const Cmd = struct {
                 .long = "Starts a gossip client and downloads a snapshot from peers.",
             },
             .sub = .{
-                .shred_version = shred_version_option,
-                .snapshot_dir = snapshot_dir_option,
-                .accountsdb_download = AccountsDbOptionsDownload.cmd_info,
-                .gossip_base = GossipOptionsCommon.cmd_info,
+                .shred_version = shred_version_arg,
+                .snapshot_dir = snapshot_dir_arg,
+                .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
+                .gossip_base = GossipArgumentsCommon.cmd_info,
             },
         };
     };
@@ -773,10 +783,10 @@ const Cmd = struct {
     const SnapshotValidate = struct {
         snapshot_dir: []const u8,
         genesis_file_path: ?[]const u8,
-        accountsdb_base: AccountsDbOptionsBase,
-        accountsdb_index: AccountsDbOptionsIndex,
+        accountsdb_base: AccountsDbArgumentsBase,
+        accountsdb_index: AccountsDbArgumentsIndex,
         gossip_cluster: ?[]const u8,
-        geyser: GeyserOptionsBase,
+        geyser: GeyserArgumentsBase,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -784,12 +794,12 @@ const Cmd = struct {
                 .long = "Loads and validates a snapshot (doesnt download a snapshot).",
             },
             .sub = .{
-                .snapshot_dir = snapshot_dir_option,
-                .genesis_file_path = genesis_file_path_option,
-                .accountsdb_base = AccountsDbOptionsBase.cmd_info,
-                .accountsdb_index = AccountsDbOptionsIndex.cmd_info,
-                .gossip_cluster = gossip_cluster_option,
-                .geyser = GeyserOptionsBase.cmd_info,
+                .snapshot_dir = snapshot_dir_arg,
+                .genesis_file_path = genesis_file_path_arg,
+                .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
+                .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
+                .gossip_cluster = gossip_cluster_arg,
+                .geyser = GeyserArgumentsBase.cmd_info,
             },
         };
     };
@@ -805,8 +815,8 @@ const Cmd = struct {
                 .long = null,
             },
             .sub = .{
-                .snapshot_dir = snapshot_dir_option,
-                .genesis_file_path = genesis_file_path_option,
+                .snapshot_dir = snapshot_dir_arg,
+                .genesis_file_path = genesis_file_path_arg,
             },
         };
     };
@@ -820,7 +830,7 @@ const Cmd = struct {
                 .long = "Loads and prints a manifest file.",
             },
             .sub = .{
-                .snapshot_dir = snapshot_dir_option,
+                .snapshot_dir = snapshot_dir_arg,
             },
         };
     };
@@ -828,12 +838,12 @@ const Cmd = struct {
     const LeaderScheduleSubCmd = struct {
         shred_version: ?u16,
         leader_schedule: ?[]const u8,
-        gossip_base: GossipOptionsCommon,
-        gossip_node: GossipOptionsNode,
+        gossip_base: GossipArgumentsCommon,
+        gossip_node: GossipArgumentsNode,
         snapshot_dir: []const u8,
         genesis_file_path: ?[]const u8,
-        accountsdb_base: AccountsDbOptionsBase,
-        accountsdb_download: AccountsDbOptionsDownload,
+        accountsdb_base: AccountsDbArgumentsBase,
+        accountsdb_download: AccountsDbArgumentsDownload,
         force_new_snapshot_download: bool,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
@@ -849,15 +859,15 @@ const Cmd = struct {
                 ,
             },
             .sub = .{
-                .shred_version = shred_version_option,
-                .leader_schedule = leader_schedule_option,
-                .gossip_base = GossipOptionsCommon.cmd_info,
-                .gossip_node = GossipOptionsNode.cmd_info,
-                .snapshot_dir = snapshot_dir_option,
-                .genesis_file_path = genesis_file_path_option,
-                .accountsdb_base = AccountsDbOptionsBase.cmd_info,
-                .accountsdb_download = AccountsDbOptionsDownload.cmd_info,
-                .force_new_snapshot_download = force_new_snapshot_download_option,
+                .shred_version = shred_version_arg,
+                .leader_schedule = leader_schedule_arg,
+                .gossip_base = GossipArgumentsCommon.cmd_info,
+                .gossip_node = GossipArgumentsNode.cmd_info,
+                .snapshot_dir = snapshot_dir_arg,
+                .genesis_file_path = genesis_file_path_arg,
+                .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
+                .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
+                .force_new_snapshot_download = force_new_snapshot_download_arg,
             },
         };
     };
@@ -867,8 +877,8 @@ const Cmd = struct {
         genesis_file_path: ?[]const u8,
         n_transactions: u64,
         n_lamports_per_tx: u64,
-        gossip_base: GossipOptionsCommon,
-        gossip_node: GossipOptionsNode,
+        gossip_base: GossipArgumentsCommon,
+        gossip_node: GossipArgumentsNode,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -880,8 +890,8 @@ const Cmd = struct {
                 ,
             },
             .sub = .{
-                .shred_version = shred_version_option,
-                .genesis_file_path = genesis_file_path_option,
+                .shred_version = shred_version_arg,
+                .genesis_file_path = genesis_file_path_arg,
                 .n_transactions = .{
                     .kind = .named,
                     .name_override = "n-transactions",
@@ -898,21 +908,21 @@ const Cmd = struct {
                     .config = {},
                     .help = "number of lamports to send per transaction",
                 },
-                .gossip_base = GossipOptionsCommon.cmd_info,
-                .gossip_node = GossipOptionsNode.cmd_info,
+                .gossip_base = GossipArgumentsCommon.cmd_info,
+                .gossip_node = GossipArgumentsNode.cmd_info,
             },
         };
     };
 
     const MockRpcServer = struct {
-        gossip_base: GossipOptionsCommon,
-        gossip_node: GossipOptionsNode,
+        gossip_base: GossipArgumentsCommon,
+        gossip_node: GossipArgumentsNode,
         snapshot_dir: []const u8,
         genesis_file_path: ?[]const u8,
-        accountsdb_base: AccountsDbOptionsBase,
-        accountsdb_download: AccountsDbOptionsDownload,
+        accountsdb_base: AccountsDbArgumentsBase,
+        accountsdb_download: AccountsDbArgumentsDownload,
         force_new_snapshot_download: bool,
-        accountsdb_index: AccountsDbOptionsIndex,
+        accountsdb_index: AccountsDbArgumentsIndex,
 
         const cmd_info: cli.CommandInfo(@This()) = .{
             .help = .{
@@ -920,14 +930,14 @@ const Cmd = struct {
                 .long = null,
             },
             .sub = .{
-                .gossip_base = GossipOptionsCommon.cmd_info,
-                .gossip_node = GossipOptionsNode.cmd_info,
-                .snapshot_dir = snapshot_dir_option,
-                .genesis_file_path = genesis_file_path_option,
-                .accountsdb_base = AccountsDbOptionsBase.cmd_info,
-                .accountsdb_download = AccountsDbOptionsDownload.cmd_info,
-                .force_new_snapshot_download = force_new_snapshot_download_option,
-                .accountsdb_index = AccountsDbOptionsIndex.cmd_info,
+                .gossip_base = GossipArgumentsCommon.cmd_info,
+                .gossip_node = GossipArgumentsNode.cmd_info,
+                .snapshot_dir = snapshot_dir_arg,
+                .genesis_file_path = genesis_file_path_arg,
+                .accountsdb_base = AccountsDbArgumentsBase.cmd_info,
+                .accountsdb_download = AccountsDbArgumentsDownload.cmd_info,
+                .force_new_snapshot_download = force_new_snapshot_download_arg,
+                .accountsdb_index = AccountsDbArgumentsIndex.cmd_info,
             },
         };
     };
@@ -951,6 +961,9 @@ fn gossip(
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
+    const zone = tracy.initZone(@src(), .{ .name = "gossip" });
+    defer zone.deinit();
+
     var app_base = try AppBase.init(allocator, cfg);
     errdefer {
         app_base.shutdown();
@@ -980,11 +993,16 @@ fn validator(
     gossip_value_allocator: std.mem.Allocator,
     cfg: config.Cmd,
 ) !void {
+    const zone = tracy.initZone(@src(), .{ .name = "validator" });
+    defer zone.deinit();
+
     var app_base = try AppBase.init(allocator, cfg);
     defer {
         app_base.shutdown();
         app_base.deinit();
     }
+
+    app_base.logger.info().logf("starting validator with cfg: {}", .{cfg});
 
     const repair_port: u16 = cfg.shred_network.repair_port;
     const turbine_recv_port: u16 = cfg.shred_network.turbine_recv_port;
@@ -1535,8 +1553,18 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         snapshot_dir,
     );
 
-    const SnapshotGenerationInfo = sig.accounts_db.AccountsDB.SnapshotGenerationInfo;
-    var latest_snapshot_gen_info = sig.sync.RwMux(?SnapshotGenerationInfo).init(blk: {
+    var accountsdb = try sig.accounts_db.AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .noop,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 1,
+    });
+    defer accountsdb.deinit();
+
+    {
         const all_snap_fields = try FullAndIncrementalManifest.fromFiles(
             allocator,
             logger.unscoped(),
@@ -1545,32 +1573,22 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         );
         defer all_snap_fields.deinit(allocator);
 
-        break :blk .{
-            .full = .{
-                .slot = snap_files.full.slot,
-                .hash = snap_files.full.hash,
-                .capitalization = all_snap_fields.full.bank_fields.capitalization,
-            },
-            .inc = inc: {
-                const inc = all_snap_fields.incremental orelse break :inc null;
-                // if the incremental snapshot field is not null, these shouldn't be either
-                const inc_info = snap_files.incremental_info.?;
-                const inc_persist = inc.bank_extra.snapshot_persistence.?;
-                break :inc .{
-                    .slot = inc_info.slot,
-                    .hash = inc_info.hash,
-                    .capitalization = inc_persist.incremental_capitalization,
-                };
-            },
-        };
-    });
+        const manifest = try accountsdb.loadWithDefaults(
+            allocator,
+            all_snap_fields,
+            1,
+            true,
+            1500,
+            false,
+            false,
+        );
+        defer manifest.deinit(allocator);
+    }
 
     var server_ctx = try sig.rpc.server.Context.init(.{
         .allocator = allocator,
         .logger = logger,
-
-        .snapshot_dir = snapshot_dir,
-        .latest_snapshot_gen_info = &latest_snapshot_gen_info,
+        .accountsdb = &accountsdb,
 
         .read_buffer_size = sig.rpc.server.MIN_READ_BUFFER_SIZE,
         .socket_addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 8899),
@@ -1690,6 +1708,9 @@ fn startGossip(
     /// Extra sockets to publish in gossip, other than the gossip socket
     extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !*GossipService {
+    const zone = tracy.initZone(@src(), .{ .name = "cmd startGossip" });
+    defer zone.deinit();
+
     app_base.logger.info()
         .field("host", app_base.my_ip)
         .field("port", app_base.my_port)
@@ -1783,6 +1804,9 @@ fn loadSnapshot(
     unscoped_logger: Logger,
     options: LoadSnapshotOptions,
 ) !LoadedSnapshot {
+    const zone = tracy.initZone(@src(), .{ .name = "cmd loadSnapshot" });
+    defer zone.deinit();
+
     const logger = unscoped_logger.withScope(@typeName(@This()) ++ "." ++ @src().fn_name);
 
     var validator_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR, .{});

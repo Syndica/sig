@@ -386,7 +386,7 @@ fn extendLookupTable(
             usize,
             LOOKUP_TABLE_META_SIZE,
             new_table_addresses_len *| Pubkey.SIZE,
-        ) catch return error.ArithmeticOverflow;
+        ) catch return InstructionError.ProgramArithmeticOverflow;
 
         // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L307
         try AddressLookupTable.overwriteMetaData(
@@ -716,7 +716,7 @@ test "address-lookup-table create" {
             .data = &.{},
         },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = payer, .lamports = before_lamports },
+        .{ .pubkey = payer, .lamports = before_lamports, .owner = system_program.ID },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system_program.ID,
@@ -733,7 +733,7 @@ test "address-lookup-table create" {
             .data = expected_state,
         },
         .{ .pubkey = unsigned_authority_address },
-        .{ .pubkey = payer, .lamports = after_lamports },
+        .{ .pubkey = payer, .lamports = after_lamports, .owner = system_program.ID },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
             .pubkey = runtime.program.system_program.ID,
@@ -750,7 +750,7 @@ test "address-lookup-table create" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -856,7 +856,7 @@ test "address-lookup-table freeze" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -966,7 +966,7 @@ test "address-lookup-table close" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -1074,7 +1074,7 @@ test "address-lookup-table deactivate" {
         .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
     };
 
-    const sysvar_cache = runtime.SysvarCache{
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
         .slot_hashes = runtime.sysvar.SlotHashes{
             .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
@@ -1156,7 +1156,11 @@ test "address-lookup-table extend" {
                 .data = before_lookup_table,
             },
             .{ .pubkey = unsigned_authority_address },
-            .{ .pubkey = payer, .lamports = if (payer_required) required_lamports else 0 },
+            .{
+                .pubkey = payer,
+                .lamports = if (payer_required) required_lamports else 0,
+                .owner = system_program.ID,
+            },
             .{
                 .pubkey = program.ID,
                 .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -1177,7 +1181,11 @@ test "address-lookup-table extend" {
                 .data = after_lookup_table,
             },
             .{ .pubkey = unsigned_authority_address },
-            .{ .pubkey = payer, .lamports = 0 },
+            .{
+                .pubkey = payer,
+                .lamports = 0,
+                .owner = system_program.ID,
+            },
             .{
                 .pubkey = program.ID,
                 .owner = runtime.ids.NATIVE_LOADER_ID,
@@ -1198,7 +1206,7 @@ test "address-lookup-table extend" {
             .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
         };
 
-        const sysvar_cache = runtime.SysvarCache{
+        const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
             .slot_hashes = runtime.sysvar.SlotHashes{
                 .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},

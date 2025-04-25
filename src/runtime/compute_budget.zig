@@ -35,6 +35,9 @@ pub const ComputeBudget = struct {
     cpi_bytes_per_unit: u64,
     /// Maximum cross-program invocation instruction size
     max_cpi_instruction_size: usize,
+    /// Number of compute units consumed by an invoke call (not including the cost incurred by
+    /// the called program)
+    invoke_units: u64,
 
     pub fn default(compute_unit_limit: u64) ComputeBudget {
         return .{
@@ -51,6 +54,7 @@ pub const ComputeBudget = struct {
             .poseidon_cost_coefficient_a = 61,
             .poseidon_cost_coefficient_c = 542,
             .max_cpi_instruction_size = 1280, // IPv6 Min MTU size
+            .invoke_units = 1000,
         };
     }
 
@@ -58,17 +62,9 @@ pub const ComputeBudget = struct {
     /// [fd] https://github.com/firedancer-io/firedancer/blob/211dfccc1d84a50191a487a6abffd962f7954179/src/flamenco/vm/syscall/fd_vm_syscall_crypto.c#L238-L245
     ///
     /// Returns the cost of a Poseidon hash syscall for a given input length.
-    pub fn poseidonCost(self: ComputeBudget, len: u64) !u64 {
-        const squared_inputs = try std.math.powi(u64, len, 2);
-        const mul_result = try std.math.mul(
-            u64,
-            squared_inputs,
-            self.poseidon_cost_coefficient_a,
-        );
-        return try std.math.add(
-            u64,
-            mul_result,
-            self.poseidon_cost_coefficient_c,
-        );
+    pub fn poseidonCost(self: ComputeBudget, len: std.math.IntFittingRange(0, 12)) u64 {
+        const squared_inputs = std.math.powi(u64, len, 2) catch unreachable;
+        const mul = squared_inputs * self.poseidon_cost_coefficient_a;
+        return mul + self.poseidon_cost_coefficient_c;
     }
 };

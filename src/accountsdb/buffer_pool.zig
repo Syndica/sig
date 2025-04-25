@@ -1,12 +1,14 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const builtin = @import("builtin");
+const tracy = @import("tracy");
 
 const IoUring = std.os.linux.IoUring;
 const Atomic = std.atomic.Value;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 const bincode = sig.bincode;
+const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITTED_DATA_LENGTH;
 
 /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
 pub const FRAME_SIZE = 512;
@@ -111,10 +113,17 @@ pub const BufferPool = struct {
     pub const ReadIoUringError = FrameManager.GetError || IoUringError;
     pub const ReadError = if (USE_IO_URING) ReadIoUringError else ReadBlockingError;
 
+    /// The number of bytes required to store the FrameRefs of any account read.
+    pub const MAX_READ_BYTES_ALLOCATED = (MAX_PERMITTED_DATA_LENGTH / FRAME_SIZE + 2) *
+        @sizeOf(FrameRef);
+
     pub fn init(
         allocator: std.mem.Allocator,
         num_frames: u32,
     ) !BufferPool {
+        const zone = tracy.initZone(@src(), .{ .name = "accountsdb.BufferPool init" });
+        defer zone.deinit();
+
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
         // Alignment of frames is good for read performance (and necessary if we want to use O_DIRECT.)
@@ -881,7 +890,7 @@ pub const AccountDataHandle = union(enum) {
         switch (self.*) {
             .owned_allocation, .unowned_allocation => |data| return @memcpy(buf, data[start..end]),
             .sub_read => |*sb| return sb.parent.read(sb.start + start, buf),
-            .empty => unreachable,
+            .empty => return,
             .buffer_pool_read => {},
         }
 
@@ -966,11 +975,11 @@ pub const AccountDataHandle = union(enum) {
         }
     }
 
-    pub fn slice(self: *const AccountDataHandle, start: usize, end: usize) AccountDataHandle {
+    pub fn slice(self: *const AccountDataHandle, start: u32, end: u32) AccountDataHandle {
         return .{ .sub_read = .{
+            .parent = self,
             .end = end,
             .start = start,
-            .self = self,
         } };
     }
 

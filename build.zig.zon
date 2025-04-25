@@ -40,12 +40,16 @@
             .hash = "122092353c0b494c2a4968c10a527dc90d6e89eaac48637fda1a0af3efd948bf4ee3",
         },
         .poseidon = .{
-            .url = "git+https://github.com/Rexicon226/zig-poseidon#82e41845bfc689192359639fef5bb89c452388b2",
-            .hash = "12208f0d8388111308c919d73c24e9a595c3f2b5f83edf2cebf10598f8439fe33843",
+            .url = "git+https://github.com/Rexicon226/zig-poseidon#a6b20b50420bdb15bfe29cafcb27e440a776ce9b",
+            .hash = "1220151eed676d55cf6517aa6f712b7fead33cd262616978a29a9381c351ba5afc95",
         },
         .secp256k1 = .{
             .url = "git+https://github.com/Syndica/secp256k1-zig#82bbb3a5bf16c39330d69fa8699cf1b4b7f7f316",
             .hash = "1220f7a062a9df740338610beb50a4af1a8a089e47ef01339b220f42626bc16494fd",
+        },
+        .tracy = .{
+            .url = "git+https://github.com/Sobeston/zig-tracy/#283e6fba375d5bb4b85735188d3059e028022774",
+            .hash = "12206816af8efb7a3c133f5d27f0b7c3cd2a9b38bdb957f8b74c855a2bd38072a5b6",
         },
     },
 }

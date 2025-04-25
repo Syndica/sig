@@ -1,9 +1,11 @@
 const std = @import("std");
-const sbpf = @import("sbpf.zig");
-const Elf = @import("elf.zig").Elf;
-const memory = @import("memory.zig");
-const syscalls = @import("syscalls.zig");
+const sig = @import("../sig.zig");
 
+const sbpf = sig.vm.sbpf;
+const memory = sig.vm.memory;
+const syscalls = sig.vm.syscalls;
+
+const Elf = sig.vm.elf.Elf;
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
 
@@ -917,10 +919,11 @@ pub const BuiltinProgram = struct {
     functions: Registry(syscalls.Syscall) = .{},
 
     pub fn deinit(
-        self: *BuiltinProgram,
+        self: BuiltinProgram,
         allocator: std.mem.Allocator,
     ) void {
-        self.functions.deinit(allocator);
+        var copy = self;
+        copy.functions.deinit(allocator);
     }
 };
 
@@ -933,8 +936,6 @@ pub const Config = struct {
     stack_frame_size: usize = 4096,
     /// Enables the use of MemoryMapping and MemoryRegion for address translation
     enable_address_translation: bool = true,
-    /// Enables gaps in VM address space between the stack frames
-    enable_stack_frame_gaps: bool = true,
     /// Maximal pc distance after which a new instruction meter validation is emitted by the JIT
     instruction_meter_checkpoint_distance: usize = 10_000,
     /// Enable instruction meter and limiting
@@ -953,9 +954,11 @@ pub const Config = struct {
     optimize_rodata: bool = true,
     /// Use aligned memory mapping
     aligned_memory_mapping: bool = true,
+    /// Enables gaps in VM address space between the stack frames
+    enable_stack_frame_gaps: bool = true,
+
     /// Allowed [SBPFVersion]s
     minimum_version: sbpf.Version = .v0,
-
     maximum_version: sbpf.Version = .v3,
 
     pub fn stackSize(config: Config) u64 {
