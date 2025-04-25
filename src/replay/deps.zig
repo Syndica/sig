@@ -24,17 +24,20 @@ pub const Tower = struct {
 };
 
 pub const BankForks = struct {
-    banks: std.AutoHashMapUnmanaged(Slot, Bank),
+    banks: std.AutoHashMapUnmanaged(Slot, Bank) = .{},
 
-    pub fn activeBankSlots(self: *const BankForks, allocator: Allocator) ![]const Slot {
-        const list = std.ArrayListUnmanaged(Slot){};
+    pub fn activeBankSlots(
+        self: *const BankForks,
+        allocator: Allocator,
+    ) Allocator.Error![]const Slot {
+        var list = std.ArrayListUnmanaged(Slot){};
         var iter = self.banks.iterator();
         while (iter.next()) |entry| {
             if (!entry.value_ptr.isFrozen()) {
                 try list.append(allocator, entry.key_ptr.*);
             }
         }
-        return try list.toOwnedSlice();
+        return try list.toOwnedSlice(allocator);
     }
 };
 

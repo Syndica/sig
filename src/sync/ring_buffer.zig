@@ -15,7 +15,7 @@ pub fn RingBuffer(T: type) type {
         const Slot = struct { item: T, next_action: std.atomic.Value(Action) };
         const Action = usize;
 
-        pub fn init(allocator: Allocator, len: usize) !RingBuffer(T) {
+        pub fn init(allocator: Allocator, len: usize) Allocator.Error!RingBuffer(T) {
             const slots = try allocator.alloc(Slot, len);
             for (slots, 0..) |*slot, i|
                 slot.next_action = std.atomic.Value(usize).init(writeAction(i));

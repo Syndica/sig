@@ -39,13 +39,14 @@ pub const EntryVerifier = struct {
         max_tasks: u32,
     ) Allocator.Error!EntryVerifier {
         const preallocated_nodes = try allocator.alloc(std.ArrayListUnmanaged(Hash), max_tasks);
-        for (preallocated_nodes) |pn| pn = .{};
+        for (preallocated_nodes) |*pn| pn.* = .{};
         return .{
             .allocator = allocator,
             .thread_pool = try sig.utils.thread.HomogeneousThreadPool(Task)
                 .initBorrowed(allocator, thread_pool, max_tasks),
             .preallocated_nodes = preallocated_nodes,
             .max_tasks = max_tasks,
+            .running = false,
         };
     }
 
@@ -133,11 +134,11 @@ pub const TransactionVerifyAndHasher = struct {
     ) Allocator.Error!TransactionVerifyAndHasher {
         const preallocated_results = try allocator
             .alloc(std.ArrayListUnmanaged(RuntimeSanitizedTransaction), max_tasks);
-        for (preallocated_results) |pn| pn = .{};
+        for (preallocated_results) |*pn| pn.* = .{};
         return .{
             .allocator = allocator,
             .thread_pool = try sig.utils.thread.HomogeneousThreadPool(Task)
-                .init(allocator, thread_pool, max_tasks),
+                .initBorrowed(allocator, thread_pool, max_tasks),
             .list_recycler = list_recycler,
             .max_tasks = max_tasks,
             .running = false,
@@ -204,7 +205,7 @@ pub fn ListRecycler(T: type) type {
         allocator: Allocator,
         recycled_lists: sig.sync.RingBuffer(std.ArrayListUnmanaged(T)),
 
-        pub fn init(allocator: Allocator, size: usize) ListRecycler(T) {
+        pub fn init(allocator: Allocator, size: usize) Allocator.Error!ListRecycler(T) {
             return .{
                 .allocator = allocator,
                 .recycled_lists = try sig.sync.RingBuffer(std.ArrayListUnmanaged(T))
@@ -212,9 +213,10 @@ pub fn ListRecycler(T: type) type {
             };
         }
 
-        pub fn deinit(self: *ListRecycler(T)) ListRecycler(T) {
+        pub fn deinit(self: *ListRecycler(T)) void {
             var count: usize = 0;
-            while (self.recycled_lists.pop()) |item| {
+            while (self.recycled_lists.pop()) |const_item| {
+                var item = const_item;
                 item.deinit(self.allocator);
                 count += 1;
                 std.debug.assert(count < self.recycled_lists.slots.len);

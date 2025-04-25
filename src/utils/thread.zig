@@ -230,10 +230,10 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             num_tasks: u64,
         ) !Self {
             var tasks = try std.ArrayListUnmanaged(TaskAdapter).initCapacity(allocator, num_tasks);
-            errdefer tasks.deinit();
+            errdefer tasks.deinit(allocator);
 
             var results = try std.ArrayListUnmanaged(TaskResult).initCapacity(allocator, num_tasks);
-            errdefer results.deinit();
+            errdefer results.deinit(allocator);
 
             return .{
                 .allocator = allocator,
@@ -244,7 +244,8 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(const_self: Self) void {
+            var self = const_self;
             if (self.pool_is_owned) {
                 self.pool.shutdown();
                 self.allocator.destroy(self.pool);

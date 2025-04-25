@@ -42,13 +42,14 @@ pub const ReplayDependencies = struct {
 };
 
 const ReplayState = struct {
+    allocator: Allocator,
     thread_pool: *ThreadPool,
     tower: Tower,
     bank_forks: BankForks,
     blockstore_reader: *BlockstoreReader,
     entry_confirmer: EntryConfirmer,
 
-    fn init(dependencies: ReplayDependencies) ReplayState {
+    fn init(dependencies: ReplayDependencies) Allocator.Error!ReplayState {
         const tower = try tower_storage.load() orelse Tower.init();
 
         const thread_pool = try dependencies.allocator.create(ThreadPool);
@@ -57,14 +58,16 @@ const ReplayState = struct {
 
         const entry_confirmer = try EntryConfirmer.init(
             dependencies.allocator,
-            dependencies.logger,
+            ScopedLogger.from(dependencies.logger),
             thread_pool,
         );
         errdefer entry_confirmer.deinit();
 
         return .{
+            .allocator = dependencies.allocator,
             .tower = tower,
             .thread_pool = thread_pool,
+            .bank_forks = .{},
             .entry_confirmer = entry_confirmer,
             .blockstore_reader = dependencies.blockstore_reader,
         };
@@ -77,7 +80,7 @@ const ReplayState = struct {
 
 /// Run the replay service indefinitely.
 pub fn run(dependencies: ReplayDependencies) !void {
-    var state = ReplayState.init(dependencies);
+    var state = try ReplayState.init(dependencies);
     defer state.deinit();
 
     while (!dependencies.exit.load(.monotonic)) try advanceReplay(&state);
@@ -86,11 +89,11 @@ pub fn run(dependencies: ReplayDependencies) !void {
 /// Run a single iteration of the entire replay process. Includes:
 /// - replay all active banks that have not been replayed yet
 /// - running concensus on the latest updates
-fn advanceReplay(state: *ReplayState) !void {
+fn advanceReplay(state: *ReplayState) Allocator.Error!void {
     // TODO: generate_new_bank_forks
 
     // TODO: replay_active_banks
-    replayActiveBanks(&state.bank_forks);
+    _ = try replayActiveBanks(state.allocator, &state.bank_forks);
 
     // TODO: process_ancestor_hashes_duplicate_slots
 
@@ -124,7 +127,7 @@ fn advanceReplay(state: *ReplayState) !void {
 }
 
 // Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
-fn replayActiveBanks(allocator: Allocator, bank_forks: *BankForks) bool {
+fn replayActiveBanks(allocator: Allocator, bank_forks: *BankForks) Allocator.Error!bool {
     // TODO: parallel processing: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3401
 
     const active_bank_slots = try bank_forks.activeBankSlots(allocator);
@@ -133,6 +136,8 @@ fn replayActiveBanks(allocator: Allocator, bank_forks: *BankForks) bool {
     }
 
     // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
+
+    return undefined;
 }
 
 const ReplaySlotFromBlockstore = struct {
@@ -201,17 +206,17 @@ const EntryConfirmer = struct {
         thread_pool: *ThreadPool,
     ) Allocator.Error!EntryConfirmer {
         const entry_verifier = try EntryVerifier
-            .init(allocator, thread_pool, thread_pool.max_thread);
-        errdefer entry_verifier.deinit(allocator);
+            .init(allocator, thread_pool, thread_pool.max_threads);
+        errdefer entry_verifier.deinit();
 
-        const list_recycler = try allocator.create(ListRecycler(RuntimeSanitizedTransaction));
-        list_recycler.* = ListRecycler(RuntimeSanitizedTransaction)
+        var list_recycler = try allocator.create(ListRecycler(RuntimeSanitizedTransaction));
+        list_recycler.* = try ListRecycler(RuntimeSanitizedTransaction)
             .init(allocator, list_recycler_size);
-        errdefer list_recycler.deinit(allocator);
+        errdefer list_recycler.deinit();
 
         const transaction_verifier = try TransactionVerifyAndHasher
-            .init(allocator, thread_pool, list_recycler, thread_pool.max_thread);
-        errdefer transaction_verifier.deinit(allocator);
+            .init(allocator, thread_pool, list_recycler, thread_pool.max_threads);
+        errdefer transaction_verifier.deinit();
 
         return .{
             .logger = logger,
@@ -221,7 +226,9 @@ const EntryConfirmer = struct {
         };
     }
 
-    pub fn deinit() void {}
+    pub fn deinit(self: EntryConfirmer) void {
+        _ = self; // autofix
+    }
 
     /// agave: confirm_slot
     /// fd: runtime_process_txns_in_microblock_stream
