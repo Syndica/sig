@@ -61,16 +61,16 @@ const AccountMetaRust = extern struct {
     /// An account's public key.
     pubkey: Pubkey,
     /// True if an `Instruction` requires a `Transaction` signature matching `pubkey`.
-    is_signer: bool,
+    is_signer: u8,
     /// True if the account data or metadata may be mutated during program execution.
-    is_writable: bool,
+    is_writable: u8,
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L588
 const AccountMetaC = extern struct {
     pubkey_addr: u64,
-    is_writable: bool,
-    is_signer: bool,
+    is_writable: u8,
+    is_signer: u8,
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
@@ -80,9 +80,9 @@ pub const AccountInfoRust = extern struct {
     data: Rc(RefCell([]u8)),
     owner_addr: u64,
     rent_epoch: Epoch,
-    is_signer: bool,
-    is_writable: bool,
-    executable: bool,
+    is_signer: u8,
+    is_writable: u8,
+    executable: u8,
 };
 
 /// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/359d7eb2b68639443d750ffcec0c7e358f138975/bpf_loader/src/syscalls/cpi.rs#L597
@@ -93,9 +93,9 @@ pub const AccountInfoC = extern struct {
     data_addr: u64,
     owner_addr: u64,
     rent_epoch: u64,
-    is_signer: bool,
-    is_writable: bool,
-    executable: bool,
+    is_signer: u8,
+    is_writable: u8,
+    executable: u8,
 };
 
 /// [rust] https://doc.rust-lang.org/src/alloc/rc.rs.html#281-289
@@ -295,8 +295,8 @@ const CallerAccount = struct {
             }
 
             // Double translate data out of RefCell
-            const data: []const u8 = (try memory_map.translateType(
-                []const u8,
+            const data: VmSlice = (try memory_map.translateType(
+                VmSlice,
                 .constant,
                 data_ptr,
                 ic.getCheckAligned(),
@@ -339,7 +339,7 @@ const CallerAccount = struct {
                 break :r2l VmValue(u64){ .translated = translated };
             };
 
-            const vm_data_addr = @intFromPtr(data.ptr);
+            const vm_data_addr = data.ptr;
             const serialized: []u8 = if (direct_mapping) ser: {
                 // when direct mapping is enabled, the permissions on the
                 // realloc region can change during CPI so we must delay
@@ -823,8 +823,8 @@ fn translateInstruction(
         }
 
         accounts[i] = InstructionAccount{
-            .is_signer = account_meta.is_signer,
-            .is_writable = account_meta.is_writable,
+            .is_signer = account_meta.is_signer > 0,
+            .is_writable = account_meta.is_writable > 0,
             .pubkey = switch (AccountInfoType) {
                 AccountInfoRust => account_meta.pubkey,
                 AccountInfoC => (try memory_map.translateType(
@@ -1471,8 +1471,8 @@ const TestAccount = struct {
 
         buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
             .key_addr = key_addr,
-            .is_signer = self.is_signer,
-            .is_writable = self.is_writable,
+            .is_signer = @intFromBool(self.is_signer),
+            .is_writable = @intFromBool(self.is_writable),
             .lamports_addr = Rc(RefCell(u64)).fromRaw(
                 @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
             ),
@@ -1480,7 +1480,7 @@ const TestAccount = struct {
                 @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
             ),
             .owner_addr = owner_addr,
-            .executable = self.executable,
+            .executable = @intFromBool(self.executable),
             .rent_epoch = self.rent_epoch,
         });
 
@@ -1603,9 +1603,9 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoC" {
         .data_addr = data_addr,
         .owner_addr = owner_addr,
         .rent_epoch = account.rent_epoch,
-        .is_signer = account.is_signer,
-        .is_writable = account.is_writable,
-        .executable = account.executable,
+        .is_signer = @intFromBool(account.is_signer),
+        .is_writable = @intFromBool(account.is_writable),
+        .executable = @intFromBool(account.executable),
     }));
 
     try buf.writer().writeAll(std.mem.asBytes(&account.key));
@@ -1784,13 +1784,13 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
         const account_meta: AccountMetaType = switch (AccountMetaType) {
             AccountMetaC => .{
                 .pubkey_addr = vm_addr + keys_offset + ((i + 1) * @sizeOf(Pubkey)),
-                .is_writable = ins_account.is_writable,
-                .is_signer = ins_account.is_signer,
+                .is_writable = @intFromBool(ins_account.is_writable),
+                .is_signer = @intFromBool(ins_account.is_signer),
             },
             AccountMetaRust => .{
                 .pubkey = ins_account.pubkey,
-                .is_writable = ins_account.is_writable,
-                .is_signer = ins_account.is_signer,
+                .is_writable = @intFromBool(ins_account.is_writable),
+                .is_signer = @intFromBool(ins_account.is_signer),
             },
             else => unreachable,
         };
