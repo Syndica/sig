@@ -814,11 +814,7 @@ fn translateInstruction(
 
     for (account_metas, 0..) |account_meta, i| {
         // Check if the u8 which holds the bools is valid (contains 0 or 1).
-        // Uses volatile to prevent the compiler from seeing that it comes from bool & assuming 0/1.
-        // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L482
-        if (@as(*const volatile u8, @ptrCast(&account_meta.is_signer)).* > 1 or
-            @as(*const volatile u8, @ptrCast(&account_meta.is_writable)).* > 1)
-        {
+        if (account_meta.is_signer > 1 or account_meta.is_writable > 1) {
             return InstructionError.InvalidArgument;
         }
 
