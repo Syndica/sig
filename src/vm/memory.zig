@@ -625,7 +625,7 @@ fn hasTranslatableRepresentation(comptime T: type) bool {
         .Array => |info| hasTranslatableRepresentation(info.child),
         .Struct => |info| switch (info.layout) {
             .auto => false, // Zig could change the size of structs any time.
-            .@"packed" => hasTranslatableRepresentation(info.backing_integer orelse return false),
+            .@"packed" => hasTranslatableRepresentation(info.backing_integer),
             .@"extern" => true, // any extern struct has a defined layout according to C.
         },
         else => false,
