@@ -1,10 +1,10 @@
 const std = @import("std");
 const cpi = @import("cpi.zig");
-const memops = @import("memops.zig");
-const hash = @import("hash.zig");
 const sig = @import("../../sig.zig");
 
-const memory = sig.vm.memory;
+pub const memops = @import("memops.zig");
+pub const hash = @import("hash.zig");
+
 const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
 
@@ -101,13 +101,26 @@ pub fn register(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_try_find_program_address", createProgramAddress,);
 
     // Sha256, Keccak256, Secp256k1Recover
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_sha256", sha256,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_keccak256", keccak256,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_sha256",
+        hash.sha256,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_keccak256",
+        hash.keccak256,
+    );
     // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", secp256k1Recover,);
+
     // Blake3
-    // if (feature_set.isActive(feature_set.BLAKE3_SYSCALL_ENABLED, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_blake3", blake3,);
-    // }
+    if (feature_set.isActive(features.BLAKE3_SYSCALL_ENABLED, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_blake3",
+            hash.blake3,
+        );
+    }
 
     // Elliptic Curve
     // if (feature_set.isActive(feature_set.CURVE25519_SYSCALL_ENABLED, slot)) {
@@ -133,25 +146,25 @@ pub fn register(
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_memcpy_",
-        memcpy,
+        memops.memcpy,
     );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_memmove_",
-        memmove,
+        memops.memmove,
     );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_memset_",
-        memset,
+        memops.memset,
     );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_memcmp_",
-        memcmp,
+        memops.memcmp,
     );
 
     // Processed Sibling
@@ -204,7 +217,7 @@ pub fn register(
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_poseidon",
-            poseidon,
+            hash.poseidon,
         );
     }
 
@@ -424,15 +437,6 @@ fn invokeSigned(
         signers_seeds_len,
     );
 }
-
-// memory operators
-pub const memcpy = memops.memcpy;
-pub const memset = memops.memset;
-pub const memcmp = memops.memcmp;
-pub const memmove = memops.memmove;
-
-// hashing
-pub const poseidon = hash.poseidon;
 
 // special
 pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {

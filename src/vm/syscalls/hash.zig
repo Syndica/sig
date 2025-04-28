@@ -171,7 +171,29 @@ const Sha256 = struct {
     const max_slices = "sha256_max_slices";
 };
 
+const Blake3 = struct {
+    const Hasher = std.crypto.hash.Blake3;
+    const Output = [32]u8;
+    const name = "Blake3";
+
+    const base_cost = "sha256_base_cost";
+    const byte_cost = "sha256_byte_cost";
+    const max_slices = "sha256_max_slices";
+};
+
+const Keccak256 = struct {
+    const Hasher = std.crypto.hash.sha3.Keccak256;
+    const Output = [32]u8;
+    const name = "Keccak256";
+
+    const base_cost = "sha256_base_cost";
+    const byte_cost = "sha256_byte_cost";
+    const max_slices = "sha256_max_slices";
+};
+
 pub const sha256 = hashSyscall(Sha256);
+pub const blake3 = hashSyscall(Blake3);
+pub const keccak256 = hashSyscall(Keccak256);
 
 test poseidon {
     try sig.vm.tests.testElfWithSyscalls(
