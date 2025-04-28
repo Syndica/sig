@@ -155,7 +155,7 @@ test "epochctx" {
     if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
-    const genesis_config = try sig.accounts_db.GenesisConfig
+    const genesis_config = try sig.core.GenesisConfig
         .init(allocator, "data/genesis-files/testnet_genesis.bin");
     defer genesis_config.deinit(allocator);
 

@@ -131,6 +131,7 @@ files_excluded_from_line_length_check = [
     "src/accountsdb/download.zig",
     "src/accountsdb/fuzz_snapshot.zig",
     "src/accountsdb/index.zig",
+    "src/accountsdb/snapshots.zig",
     "src/accountsdb/swiss_map.zig",
     "src/accountsdb/sysvars.zig",
     "src/benchmarks.zig",

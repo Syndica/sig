@@ -1,21 +1,29 @@
 pub const account = @import("account.zig");
+pub const bank = @import("bank.zig");
 pub const entry = @import("entry.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
 pub const epoch_context = @import("epoch_context.zig");
+pub const genesis_config = @import("genesis_config.zig");
 pub const hard_forks = @import("hard_forks.zig");
 pub const hash = @import("hash.zig");
 pub const instruction = @import("instruction.zig");
 pub const leader_schedule = @import("leader_schedule.zig");
 pub const pubkey = @import("pubkey.zig");
+pub const rent_collector = @import("rent_collector.zig");
 pub const shred = @import("shred.zig");
 pub const signature = @import("signature.zig");
+pub const stake = @import("stake.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
 
 pub const Account = account.Account;
+pub const BankFields = bank.BankFields;
+pub const ClusterType = genesis_config.ClusterType;
 pub const Entry = entry.Entry;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
 pub const EpochContext = epoch_context.EpochContext;
+pub const EpochConstants = bank.EpochConstants;
+pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const HardForks = hard_forks.HardForks;
 pub const HardFork = HardForks.Fork;
 pub const Hash = hash.Hash;
@@ -24,9 +32,12 @@ pub const Nonce = shred.Nonce;
 pub const Pubkey = pubkey.Pubkey;
 pub const ShredVersion = shred.ShredVersion;
 pub const Signature = signature.Signature;
+pub const SlotConstants = bank.SlotConstants;
+pub const SlotState = bank.SlotState;
 pub const Transaction = transaction.Transaction;
 
 pub const Epoch = time.Epoch;
 pub const Slot = time.Slot;
+pub const UnixTimestamp = time.UnixTimestamp;
 
 pub const Cluster = enum { mainnet, testnet, devnet, localnet };

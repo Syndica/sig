@@ -4,9 +4,11 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
-const CodeShred = sig.ledger.shred.CodeShred;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
+const UnixTimestamp = sig.core.UnixTimestamp;
+
+const CodeShred = sig.ledger.shred.CodeShred;
 
 /// The Meta column family
 pub const SlotMeta = struct {
@@ -293,8 +295,6 @@ pub const TransactionStatusIndexMeta = struct {
 };
 
 pub const Reward = sig.ledger.transaction_status.Reward;
-
-pub const UnixTimestamp = i64;
 
 // TODO consider union
 pub const PerfSample = struct {

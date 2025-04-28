@@ -22,6 +22,7 @@ const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 const Timer = sig.time.Timer;
 const Transaction = sig.core.Transaction;
+const UnixTimestamp = sig.core.UnixTimestamp;
 
 // shred
 const Shred = sig.ledger.shred.Shred;
@@ -38,7 +39,6 @@ const PerfSample = ledger.meta.PerfSample;
 const SlotMeta = ledger.meta.SlotMeta;
 const TransactionStatusMeta = ledger.meta.TransactionStatusMeta;
 const TransactionError = ledger.transaction_status.TransactionError;
-const UnixTimestamp = ledger.meta.UnixTimestamp;
 
 const schema = ledger.schema.schema;
 const key_serializer = ledger.database.key_serializer;

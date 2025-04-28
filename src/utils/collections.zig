@@ -856,6 +856,24 @@ pub fn RingBuffer(comptime I: type, comptime Size: usize) type {
     };
 }
 
+pub fn cloneMapAndValues(allocator: Allocator, map: anytype) Allocator.Error!@TypeOf(map) {
+    var cloned: @TypeOf(map) = .{};
+    errdefer deinitMapAndValues(allocator, cloned);
+
+    try cloned.ensureTotalCapacity(allocator, map.count());
+    for (map.keys(), map.values()) |key, value| {
+        cloned.putAssumeCapacityNoClobber(key, try value.clone(allocator));
+    }
+
+    return cloned;
+}
+
+pub fn deinitMapAndValues(allocator: Allocator, const_map: anytype) void {
+    var map = const_map;
+    for (map.values()) |value| value.deinit(allocator);
+    (&map).deinit(allocator);
+}
+
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
@@ -1195,4 +1213,36 @@ test "SortedMap" {
     try expect(!map.is_sorted);
     map.sort();
     try expect(map.is_sorted);
+}
+
+test "checkAllAllocationFailures in cloneMapAndValues" {
+    const Clonable = struct {
+        inner: []const u8,
+
+        const Self = @This();
+
+        pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
+            return .{ .inner = try allocator.dupe(u8, self.inner) };
+        }
+
+        pub fn deinit(self: *const Self, allocator: Allocator) void {
+            return allocator.free(self.inner);
+        }
+
+        pub fn runTest(allocator: std.mem.Allocator) !void {
+            var map = std.AutoArrayHashMapUnmanaged(u64, Self){};
+            defer deinitMapAndValues(allocator, map);
+
+            for (0..100) |i| {
+                const item = try allocator.alloc(u8, i * 100);
+                errdefer allocator.free(item);
+                try map.put(allocator, i, .{ .inner = item });
+            }
+
+            const cloned = try cloneMapAndValues(allocator, map);
+            deinitMapAndValues(allocator, cloned);
+        }
+    };
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Clonable.runTest, .{});
 }

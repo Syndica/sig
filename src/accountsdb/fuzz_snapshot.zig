@@ -3,12 +3,12 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 
+const BankFields = sig.core.BankFields;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const BankFields = sig.accounts_db.snapshots.BankFields;
 const ExtraFields = sig.accounts_db.snapshots.ExtraFields;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const SnapshotManifest = sig.accounts_db.Manifest;
@@ -76,19 +76,13 @@ fn randomSnapshotManifest(
     /// for commentary on the runtime of this function.
     random: std.Random,
 ) !SnapshotManifest {
-    const bank_fields = try BankFields.initRandom(allocator, random, 0, max_list_entries);
+    const bank_fields = try BankFields.initRandom(allocator, random, max_list_entries);
     errdefer bank_fields.deinit(allocator);
 
     const accounts_db_fields = try randomAccountsDbFields(allocator, random, .{});
     errdefer accounts_db_fields.deinit(allocator);
 
-    const bank_extra = try ExtraFields.initRandom(allocator, random, .{
-        .versioned_epoch_stakes_len = random.intRangeAtMost(usize, 0, max_list_entries),
-        .list_entries = .{
-            .min = 0,
-            .max = max_list_entries,
-        },
-    });
+    const bank_extra = try ExtraFields.initRandom(allocator, random, max_list_entries);
     errdefer bank_extra.deinit(allocator);
 
     return .{
