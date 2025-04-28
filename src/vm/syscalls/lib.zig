@@ -337,12 +337,6 @@ pub fn logData(
     try stable_log.programData(tc, messages);
 }
 
-// memory operators
-pub const memcpy = memops.memcpy;
-pub const memset = memops.memset;
-pub const memcmp = memops.memcmp;
-pub const memmove = memops.memmove;
-
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     @panic("TODO: implement allocFree syscall");
@@ -386,14 +380,8 @@ pub fn setReturnData(
     ctx.return_data.data.appendSliceAssumeCapacity(return_data);
 }
 
-// hashing
 const Parameters = enum(u64) {
     Bn254X5 = 0,
-};
-
-const Slice = extern struct {
-    addr: [*]const u8,
-    len: u64,
 };
 
 pub fn poseidon(
@@ -417,13 +405,19 @@ pub fn poseidon(
     const cost = budget.poseidonCost(@intCast(len));
     try tc.consumeCompute(cost);
 
-    const hash_result = try memory_map.vmap(.mutable, result_addr, 32);
-    const input_bytes = try memory_map.vmap(
+    const hash_result = try memory_map.translateType(
+        [32]u8,
+        .mutable,
+        result_addr,
+        try tc.getCheckAligned(),
+    );
+    const inputs = try memory_map.translateSlice(
+        cpi.VmSlice,
         .constant,
         addr,
-        len * @sizeOf(Slice),
+        len,
+        try tc.getCheckAligned(),
     );
-    const inputs = std.mem.bytesAsSlice(Slice, input_bytes);
 
     // Agave handles poseidon errors in an annoying way.
     // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
@@ -431,12 +425,27 @@ pub fn poseidon(
     // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
     var hasher = phash.Hasher.init(endianness);
     for (inputs) |input| {
-        const slice = try memory_map.vmap(
+        const slice = try memory_map.translateSlice(
+            u8,
             .constant,
-            @intFromPtr(input.addr),
+            input.ptr,
             input.len,
+            try tc.getCheckAligned(),
         );
-        hasher.append(slice[0..32]) catch {
+
+        // Makes sure the input is a valid size, soft-error if it isn't.
+        // [fd] https://github.com/firedancer-io/firedancer/blob/211dfccc1d84a50191a487a6abffd962f7954179/src/ballet/bn254/fd_poseidon.c#L101-L104
+        if (slice.len == 0 or slice.len > 32) {
+            registers.set(.r0, 1);
+            return;
+        }
+        // If the input isn't 32-bytes long, we pad the rest with zeroes.
+        var buffer: [32]u8 = .{0} ** 32;
+        switch (endianness) {
+            .little => @memcpy(buffer[0..slice.len], slice),
+            .big => std.mem.copyBackwards(u8, &buffer, slice),
+        }
+        hasher.append(&buffer) catch {
             if (tc.ec.feature_set.active.contains(
                 features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
             )) {
@@ -447,25 +456,6 @@ pub fn poseidon(
     }
     const result = hasher.finish();
     @memcpy(hash_result, &result);
-}
-
-// special
-pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
-    return SyscallError.Abort;
-}
-
-pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
-    const file = registers.get(.r1);
-    const len = registers.get(.r2);
-
-    try ctx.consumeCompute(len);
-
-    const message = try memory_map.vmap(.constant, file, len);
-    if (!std.unicode.utf8ValidateSlice(message)) {
-        return SyscallError.InvalidString;
-    }
-
-    return SyscallError.Panic;
 }
 
 test poseidon {
@@ -482,12 +472,20 @@ test poseidon {
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
-pub fn invokeSignedC(ctx: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
+pub fn invokeSignedC(
+    ctx: *TransactionContext,
+    mmap: *MemoryMap,
+    rm: *RegisterMap,
+) Error!void {
     return invokeSigned(cpi.AccountInfoC, ctx, mmap, rm);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
-pub fn invokeSignedRust(ctx: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
+pub fn invokeSignedRust(
+    ctx: *TransactionContext,
+    mmap: *MemoryMap,
+    rm: *RegisterMap,
+) Error!void {
     return invokeSigned(cpi.AccountInfoRust, ctx, mmap, rm);
 }
 
@@ -516,4 +514,35 @@ fn invokeSigned(
         signers_seeds_addr,
         signers_seeds_len,
     );
+}
+
+// memory operators
+pub const memcpy = memops.memcpy;
+pub const memset = memops.memset;
+pub const memcmp = memops.memcmp;
+pub const memmove = memops.memmove;
+
+// // hashing
+// fn hashSyscall(comptime Hash: type) Syscall {
+//     const S = struct {};
+//     return S.syscall;
+// }
+
+// special
+pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
+    return SyscallError.Abort;
+}
+
+pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
+    const file = registers.get(.r1);
+    const len = registers.get(.r2);
+
+    try ctx.consumeCompute(len);
+
+    const message = try memory_map.vmap(.constant, file, len);
+    if (!std.unicode.utf8ValidateSlice(message)) {
+        return SyscallError.InvalidString;
+    }
+
+    return SyscallError.Panic;
 }
