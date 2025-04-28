@@ -2332,7 +2332,7 @@ pub fn testElfWithSyscalls(
             Region.init(.constant, &.{}, memory.HEAP_START),
             Region.init(.mutable, &.{}, memory.INPUT_START),
         },
-        .v0,
+        config.maximum_version,
         config,
     );
 
@@ -2933,4 +2933,61 @@ test "function without return" {
         \\  mov r0, 2
         \\  add64 r0, 5
     , error.InvalidFunction);
+}
+
+pub fn testSyscall(
+    comptime syscall_func: anytype,
+    regions: []const memory.Region,
+    comptime test_cases: []const struct { [4]u64, syscalls.Error!void },
+    comptime verify_func: anytype,
+    config: struct {
+        align_memory_map: bool = false,
+        version: sbpf.Version = .v3,
+        compute_meter: u64 = 10_000,
+    },
+) !void {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            },
+        },
+        .compute_meter = config.compute_meter,
+    });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(
+        allocator,
+        regions,
+        config.version,
+        .{ .aligned_memory_mapping = config.align_memory_map },
+    );
+    defer memory_map.deinit(allocator);
+
+    for (test_cases) |case| {
+        const args, const expected = case;
+        for (args, 0..) |a, i| {
+            registers.set(@enumFromInt(i + 1), a);
+        }
+
+        const result = syscall_func(&tc, &memory_map, &registers);
+        if (expected) |_| {
+            try result;
+            try verify_func(&tc, &memory_map, args);
+        } else |expected_err| {
+            try std.testing.expectError(expected_err, result);
+        }
+    }
 }

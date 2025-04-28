@@ -1,7 +1,7 @@
-const phash = @import("poseidon");
 const std = @import("std");
 const cpi = @import("cpi.zig");
 const memops = @import("memops.zig");
+const hash = @import("hash.zig");
 const sig = @import("../../sig.zig");
 
 const memory = sig.vm.memory;
@@ -380,97 +380,6 @@ pub fn setReturnData(
     ctx.return_data.data.appendSliceAssumeCapacity(return_data);
 }
 
-const Parameters = enum(u64) {
-    Bn254X5 = 0,
-};
-
-pub fn poseidon(
-    tc: *TransactionContext,
-    memory_map: *MemoryMap,
-    registers: *RegisterMap,
-) Error!void {
-    const parameters = std.meta.intToEnum(Parameters, registers.get(.r1)) catch
-        return error.InvalidParameters;
-    std.debug.assert(parameters == .Bn254X5);
-
-    const endianness = std.meta.intToEnum(std.builtin.Endian, registers.get(.r2)) catch
-        return error.InvalidEndianness;
-    const addr = registers.get(.r3);
-    const len = registers.get(.r4);
-    const result_addr = registers.get(.r5);
-
-    if (len > 12) return error.InvalidNumberOfInputs;
-
-    const budget = tc.compute_budget;
-    const cost = budget.poseidonCost(@intCast(len));
-    try tc.consumeCompute(cost);
-
-    const hash_result = try memory_map.translateType(
-        [32]u8,
-        .mutable,
-        result_addr,
-        try tc.getCheckAligned(),
-    );
-    const inputs = try memory_map.translateSlice(
-        cpi.VmSlice,
-        .constant,
-        addr,
-        len,
-        try tc.getCheckAligned(),
-    );
-
-    // Agave handles poseidon errors in an annoying way.
-    // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
-    // It is acitvated on all clusters, we still check for activation here and panic if it is not active.
-    // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
-    var hasher = phash.Hasher.init(endianness);
-    for (inputs) |input| {
-        const slice = try memory_map.translateSlice(
-            u8,
-            .constant,
-            input.ptr,
-            input.len,
-            try tc.getCheckAligned(),
-        );
-
-        // Makes sure the input is a valid size, soft-error if it isn't.
-        // [fd] https://github.com/firedancer-io/firedancer/blob/211dfccc1d84a50191a487a6abffd962f7954179/src/ballet/bn254/fd_poseidon.c#L101-L104
-        if (slice.len == 0 or slice.len > 32) {
-            registers.set(.r0, 1);
-            return;
-        }
-        // If the input isn't 32-bytes long, we pad the rest with zeroes.
-        var buffer: [32]u8 = .{0} ** 32;
-        switch (endianness) {
-            .little => @memcpy(buffer[0..slice.len], slice),
-            .big => std.mem.copyBackwards(u8, &buffer, slice),
-        }
-        hasher.append(&buffer) catch {
-            if (tc.ec.feature_set.active.contains(
-                features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-            )) {
-                registers.set(.r0, 1);
-                return;
-            } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
-        };
-    }
-    const result = hasher.finish();
-    @memcpy(hash_result, &result);
-}
-
-test poseidon {
-    try sig.vm.tests.testElfWithSyscalls(
-        .{},
-        sig.ELF_DATA_DIR ++ "poseidon_test.so",
-        &.{
-            .{ .name = "sol_poseidon", .builtin_fn = poseidon },
-            .{ .name = "log", .builtin_fn = log },
-            .{ .name = "sol_panic_", .builtin_fn = panic },
-        },
-        .{ 0, 48526 },
-    );
-}
-
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
 pub fn invokeSignedC(
     ctx: *TransactionContext,
@@ -522,11 +431,8 @@ pub const memset = memops.memset;
 pub const memcmp = memops.memcmp;
 pub const memmove = memops.memmove;
 
-// // hashing
-// fn hashSyscall(comptime Hash: type) Syscall {
-//     const S = struct {};
-//     return S.syscall;
-// }
+// hashing
+pub const poseidon = hash.poseidon;
 
 // special
 pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {

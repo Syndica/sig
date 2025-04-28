@@ -843,63 +843,11 @@ test "isOverlapping" {
     }
 }
 
-fn testSyscall(
-    comptime syscall_func: anytype,
-    regions: []const memory.Region,
-    comptime test_cases: []const struct { [4]u64, Error!void },
-    comptime verify_func: anytype,
-) !void {
-    const testing = sig.runtime.testing;
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
-        .accounts = &.{
-            .{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            },
-        },
-        .compute_meter = 10_000,
-    });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
-
-    var registers = RegisterMap.initFill(0);
-    var memory_map = try MemoryMap.init(
-        allocator,
-        regions,
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
-
-    for (test_cases) |case| {
-        const args, const expected = case;
-        for (args, 0..) |a, i| {
-            registers.set(@enumFromInt(i + 1), a);
-        }
-
-        const result = syscall_func(&tc, &memory_map, &registers);
-        if (expected) |_| {
-            try result;
-            try verify_func(&tc, &memory_map, args);
-        } else |expected_err| {
-            try std.testing.expectError(expected_err, result);
-        }
-    }
-}
-
 test "memset syscall" {
     const vm_addr = memory.HEAP_START;
     var buf = "hello world".*;
 
-    try testSyscall(
+    try sig.vm.tests.testSyscall(
         memset,
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
@@ -923,6 +871,7 @@ test "memset syscall" {
                 try std.testing.expect(std.mem.allEqual(u8, slice, @truncate(scalar)));
             }
         }.verify,
+        .{},
     );
 }
 
@@ -931,7 +880,7 @@ test "memcmp syscall" {
     const result_addr = vm_addr + 0x1337;
     var result: [@sizeOf(i32)]u8 = undefined;
 
-    try testSyscall(
+    try sig.vm.tests.testSyscall(
         memcmp,
         &.{
             memory.Region.init(.constant, "ababcz", vm_addr),
@@ -965,6 +914,7 @@ test "memcmp syscall" {
                 }
             }
         }.verify,
+        .{},
     );
 }
 
@@ -972,7 +922,7 @@ test "memcpy syscall" {
     const vm_addr = memory.HEAP_START;
     var buf = "hello world".*;
 
-    try testSyscall(
+    try sig.vm.tests.testSyscall(
         memcpy,
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
@@ -995,6 +945,7 @@ test "memcpy syscall" {
                 try std.testing.expect(std.mem.eql(u8, dst, src));
             }
         }.verify,
+        .{},
     );
 }
 
@@ -1002,7 +953,7 @@ test "memmove syscall" {
     const vm_addr = memory.HEAP_START;
     var buf = "hello world".*;
 
-    try testSyscall(
+    try sig.vm.tests.testSyscall(
         memmove,
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
@@ -1028,5 +979,6 @@ test "memmove syscall" {
                 try std.testing.expect(std.mem.eql(u8, dst, src));
             }
         }.verify,
+        .{},
     );
 }

@@ -38,6 +38,12 @@ pub const ComputeBudget = struct {
     /// Number of compute units consumed by an invoke call (not including the cost incurred by
     /// the called program)
     invoke_units: u64,
+    /// Base number of compute units consumed to call SHA256
+    sha256_base_cost: u64,
+    /// Incremental number of units consumed by SHA256 (based on bytes)
+    sha256_byte_cost: u64,
+    /// Maximum number of slices hashed per syscall
+    sha256_max_slices: u64,
 
     pub fn default(compute_unit_limit: u64) ComputeBudget {
         return .{
@@ -55,6 +61,9 @@ pub const ComputeBudget = struct {
             .poseidon_cost_coefficient_c = 542,
             .max_cpi_instruction_size = 1280, // IPv6 Min MTU size
             .invoke_units = 1000,
+            .sha256_base_cost = 85,
+            .sha256_byte_cost = 1,
+            .sha256_max_slices = 20_000,
         };
     }
 
