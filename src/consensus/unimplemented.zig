@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const sig = @import("../sig.zig");
-const Bank = sig.accounts_db.Bank;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
@@ -17,25 +16,6 @@ const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 // TODO DUPLICATE_THRESHOLD is defined in replay stage in Agave
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
-
-pub const BankForks = struct {
-    pub fn rootBank(self: *const BankForks) Bank {
-        _ = self;
-        @panic("Unimplemented");
-    }
-    pub fn frozenBanks(self: *const BankForks) SortedMap(Slot, Bank) {
-        _ = self;
-        @panic("Unimplemented");
-    }
-    pub fn getWithCheckedHash(
-        self: *const BankForks,
-        heaviest: SlotAndHash,
-    ) ?Bank {
-        _ = self;
-        _ = heaviest;
-        @panic("Unimplemented");
-    }
-};
 
 // TODO Implemented as part of ProgressMap
 pub const ForkStats = struct {
@@ -60,8 +40,10 @@ pub const ProgressMap = struct {
 
 pub const ReplayStage = struct {
     pub fn initializeProgressAndForkChoice(
-        root_bank: *const Bank,
-        frozen_banks: *const []Bank,
+        root_slot: *const Slot,
+        root_hash: *const Hash,
+        // Bank does not exist in Sig. Need an anologous struct.
+        // frozen_banks: *const []Bank,
         my_pubkey: *const Pubkey,
         vote_account: *const Pubkey,
         duplicate_slot_hashes: std.ArrayList(SlotAndHash),
@@ -69,8 +51,8 @@ pub const ReplayStage = struct {
         ProgressMap,
         HeaviestSubtreeForkChoice,
     } {
-        _ = root_bank;
-        _ = frozen_banks;
+        _ = root_slot;
+        _ = root_hash;
         _ = my_pubkey;
         _ = vote_account;
         _ = duplicate_slot_hashes;

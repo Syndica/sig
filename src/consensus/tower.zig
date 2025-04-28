@@ -4,8 +4,8 @@ const sig = @import("../sig.zig");
 const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 
 const Account = sig.core.Account;
-const Bank = sig.accounts_db.Bank;
-const BankForks = sig.consensus.unimplemented.BankForks;
+const AccountsDB = sig.accounts_db.AccountsDB;
+const BankFields = sig.core.BankFields;
 const BlockTimestamp = sig.runtime.program.vote_program.state.BlockTimestamp;
 const Hash = sig.core.Hash;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -29,8 +29,7 @@ const VoteStateUpdate = sig.runtime.program.vote_program.state.VoteStateUpdate;
 const VoteStateVersions = sig.runtime.program.vote_program.state.VoteStateVersions;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
-// TODO Question: Should this be moved to a more appropitate location, and not `accounts_db.snapshots.`
-const StakeAndVoteAccountsMap = sig.accounts_db.snapshots.StakeAndVoteAccountsMap;
+const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 
@@ -168,7 +167,7 @@ pub const Tower = struct {
         node_pubkey: *const Pubkey,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
-        bank: *const Bank,
+        accounts_db: *AccountsDB,
     ) !Tower {
         var tower = try Tower.default(allocator);
         tower.logger = logger.withScope(@typeName(Self));
@@ -177,7 +176,7 @@ pub const Tower = struct {
             allocator,
             vote_account_pubkey,
             fork_root,
-            bank,
+            accounts_db,
         );
         return tower;
     }
@@ -190,39 +189,19 @@ pub const Tower = struct {
     pub fn newFromBankforks(
         allocator: std.mem.Allocator,
         logger: Logger,
-        bank_forks: *const BankForks,
+        root_slot: *const Slot,
+        root_hash: *const Hash,
         node_pubkey: *const Pubkey,
         vote_account: *const Pubkey,
     ) !Tower {
-        const root_bank = bank_forks.rootBank();
-        _, const heaviest_subtree_fork_choice = ReplayStage.initializeProgressAndForkChoice(
-            &root_bank,
-            &bank_forks.frozenBanks().inner.values(),
-            node_pubkey,
-            vote_account,
-            std.ArrayList(SlotAndHash).init(allocator),
-        );
-
-        const fork_root = root_bank.bank_fields.slot;
-        const heaviest = heaviest_subtree_fork_choice.heaviestOverallSlot();
-        const heaviest_bank = bank_forks.getWithCheckedHash(heaviest) orelse {
-            logger.withScope(@typeName(Tower))
-                .err()
-                .log(
-                \\The best overall slot must be one of `frozen_banks`
-                \\which all exist in bank_forks
-            );
-            return error.InvalidBank;
-        };
-
-        return Tower.init(
-            allocator,
-            logger,
-            node_pubkey,
-            vote_account,
-            fork_root,
-            &heaviest_bank,
-        );
+        _ = allocator;
+        _ = logger;
+        _ = root_slot;
+        _ = root_hash;
+        _ = node_pubkey;
+        _ = vote_account;
+        // Depends on having analogous structs for things like Bank, BankForks etc
+        @panic("Unimplemented");
     }
 
     pub fn towerSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
@@ -290,7 +269,7 @@ pub const Tower = struct {
     pub fn recordBankVote(
         self: *Tower,
         allocator: std.mem.Allocator,
-        bank: *const Bank,
+        bank_fields: *const BankFields,
     ) !?Slot {
         // Returns the new root if one is made after applying a vote for the given bank to
         // `self.vote_state`
@@ -302,8 +281,8 @@ pub const Tower = struct {
 
         return try self.recordBankVoteAndUpdateLockouts(
             allocator,
-            bank.bank_fields.slot,
-            bank.bank_fields.hash,
+            bank_fields.slot,
+            bank_fields.hash,
             is_enable_tower_active,
             block_id,
         );
@@ -1226,9 +1205,9 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
-        bank: *const Bank,
+        accounts_db: *AccountsDB,
     ) !void {
-        const vote_account = bank.accounts_db.getAccount(vote_account_pubkey) catch {
+        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch {
             self.initializeRoot(fork_root);
             return;
         };
@@ -1460,10 +1439,10 @@ pub const Tower = struct {
 
     pub fn lastVotedSlotInBank(
         allocator: std.mem.Allocator,
-        bank: *const Bank,
+        accounts_db: *AccountsDB,
         vote_account_pubkey: *const Pubkey,
     ) ?Slot {
-        const vote_account = bank.accounts_db.getAccount(vote_account_pubkey) catch return null;
+        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch return null;
         const vote_state = stateFromAccount(
             allocator,
             &vote_account,
