@@ -8,6 +8,7 @@ pub const ecc = @import("ecc.zig");
 
 const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
+const pubkey_utils = sig.runtime.pubkey_utils;
 
 const memory = sig.vm.memory;
 const SyscallError = sig.vm.SyscallError;
@@ -99,8 +100,16 @@ pub fn register(
     );
 
     // Program derived addresses
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_create_program_address", createProgramAddress,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_try_find_program_address", createProgramAddress,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_create_program_address",
+        createProgramAddress,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_try_find_program_address",
+        findProgramAddress,
+    );
 
     // Sha256, Keccak256, Secp256k1Recover
     _ = try syscalls.functions.registerHashed(
@@ -555,6 +564,39 @@ pub fn panic(
     }
 
     return SyscallError.Panic;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L903
+pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
+    const seeds_addr = rm.get(.r1);
+    const seeds_len = rm.get(.r2);
+    const program_id_addr = rm.get(.r3);
+    const address_addr = rm.get(.r4);
+    const bump_seed_addr = rm.get(.r5);
+
+    try tc.consumeCompute(tc.compute_budget.create_program_address_units);
+
+    var bump_seed = [_]u8{std.math.maxInt(u8)};
+    for (0..255) |_| {
+        var seeds_with_bump: std.BoundedArray()
+
+        pubkey_utils.createProgramAddress(.{}, &bump_seed, program_id);
+    }
+}
+
+
+pub fn createProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
+
+}
+
+fn translateAndCheckProgramAddressInputs(
+    seeds_addr: u64,
+    seeds_len: u64,
+    program_id_addr: u64,
+    memory_map: *MemoryMap,
+    check_aligned: bool,
+) Error!void {
+    
 }
 
 // Syscall Tests
