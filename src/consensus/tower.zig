@@ -205,15 +205,11 @@ pub const Tower = struct {
     }
 
     pub fn towerSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
-        var slots = std.ArrayListUnmanaged(Slot){};
-        try slots.ensureTotalCapacity(
-            allocator,
-            self.vote_state.votes.items.len,
-        );
-        for (self.vote_state.votes.items) |vote| {
-            slots.appendAssumeCapacity(vote.slot);
+        var slots = try allocator.alloc(Slot, self.vote_state.votes.items.len);
+        for (self.vote_state.votes.items, 0..) |vote, i| {
+            slots[i] = vote.slot;
         }
-        return slots.toOwnedSlice(allocator);
+        return slots;
     }
 
     pub fn refreshLastVoteTimestamp(
@@ -944,15 +940,11 @@ pub const Tower = struct {
     }
 
     fn votedSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
-        var slots = try std.ArrayListUnmanaged(Slot).initCapacity(
-            allocator,
-            self.vote_state.votes.items.len,
-        );
-        for (self.vote_state.votes.items) |lockout| {
-            slots.appendAssumeCapacity(lockout.slot);
+        var slots = try allocator.alloc(Slot, self.vote_state.votes.items.len);
+        for (self.vote_state.votes.items, 0..) |lockout, i| {
+            slots[i] = lockout.slot;
         }
-
-        return slots.toOwnedSlice(allocator);
+        return slots;
     }
 
     pub fn isStrayLastVote(self: *const Tower) bool {
@@ -1456,9 +1448,10 @@ pub const Tower = struct {
         vote_account: *const Account,
         vote_account_pubkey: *const Pubkey,
     ) !VoteState {
-        const data = std.ArrayList(u8).init(allocator);
+        var data = std.ArrayList(u8).init(allocator);
         const buf = data.items;
         // TODO Not sure if this is the way to get the data from the vote account. Review.
+        try data.ensureTotalCapacity(vote_account.data.len());
         _ = vote_account.writeToBuf(vote_account_pubkey, buf);
         const versioned_state = try sig.bincode.readFromSlice(
             allocator,
