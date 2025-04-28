@@ -20,6 +20,9 @@ sudo -iu sig bash <<'EOF' | tee /dev/null
     if ! [ -z "$SLACK_WEBHOOK_URL" ]; then
         echo "SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL" > /home/sig/sig/metrics/.env
     fi
+    if ! [ -z "$GF_SECURITY_ADMIN_PASSWORD" ]; then
+        echo "GF_SECURITY_ADMIN_PASSWORD=$GF_SECURITY_ADMIN_PASSWORD" >> /home/sig/sig/metrics/.env
+    fi
 EOF
 code=$?
 
