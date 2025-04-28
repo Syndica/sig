@@ -7,7 +7,6 @@ const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const SlotAndHash = sig.core.hash.SlotAndHash;
-const SortedMap = sig.utils.collections.SortedMap;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 
