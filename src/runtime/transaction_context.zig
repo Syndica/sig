@@ -135,9 +135,10 @@ pub const TransactionContext = struct {
         return &self.accounts[index];
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d033f544a96a72c6c664e56871eb8a24b5/program-runtime/src/invoke_context.rs#L686
-    pub fn getCheckAligned(self: *TransactionContext) InstructionError!bool {
-        return (try self.getCurrentInstructionContext()).getCheckAligned();
+    /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/program-runtime/src/invoke_context.rs#L688
+    pub fn getCheckAligned(self: *TransactionContext) bool {
+        const ic = self.getCurrentInstructionContext() catch return true;
+        return ic.getCheckAligned();
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d033f544a96a72c6c664e56871eb8a24b5/transaction-context/src/lib.rs#L340
