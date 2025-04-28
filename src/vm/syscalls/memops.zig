@@ -283,6 +283,7 @@ const MemcmpContext = struct {
                 return error.Diff;
             }
         }
+        ctx.result = 0;
         return;
     }
 };
@@ -423,6 +424,7 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     try consumeMemoryCompute(tc, len);
 
     const feature_set = tc.sc.ec.feature_set;
+    const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
         const cmp_result_slice = try memory_map.vmap(
             .mutable,
@@ -441,14 +443,15 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
             ic.getCheckAligned(),
         );
     } else {
-        const a = try memory_map.vmap(.constant, a_addr, len);
-        const b = try memory_map.vmap(.constant, b_addr, len);
-        const cmp_result_slice = try memory_map.vmap(
+        const a = try memory_map.translateSlice(u8, .constant, a_addr, len, check_aligned);
+        const b = try memory_map.translateSlice(u8, .constant, b_addr, len, check_aligned);
+        const cmp_result = try memory_map.translateType(
+            i32,
             .mutable,
             cmp_result_addr,
-            @sizeOf(i32),
+            check_aligned,
         );
-        const cmp_result: *align(1) i32 = @ptrCast(cmp_result_slice.ptr);
+
         var memcmp_ctx: MemcmpContext = .{ .result = 0 };
         memcmp_ctx.run(a, b) catch {};
         cmp_result.* = memcmp_ctx.result;
@@ -931,12 +934,20 @@ test "memcmp syscall" {
     try testSyscall(
         memcmp,
         &.{
-            memory.Region.init(.constant, "ababc", vm_addr),
+            memory.Region.init(.constant, "ababcz", vm_addr),
             memory.Region.init(.mutable, &result, result_addr),
         },
         &.{
             .{ .{ vm_addr, vm_addr, 3, result_addr }, {} }, // overlapping
             .{ .{ vm_addr, vm_addr + 2, 2, result_addr }, {} }, // non-overlapping: 0..2 vs 2..4
+            .{ .{ vm_addr, vm_addr + 1, 1, result_addr }, {} }, // "a" cmp "b" (diff = -1)
+            .{ .{ vm_addr, vm_addr + 5, 1, result_addr }, {} }, // "a" cmp "z" (diff > -1)
+            .{ .{ vm_addr + 1, vm_addr, 1, result_addr }, {} }, // "b" cmp "a" (diff = 1)
+            .{ .{ vm_addr + 5, vm_addr, 1, result_addr }, {} }, // "b" cmp "z" (diff > 1)
+            .{ .{ 0x42, vm_addr, 1, result_addr }, error.AccessViolation }, // invalid a addr
+            .{ .{ vm_addr, 0x42, 1, result_addr }, error.AccessViolation }, // invalid b addr
+            .{ .{ 0x1337, 0x42, 1, result_addr }, error.AccessViolation }, // invalid both addr
+            .{ .{ vm_addr, vm_addr, 1, 0x42 }, error.AccessViolation }, // invalid result addr
         },
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
@@ -947,12 +958,11 @@ test "memcmp syscall" {
                 const b = try memory_map.translateSlice(u8, .constant, b_ptr, len, aligned);
                 const res = (try memory_map.translateType(i32, .constant, res_ptr, aligned)).*;
 
-                const expected: i32 = switch (std.mem.order(u8, a, b)) {
-                    .eq => 0,
-                    .lt => -1,
-                    .gt => 1,
-                };
-                try std.testing.expectEqual(expected, res);
+                switch (std.mem.order(u8, a, b)) {
+                    .eq => try std.testing.expectEqual(res, 0),
+                    .lt => try std.testing.expect(res < 0),
+                    .gt => try std.testing.expect(res > 0),
+                }
             }
         }.verify,
     );
@@ -972,6 +982,7 @@ test "memcpy syscall" {
             .{ .{ vm_addr, vm_addr + 1, 3, 0 }, error.CopyOverlapping }, // overlapping copy
             .{ .{ 0x1337, vm_addr, 5, 0 }, error.AccessViolation }, // invalid dst ptr
             .{ .{ vm_addr, 0x1337, 5, 0 }, error.AccessViolation }, // invalid src ptr
+            .{ .{ 0x42, 0x1337, 5, 0 }, error.AccessViolation }, // invalid both ptr
         },
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
