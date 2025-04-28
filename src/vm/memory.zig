@@ -117,6 +117,10 @@ pub const MemoryMap = union(enum) {
         .mutable => *T,
         .constant => *const T,
     }) {
+        if (comptime !hasTranslatableRepresentation(T)) {
+            @compileError(@typeName(T) ++ " doesn't have a stable layout for translation");
+        }
+
         const host_addr = try memory_map.translate(state, vm_addr, @sizeOf(T));
         if (!check_aligned) {
             return @ptrFromInt(host_addr);
@@ -139,6 +143,10 @@ pub const MemoryMap = union(enum) {
         .mutable => []T,
         .constant => []const T,
     }) {
+        if (comptime !hasTranslatableRepresentation(T)) {
+            @compileError(@typeName(T) ++ " doesn't have a stable layout for translation");
+        }
+
         if (len == 0) {
             return &.{}; // &mut []
         }
@@ -493,9 +501,50 @@ const UnalignedMemoryMap = struct {
             return accessViolation(vm_addr, self.version, self.config);
     }
 };
+
+/// Returns true if T is a type that has a stable layout to be translated from VM memory.
+fn hasTranslatableRepresentation(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .Bool => false, // u8's should be used instead to be explicit on data layout.
+        .Int => |info| @sizeOf(T) * 8 == info.bits, // TODO: check for large than __uint128_t?
+        .Float => T == f32 or T == f64, // extern structs realistically only support float & double.
+        .Pointer => |info| info.size != .Slice, // Slice have undefined memory layout.
+        .Array => |info| hasTranslatableRepresentation(info.child),
+        .Struct => |info| switch (info.layout) {
+            .auto => false, // Zig could change the size of structs any time.
+            .@"packed" => hasTranslatableRepresentation(info.backing_integer orelse return false),
+            .@"extern" => true, // any extern struct has a defined layout according to C.
+        },
+        else => false,
+    };
+}
+
 const expectError = std.testing.expectError;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
+
+test "hasTranslatableRepresentation" {
+    try expectEqual(true, hasTranslatableRepresentation(u8));
+    try expectEqual(true, hasTranslatableRepresentation(u16));
+    try expectEqual(true, hasTranslatableRepresentation(i32));
+    try expectEqual(true, hasTranslatableRepresentation(i64));
+    try expectEqual(false, hasTranslatableRepresentation(u42));
+
+    try expectEqual(true, hasTranslatableRepresentation(f32));
+    try expectEqual(true, hasTranslatableRepresentation(f64));
+    try expectEqual(false, hasTranslatableRepresentation(f128));
+    try expectEqual(false, hasTranslatableRepresentation(f16));
+
+    try expectEqual(true, hasTranslatableRepresentation(extern struct { x: u8 }));
+    try expectEqual(true, hasTranslatableRepresentation(extern struct { x: u64, y: u8 }));
+    try expectEqual(false, hasTranslatableRepresentation(packed struct { x: u64, y: u8 }));
+    try expectEqual(true, hasTranslatableRepresentation(packed struct { x: u56, y: u8 }));
+
+    try expectEqual(true, hasTranslatableRepresentation([3]u8));
+    try expectEqual(false, hasTranslatableRepresentation([]u8));
+    try expectEqual(true, hasTranslatableRepresentation([89]extern struct { x: f32 }));
+    try expectEqual(false, hasTranslatableRepresentation([89]packed struct { x: u31 }));
+}
 
 test "aligned vmap" {
     var program_mem: [4]u8 = .{0xFF} ** 4;
