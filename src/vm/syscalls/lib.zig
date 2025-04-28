@@ -136,7 +136,11 @@ pub fn register(
         memcpy,
     );
 
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_memmove_", memmove,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_memmove_",
+        memmove,
+    );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
@@ -240,7 +244,7 @@ pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Register
         .constant,
         vm_addr,
         len,
-        try tc.getCheckAligned(),
+        tc.getCheckAligned(),
     );
 
     if (!std.unicode.utf8ValidateSlice(message)) {
@@ -282,7 +286,7 @@ pub fn logPubkey(
         .constant,
         vm_addr,
         @sizeOf(Pubkey),
-        try tc.getCheckAligned(),
+        tc.getCheckAligned(),
     );
     const pubkey: Pubkey = @bitCast(pubkey_bytes[0..@sizeOf(Pubkey)].*);
 
@@ -311,7 +315,7 @@ pub fn logData(
         .constant,
         vm_addr,
         len,
-        try tc.getCheckAligned(),
+        tc.getCheckAligned(),
     );
 
     var cost = tc.compute_budget.syscall_base_cost *| vm_messages.len;
@@ -326,7 +330,7 @@ pub fn logData(
             .constant,
             msg.ptr,
             msg.len,
-            try tc.getCheckAligned(),
+            tc.getCheckAligned(),
         );
     }
 
@@ -337,6 +341,7 @@ pub fn logData(
 pub const memcpy = memops.memcpy;
 pub const memset = memops.memset;
 pub const memcmp = memops.memcmp;
+pub const memmove = memops.memmove;
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
