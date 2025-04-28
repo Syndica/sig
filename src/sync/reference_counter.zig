@@ -28,8 +28,6 @@ pub const ReferenceCounter = extern struct {
         acquirers: i32 = 0,
     };
 
-    const Self = @This();
-
     /// Acquire access to the shared resource in a new context.
     /// Call `release` when you are done using the resource in this context.
     ///
@@ -39,7 +37,7 @@ pub const ReferenceCounter = extern struct {
     /// Returns:
     /// - true: access granted, counter has incremented
     /// - false: access denied, already destroyed
-    pub fn acquire(self: *Self) bool {
+    pub fn acquire(self: *ReferenceCounter) bool {
         const prior: State = @bitCast(self.state.fetchAdd(
             @bitCast(State{ .acquirers = 1, .refs = 1 }),
             .monotonic,
@@ -58,7 +56,7 @@ pub const ReferenceCounter = extern struct {
     /// Returns:
     /// - true: this was the last reference. you should now destroy the resource.
     /// - false: there are still more references. don't do anything.
-    pub fn release(self: *Self) bool {
+    pub fn release(self: *ReferenceCounter) bool {
         const prior: State = @bitCast(self.state.fetchSub(
             @bitCast(State{ .refs = 1 }),
             .release,
@@ -78,14 +76,14 @@ pub const ReferenceCounter = extern struct {
     /// Returns:
     /// - true: there is at least 1 remaining reference
     /// - false: there are no more references
-    pub fn isAlive(self: *Self) bool {
+    pub fn isAlive(self: *ReferenceCounter) bool {
         const current: State = @bitCast(self.state.load(.seq_cst));
         return current.refs >= 1;
     }
 
     /// Resets a reference count representing a dead resource (rc=0) to one
     /// representing an alive resource (rc=1).
-    pub fn reset(self: *Self) void {
+    pub fn reset(self: *ReferenceCounter) void {
         const prior: State = @bitCast(self.state.load(.acquire));
         if (prior.refs != 0) {
             unreachable; // tried to reset alive reference counter
