@@ -197,16 +197,26 @@ def line_length(args, files_to_check):
 
     lines_found = 0
 
+    fmt_off = False
     for path in files_to_check:
         if path in files_excluded_from_line_length_check:
             continue
         with open(path) as f:
             lines = f.readlines()
         for i, line in enumerate(lines):
-            # ignore comments. these are lines where the first non-whitespace characters
-            # are "//"
-            if line.strip().startswith(("//", "\\" + "\\")):
+            stripped = line.lstrip()
+            if "// zig fmt: off" in stripped:
+                fmt_off = True
+            if "// zig fmt: on" in stripped:
+                fmt_off = False
+                continue # Don't check lines that have formatting turned off
+
+            if fmt_off: 
                 continue
+
+            if stripped.strip().startswith(("//", "\\" + "\\")):
+                continue
+
             code_part = line.split("//", 1)[0].rstrip()
             if len(code_part) > MAX_LINE_LENGTH + 1:  # +1 for \n
                 print(f"{path}:{i + 1} is too long: {len(code_part)}")

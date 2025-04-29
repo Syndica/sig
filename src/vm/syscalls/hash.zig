@@ -232,28 +232,19 @@ test sha256 {
 
     try sig.vm.tests.testSyscall(
         sha256,
-        &.{
-            memory.Region.init(
-                .constant,
-                std.mem.sliceAsBytes(&bytes_to_hash),
-                memory.RODATA_START,
-            ),
-            memory.Region.init(.mutable, &hash_result, memory.STACK_START),
-            memory.Region.init(.constant, bytes1, bytes_to_hash[0].ptr),
-            memory.Region.init(.constant, bytes2, bytes_to_hash[1].ptr),
-        },
         // zig fmt: off
         &.{
-           
+            memory.Region.init(.constant, std.mem.sliceAsBytes(&bytes_to_hash), memory.RODATA_START),
+            memory.Region.init(.mutable,  &hash_result,                         memory.STACK_START),
+            memory.Region.init(.constant, bytes1,                               bytes_to_hash[0].ptr),
+            memory.Region.init(.constant, bytes2,                               bytes_to_hash[1].ptr),
+        },
+        &.{
             .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0, 0 }, 0 },
             .{ .{ memory.RODATA_START - 1, 2, memory.STACK_START,     0, 0 }, error.AccessViolation },
             .{ .{ memory.RODATA_START,     3, memory.STACK_START,     0, 0 }, error.AccessViolation }, 
             .{ .{ memory.RODATA_START,     2, memory.STACK_START - 1, 0, 0 }, error.AccessViolation }, 
-            // only gave enough budget for 4 runs
-            .{
-                .{ memory.RODATA_START, 2, memory.STACK_START, 0, 0 },
-                error.ComputationalBudgetExceeded,
-            },
+            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
         struct {
