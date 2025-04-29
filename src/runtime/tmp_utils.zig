@@ -3,4 +3,4 @@
 
 const sig = @import("../sig.zig");
 
-pub const hashv = sig.core.Hash.hashv;
+pub const hashv = sig.core.Hash.generateSha256;

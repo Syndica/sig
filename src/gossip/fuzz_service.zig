@@ -451,7 +451,7 @@ pub fn randomPullRequestWithContactInfo(
             const rand_value = try randomSignedGossipData(allocator, random, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
-            const value_hash = Hash.generateSha256Hash(bytes);
+            const value_hash = Hash.generateSha256(bytes);
             filter.filter.add(&value_hash.data);
         }
     } else {
@@ -462,7 +462,7 @@ pub fn randomPullRequestWithContactInfo(
             const rand_value = try randomSignedGossipData(allocator, random, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
-            const value_hash = Hash.generateSha256Hash(bytes);
+            const value_hash = Hash.generateSha256(bytes);
             filter_set.add(&value_hash);
         }
 
