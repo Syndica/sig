@@ -216,6 +216,7 @@ fn iterateMemoryPairs(
 const MemmoveContext = struct {
     // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this symbol:
     // https://github.com/ziglang/zig/blob/79460d4a3eef8eb927b02a7eda8bc9999a766672/lib/compiler_rt/memmove.zig#L9-L22
+    // TODO(0.15): Use `@memmove` builtin.
     extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.C) ?[*]u8;
 
     fn run(_: *@This(), dst: []u8, src: []const u8) !void {
@@ -349,7 +350,7 @@ pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     }
 }
 
-fn isOverlapping(src_addr: u64, src_len: u64, dst_addr: u64, dst_len: u64) bool {
+pub fn isOverlapping(src_addr: u64, src_len: u64, dst_addr: u64, dst_len: u64) bool {
     if (src_addr > dst_addr) {
         return (src_addr -| dst_addr) < dst_len;
     } else {
@@ -843,79 +844,29 @@ test "isOverlapping" {
     }
 }
 
-fn testSyscall(
-    comptime syscall_func: anytype,
-    regions: []const memory.Region,
-    comptime test_cases: []const struct { [4]u64, Error!void },
-    comptime verify_func: anytype,
-) !void {
-    const testing = sig.runtime.testing;
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
-        .accounts = &.{
-            .{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            },
-        },
-        .compute_meter = 10_000,
-    });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
-
-    var registers = RegisterMap.initFill(0);
-    var memory_map = try MemoryMap.init(
-        allocator,
-        regions,
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
-
-    for (test_cases) |case| {
-        const args, const expected = case;
-        for (args, 0..) |a, i| {
-            registers.set(@enumFromInt(i + 1), a);
-        }
-
-        const result = syscall_func(&tc, &memory_map, &registers);
-        if (expected) |_| {
-            try result;
-            try verify_func(&tc, &memory_map, args);
-        } else |expected_err| {
-            try std.testing.expectError(expected_err, result);
-        }
-    }
-}
-
 test "memset syscall" {
     const vm_addr = memory.HEAP_START;
     var buf = "hello world".*;
 
-    try testSyscall(
+    try sig.vm.tests.testSyscall(
         memset,
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
         },
+        // zig fmt: off
         &.{
-            .{ .{ vm_addr, 0, 2, 0 }, {} }, // part of buffer
-            .{ .{ vm_addr + 2, 0, 2, 0 }, {} }, // other part of buffer (unaligned vm ptr)
-            .{ .{ vm_addr, 1, buf.len, 0 }, {} }, // full buffer, non-zero scalar
-            .{ .{ vm_addr, 0, 0, 0 }, {} }, // empty slice
-            .{ .{ vm_addr + 1, 0, 0, 0 }, {} }, // empty slice (unaligned)
-            .{ .{ vm_addr, 0x999, buf.len, 0 }, {} }, // overflowing u8 scalar
-            .{ .{ 0x1337, 42, 7, 0 }, error.AccessViolation }, // invalid buffer
+            .{ .{ vm_addr,     0,     2,       0, 0 }, 0 }, // part of buffer
+            .{ .{ vm_addr + 2, 0,     2,       0, 0 }, 0 }, // other part of buffer (unaligned vm ptr)
+            .{ .{ vm_addr,     1,     buf.len, 0, 0 }, 0 }, // full buffer, non-zero scalar
+            .{ .{ vm_addr,     0,     0,       0, 0 }, 0 }, // empty slice
+            .{ .{ vm_addr + 1, 0,     0,       0, 0 }, 0 }, // empty slice (unaligned)
+            .{ .{ vm_addr,     0x999, buf.len, 0, 0 }, 0 }, // overflowing u8 scalar
+            .{ .{ 0x1337,      42,    7,       0, 0 }, error.AccessViolation }, // invalid buffer
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
-                const addr, const scalar, const len, _ = args;
+                const addr, const scalar, const len, _, _ = args;
 
                 const aligned = tc.getCheckAligned();
                 const slice = try memory_map.translateSlice(u8, .constant, addr, len, aligned);
@@ -923,6 +874,7 @@ test "memset syscall" {
                 try std.testing.expect(std.mem.allEqual(u8, slice, @truncate(scalar)));
             }
         }.verify,
+        .{},
     );
 }
 
@@ -931,27 +883,29 @@ test "memcmp syscall" {
     const result_addr = vm_addr + 0x1337;
     var result: [@sizeOf(i32)]u8 = undefined;
 
-    try testSyscall(
+    try sig.vm.tests.testSyscall(
         memcmp,
         &.{
             memory.Region.init(.constant, "ababcz", vm_addr),
             memory.Region.init(.mutable, &result, result_addr),
         },
+        // zig fmt: off
         &.{
-            .{ .{ vm_addr, vm_addr, 3, result_addr }, {} }, // overlapping
-            .{ .{ vm_addr, vm_addr + 2, 2, result_addr }, {} }, // non-overlapping: 0..2 vs 2..4
-            .{ .{ vm_addr, vm_addr + 1, 1, result_addr }, {} }, // "a" cmp "b" (diff = -1)
-            .{ .{ vm_addr, vm_addr + 5, 1, result_addr }, {} }, // "a" cmp "z" (diff > -1)
-            .{ .{ vm_addr + 1, vm_addr, 1, result_addr }, {} }, // "b" cmp "a" (diff = 1)
-            .{ .{ vm_addr + 5, vm_addr, 1, result_addr }, {} }, // "b" cmp "z" (diff > 1)
-            .{ .{ 0x42, vm_addr, 1, result_addr }, error.AccessViolation }, // invalid a addr
-            .{ .{ vm_addr, 0x42, 1, result_addr }, error.AccessViolation }, // invalid b addr
-            .{ .{ 0x1337, 0x42, 1, result_addr }, error.AccessViolation }, // invalid both addr
-            .{ .{ vm_addr, vm_addr, 1, 0x42 }, error.AccessViolation }, // invalid result addr
+            .{ .{ vm_addr,     vm_addr,     3, result_addr, 0 }, 0 }, // overlapping
+            .{ .{ vm_addr,     vm_addr + 2, 2, result_addr, 0 }, 0 }, // non-overlapping: 0..2 vs 2..4
+            .{ .{ vm_addr,     vm_addr + 1, 1, result_addr, 0 }, 0 }, // "a" cmp "b" (diff = -1)
+            .{ .{ vm_addr,     vm_addr + 5, 1, result_addr, 0 }, 0 }, // "a" cmp "z" (diff > -1)
+            .{ .{ vm_addr + 1, vm_addr,     1, result_addr, 0 }, 0 }, // "b" cmp "a" (diff = 1)
+            .{ .{ vm_addr + 5, vm_addr,     1, result_addr, 0 }, 0 }, // "b" cmp "z" (diff > 1)
+            .{ .{ 0x42,        vm_addr,     1, result_addr, 0 }, error.AccessViolation }, // invalid a addr
+            .{ .{ vm_addr,     0x42,        1, result_addr, 0 }, error.AccessViolation }, // invalid b addr
+            .{ .{ 0x1337,      0x42,        1, result_addr, 0 }, error.AccessViolation }, // invalid both addr
+            .{ .{ vm_addr,     vm_addr,     1, 0x42,        0 }, error.AccessViolation }, // invalid result addr
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
-                const a_ptr, const b_ptr, const len, const res_ptr = args;
+                const a_ptr, const b_ptr, const len, const res_ptr, _ = args;
 
                 const aligned = tc.getCheckAligned();
                 const a = try memory_map.translateSlice(u8, .constant, a_ptr, len, aligned);
@@ -965,6 +919,7 @@ test "memcmp syscall" {
                 }
             }
         }.verify,
+        .{},
     );
 }
 
@@ -972,21 +927,23 @@ test "memcpy syscall" {
     const vm_addr = memory.HEAP_START;
     var buf = "hello world".*;
 
-    try testSyscall(
+    try sig.vm.tests.testSyscall(
         memcpy,
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
         },
+        // zig fmt: off
         &.{
-            .{ .{ vm_addr, vm_addr + buf.len / 2, buf.len / 2, 0 }, {} }, // normal copy
-            .{ .{ vm_addr, vm_addr + 1, 3, 0 }, error.CopyOverlapping }, // overlapping copy
-            .{ .{ 0x1337, vm_addr, 5, 0 }, error.AccessViolation }, // invalid dst ptr
-            .{ .{ vm_addr, 0x1337, 5, 0 }, error.AccessViolation }, // invalid src ptr
-            .{ .{ 0x42, 0x1337, 5, 0 }, error.AccessViolation }, // invalid both ptr
+            .{ .{ vm_addr, vm_addr + buf.len / 2, buf.len / 2, 0, 0 }, 0 }, // normal copy
+            .{ .{ vm_addr, vm_addr + 1,           3,           0, 0 }, error.CopyOverlapping }, // overlapping copy
+            .{ .{ 0x1337,  vm_addr,               5,           0, 0 }, error.AccessViolation }, // invalid dst ptr
+            .{ .{ vm_addr, 0x1337,                5,           0, 0 }, error.AccessViolation }, // invalid src ptr
+            .{ .{ 0x42,    0x1337,                5,           0, 0 }, error.AccessViolation }, // invalid both ptr
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
-                const dst_addr, const src_addr, const len, _ = args;
+                const dst_addr, const src_addr, const len, _, _ = args;
 
                 const aligned = tc.getCheckAligned();
                 const dst = try memory_map.translateSlice(u8, .constant, dst_addr, len, aligned);
@@ -995,6 +952,7 @@ test "memcpy syscall" {
                 try std.testing.expect(std.mem.eql(u8, dst, src));
             }
         }.verify,
+        .{},
     );
 }
 
@@ -1002,21 +960,23 @@ test "memmove syscall" {
     const vm_addr = memory.HEAP_START;
     var buf = "hello world".*;
 
-    try testSyscall(
+    try sig.vm.tests.testSyscall(
         memmove,
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
         },
+        // zig fmt: off
         &.{
-            .{ .{ vm_addr, vm_addr + buf.len / 2, buf.len / 2, 0 }, {} }, // normal copy
-            .{ .{ vm_addr, vm_addr + 1, 3, 0 }, {} }, // overlapping src copy
-            .{ .{ vm_addr + 1, vm_addr, 3, 0 }, {} }, // overlapping dst copy
-            .{ .{ 0x1337, vm_addr, 5, 0 }, error.AccessViolation }, // invalid dst ptr
-            .{ .{ vm_addr, 0x1337, 5, 0 }, error.AccessViolation }, // invalid src ptr
+            .{ .{ vm_addr,     vm_addr + buf.len / 2, buf.len / 2, 0, 0 }, 0 }, // normal copy
+            .{ .{ vm_addr,     vm_addr + 1,           3,           0, 0 }, 0 }, // overlapping src copy
+            .{ .{ vm_addr + 1, vm_addr,               3,           0, 0 }, 0 }, // overlapping dst copy
+            .{ .{ 0x1337,      vm_addr,               5,           0, 0 }, error.AccessViolation }, // invalid dst ptr
+            .{ .{ vm_addr,     0x1337,                5,           0, 0 }, error.AccessViolation }, // invalid src ptr
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
-                const dst_addr, const src_addr, const len, _ = args;
+                const dst_addr, const src_addr, const len, _, _ = args;
 
                 // skip checking overlapping data validity as its hard to tell using `testSyscall`
                 if (isOverlapping(src_addr, len, dst_addr, len)) return;
@@ -1028,5 +988,6 @@ test "memmove syscall" {
                 try std.testing.expect(std.mem.eql(u8, dst, src));
             }
         }.verify,
+        .{},
     );
 }

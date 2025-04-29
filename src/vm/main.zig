@@ -8,7 +8,6 @@ const memory = sig.vm.memory;
 const Executable = sig.vm.Executable;
 const Vm = sig.vm.Vm;
 const sbpf = sig.vm.sbpf;
-const syscalls = sig.vm.syscalls;
 const Config = sig.vm.Config;
 const MemoryMap = memory.MemoryMap;
 const EpochContext = sig.runtime.transaction_context.EpochContext;
@@ -43,28 +42,40 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(gpa, sbpf.MAX_FILE_SIZE);
     defer gpa.free(bytes);
 
-    var loader: sig.vm.BuiltinProgram = .{};
-    defer loader.deinit(gpa);
+    const ec = EpochContext{
+        .allocator = gpa,
+        .feature_set = FeatureSet.EMPTY,
+    };
+    defer ec.deinit();
 
-    inline for (.{
-        .{ "log", syscalls.log },
-        .{ "sol_log_64_", syscalls.log64 },
-        .{ "sol_log_pubkey", syscalls.logPubkey },
-        .{ "sol_log_compute_units_", syscalls.logComputeUnits },
-        .{ "sol_memset_", syscalls.memset },
-        .{ "sol_memcpy_", syscalls.memcpy },
-        .{ "sol_memcmp_", syscalls.memcmp },
-        .{ "sol_poseidon", syscalls.poseidon },
-        .{ "sol_panic_", syscalls.panic },
-        .{ "abort", syscalls.abort },
-    }) |entry| {
-        const name, const function = entry;
-        _ = try loader.functions.registerHashed(
-            gpa,
-            name,
-            function,
-        );
-    }
+    const sc = SlotContext{
+        .allocator = gpa,
+        .ec = &ec,
+        .sysvar_cache = .{},
+    };
+    defer sc.deinit();
+
+    var tc: TransactionContext = .{
+        .allocator = gpa,
+        .ec = &ec,
+        .sc = &sc,
+        .accounts = &.{},
+        .serialized_accounts = .{},
+        .instruction_stack = .{},
+        .instruction_trace = .{},
+        .accounts_resize_delta = 0,
+        .return_data = .{},
+        .custom_error = null,
+        .log_collector = null,
+        .compute_meter = cmd.limit,
+        .prev_blockhash = Hash.ZEROES,
+        .prev_lamports_per_signature = 0,
+        .compute_budget = ComputeBudget.default(1_400_000),
+    };
+    defer tc.deinit();
+
+    var loader = try sig.vm.syscalls.register(gpa, &ec.feature_set, 0, true);
+    defer loader.deinit(gpa);
 
     const config: Config = .{
         .maximum_version = cmd.version,
@@ -100,38 +111,6 @@ pub fn main() !void {
         executable.version,
         config,
     );
-
-    const ec = EpochContext{
-        .allocator = gpa,
-        .feature_set = FeatureSet.EMPTY,
-    };
-    defer ec.deinit();
-
-    const sc = SlotContext{
-        .allocator = gpa,
-        .ec = &ec,
-        .sysvar_cache = .{},
-    };
-    defer sc.deinit();
-
-    var tc: TransactionContext = .{
-        .allocator = gpa,
-        .ec = &ec,
-        .sc = &sc,
-        .accounts = &.{},
-        .serialized_accounts = .{},
-        .instruction_stack = .{},
-        .instruction_trace = .{},
-        .accounts_resize_delta = 0,
-        .return_data = .{},
-        .custom_error = null,
-        .log_collector = null,
-        .compute_meter = cmd.limit,
-        .prev_blockhash = Hash.ZEROES,
-        .prev_lamports_per_signature = 0,
-        .compute_budget = ComputeBudget.default(1_400_000),
-    };
-    defer tc.deinit();
 
     var vm = try Vm.init(
         gpa,

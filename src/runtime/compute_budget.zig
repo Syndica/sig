@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/compute-budget/src/compute_budget.rs#L11-L119
 pub const ComputeBudget = struct {
@@ -38,6 +39,40 @@ pub const ComputeBudget = struct {
     /// Number of compute units consumed by an invoke call (not including the cost incurred by
     /// the called program)
     invoke_units: u64,
+    /// Base number of compute units consumed to call SHA256
+    sha256_base_cost: u64,
+    /// Incremental number of units consumed by SHA256 (based on bytes)
+    sha256_byte_cost: u64,
+    /// Maximum number of slices hashed per syscall
+    sha256_max_slices: u64,
+    /// Number of compute units consumed to validate a curve25519 edwards point
+    curve25519_edwards_validate_point_cost: u64,
+    /// Number of compute units consumed to add two curve25519 edwards points
+    curve25519_edwards_add_cost: u64,
+    /// Number of compute units consumed to subtract two curve25519 edwards points
+    curve25519_edwards_subtract_cost: u64,
+    /// Number of compute units consumed to multiply a curve25519 edwards point
+    curve25519_edwards_multiply_cost: u64,
+    /// Number of compute units consumed for a multiscalar multiplication (msm) of edwards points.
+    /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
+    curve25519_edwards_msm_base_cost: u64,
+    /// Number of compute units consumed for a multiscalar multiplication (msm) of edwards points.
+    /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
+    curve25519_edwards_msm_incremental_cost: u64,
+    /// Number of compute units consumed to validate a curve25519 ristretto point
+    curve25519_ristretto_validate_point_cost: u64,
+    /// Number of compute units consumed to add two curve25519 ristretto points
+    curve25519_ristretto_add_cost: u64,
+    /// Number of compute units consumed to subtract two curve25519 ristretto points
+    curve25519_ristretto_subtract_cost: u64,
+    /// Number of compute units consumed to multiply a curve25519 ristretto point
+    curve25519_ristretto_multiply_cost: u64,
+    /// Number of compute units consumed for a multiscalar multiplication (msm) of ristretto points.
+    /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
+    curve25519_ristretto_msm_base_cost: u64,
+    /// Number of compute units consumed for a multiscalar multiplication (msm) of ristretto points.
+    /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
+    curve25519_ristretto_msm_incremental_cost: u64,
 
     pub fn default(compute_unit_limit: u64) ComputeBudget {
         return .{
@@ -55,6 +90,21 @@ pub const ComputeBudget = struct {
             .poseidon_cost_coefficient_c = 542,
             .max_cpi_instruction_size = 1280, // IPv6 Min MTU size
             .invoke_units = 1000,
+            .sha256_base_cost = 85,
+            .sha256_byte_cost = 1,
+            .sha256_max_slices = 20_000,
+            .curve25519_edwards_validate_point_cost = 159,
+            .curve25519_edwards_add_cost = 473,
+            .curve25519_edwards_subtract_cost = 475,
+            .curve25519_edwards_multiply_cost = 2_177,
+            .curve25519_edwards_msm_base_cost = 2_273,
+            .curve25519_edwards_msm_incremental_cost = 758,
+            .curve25519_ristretto_validate_point_cost = 169,
+            .curve25519_ristretto_add_cost = 521,
+            .curve25519_ristretto_subtract_cost = 519,
+            .curve25519_ristretto_multiply_cost = 2_208,
+            .curve25519_ristretto_msm_base_cost = 2303,
+            .curve25519_ristretto_msm_incremental_cost = 788,
         };
     }
 
@@ -66,5 +116,20 @@ pub const ComputeBudget = struct {
         const squared_inputs = std.math.powi(u64, len, 2) catch unreachable;
         const mul = squared_inputs * self.poseidon_cost_coefficient_a;
         return mul + self.poseidon_cost_coefficient_c;
+    }
+
+    pub fn curveGroupOperationCost(
+        self: ComputeBudget,
+        curve_id: sig.vm.syscalls.ecc.CurveId,
+        group_op: sig.vm.syscalls.ecc.GroupOp,
+    ) u64 {
+        switch (curve_id) {
+            inline else => |id| switch (group_op) {
+                inline else => |op| {
+                    const name = "curve25519_" ++ @tagName(id) ++ "_" ++ @tagName(op) ++ "_cost";
+                    return @field(self, name);
+                },
+            },
+        }
     }
 };
