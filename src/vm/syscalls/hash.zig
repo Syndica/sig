@@ -245,20 +245,20 @@ test sha256 {
         // zig fmt: off
         &.{
            
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0 }, 0 },
-            .{ .{ memory.RODATA_START - 1, 2, memory.STACK_START,     0 }, error.AccessViolation },
-            .{ .{ memory.RODATA_START,     3, memory.STACK_START,     0 }, error.AccessViolation }, 
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START - 1, 0 }, error.AccessViolation }, 
+            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0, 0 }, 0 },
+            .{ .{ memory.RODATA_START - 1, 2, memory.STACK_START,     0, 0 }, error.AccessViolation },
+            .{ .{ memory.RODATA_START,     3, memory.STACK_START,     0, 0 }, error.AccessViolation }, 
+            .{ .{ memory.RODATA_START,     2, memory.STACK_START - 1, 0, 0 }, error.AccessViolation }, 
             // only gave enough budget for 4 runs
             .{
-                .{ memory.RODATA_START, 2, memory.STACK_START, 0 },
+                .{ memory.RODATA_START, 2, memory.STACK_START, 0, 0 },
                 error.ComputationalBudgetExceeded,
             },
         },
         // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
-                _, _, const result_addr, _ = args;
+                _, _, const result_addr, _, _ = args;
 
                 const result_slice = try memory_map.translateSlice(
                     u8,

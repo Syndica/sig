@@ -2938,7 +2938,7 @@ test "function without return" {
 pub fn testSyscall(
     comptime syscall_func: anytype,
     regions: []const memory.Region,
-    comptime test_cases: []const struct { [4]u64, syscalls.Error!u64 },
+    comptime test_cases: []const struct { [5]u64, syscalls.Error!u64 },
     comptime verify_func: ?fn (
         *sig.runtime.TransactionContext,
         *MemoryMap,
