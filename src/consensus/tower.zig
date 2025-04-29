@@ -1448,10 +1448,8 @@ pub const Tower = struct {
         vote_account: *const Account,
         vote_account_pubkey: *const Pubkey,
     ) !VoteState {
-        var data = std.ArrayList(u8).init(allocator);
-        const buf = data.items;
+        const buf = try allocator.alloc(u8, vote_account.data.len());
         // TODO Not sure if this is the way to get the data from the vote account. Review.
-        try data.ensureTotalCapacity(vote_account.data.len());
         _ = vote_account.writeToBuf(vote_account_pubkey, buf);
         const versioned_state = try sig.bincode.readFromSlice(
             allocator,
