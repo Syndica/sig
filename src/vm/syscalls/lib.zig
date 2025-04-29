@@ -359,7 +359,7 @@ pub fn logData(
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
 
     const vm_messages = try memory_map.translateSlice(
-        cpi.VmSlice,
+        memory.VmSlice,
         .constant,
         vm_addr,
         len,
@@ -574,29 +574,118 @@ pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regist
     const address_addr = rm.get(.r4);
     const bump_seed_addr = rm.get(.r5);
 
-    try tc.consumeCompute(tc.compute_budget.create_program_address_units);
+    const cost = tc.compute_budget.create_program_address_units;
+    try tc.consumeCompute(cost);
+
+    const check_aligned = tc.getCheckAligned();
+    const program_id, const seeds = try translateAndCheckProgramAddressInputs(
+        mmap,
+        seeds_addr,
+        seeds_len,
+        program_id_addr,
+        check_aligned,
+    );
+
+    const bump_seed_ref = try mmap.translateType(u8, .mutable, bump_seed_addr, check_aligned);
+    const address = try mmap.translateSlice(
+        u8,
+        .mutable,
+        address_addr,
+        @sizeOf(Pubkey),
+        check_aligned,
+    );
 
     var bump_seed = [_]u8{std.math.maxInt(u8)};
     for (0..255) |_| {
-        var seeds_with_bump: std.BoundedArray()
+        const new_address = pubkey_utils.createProgramAddress(
+            seeds.slice(),
+            &bump_seed,
+            program_id,
+        ) catch {
+            bump_seed[0] -|= 1;
+            try tc.consumeCompute(cost);
+            continue;
+        };
 
-        pubkey_utils.createProgramAddress(.{}, &bump_seed, program_id);
+        if (memops.isOverlapping(
+            @intFromPtr(bump_seed_ref),
+            @sizeOf(u8),
+            @intFromPtr(address.ptr),
+            address.len,
+        )) return SyscallError.CopyOverlapping;
+
+        bump_seed_ref.* = bump_seed[0];
+        @memcpy(address, std.mem.asBytes(&new_address));
+        return; // return 0
     }
+
+    // TODO: return 1
 }
 
-
 pub fn createProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
+    const seeds_addr = rm.get(.r1);
+    const seeds_len = rm.get(.r2);
+    const program_id_addr = rm.get(.r3);
+    const address_addr = rm.get(.r4);
 
+    const cost = tc.compute_budget.create_program_address_units;
+    try tc.consumeCompute(cost);
+
+    const check_aligned = tc.getCheckAligned();
+    const program_id, const seeds = try translateAndCheckProgramAddressInputs(
+        mmap,
+        seeds_addr,
+        seeds_len,
+        program_id_addr,
+        check_aligned,
+    );
+
+    const new_address = pubkey_utils.createProgramAddress(seeds.slice(), &.{}, program_id) catch {
+        return; // TODO: return 1
+    };
+    const address = try mmap.translateSlice(
+        u8,
+        .mutable,
+        address_addr,
+        @sizeOf(Pubkey),
+        check_aligned,
+    );
+    @memcpy(address, std.mem.asBytes(&new_address));
+    return; // return 0
 }
 
 fn translateAndCheckProgramAddressInputs(
     seeds_addr: u64,
     seeds_len: u64,
     program_id_addr: u64,
-    memory_map: *MemoryMap,
+    mmap: *MemoryMap,
     check_aligned: bool,
-) Error!void {
-    
+) Error!struct { Pubkey, std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
+    const untranslated_seeds = try mmap.translateSlice(
+        memory.VmSlice,
+        .constant,
+        seeds_addr,
+        seeds_len,
+        check_aligned,
+    );
+    if (untranslated_seeds.len > pubkey_utils.MAX_SEEDS) {
+        return SyscallError.BadSeeds; // PubkeyError.MaxSeedLengthExceeded
+    }
+
+    var seeds: std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
+    for (untranslated_seeds) |untranslated_seed| {
+        if (untranslated_seed.len > pubkey_utils.MAX_SEEDS) return SyscallError.BadSeeds;
+        seeds.appendAssumeCapacity(try mmap.translateSlice(
+            u8,
+            .constant,
+            untranslated_seed.ptr,
+            untranslated_seed.len,
+            check_aligned,
+        ));
+    }
+
+    const program_id = try mmap.translateType(Pubkey, .constant, program_id_addr, check_aligned);
+    return .{ program_id.*, seeds };
 }
 
 // Syscall Tests

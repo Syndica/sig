@@ -632,6 +632,13 @@ fn hasTranslatableRepresentation(comptime T: type) bool {
     };
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
+pub const VmSlice = extern struct {
+    ptr: u64,
+    len: u64,
+};
+
 const expectError = std.testing.expectError;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
