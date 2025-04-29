@@ -127,7 +127,8 @@ pub fn runLoop(
         };
 
         if (must_flush_slots) {
-            db.logger.debug().logf("flushing slots: min: {}...{}", std.mem.minMax(Slot, flush_slots.items));
+            db.logger.debug()
+                .logf("flushing slots: min: {}...{}", std.mem.minMax(Slot, flush_slots.items));
 
             // flush the slots
             try unclean_account_files.ensureTotalCapacityPrecise(flush_slots.items.len);
@@ -136,7 +137,8 @@ pub fn runLoop(
             for (flush_slots.items) |flush_slot| {
                 const unclean_file_id = flushSlot(db, flush_slot) catch |err| {
                     // flush fail = loss of account data on slot -- should never happen
-                    db.logger.err().logf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
+                    db.logger.err()
+                        .logf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
                     continue;
                 };
                 unclean_account_files.appendAssumeCapacity(unclean_file_id);
@@ -148,13 +150,19 @@ pub fn runLoop(
         const largest_flushed_slot = db.largest_flushed_slot.load(.seq_cst);
 
         const latest_full_snapshot_slot_before_generation = blk: {
-            const maybe_latest_snapshot_info, var latest_snapshot_info_lg = db.latest_snapshot_gen_info.readWithLock();
+            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
+                db.latest_snapshot_gen_info.readWithLock();
             defer latest_snapshot_info_lg.unlock();
             const latest_info = maybe_latest_snapshot_info.* orelse break :blk 0;
             break :blk latest_info.full.slot;
         };
-        if (largest_flushed_slot - latest_full_snapshot_slot_before_generation >= slots_per_full_snapshot) {
-            db.logger.info().logf("accountsdb[manager]: generating full snapshot for slot {d}", .{largest_flushed_slot});
+        if (largest_flushed_slot - latest_full_snapshot_slot_before_generation >=
+            slots_per_full_snapshot)
+        {
+            db.logger.info().logf(
+                "accountsdb[manager]: generating full snapshot for slot {d}",
+                .{largest_flushed_slot},
+            );
             _ = try db.generateFullSnapshotWithCompressor(zstd_compressor, zstd_buffer, .{
                 .target_slot = largest_flushed_slot,
                 .bank_fields = &tmp_bank_fields,
@@ -163,13 +171,18 @@ pub fn runLoop(
             });
         }
 
-        const latest_full_snapshot_slot, // we may have just generated a full snapshot, so we re-read the latest full snapshot slot
+        // we may have just generated a full snapshot,
+        // so we re-read the latest full snapshot slot
+        const latest_full_snapshot_slot, //
         const latest_inc_snapshot_slot //
         = blk: {
-            const maybe_latest_snapshot_info, var latest_snapshot_info_lg = db.latest_snapshot_gen_info.readWithLock();
+            const maybe_latest_snapshot_info, var latest_snapshot_info_lg =
+                db.latest_snapshot_gen_info.readWithLock();
             defer latest_snapshot_info_lg.unlock();
-            const latest_info = maybe_latest_snapshot_info.* orelse break :blk .{largest_flushed_slot} ** 2;
-            const latest_info_inc = latest_info.inc orelse break :blk .{ latest_info.full.slot, largest_flushed_slot };
+            const latest_info = maybe_latest_snapshot_info.* orelse
+                break :blk .{largest_flushed_slot} ** 2;
+            const latest_info_inc = latest_info.inc orelse
+                break :blk .{ latest_info.full.slot, largest_flushed_slot };
             break :blk .{
                 latest_info.full.slot,
                 latest_info_inc.slot,
@@ -237,7 +250,8 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         const unrooted_accounts, var unrooted_accounts_lg = db.unrooted_accounts.readWithLock();
         defer unrooted_accounts_lg.unlock();
 
-        const pubkeys, const accounts = unrooted_accounts.get(slot) orelse return error.SlotNotFound;
+        const pubkeys, const accounts = unrooted_accounts.get(slot) orelse
+            return error.SlotNotFound;
         break :blk .{ pubkeys, accounts };
     };
     std.debug.assert(accounts.len == pubkeys.len);
@@ -292,9 +306,8 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
 
     // update the reference AFTER the data exists
     for (pubkeys, offsets) |pubkey, offset| {
-        const head_ref, var head_reference_lg = db.account_index.pubkey_ref_map.getWrite(&pubkey) orelse {
-            return error.PubkeyNotFound;
-        };
+        const head_ref, var head_reference_lg =
+            db.account_index.pubkey_ref_map.getWrite(&pubkey) orelse return error.PubkeyNotFound;
         defer head_reference_lg.unlock();
 
         // find the slot in the reference list
@@ -313,7 +326,8 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     }
 
     // TODO: prom metrics
-    // db.logger.debug().logf("flushed {} accounts, totalling size {}", .{ account_file.number_of_accounts, size });
+    // db.logger.debug().logf("flushed {} accounts, totalling size {}",
+    // .{ account_file.number_of_accounts, size });
 
     // remove old references
     {
@@ -367,7 +381,8 @@ fn cleanAccountFiles(
 
     // TODO: move this out into a CleanState struct to reduce allocations
     // track then delete all to avoid deleting while iterating
-    var references_to_delete = std.ArrayList(struct { pubkey: Pubkey, slot: Slot }).init(db.allocator);
+    var references_to_delete = std.ArrayList(struct { pubkey: Pubkey, slot: Slot })
+        .init(db.allocator);
     defer references_to_delete.deinit();
 
     // track so we dont double delete
@@ -396,11 +411,13 @@ fn cleanAccountFiles(
             // check if already cleaned
             if (try cleaned_pubkeys.fetchPut(pubkey, {}) != null) continue;
 
-            const head_ref, var head_ref_lg = db.account_index.pubkey_ref_map.getRead(&pubkey).?; // SAFE: this should always succeed or something is wrong
+            // SAFE: this should always succeed or something is wrong
+            const head_ref, var head_ref_lg = db.account_index.pubkey_ref_map.getRead(&pubkey).?;
             defer head_ref_lg.unlock();
 
             // get the highest slot <= highest_rooted_slot
-            const rooted_ref_count, const ref_slot_max = head_ref.highestRootedSlot(rooted_slot_max);
+            const rooted_ref_count, const ref_slot_max =
+                head_ref.highestRootedSlot(rooted_slot_max);
 
             // short exit because nothing else to do
             if (rooted_ref_count == 0) continue;
@@ -432,17 +449,21 @@ fn cleanAccountFiles(
                         .slot = ref.slot,
                     });
 
-                    // NOTE: we should never clean non-rooted references (ie, should always be in a file)
+                    // NOTE: we should never clean non-rooted references
+                    // (ie, should always be in a file)
                     const ref_file_id = ref.location.File.file_id;
                     const ref_slot = ref.slot;
 
                     const accounts_total_count, const accounts_dead_count = blk: {
-                        const dead_accounts_counter, var dead_accounts_counter_lg = db.dead_accounts_counter.writeWithLock();
+                        const dead_accounts_counter, var dead_accounts_counter_lg =
+                            db.dead_accounts_counter.writeWithLock();
                         defer dead_accounts_counter_lg.unlock();
 
-                        // NOTE: if there is no counter for this slot, it may have been removed after reaching 0 dead accounts
+                        // NOTE: if there is no counter for this slot, it may
+                        // have been removed after reaching 0 dead accounts
                         // previously. it is added back as needed.
-                        const number_dead_accounts_ptr = (try dead_accounts_counter.getOrPutValue(ref_slot, 0)).value_ptr;
+                        const number_dead_accounts_ptr =
+                            (try dead_accounts_counter.getOrPutValue(ref_slot, 0)).value_ptr;
                         number_dead_accounts_ptr.* += 1;
                         const accounts_dead_count = number_dead_accounts_ptr.*;
 
@@ -454,9 +475,13 @@ fn cleanAccountFiles(
                             const ref_account_file = ref_blk: {
                                 const file_map, var file_map_lg = db.file_map.readWithLock();
                                 defer file_map_lg.unlock();
-                                break :ref_blk file_map.get(ref_file_id).?; // we are holding a lock on `file_map_fd_rw`.
+                                // we are holding a lock on `file_map_fd_rw`.
+                                break :ref_blk file_map.get(ref_file_id).?;
                             };
-                            break :blk .{ ref_account_file.number_of_accounts, accounts_dead_count };
+                            break :blk .{
+                                ref_account_file.number_of_accounts,
+                                accounts_dead_count,
+                            };
                         }
                     };
                     std.debug.assert(accounts_dead_count <= accounts_total_count);
@@ -564,14 +589,18 @@ fn deleteAccountFiles(
     }
 
     {
-        const dead_accounts_counter, var dead_accounts_counter_lg = db.dead_accounts_counter.writeWithLock();
+        const dead_accounts_counter, var dead_accounts_counter_lg =
+            db.dead_accounts_counter.writeWithLock();
         defer dead_accounts_counter_lg.unlock();
 
         for (delete_queue.items) |account_file| {
             const slot = account_file.slot;
-            // there are two cases for an account file being queued for deletion from cleaning:
-            // 1) it was queued for shrink, and this is the *old* accountFile: dead_count == 0 and the slot DNE in the map (shrink removed it)
-            // 2) it contains 100% dead accounts (in which dead_count > 0 and we can remove it from the map)
+            // there are two cases for an account file being queued for deletion
+            // from cleaning:
+            // 1) it was queued for shrink, and this is the *old* accountFile:
+            //    dead_count == 0 and the slot DNE in the map (shrink removed it)
+            // 2) it contains 100% dead accounts (in which dead_count > 0 and we
+            //    can remove it from the map)
             _ = dead_accounts_counter.swapRemove(slot);
         }
     }
@@ -582,10 +611,14 @@ fn deleteAccountFile(
     slot: Slot,
     file_id: FileId,
 ) !void {
-    const file_path_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() });
+    const file_path_bounded =
+        sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() });
     db.snapshot_dir.deleteFile(file_path_bounded.constSlice()) catch |err| switch (err) {
         error.FileNotFound => {
-            db.logger.warn().logf("trying to delete accounts file which does not exist: {s}", .{sig.utils.fmt.tryRealPath(db.snapshot_dir, file_path_bounded.constSlice())});
+            db.logger.warn().logf(
+                "trying to delete accounts file which does not exist: {s}",
+                .{sig.utils.fmt.tryRealPath(db.snapshot_dir, file_path_bounded.constSlice())},
+            );
             return error.InvalidAccountFile;
         },
         else => |e| return e,
@@ -742,7 +775,8 @@ fn shrinkAccountFiles(
                 // find the slot in the reference list
                 const pubkey = account.pubkey();
 
-                const ref_parent, var ref_lg = db.account_index.getReferenceParent(pubkey, slot) catch |err| switch (err) {
+                const ref_parent, var ref_lg =
+                    db.account_index.getReferenceParent(pubkey, slot) catch |err| switch (err) {
                     // SAFE: we know the pubkey exists in the index because its alive
                     error.SlotNotFound, error.PubkeyNotFound => unreachable,
                 };
@@ -767,7 +801,8 @@ fn shrinkAccountFiles(
 
         // update slot's reference memory
         {
-            const slot_reference_map, var slot_reference_map_lg = db.account_index.slot_reference_map.writeWithLock();
+            const slot_reference_map, var slot_reference_map_lg =
+                db.account_index.slot_reference_map.writeWithLock();
             defer slot_reference_map_lg.unlock();
 
             const slot_reference_map_entry = slot_reference_map.getEntry(slot) orelse {
@@ -790,7 +825,8 @@ fn shrinkAccountFiles(
             // there has to be a counter for it at this point, since
             // cleanAccounts would only have added this file_id to
             // the queue if it deleted any accounts refs.
-            const dead_accounts_counter, var dead_accounts_counter_lg = db.dead_accounts_counter.writeWithLock();
+            const dead_accounts_counter, var dead_accounts_counter_lg =
+                db.dead_accounts_counter.writeWithLock();
             defer dead_accounts_counter_lg.unlock();
             const removed = dead_accounts_counter.fetchSwapRemove(slot).?;
             std.debug.assert(removed.value == accounts_dead_count);
@@ -798,7 +834,10 @@ fn shrinkAccountFiles(
     }
 
     if (number_of_files > 0) {
-        db.logger.info().logf("shrinked {} account files, total accounts deleted: {} ({} bytes)", .{ number_of_files, total_accounts_deleted, total_accounts_deleted_size });
+        db.logger.info().logf(
+            "shrinked {} account files, total accounts deleted: {} ({} bytes)",
+            .{ number_of_files, total_accounts_deleted, total_accounts_deleted_size },
+        );
     }
     db.metrics.time_shrink.observe(timer.read().asNanos());
 
@@ -831,8 +870,14 @@ fn purgeSlot(db: *AccountsDB, slot: Slot) void {
     // remove the references
     for (pubkeys) |*pubkey| {
         db.account_index.removeReference(pubkey, slot) catch |err| switch (err) {
-            error.PubkeyNotFound => std.debug.panic("pubkey not found in index while purging: {any}", .{pubkey}),
-            error.SlotNotFound => std.debug.panic("pubkey @ slot not found in index while purging: {any} @ {d}", .{ pubkey, slot }),
+            error.PubkeyNotFound => std.debug.panic(
+                "pubkey not found in index while purging: {any}",
+                .{pubkey},
+            ),
+            error.SlotNotFound => std.debug.panic(
+                "pubkey @ slot not found in index while purging: {any} @ {d}",
+                .{ pubkey, slot },
+            ),
         };
     }
 
@@ -971,7 +1016,8 @@ test "purge accounts in cache works" {
 
     // ref backing memory is cleared
     {
-        const slot_reference_map, var slot_reference_map_lg = accounts_db.account_index.slot_reference_map.readWithLock();
+        const slot_reference_map, var slot_reference_map_lg =
+            accounts_db.account_index.slot_reference_map.readWithLock();
         defer slot_reference_map_lg.unlock();
 
         try std.testing.expect(slot_reference_map.count() == 0);
@@ -985,7 +1031,8 @@ test "purge accounts in cache works" {
 
     // ref hashmap is cleared
     for (0..n_accounts) |i| {
-        try std.testing.expect(accounts_db.account_index.pubkey_ref_map.getRead(&pubkey_copy[i]) == null);
+        try std.testing
+            .expect(accounts_db.account_index.pubkey_ref_map.getRead(&pubkey_copy[i]) == null);
     }
 }
 
@@ -1214,11 +1261,25 @@ test "full clean account file works" {
 
     try unclean_account_files.append(try flushSlot(&accounts_db, slot));
 
-    var r = try cleanAccountFiles(&accounts_db, 0, unclean_account_files.items, &shrink_account_files, &delete_account_files); // zero is rooted so no files should be cleaned
+    // zero is rooted so no files should be cleaned
+    var r = try cleanAccountFiles(
+        &accounts_db,
+        0,
+        unclean_account_files.items,
+        &shrink_account_files,
+        &delete_account_files,
+    );
     try std.testing.expect(r.num_old_states == 0);
     try std.testing.expect(r.num_zero_lamports == 0);
 
-    r = try cleanAccountFiles(&accounts_db, 1, unclean_account_files.items, &shrink_account_files, &delete_account_files); // zero has no old state so no files should be cleaned
+    // zero has no old state so no files should be cleaned
+    r = try cleanAccountFiles(
+        &accounts_db,
+        1,
+        unclean_account_files.items,
+        &shrink_account_files,
+        &delete_account_files,
+    );
     try std.testing.expect(r.num_old_states == 0);
     try std.testing.expect(r.num_zero_lamports == 0);
 
@@ -1227,7 +1288,13 @@ test "full clean account file works" {
     try accounts_db.putAccountSlice(&accounts2, &pubkeys2, new_slot);
     try unclean_account_files.append(try flushSlot(&accounts_db, new_slot));
 
-    r = try cleanAccountFiles(&accounts_db, new_slot + 100, unclean_account_files.items, &shrink_account_files, &delete_account_files);
+    r = try cleanAccountFiles(
+        &accounts_db,
+        new_slot + 100,
+        unclean_account_files.items,
+        &shrink_account_files,
+        &delete_account_files,
+    );
     try std.testing.expect(r.num_old_states == n_accounts);
     try std.testing.expect(r.num_zero_lamports == 0);
     // full delete
@@ -1348,7 +1415,8 @@ test "shrink account file works" {
 
     // full memory block
     {
-        const slot_reference_map, var slot_reference_map_lg = accounts_db.account_index.slot_reference_map.readWithLock();
+        const slot_reference_map, var slot_reference_map_lg =
+            accounts_db.account_index.slot_reference_map.readWithLock();
         defer slot_reference_map_lg.unlock();
 
         const slot_mem = slot_reference_map.get(new_slot).?;
@@ -1394,7 +1462,8 @@ test "shrink account file works" {
 
     // test: memory block is shrunk too
     {
-        const slot_reference_map, var slot_reference_map_lg = accounts_db.account_index.slot_reference_map.readWithLock();
+        const slot_reference_map, var slot_reference_map_lg =
+            accounts_db.account_index.slot_reference_map.readWithLock();
         defer slot_reference_map_lg.unlock();
 
         const slot_mem = slot_reference_map.get(slot).?;
