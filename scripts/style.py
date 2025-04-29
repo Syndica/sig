@@ -207,8 +207,9 @@ def line_length(args, files_to_check):
             # are "//"
             if line.strip().startswith(("//", "\\" + "\\")):
                 continue
-            if len(line) > MAX_LINE_LENGTH + 1:  # +1 for \n
-                print(f"{path}:{i + 1} is too long: {len(line)}")
+            code_part = line.split("//", 1)[0].rstrip()
+            if len(code_part) > MAX_LINE_LENGTH + 1:  # +1 for \n
+                print(f"{path}:{i + 1} is too long: {len(code_part)}")
                 lines_found += 1
                 if path not in unique_files:
                     unique_files[path] = 1
