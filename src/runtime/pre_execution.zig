@@ -52,7 +52,45 @@ const ProcessingEnv = struct {
     }
 };
 
-// TODO: add something like ProcessedTransactionCounts
+const TransactionResult = struct {
+    const Kind = enum { Executed, FeesOnly };
+    const Result = union(Kind) { FeesOnly, Loaded: Executed };
+
+    // Transaction was not executed. Fees can be collected.
+    const FeesOnly = struct {
+        err: anyerror, // TODO: narrow this to accountsdb load error
+        // rollback_accounts: ignored for now, still unclear on what exactly it's for
+        // fee_details: ignored - this is passed in
+    };
+
+    /// Transaction was executed, may have failed. Fees can be collected.
+    const Executed = struct {
+        const TransactionReturnData = struct {
+            // what program_id is returned?
+            program_id: Pubkey,
+            data: []u8,
+        };
+
+        loaded_accounts: sig.runtime.account_loader.LoadedAccounts,
+        executed_units: u64,
+        /// only valid in successful transactions
+        accounts_data_len_delta: i64,
+        return_data: ?TransactionReturnData,
+        err: ?anyerror, // TODO: narrow to transaction error
+
+        programs_modified_by_tx: void = {}, // TODO: program cache not yet implemented (!)
+        // rollback_accounts: ignored for now, still unclear on what exactly it's for
+        // fee_details: ignored - this is passed in
+        // compute_budget: ignored - this is passed in
+        // program_indicies: seems useless, skipping
+
+    };
+
+    /// null => failed to load accounts | failed to allocate logs
+    logs: ?[]const []const u8,
+    result: Result,
+};
+
 const Output = struct {
     // .len == raw_instructions.len
     processing_results: []const TransactionResult,
@@ -64,71 +102,17 @@ const Output = struct {
                 allocator.free(log);
             }
             switch (result.result) {
-                .FeesOnlyTransaction => {},
-                .LoadedTransaction => |loaded| {
-                    for (loaded.accounts) |account| {
-                        allocator.free(account.data);
-                    }
+                .FeesOnly => {},
+                .Loaded => |loaded| {
+                    for (loaded.accounts) |account| allocator.free(account.data);
                     allocator.free(loaded.accounts);
                     allocator.free(loaded.rent_debits);
+                    if (loaded.return_data) |ret| allocator.free(ret.data);
                 },
             }
         }
         allocator.free(self.processing_results);
     }
-};
-
-const TransactionResult = struct {
-    const Kind = enum { Executed, FeesOnly };
-    const Result = union(Kind) { FeesOnly, Loaded: Executed };
-
-    const FeesOnly = struct {
-        load_error: anyerror, // TODO: narrow this to accountsdb load error
-    };
-
-    const Executed = struct {
-        /// indexes of accounts and rent_debits correspond to the indexes in the transaction - get pubkeys
-        /// this way.
-        const LoadedTransaction = struct {
-            const RentDebit = struct { rent_collected: u64, post_balance: u64 };
-
-            // TODO: could transactions share the same account.datas?
-            accounts: []const AccountSharedData,
-
-            // program_indicies: seems useless, skipping
-            // fee_details: lifted to TransactionResult (shared between this and FeesOnlyTransaction)
-            // rollback_accounts: ignored for now, still unclear on what exactly it's for
-            // compute_budget: Not sure why this would be stored here
-
-            rent: u64,
-            rent_debits: []const RentDebit, // TODO: maybe better to use a bounded array
-            loaded_accounts_data_size: u32,
-        };
-
-        const TransactionReturnData = struct {
-            program_id: Pubkey, // what program_id is returned?
-            data: []u8,
-        };
-
-        loaded_transaction: LoadedTransaction,
-        executed_units: u64,
-        /// only valid in successful transactions
-        accounts_data_len_delta: i64,
-        return_data: ?TransactionReturnData,
-        programs_modified_by_tx: void = {}, // TODO: program cache not yet implemented (!)
-        err: ?anyerror, // TODO: narrow to transaction error
-    };
-
-    /// null => failed to load accounts | failed to allocate logs
-    logs: ?[]const []const u8,
-    result: Result,
-};
-
-const ProcessedTransactionCounts = struct {
-    processed_transactions_count: u64,
-    processed_non_vote_transactions_count: u64,
-    processed_with_successful_result_count: u64,
-    signature_count: u64,
 };
 
 // simplified ~= agave's load_and_execute_sanitized_transactions
