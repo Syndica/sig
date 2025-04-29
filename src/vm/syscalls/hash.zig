@@ -156,24 +156,18 @@ fn hashSyscall(comptime H: type) Syscall {
     return S.syscall;
 }
 
-const Sha256 = struct {
+pub const sha256 = hashSyscall(struct {
     const Hasher = std.crypto.hash.sha2.Sha256;
     const name = "Sha256";
-};
-
-const Blake3 = struct {
+});
+pub const blake3 = hashSyscall(struct {
     const Hasher = std.crypto.hash.Blake3;
     const name = "Blake3";
-};
-
-const Keccak256 = struct {
+});
+pub const keccak256 = hashSyscall(struct {
     const Hasher = std.crypto.hash.sha3.Keccak256;
     const name = "Keccak256";
-};
-
-pub const sha256 = hashSyscall(Sha256);
-pub const blake3 = hashSyscall(Blake3);
-pub const keccak256 = hashSyscall(Keccak256);
+});
 
 test poseidon {
     try sig.vm.tests.testElfWithSyscalls(

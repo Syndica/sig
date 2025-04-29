@@ -74,12 +74,7 @@ pub fn main() !void {
     };
     defer tc.deinit();
 
-    var loader = try sig.vm.syscalls.register(
-        gpa,
-        &ec.feature_set,
-        0,
-        true,
-    );
+    var loader = try sig.vm.syscalls.register(gpa, &ec.feature_set, 0, true);
     defer loader.deinit(gpa);
 
     const config: Config = .{
