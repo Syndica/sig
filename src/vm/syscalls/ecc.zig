@@ -151,8 +151,6 @@ pub fn curveGroupOp(
                 tc.getCheckAligned(),
             );
             result_point.* = result.toBytes();
-
-            registers.set(.r0, 0);
             return;
         },
     }
@@ -223,8 +221,6 @@ pub fn curveMultiscalarMul(
                 tc.getCheckAligned(),
             );
             result_point_data.* = result.toBytes();
-
-            registers.set(.r0, 0);
         },
     }
 }
