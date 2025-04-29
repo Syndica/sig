@@ -116,8 +116,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     try accounts_db.account_index.expandRefCapacity(1_000_000);
 
     var manager_exit = std.atomic.Value(bool).init(false);
-    const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
-        &accounts_db, AccountsDB.ManagerLoopConfig{
+    const manager_handle = try std.Thread.spawn(.{}, sig.accounts_db.manager.runLoop, .{
+        &accounts_db, sig.accounts_db.manager.ManagerLoopConfig{
             .exit = &manager_exit,
             .slots_per_full_snapshot = 50_000,
             .slots_per_incremental_snapshot = 5_000,
