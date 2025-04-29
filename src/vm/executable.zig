@@ -121,7 +121,7 @@ pub const Executable = struct {
 
     pub fn verify(
         self: *const Executable,
-        loader: *BuiltinProgram,
+        loader: *const BuiltinProgram,
     ) !void {
         const version = self.version;
         const instructions = self.instructions;
@@ -181,7 +181,7 @@ pub const Executable = struct {
                 => {}, // nothing to verify
 
                 .add64_imm => if (version.enableDynamicStackFrames() and inst.dst == .r10) {
-                    if (!std.mem.isAligned(inst.imm, 16)) return error.UnalignedImmediate;
+                    if (!std.mem.isAligned(inst.imm, 64)) return error.UnalignedImmediate;
                 },
 
                 .lsh32_imm,
@@ -194,7 +194,7 @@ pub const Executable = struct {
                 .arsh64_imm,
                 => if (inst.imm >= 64) return error.ShiftWithOverflow,
 
-                .neg32 => if (version.disableNegation()) return error.UnknownInstruction,
+                .neg32 => if (version.disableNegation()) return error.UnsupportedInstruction,
 
                 .mul32_reg,
                 .div32_reg,
@@ -219,12 +219,12 @@ pub const Executable = struct {
                     store = true;
                 },
 
-                .mul32_imm => if (version.enablePqr()) return error.UnknownInstruction,
+                .mul32_imm => if (version.enablePqr()) return error.UnsupportedInstruction,
                 .mod32_imm,
                 .div32_imm,
                 => if (!version.enablePqr()) {
                     if (inst.imm == 0) return error.DivisionByZero;
-                } else return error.UnknownInstruction,
+                } else return error.UnsupportedInstruction,
 
                 .udiv32_reg,
                 .udiv64_reg,
@@ -242,7 +242,7 @@ pub const Executable = struct {
                 .urem64_reg,
                 .srem32_reg,
                 .srem64_reg,
-                => if (!version.enablePqr()) return error.UnknownInstruction,
+                => if (!version.enablePqr()) return error.UnsupportedInstruction,
 
                 .udiv32_imm,
                 .udiv64_imm,
@@ -254,13 +254,13 @@ pub const Executable = struct {
                 .srem64_imm,
                 => if (version.enablePqr()) {
                     if (inst.imm == 0) return error.DivisionByZero;
-                } else return error.UnknownInstruction,
+                } else return error.UnsupportedInstruction,
 
-                .hor64_imm => if (!version.disableLddw()) return error.UnknownInstruction,
+                .hor64_imm => if (!version.disableLddw()) return error.UnsupportedInstruction,
 
                 .le, .be => {
-                    if (inst.opcode == .le and !version.enableLe()) {
-                        return error.UnknownInstruction;
+                    if (inst.opcode == .le and version.disableLe()) {
+                        return error.UnsupportedInstruction;
                     }
                     switch (inst.imm) {
                         16, 32, 64 => {},
@@ -310,7 +310,7 @@ pub const Executable = struct {
                 .ld_h_reg,
                 .ld_w_reg,
                 .ld_dw_reg,
-                => if (version.moveMemoryInstructionClasses()) return error.UnknownInstruction,
+                => if (version.moveMemoryInstructionClasses()) return error.UnsupportedInstruction,
 
                 .st_b_imm,
                 .st_h_imm,
@@ -322,11 +322,14 @@ pub const Executable = struct {
                 .st_dw_reg,
                 => if (!version.moveMemoryInstructionClasses()) {
                     store = true;
-                } else return error.UnknownInstruction,
+                } else return error.UnsupportedInstruction,
 
                 .ld_4b_reg,
+                => if (!version.moveMemoryInstructionClasses()) return error.UnsupportedInstruction,
                 .st_4b_reg,
-                => if (!version.moveMemoryInstructionClasses()) return error.UnknownInstruction,
+                => if (version.moveMemoryInstructionClasses()) {
+                    store = true;
+                } else return error.UnsupportedInstruction,
 
                 .ld_dw_imm => if (!version.disableLddw()) {
                     // If this is the last instructions, half of it is missing!
@@ -334,7 +337,7 @@ pub const Executable = struct {
                     pc += 1;
                     const next_instruction = instructions[pc];
                     if (@intFromEnum(next_instruction.opcode) != 0) return error.IncompleteLddw;
-                } else return error.UnknownInstruction,
+                } else return error.UnsupportedInstruction,
 
                 .call_imm => if (version.enableStaticSyscalls()) {
                     const target_pc = version.computeTargetPc(pc, inst);
@@ -351,14 +354,15 @@ pub const Executable = struct {
                     if (@intFromEnum(reg) >= 10) return error.InvalidRegister;
                 },
 
-                .@"return" => if (!version.enableStaticSyscalls()) return error.UnknownInstruction,
+                .@"return" => if (!version.enableStaticSyscalls())
+                    return error.UnsupportedInstruction,
                 .exit_or_syscall => if (version.enableStaticSyscalls() and
                     !loader.functions.map.contains(inst.imm))
                 {
                     return error.InvalidSyscall;
                 },
 
-                else => return error.UnknownInstruction,
+                else => return error.UnsupportedInstruction,
             }
 
             try inst.checkRegisters(store, version);
@@ -793,6 +797,8 @@ pub const Assembler = struct {
                     } });
                 } else if (std.fmt.parseInt(i64, op, 0) catch null) |int| {
                     try operands.append(allocator, .{ .integer = int });
+                } else if (std.fmt.parseInt(u64, op, 0) catch null) |int| {
+                    try operands.append(allocator, .{ .integer = @bitCast(int) });
                 } else {
                     try operands.append(allocator, .{ .label = op });
                 }

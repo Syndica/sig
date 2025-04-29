@@ -118,7 +118,7 @@ test "mov32 large" {
         \\  mov32 r1, -1
         \\  mov32 r0, r1
         \\  return
-    , .{ 0xFFFFFFFF, 3 });
+    , .{ 0xFFFFFFFFFFFFFFFF, 3 });
 }
 
 test "mov large" {
@@ -1950,28 +1950,28 @@ test "pqr" {
             .{ OpCode.srem32_reg,  13, 4, 1 },
             .{ OpCode.srem64_reg,  13, 4, 1 },
 
-            .{ OpCode.lmul32_reg,  13, ~@as(u64, 3), ~@as(u64, 51) },
+            .{ OpCode.lmul32_reg,  13, ~@as(u64, 3), ~@as(u32, 51) },
             .{ OpCode.lmul64_reg,  13, ~@as(u64, 3), ~@as(u64, 51) },
             .{ OpCode.shmul64_reg, 13, ~@as(u64, 3), ~@as(u64, 0) },
-            .{ OpCode.sdiv32_reg,  13, ~@as(u64, 3), ~@as(u64, 2) },
+            .{ OpCode.sdiv32_reg,  13, ~@as(u32, 3), ~@as(u32, 2) },
             .{ OpCode.sdiv64_reg,  13, ~@as(u64, 3), ~@as(u64, 2) },
-            .{ OpCode.srem32_reg,  13, ~@as(u64, 3), 1 },
+            .{ OpCode.srem32_reg,  13, ~@as(u32, 3), 1 },
             .{ OpCode.srem64_reg,  13, ~@as(u64, 3), 1 },
 
-            .{ OpCode.lmul32_reg,  ~@as(u64, 12), 4, ~@as(u64, 51) },
+            .{ OpCode.lmul32_reg,  ~@as(u64, 12), 4, ~@as(u32, 51) },
             .{ OpCode.lmul64_reg,  ~@as(u64, 12), 4, ~@as(u64, 51) },
             .{ OpCode.shmul64_reg, ~@as(u64, 12), 4, ~@as(u64, 0) },
-            .{ OpCode.sdiv32_reg,  ~@as(u64, 12), 4, ~@as(u64, 2) },
+            .{ OpCode.sdiv32_reg,  ~@as(u64, 12), 4, ~@as(u32, 2) },
             .{ OpCode.sdiv64_reg,  ~@as(u64, 12), 4, ~@as(u64, 2) },
-            .{ OpCode.srem32_reg,  ~@as(u64, 12), 4, ~@as(u64, 0) },
+            .{ OpCode.srem32_reg,  ~@as(u64, 12), 4, ~@as(u32, 0) },
             .{ OpCode.srem64_reg,  ~@as(u64, 12), 4, ~@as(u64, 0) },
 
-            .{ OpCode.lmul32_reg,  ~@as(u64, 12), ~@as(u64, 3), 52 },
+            .{ OpCode.lmul32_reg,  ~@as(u64, 12), ~@as(u32, 3), 52 },
             .{ OpCode.lmul64_reg,  ~@as(u64, 12), ~@as(u64, 3), 52 },
             .{ OpCode.shmul64_reg, ~@as(u64, 12), ~@as(u64, 3), 0 },
-            .{ OpCode.sdiv32_reg,  ~@as(u64, 12), ~@as(u64, 3), 3 },
+            .{ OpCode.sdiv32_reg,  ~@as(u64, 12), ~@as(u32, 3), 3 },
             .{ OpCode.sdiv64_reg,  ~@as(u64, 12), ~@as(u64, 3), 3 },
-            .{ OpCode.srem32_reg,  ~@as(u64, 12), ~@as(u64, 3), ~@as(u64, 0) },
+            .{ OpCode.srem32_reg,  ~@as(u64, 12), ~@as(u32, 3), ~@as(u32, 0) },
             .{ OpCode.srem64_reg,  ~@as(u64, 12), ~@as(u64, 3), ~@as(u64, 0) },
         },
         // zig fmt: on
@@ -2001,8 +2001,8 @@ test "pqr" {
         const map = try MemoryMap.init(allocator, &.{}, .v2, .{});
 
         // TODO: I would have defined the `context` struct inside of the loop,
-        // but an LLVM 18 miscompilation on ARM64 doesn't let me. Move it back
-        // when we update to Zig 0.14.
+        // but an LLVM 18 miscompilation on ARM64 doesn't let me.
+        // TODO(0.14): Move it back
         context.compute_meter = 6;
         var vm = try Vm.init(
             allocator,
@@ -2172,7 +2172,7 @@ test "callx out of bounds low" {
         \\  mov64 r0, 0x3
         \\  callx r0
         \\  exit
-    , .{ error.PcOutOfBounds, 2 });
+    , .{ error.CallOutsideTextSegment, 2 });
 }
 
 test "callx out of bounds high" {
@@ -2183,7 +2183,7 @@ test "callx out of bounds high" {
         \\  or64 r0, 0x3
         \\  callx r0
         \\  return
-    , .{ error.PcOutOfBounds, 4 });
+    , .{ error.CallOutsideTextSegment, 4 });
 }
 
 test "callx out of bounds max" {
@@ -2193,7 +2193,7 @@ test "callx out of bounds max" {
         \\  hor64 r0, -0x1
         \\  callx r0
         \\  return
-    , .{ error.PcOutOfBounds, 3 });
+    , .{ error.CallOutsideTextSegment, 3 });
 }
 
 test "call bpf 2 bpf" {
@@ -2654,7 +2654,7 @@ test "invalid dst reg" {
     inline for (.{ .v0, .v3 }) |sbpf_version| {
         try testVerify(.{ .maximum_version = sbpf_version },
             \\entrypoint:
-            \\  mov r11, 1
+            \\  mov pc, 1
             \\  exit
         , error.InvalidDestinationRegister);
     }
@@ -2664,7 +2664,7 @@ test "invalid src reg" {
     inline for (.{ .v0, .v3 }) |sbpf_version| {
         try testVerify(.{ .maximum_version = sbpf_version },
             \\entrypoint:
-            \\  mov r0, r11
+            \\  mov r0, pc
             \\  exit
         , error.InvalidSourceRegister);
     }
@@ -2754,7 +2754,7 @@ test "invalid return" {
         &.{
             0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         },
-        error.UnknownInstruction,
+        error.UnsupportedInstruction,
     );
 }
 
@@ -2804,7 +2804,7 @@ test "neg invalid on v3" {
         \\entrypoint:
         \\  neg32 r0
         \\  exit
-    , error.UnknownInstruction);
+    , error.UnsupportedInstruction);
 }
 
 test "lddw invalid on v3" {
@@ -2812,7 +2812,7 @@ test "lddw invalid on v3" {
         \\entrypoint:
         \\  lddw r0, 0x1122334455667788
         \\  exit
-    , error.UnknownInstruction);
+    , error.UnsupportedInstruction);
 }
 
 test "le invalid on v3" {
@@ -2820,19 +2820,19 @@ test "le invalid on v3" {
         \\entrypoint:
         \\  le16 r0
         \\  exit
-    , error.UnknownInstruction);
+    , error.UnsupportedInstruction);
 
     try testVerify(.{},
         \\entrypoint:
         \\  le32 r0
         \\  exit
-    , error.UnknownInstruction);
+    , error.UnsupportedInstruction);
 
     try testVerify(.{},
         \\entrypoint:
         \\  le64 r0
         \\  exit
-    , error.UnknownInstruction);
+    , error.UnsupportedInstruction);
 }
 
 test "shift overflows" {
@@ -2892,7 +2892,7 @@ test "sdiv disabled" {
                 .{ .maximum_version = sbpf_version },
                 assembly,
                 switch (sbpf_version) {
-                    .v0 => error.UnknownInstruction,
+                    .v0 => error.UnsupportedInstruction,
                     .v3 => {},
                     else => unreachable,
                 },
@@ -2911,7 +2911,7 @@ test "return instruction" {
                 0x9d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // return
             },
             switch (sbpf_version) {
-                .v0 => error.UnknownInstruction,
+                .v0 => error.UnsupportedInstruction,
                 .v3 => error.InvalidSyscall,
                 else => unreachable,
             },

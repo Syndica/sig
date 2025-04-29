@@ -42,6 +42,9 @@ pub const SyscallError = error{
     InvalidAttribute,
     InvalidPointer,
     ArithmeticOverflow,
+    InvalidParameters,
+    InvalidEndianness,
+    InvalidNumberOfInputs,
 };
 
 pub const EbpfError = error{
@@ -49,7 +52,7 @@ pub const EbpfError = error{
     FunctionAlreadyRegistered,
     CallDepthExceeded,
     ExitRootCallFrame,
-    DivideByZero,
+    DivisionByZero,
     DivideOverflow,
     ExecutionOverrun,
     CallOutsideTextSegment,
