@@ -196,11 +196,11 @@ pub fn register(
         "sol_set_return_data",
         setReturnData,
     );
-    // _ = try syscalls.functions.registerHashed(
-    //     allocator,
-    //     "sol_get_return_data",
-    //     getReturnData,
-    // );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_get_return_data",
+        getReturnData,
+    );
 
     // Cross Program Invocation
     _ = try syscalls.functions.registerHashed(
@@ -243,9 +243,13 @@ pub fn register(
     }
 
     // Remaining Compute Units
-    // if (feature_set.isActive(feature_set.ENABLE_REMAINING_COMPUTE_UNITS_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_remaining_compute_units", remainingComputeUnits,);
-    // }
+    if (feature_set.isActive(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_remaining_compute_units",
+            remainingComputeUnits,
+        );
+    }
 
     // Alt_bn_128_compression
     // if (feature_set.isActive(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL, slot)) {
@@ -472,6 +476,16 @@ pub fn getStackHeight(
 ) Error!void {
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
     registers.set(.r0, tc.instruction_stack.len);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1968-L1986
+pub fn remainingComputeUnits(
+    tc: *TransactionContext,
+    _: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+    registers.set(.r0, tc.compute_meter);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
