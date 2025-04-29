@@ -123,10 +123,7 @@ fn Bank(comptime kind: BankKind) type {
     };
 }
 
-pub const RentDebit = struct {
-    rent_collected: u64,
-    rent_balance: u64,
-};
+pub const RentDebit = struct { rent_collected: u64, rent_balance: u64 };
 
 const LoadedTransactionAccount = struct {
     account: AccountSharedData,
