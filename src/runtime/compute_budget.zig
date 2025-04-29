@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/compute-budget/src/compute_budget.rs#L11-L119
 pub const ComputeBudget = struct {
@@ -115,5 +116,20 @@ pub const ComputeBudget = struct {
         const squared_inputs = std.math.powi(u64, len, 2) catch unreachable;
         const mul = squared_inputs * self.poseidon_cost_coefficient_a;
         return mul + self.poseidon_cost_coefficient_c;
+    }
+
+    pub fn curveGroupOperationCost(
+        self: ComputeBudget,
+        curve_id: sig.vm.syscalls.ecc.CurveId,
+        group_op: sig.vm.syscalls.ecc.GroupOp,
+    ) u64 {
+        switch (curve_id) {
+            inline else => |id| switch (group_op) {
+                inline else => |op| {
+                    const name = "curve25519_" ++ @tagName(id) ++ "_" ++ @tagName(op) ++ "_cost";
+                    return @field(self, name);
+                },
+            },
+        }
     }
 };

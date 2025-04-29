@@ -131,11 +131,11 @@ pub fn register(
             "sol_curve_validate_point",
             ecc.curvePointValidation,
         );
-        // _ = try syscalls.functions.registerHashed(
-        //     allocator,
-        //     "sol_curve_group_op",
-        //     curveGroupOp,
-        // );
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_curve_group_op",
+            ecc.curveGroupOp,
+        );
         // _ = try syscalls.functions.registerHashed(
         //     allocator,
         //     "sol_curve_multiscalar_mul",
