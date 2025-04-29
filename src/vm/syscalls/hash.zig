@@ -102,29 +102,24 @@ fn hashSyscall(comptime H: type) Syscall {
             const vals_len = registers.get(.r2);
             const result_addr = registers.get(.r3);
 
-            const hash_base_cost = @field(tc.compute_budget, H.base_cost);
-            const hash_byte_cost = @field(tc.compute_budget, H.byte_cost);
-            const hash_max_slices = @field(tc.compute_budget, H.max_slices);
-
-            if (hash_max_slices < vals_len) {
+            if (tc.compute_budget.sha256_max_slices < vals_len) {
                 try tc.log(
                     "{s} Hashing {} sequences in one syscall is over the limit {}",
                     .{
                         H.name,
                         vals_len,
-                        hash_max_slices,
+                        tc.compute_budget.sha256_max_slices,
                     },
                 );
                 return SyscallError.TooManySlices;
             }
 
-            try tc.consumeCompute(hash_base_cost);
+            try tc.consumeCompute(tc.compute_budget.sha256_base_cost);
 
-            const hash_result = try memory_map.translateSlice(
-                u8,
+            const hash_result = try memory_map.translateType(
+                [32]u8,
                 .mutable,
                 result_addr,
-                @sizeOf(H.Output),
                 tc.getCheckAligned(),
             );
 
@@ -148,14 +143,14 @@ fn hashSyscall(comptime H: type) Syscall {
                     );
                     const cost = @max(
                         tc.compute_budget.mem_op_base_cost,
-                        hash_byte_cost *% (val.len / 2),
+                        tc.compute_budget.sha256_byte_cost *% (val.len / 2),
                     );
                     try tc.consumeCompute(cost);
                     hasher.update(bytes);
                 }
             }
 
-            hasher.final(hash_result[0..@sizeOf(H.Output)]);
+            hasher.final(hash_result);
         }
     };
     return S.syscall;
@@ -163,32 +158,17 @@ fn hashSyscall(comptime H: type) Syscall {
 
 const Sha256 = struct {
     const Hasher = std.crypto.hash.sha2.Sha256;
-    const Output = [32]u8;
     const name = "Sha256";
-
-    const base_cost = "sha256_base_cost";
-    const byte_cost = "sha256_byte_cost";
-    const max_slices = "sha256_max_slices";
 };
 
 const Blake3 = struct {
     const Hasher = std.crypto.hash.Blake3;
-    const Output = [32]u8;
     const name = "Blake3";
-
-    const base_cost = "sha256_base_cost";
-    const byte_cost = "sha256_byte_cost";
-    const max_slices = "sha256_max_slices";
 };
 
 const Keccak256 = struct {
     const Hasher = std.crypto.hash.sha3.Keccak256;
-    const Output = [32]u8;
     const name = "Keccak256";
-
-    const base_cost = "sha256_base_cost";
-    const byte_cost = "sha256_byte_cost";
-    const max_slices = "sha256_max_slices";
 };
 
 pub const sha256 = hashSyscall(Sha256);
