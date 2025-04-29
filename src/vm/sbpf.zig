@@ -43,6 +43,10 @@ pub const Version = enum(u32) {
     pub fn disableNegation(version: Version) bool {
         return version.gte(.v2);
     }
+    /// ... SIMD-0174
+    pub fn explicitSignExtensionOfResults(version: Version) bool {
+        return version.gte(.v2);
+    }
 
     /// Enable SIMD-0173: SBPF instruction encoding improvements
     pub fn callRegUsesSrcReg(version: Version) bool {
@@ -56,8 +60,8 @@ pub const Version = enum(u32) {
         return version.gte(.v2);
     }
     /// ... SIMD-0173
-    pub fn enableLe(version: Version) bool {
-        return version == .v0;
+    pub fn disableLe(version: Version) bool {
+        return version.gte(.v2);
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
@@ -101,8 +105,8 @@ pub const Version = enum(u32) {
 pub const Instruction = packed struct(u64) {
     opcode: OpCode,
     /// TODO: when ptrCasting into Instruction, the `dst` and `src values might
-    /// be out of range. There's safety check for this, so we'll need to check
-    /// it ourselves.
+    /// be out of range.
+    /// There isn't a safety check for this, so we'll need to check it ourselves.
     dst: Register,
     src: Register,
     off: i16,
@@ -379,7 +383,7 @@ pub const Instruction = packed struct(u64) {
             return switch (class) {
                 alu64 => true,
                 alu32 => false,
-                else => std.debug.panic("TODO: {s}", .{@tagName(opcode)}),
+                else => unreachable,
             };
         }
 
@@ -388,7 +392,7 @@ pub const Instruction = packed struct(u64) {
             return switch (class) {
                 ld, ldx => .constant,
                 st, stx => .mutable,
-                else => std.debug.panic("TODO: {s}", .{@tagName(opcode)}),
+                else => unreachable,
             };
         }
     };
@@ -692,8 +696,6 @@ pub const Instruction = packed struct(u64) {
         r9,
         /// Frame pointer, System register
         r10,
-        /// Stack pointer, System register
-        r11,
         /// Program counter, Hidden register
         pc,
     };
@@ -729,7 +731,13 @@ pub const Instruction = packed struct(u64) {
         writer: anytype,
     ) !void {
         comptime assert(fmt.len == 0);
-        try writer.print("{s}", .{@tagName(inst.opcode)});
+        try writer.print("{}({} {} {} {})", .{
+            inst.opcode,
+            inst.dst,
+            inst.src,
+            inst.off,
+            inst.imm,
+        });
     }
 };
 
