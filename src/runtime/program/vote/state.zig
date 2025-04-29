@@ -33,7 +33,7 @@ pub const BlockTimestamp = struct {
     slot: Slot,
     timestamp: i64,
 
-    pub const DEFAULT = BlockTimestamp{
+    pub const ZEROES = BlockTimestamp{
         .slot = 0,
         .timestamp = 0,
     };
@@ -114,7 +114,7 @@ pub const Vote = struct {
     /// processing timestamp of last slot
     timestamp: ?i64,
 
-    pub const DEFAULT = Vote{
+    pub const ZEROES = Vote{
         .slots = &[0]Slot{},
         .hash = Hash.ZEROES,
         .timestamp = null,
@@ -132,7 +132,7 @@ pub const VoteStateUpdate = struct {
     /// processing timestamp of last slot
     timestamp: ?i64,
 
-    pub fn default(allocator: std.mem.Allocator) !VoteStateUpdate {
+    pub fn zeroes(allocator: std.mem.Allocator) !VoteStateUpdate {
         return .{
             .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
             .root = null,
@@ -157,7 +157,7 @@ pub const TowerSync = struct {
     /// in order to compute.
     block_id: Hash,
 
-    pub fn default(allocator: std.mem.Allocator) !TowerSync {
+    pub fn zeroes(allocator: std.mem.Allocator) !TowerSync {
         return .{
             .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
             .root = null,

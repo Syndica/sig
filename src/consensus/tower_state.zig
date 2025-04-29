@@ -20,14 +20,13 @@ pub const TowerVoteState = struct {
         self.votes.deinit(allocator);
     }
 
-    pub fn lastLockout(self: *const TowerVoteState) ?*const Lockout {
+    pub fn lastLockout(self: *const TowerVoteState) ?Lockout {
         if (self.votes.items.len == 0) return null;
-        return &self.votes.items[self.votes.items.len - 1];
+        return self.votes.items[self.votes.items.len - 1];
     }
 
     pub fn lastVotedSlot(self: *const TowerVoteState) ?Slot {
-        if (self.lastLockout() == null) return null;
-        return self.lastLockout().?.slot;
+        return if (self.lastLockout()) |last_lockout| last_lockout.slot else null;
     }
 
     pub fn clone(
@@ -37,10 +36,10 @@ pub const TowerVoteState = struct {
         return .{ .votes = try self.votes.clone(allocator), .root_slot = self.root_slot };
     }
 
-    pub fn nthRecentLockout(self: *const TowerVoteState, position: usize) ?*const Lockout {
+    pub fn nthRecentLockout(self: *const TowerVoteState, position: usize) ?Lockout {
         const pos = std.math.sub(usize, self.votes.items.len, (position +| 1)) catch
             return null;
-        return &self.votes.items[pos];
+        return self.votes.items[pos];
     }
 
     pub fn processNextVoteSlot(

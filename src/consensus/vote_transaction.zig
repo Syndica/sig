@@ -16,7 +16,7 @@ pub const VoteTransaction = union(enum) {
     tower_sync: TowerSync,
 
     pub fn default(allocator: std.mem.Allocator) !VoteTransaction {
-        return VoteTransaction{ .tower_sync = try TowerSync.default(allocator) };
+        return VoteTransaction{ .tower_sync = try TowerSync.zeroes(allocator) };
     }
 
     pub fn deinit(self: *VoteTransaction, allocator: std.mem.Allocator) void {
@@ -186,7 +186,7 @@ test "vote_transaction.VoteTransaction - default initialization" {
     defer vote_transaction.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(
-        VoteTransaction{ .tower_sync = try TowerSync.default(std.testing.allocator) },
+        VoteTransaction{ .tower_sync = try TowerSync.zeroes(std.testing.allocator) },
         vote_transaction,
     );
 }

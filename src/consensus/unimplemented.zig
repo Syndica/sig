@@ -6,9 +6,6 @@ const sig = @import("../sig.zig");
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const SlotAndHash = sig.core.hash.SlotAndHash;
-
-const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 
 const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
@@ -33,28 +30,6 @@ pub const ProgressMap = struct {
         @panic("Unimplemented");
     }
     pub fn getForkStats(_: ProgressMap, _: Slot) ?ForkStats {
-        @panic("Unimplemented");
-    }
-};
-
-pub const ReplayStage = struct {
-    pub fn initializeProgressAndForkChoice(
-        root_slot: *const Slot,
-        root_hash: *const Hash,
-        // Bank does not exist in Sig. Need an anologous struct.
-        // frozen_banks: *const []Bank,
-        my_pubkey: *const Pubkey,
-        vote_account: *const Pubkey,
-        duplicate_slot_hashes: std.ArrayList(SlotAndHash),
-    ) struct {
-        ProgressMap,
-        HeaviestSubtreeForkChoice,
-    } {
-        _ = root_slot;
-        _ = root_hash;
-        _ = my_pubkey;
-        _ = vote_account;
-        _ = duplicate_slot_hashes;
         @panic("Unimplemented");
     }
 };

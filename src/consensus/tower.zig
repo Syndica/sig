@@ -96,8 +96,6 @@ const BlockhashStatus = union(enum) {
     hot_spare,
     /// Successfully generated vote tx with blockhash
     blockhash: Hash,
-
-    pub const DEFAULT = BlockhashStatus{ .uninitialized = {} };
 };
 
 pub const TowerError = error{
@@ -151,8 +149,8 @@ pub const Tower = struct {
             .threshold_size = 0,
             .vote_state = try TowerVoteState.default(allocator),
             .last_vote = try VoteTransaction.default(allocator),
-            .last_vote_tx_blockhash = BlockhashStatus.DEFAULT,
-            .last_timestamp = BlockTimestamp.DEFAULT,
+            .last_vote_tx_blockhash = .uninitialized,
+            .last_timestamp = BlockTimestamp.ZEROES,
             .stray_restored_slot = null,
             .last_switch_threshold_check = null,
         };
@@ -251,15 +249,15 @@ pub const Tower = struct {
         self: *Tower,
         new_vote_tx_blockhash: Hash,
     ) void {
-        self.last_vote_tx_blockhash = BlockhashStatus{ .blockhash = new_vote_tx_blockhash };
+        self.last_vote_tx_blockhash = .{ .blockhash = new_vote_tx_blockhash };
     }
 
     pub fn markLastVoteTxBlockhashNonVoting(self: *Tower) void {
-        self.last_vote_tx_blockhash = BlockhashStatus{ .non_voting = {} };
+        self.last_vote_tx_blockhash = .non_voting;
     }
 
     pub fn markLastVoteTxBlockhashHotSpare(self: *Tower) void {
-        self.last_vote_tx_blockhash = BlockhashStatus{ .hot_spare = {} };
+        self.last_vote_tx_blockhash = .hot_spare;
     }
 
     pub fn recordBankVote(
@@ -978,7 +976,7 @@ pub const Tower = struct {
         var default_vote = try VoteTransaction.default(allocator);
         defer default_vote.deinit(allocator);
 
-        var default_tower = VoteTransaction{ .tower_sync = try TowerSync.default(allocator) };
+        var default_tower = VoteTransaction{ .tower_sync = try TowerSync.zeroes(allocator) };
         defer default_tower.deinit(allocator);
 
         // This ensures that if vote_state.votes is empty,
@@ -1181,7 +1179,7 @@ pub const Tower = struct {
             // we might not have banks for those votes so just reset.
             // That's because the votes may well past replayed_root
             self.last_vote.deinit(allocator);
-            self.last_vote = VoteTransaction{ .vote = Vote.DEFAULT };
+            self.last_vote = VoteTransaction{ .vote = Vote.ZEROES };
         } else {
             const voted_slots = try self.votedSlots(allocator);
             defer allocator.free(voted_slots);
@@ -1518,7 +1516,7 @@ pub const Tower = struct {
     fn optimisticallyBypassVoteStakeThresholdCheck(
         // Needs to be an iterator that produces Lockout
         tower_before_applying_vote: anytype,
-        threshold_vote: *const Lockout,
+        threshold_vote: Lockout,
     ) bool {
         for (tower_before_applying_vote) |old_vote| {
             if (old_vote.slot == threshold_vote.slot and
@@ -1532,7 +1530,7 @@ pub const Tower = struct {
 
     fn checkVoteStakeThreshold(
         logger: ScopedLogger(@typeName(Tower)),
-        maybe_threshold_vote: ?*const Lockout,
+        maybe_threshold_vote: ?Lockout,
         tower_before_applying_vote: anytype,
         threshold_depth: usize,
         threshold_size: f64,
