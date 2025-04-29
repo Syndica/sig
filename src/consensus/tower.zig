@@ -1492,15 +1492,16 @@ pub const Tower = struct {
 
         var max_slot: ?Slot = null;
 
-        for (ancestors_a.items()) |slot| {
-            for (ancestors_b.items()) |other_slot| {
-                if (slot == other_slot and
-                    (max_slot == null or
-                    slot > max_slot.?))
-                {
-                    max_slot = slot;
-                }
-            }
+        var superset, const subset = if (ancestors_a.count() >= ancestors_b.count())
+            .{ ancestors_a, ancestors_b }
+        else
+            .{ ancestors_b, ancestors_a };
+
+        if (superset.count() == 0 or subset.count() == 0) return null;
+
+        for (superset.items()) |slot| {
+            if (!subset.contains(slot)) continue;
+            max_slot = if (max_slot) |current_max| @max(current_max, slot) else slot;
         }
 
         return max_slot;
