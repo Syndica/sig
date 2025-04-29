@@ -3084,7 +3084,7 @@ fn createTestTower(
     threshold_size: f64,
 ) !Tower {
     if (!builtin.is_test) {
-        @panic("createTestTower should only be used in test");
+        @compileError("createTestTower should only be used in test");
     }
     var tower = try Tower.default(allocator);
     tower.threshold_depth = threshold_depth;
@@ -3096,7 +3096,7 @@ fn createTestSlotHistory(
     allocator: std.mem.Allocator,
 ) !SlotHistory {
     if (!builtin.is_test) {
-        @panic("createTestSlotHistory should only be used in test");
+        @compileError("createTestSlotHistory should only be used in test");
     }
 
     var bits = try DynamicArrayBitSet(u64).initFull(allocator, MAX_ENTRIES);
@@ -3113,7 +3113,7 @@ fn isSlotConfirmed(
     total_stake: Stake,
 ) bool {
     if (!builtin.is_test) {
-        @panic("isSlotConfirmed should only be used in test");
+        @compileError("isSlotConfirmed should only be used in test");
     }
 
     if (voted_stakes.get(slot)) |stake| {
@@ -3126,7 +3126,7 @@ fn isSlotConfirmed(
 
 fn voteAndCheckRecent(num_votes: usize) !void {
     if (!builtin.is_test) {
-        @panic("voteAndCheckRecent should only be used in test");
+        @compileError("voteAndCheckRecent should only be used in test");
     }
     var tower = try createTestTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
