@@ -12,6 +12,7 @@ const Entry = sig.core.Entry;
 const Epoch = sig.core.Epoch;
 const EpochConstants = sig.core.EpochConstants;
 const Hash = sig.core.Hash;
+const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
@@ -89,7 +90,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     }
 
     for (active_slots) |slot| {
-        _ = try replayActiveSlot(state, slot);
+        _ = try replaySlot(state, slot);
     }
 
     // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
@@ -97,26 +98,24 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     return undefined;
 }
 
-const ReplaySlotFromBlockstore = struct {
-    is_slot_dead: bool,
-    bank_slot: Slot,
-    replay_result: ?BlockstoreProcessorError!usize,
+/// Analogous to [ReplaySlotFromBlockstore](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L175)
+const ReplayResult = union(enum) {
+    /// Replay succeeded with this many transactions.
+    success: struct { transaction_count: usize },
+    /// The slot was previously marked as dead, so it was not replayed.
+    dead,
+    /// Replay failed due to this error.
+    failure: BlockstoreProcessorError,
 };
 
 /// replay_active_bank
-fn replayActiveSlot(
+fn replaySlot(
     state: *ReplayExecutionState,
     bank_slot: Slot,
-) !ReplaySlotFromBlockstore {
-    var replay_result = ReplaySlotFromBlockstore{
-        .is_slot_dead = false,
-        .bank_slot = bank_slot,
-        .replay_result = null,
-    };
+) !ReplayResult {
     const fork_progress = try state.progress_map.map.getOrPut(state.allocator, bank_slot);
     if (fork_progress.found_existing and fork_progress.value_ptr.is_dead) {
-        replay_result.is_slot_dead = true;
-        return replay_result;
+        return .dead;
     }
 
     const slot_info = state.slot_tracker.slots.get(bank_slot) orelse return error.MissingSlot;
@@ -124,7 +123,7 @@ fn replayActiveSlot(
     const verify_ticks_config = VerifyTicksConfig{
         .tick_height = slot_info.state.tickHeight(),
         .max_tick_height = slot_info.constants.max_tick_height,
-        .hashes_per_tick = epoch_info.hashes_per_tick orelse 0,
+        .hashes_per_tick = epoch_info.hashes_per_tick,
     };
 
     const slot = bank_slot;
@@ -134,15 +133,13 @@ fn replayActiveSlot(
         try state.blockstore_reader.getSlotEntriesWithShredInfo(bank_slot, start_shred, false);
     _ = num_shreds; // autofix
 
-    try state.entry_confirmer.confirmSlotEntries(
+    return try state.entry_confirmer.confirmSlotEntries(
         &fork_progress.value_ptr.confirmation_progress,
         entries.items,
         verify_ticks_config,
         slot,
         slot_is_full,
     );
-
-    return replay_result;
 }
 
 /// Maintains the state that is used by confirmSlotEntries and must be persisted
@@ -198,7 +195,7 @@ const EntryConfirmer = struct {
 
     /// Validate and execute the entries.
     ///
-    /// agave: confirm_slot
+    /// agave: confirm_slot and confirm_slot_entries
     /// fd: runtime_process_txns_in_microblock_stream
     fn confirmSlotEntries(
         self: *EntryConfirmer,
@@ -207,10 +204,18 @@ const EntryConfirmer = struct {
         config: VerifyTicksConfig,
         slot: Slot,
         slot_is_full: bool,
-    ) BlockstoreProcessorError!void {
-        _ = slot; // autofix
+    ) !ReplayResult {
         // TODO: send each entry to entry notification sender
-        try verifyTicks(self.logger, config, entries, slot_is_full, &progress.tick_hash_count);
+        if (verifyTicks(
+            self.logger,
+            config,
+            slot,
+            entries,
+            slot_is_full,
+            &progress.tick_hash_count,
+        )) |block_error| {
+            return .{ .failure = .{ .InvalidBlock = block_error } };
+        }
 
         self.replay_entries.clearRetainingCapacity();
         try self.replay_entries.ensureTotalCapacity(self.allocator, entries.len);
@@ -222,25 +227,30 @@ const EntryConfirmer = struct {
         // TODO: executes entry transactions and verify results
         //     TODO: call process_entries
         // var batches = std.ArrayListUnmanaged(void){};
-        var accounts = std.ArrayListUnmanaged(void){};
+        var accounts = std.ArrayListUnmanaged(struct { Pubkey, bool }){};
+        var num_transactions: usize = 0;
         for (entries) |entry| {
             if (entry.transactions.items.len > 0) {
                 for (entry.transactions.items) |tx| {
-                    for (tx.msg.account_keys) |key| {
-                        try accounts.append(self.allocator, .{key});
+                    num_transactions += 1;
+                    for (tx.msg.account_keys, 0..) |key, i| {
+                        // TODO: fix broken account locking
+                        try accounts.append(self.allocator, .{ key, tx.msg.isWritable(i) });
                     }
                 }
-                self.account_locks.lock(self.list_recycler.allocator, accounts);
+                try self.account_locks.lock(self.list_recycler.allocator, accounts.items);
             }
         }
 
-        if (self.entry_verifier.finish()) {
-            return error.PohVerificationFailed;
+        if (!try self.entry_verifier.finish()) {
+            return .{ .failure = .{ .InvalidBlock = .InvalidEntryHash } };
         }
+
+        return .{ .success = .{ .transaction_count = num_transactions } };
     }
 };
 
-const BlockstoreProcessorError = Allocator.Error || BlockError;
+// const BlockstoreProcessorError = Allocator.Error || BlockError || Transaction.VerifyError;
 
 const VerifyTicksConfig = struct {
     /// slot-scoped state
@@ -248,7 +258,7 @@ const VerifyTicksConfig = struct {
     /// slot-scoped constant
     max_tick_height: u64,
     /// epoch-scoped constant
-    hashes_per_tick: u64,
+    hashes_per_tick: ?u64,
 };
 
 /// Verify that a segment of entries has the correct number of ticks and hashes
@@ -256,43 +266,62 @@ const VerifyTicksConfig = struct {
 fn verifyTicks(
     logger: ScopedLogger,
     config: VerifyTicksConfig,
+    slot: Slot,
     entries: []const Entry,
     slot_full: bool,
     tick_hash_count: *u64,
-) BlockError!void {
+) ?BlockError {
     const next_bank_tick_height = config.tick_height + Entry.slice.tickCount(entries);
     const max_bank_tick_height = config.max_tick_height;
 
     if (next_bank_tick_height > max_bank_tick_height) {
-        logger.warn().logf("Too many entry ticks found in slot: {}", .{config.slot});
-        return error.TooManyTicks;
+        logger.warn().logf("Too many entry ticks found in slot: {}", .{slot});
+        return .TooManyTicks;
     }
 
     if (next_bank_tick_height < max_bank_tick_height and slot_full) {
-        logger.info().logf("Too few entry ticks found in slot: {}", .{config.slot});
-        return error.TooFewTicks;
+        logger.info().logf("Too few entry ticks found in slot: {}", .{slot});
+        return .TooFewTicks;
     }
 
     if (next_bank_tick_height == max_bank_tick_height) {
         if (entries.len == 0 or !entries[entries.len - 1].isTick()) {
-            logger.warn().logf("Slot: {} did not end with a tick entry", .{config.slot});
-            return error.TrailingEntry;
+            logger.warn().logf("Slot: {} did not end with a tick entry", .{slot});
+            return .TrailingEntry;
         }
 
         if (!slot_full) {
-            logger.warn().logf("Slot: {} was not marked full", .{config.slot});
-            return error.InvalidLastTick;
+            logger.warn().logf("Slot: {} was not marked full", .{slot});
+            return .InvalidLastTick;
         }
     }
 
     const hashes_per_tick = config.hashes_per_tick orelse 0;
-    if (!Entry.slice.verifyTickHashCount(tick_hash_count, hashes_per_tick)) {
-        logger.warn().logf("Tick with invalid number of hashes found in slot: {}", config.slot);
-        return error.InvalidTickHashCount;
+    if (!Entry.slice.verifyTickHashCount(logger, entries, tick_hash_count, hashes_per_tick)) {
+        logger.warn().logf("Tick with invalid number of hashes found in slot: {}", .{slot});
+        return .InvalidTickHashCount;
     }
+
+    return null;
 }
 
-pub const BlockError = error{
+/// Analogous to [BlockstoreProcessorError](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L779)
+pub const BlockstoreProcessorError = union(enum) {
+    FailedToLoadEntries: anyerror,
+    FailedToLoadMeta,
+    /// failed to replay bank 0, did you forget to provide a snapshot
+    FailedToReplayBank0,
+    InvalidBlock: BlockError,
+    InvalidTransaction: sig.ledger.transaction_status.TransactionError, // TODO move to core?
+    NoValidForksFound,
+    InvalidHardFork: Slot,
+    RootBankWithMismatchedCapitalization: Slot,
+    SetRootError,
+    IncompleteFinalFecSet,
+    InvalidRetransmitterSignatureFinalFecSet,
+};
+
+pub const BlockError = enum {
     /// Block did not have enough ticks was not marked full
     /// and no shred with is_last was seen.
     Incomplete,

@@ -77,7 +77,7 @@ pub const AccountLocks = struct {
     write_locks: std.AutoArrayHashMapUnmanaged(Pubkey, void) = .{},
     readonly_locks: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .{},
 
-    const LockError = Allocator.Error | error{LockFailed};
+    const LockError = Allocator.Error || error{LockFailed};
 
     /// Either locks all accounts, or locks none and returns an error.
     pub fn lock(
@@ -114,15 +114,12 @@ pub const AccountLocks = struct {
     /// Returns the number of items that were already unlocked and thus did not
     /// need to be unlocked. You can use this in a calling scope to assert that
     /// this struct is not being misused.
-    pub fn unlock(
-        self: *AccountLocks,
-        accounts: []struct { Pubkey, bool },
-    ) u64 {
+    pub fn unlock(self: *AccountLocks, accounts: []const struct { Pubkey, bool }) u64 {
         var already_unlocked: u64 = 0;
         for (accounts) |account| {
             const address, const write = account;
             if (write) {
-                self.write_locks.swapRemove(address);
+                if (!self.write_locks.swapRemove(address)) already_unlocked += 1;
             } else {
                 const index = self.readonly_locks.getIndex(address) orelse {
                     already_unlocked += 1;

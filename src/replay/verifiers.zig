@@ -18,7 +18,7 @@ const verifyPoh = sig.core.entry.verifyPoh;
 pub const EntryVerifier = struct {
     allocator: Allocator,
     thread_pool: sig.utils.thread.HomogeneousThreadPool(Task),
-    preallocated_nodes: []const std.ArrayListUnmanaged(Hash),
+    preallocated_nodes: []std.ArrayListUnmanaged(Hash),
     max_tasks: usize,
     running: bool,
 
@@ -28,8 +28,13 @@ pub const EntryVerifier = struct {
         initial_hash: Hash,
         entries: []const Entry,
 
-        pub fn run(self: *Task) bool {
-            return verifyPoh(self.allocator, self.preallocated_nodes, self.initial_hash, self.entries);
+        pub fn run(self: *Task) Allocator.Error!bool {
+            return try verifyPoh(
+                self.allocator,
+                self.preallocated_nodes,
+                self.initial_hash,
+                self.entries,
+            );
         }
     };
 
@@ -60,7 +65,7 @@ pub const EntryVerifier = struct {
     pub fn start(self: *EntryVerifier, initial_hash: Hash, entries: []const Entry) void {
         std.debug.assert(!self.running);
         self.running = true;
-        if (entries.len == 0) return true;
+        if (entries.len == 0) return;
         const num_tasks = @min(self.max_tasks, entries.len);
         const entries_per_task = entries.len / num_tasks;
         var batch_initial_hash = initial_hash;
@@ -72,15 +77,15 @@ pub const EntryVerifier = struct {
                 .initial_hash = batch_initial_hash,
                 .entries = entries[i..end],
             });
-            batch_initial_hash = entries[end - 1];
+            batch_initial_hash = entries[end - 1].hash;
         }
     }
 
     /// Block until all verification tasks are complete, and return the result.
     pub fn finish(self: *EntryVerifier) Allocator.Error!bool {
         defer self.running = false;
-        const results = try self.thread_pool.join();
-        defer results.deinit();
+        var results = try self.thread_pool.join();
+        defer results.deinit(self.allocator);
         for (results.items) |result| {
             if (!try result) return false;
         }
@@ -162,7 +167,7 @@ pub const TransactionVerifyAndHasher = struct {
         std.debug.assert(input.len == output.len);
         self.running = true;
 
-        if (input.len == 0) return true;
+        if (input.len == 0) return;
         const num_tasks = @min(self.max_tasks, input.len);
         const entries_per_task = input.len / num_tasks;
 
@@ -170,7 +175,6 @@ pub const TransactionVerifyAndHasher = struct {
             const end = if (i == num_tasks + 1) input.len else i * entries_per_task;
 
             self.thread_pool.schedule(.{
-                .allocator = self.allocator,
                 .list_recycler = self.list_recycler,
                 .input = input[i..end],
                 .output = output[i..end],
@@ -223,7 +227,7 @@ pub fn ListRecycler(T: type) type {
             }
         }
 
-        pub fn get(self: *ListRecycler(T)) T {
+        pub fn get(self: *ListRecycler(T)) std.ArrayListUnmanaged(T) {
             return self.recycled_lists.pop() orelse .{};
         }
 

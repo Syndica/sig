@@ -36,7 +36,7 @@ pub const entry_slice = struct {
     pub fn tickCount(entries: []const Entry) u64 {
         var tick_count: u64 = 0;
         for (entries) |entry| {
-            tick_count += entry.isTick();
+            if (entry.isTick()) tick_count += 1;
         }
         return tick_count;
     }
@@ -54,11 +54,11 @@ pub const entry_slice = struct {
         }
 
         for (entries) |entry| {
-            tick_hash_count.* = tick_hash_count +| entry.num_hashes;
+            tick_hash_count.* = tick_hash_count.* +| entry.num_hashes;
             if (entry.isTick()) {
                 if (tick_hash_count.* != hashes_per_tick) {
                     logger.warn().logf(
-                        "invalid tick hash count!: entry: {:#?}, " ++
+                        "invalid tick hash count!: entry: {any}, " ++
                             "tick_hash_count: {}, hashes_per_tick: {}",
                         .{ entry, tick_hash_count, hashes_per_tick },
                     );
@@ -78,7 +78,7 @@ pub fn verifyPoh(
     preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
     initial_hash: Hash,
     entries: []const Entry,
-) bool {
+) Allocator.Error!bool {
     var current_hash = initial_hash;
 
     for (entries) |entry| {
@@ -88,8 +88,8 @@ pub fn verifyPoh(
             current_hash = Hash.generateSha256Hash(&current_hash.data);
         }
 
-        if (entry.transactions) |transactions| {
-            const mixin = hashTransactions(allocator, preallocated_nodes, transactions);
+        if (entry.transactions.items.len > 0) {
+            const mixin = try hashTransactions(allocator, preallocated_nodes, entry.transactions.items);
             current_hash = current_hash.extendAndHash(&mixin.data);
         } else {
             current_hash = Hash.generateSha256Hash(&current_hash.data);
@@ -128,19 +128,19 @@ fn hashTransactions(
     var owned_nodes = std.ArrayListUnmanaged(Hash){};
     defer owned_nodes.deinit(allocator);
     const nodes = if (preallocated_nodes) |pn| pn else &owned_nodes;
-    const capacity = @log2(num_signatures) + 2 * num_signatures + 1;
+    const capacity = std.math.log2(num_signatures) + 2 * num_signatures + 1;
     nodes.clearRetainingCapacity();
     try nodes.ensureTotalCapacity(allocator, capacity);
 
     for (transactions) |tx| for (tx.signatures) |signature| {
-        const hash = Hash.hashv(LEAF_PREFIX, &signature.data);
-        try nodes.appendAssumeCapacity(hash);
+        const hash = Hash.hashv(&.{ LEAF_PREFIX, &signature.data });
+        nodes.appendAssumeCapacity(hash);
     };
 
     var level_len = nextLevelLen(num_signatures);
     var level_start = num_signatures;
     var prev_level_len = num_signatures;
-    var prev_level_start = 0;
+    var prev_level_start: usize = 0;
     while (level_len > 0) {
         for (0..level_len) |i| {
             const prev_level_idx = 2 * i;
@@ -151,8 +151,8 @@ fn hashTransactions(
                 // Duplicate last entry if the level length is odd
                 &nodes.items[prev_level_start + prev_level_idx];
 
-            const hash = Hash.hashv(INTERMEDIATE_PREFIX, lsib, rsib);
-            try nodes.appendAssumeCapacity(hash);
+            const hash = Hash.hashv(&.{ INTERMEDIATE_PREFIX, &lsib.data, &rsib.data });
+            nodes.appendAssumeCapacity(hash);
         }
         prev_level_start = level_start;
         prev_level_len = level_len;

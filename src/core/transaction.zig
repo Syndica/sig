@@ -103,18 +103,20 @@ pub const Transaction = struct {
         /// The message is larger than the largest allowed transaction message size.
         NoSpaceLeft,
         /// Signature verification failure due to input being in wrong form.
-        NonCanonicalError,
+        NonCanonical,
         /// There are not as many accounts as there are signatures.
         NotEnoughAccounts,
         /// A signature was invalid.
         SignatureVerificationFailed,
+        /// The message could not be serialized.
+        SerializationFailed,
     };
 
     /// Verify the transaction signatures and return the blake3 hash of the message.
     pub fn verifyAndHashMessage(self: Transaction) VerifyError!Hash {
         var bytes: [MAX_BYTES]u8 = undefined;
         var stream = std.io.fixedBufferStream(&bytes);
-        try self.msg.serialize(stream.writer(), self.version);
+        self.msg.serialize(stream.writer(), self.version) catch return error.SerializationFailed;
         const serialized_msg = stream.getWritten();
 
         if (self.msg.account_keys.len > self.signatures.len) {
