@@ -216,6 +216,7 @@ fn iterateMemoryPairs(
 const MemmoveContext = struct {
     // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this symbol:
     // https://github.com/ziglang/zig/blob/79460d4a3eef8eb927b02a7eda8bc9999a766672/lib/compiler_rt/memmove.zig#L9-L22
+    // TODO(0.15): Use `@memmove` builtin.
     extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.C) ?[*]u8;
 
     fn run(_: *@This(), dst: []u8, src: []const u8) !void {
@@ -852,15 +853,17 @@ test "memset syscall" {
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
         },
+        // zig fmt: off
         &.{
-            .{ .{ vm_addr, 0, 2, 0 }, {} }, // part of buffer
-            .{ .{ vm_addr + 2, 0, 2, 0 }, {} }, // other part of buffer (unaligned vm ptr)
-            .{ .{ vm_addr, 1, buf.len, 0 }, {} }, // full buffer, non-zero scalar
-            .{ .{ vm_addr, 0, 0, 0 }, {} }, // empty slice
-            .{ .{ vm_addr + 1, 0, 0, 0 }, {} }, // empty slice (unaligned)
-            .{ .{ vm_addr, 0x999, buf.len, 0 }, {} }, // overflowing u8 scalar
-            .{ .{ 0x1337, 42, 7, 0 }, error.AccessViolation }, // invalid buffer
+            .{ .{ vm_addr,     0,     2,       0 }, 0 }, // part of buffer
+            .{ .{ vm_addr + 2, 0,     2,       0 }, 0 }, // other part of buffer (unaligned vm ptr)
+            .{ .{ vm_addr,     1,     buf.len, 0 }, 0 }, // full buffer, non-zero scalar
+            .{ .{ vm_addr,     0,     0,       0 }, 0 }, // empty slice
+            .{ .{ vm_addr + 1, 0,     0,       0 }, 0 }, // empty slice (unaligned)
+            .{ .{ vm_addr,     0x999, buf.len, 0 }, 0 }, // overflowing u8 scalar
+            .{ .{ 0x1337,      42,    7,       0 }, error.AccessViolation }, // invalid buffer
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
                 const addr, const scalar, const len, _ = args;
@@ -886,18 +889,20 @@ test "memcmp syscall" {
             memory.Region.init(.constant, "ababcz", vm_addr),
             memory.Region.init(.mutable, &result, result_addr),
         },
+        // zig fmt: off
         &.{
-            .{ .{ vm_addr, vm_addr, 3, result_addr }, {} }, // overlapping
-            .{ .{ vm_addr, vm_addr + 2, 2, result_addr }, {} }, // non-overlapping: 0..2 vs 2..4
-            .{ .{ vm_addr, vm_addr + 1, 1, result_addr }, {} }, // "a" cmp "b" (diff = -1)
-            .{ .{ vm_addr, vm_addr + 5, 1, result_addr }, {} }, // "a" cmp "z" (diff > -1)
-            .{ .{ vm_addr + 1, vm_addr, 1, result_addr }, {} }, // "b" cmp "a" (diff = 1)
-            .{ .{ vm_addr + 5, vm_addr, 1, result_addr }, {} }, // "b" cmp "z" (diff > 1)
-            .{ .{ 0x42, vm_addr, 1, result_addr }, error.AccessViolation }, // invalid a addr
-            .{ .{ vm_addr, 0x42, 1, result_addr }, error.AccessViolation }, // invalid b addr
-            .{ .{ 0x1337, 0x42, 1, result_addr }, error.AccessViolation }, // invalid both addr
-            .{ .{ vm_addr, vm_addr, 1, 0x42 }, error.AccessViolation }, // invalid result addr
+            .{ .{ vm_addr,     vm_addr,     3, result_addr }, 0 }, // overlapping
+            .{ .{ vm_addr,     vm_addr + 2, 2, result_addr }, 0 }, // non-overlapping: 0..2 vs 2..4
+            .{ .{ vm_addr,     vm_addr + 1, 1, result_addr }, 0 }, // "a" cmp "b" (diff = -1)
+            .{ .{ vm_addr,     vm_addr + 5, 1, result_addr }, 0 }, // "a" cmp "z" (diff > -1)
+            .{ .{ vm_addr + 1, vm_addr,     1, result_addr }, 0 }, // "b" cmp "a" (diff = 1)
+            .{ .{ vm_addr + 5, vm_addr,     1, result_addr }, 0 }, // "b" cmp "z" (diff > 1)
+            .{ .{ 0x42,        vm_addr,     1, result_addr }, error.AccessViolation }, // invalid a addr
+            .{ .{ vm_addr,     0x42,        1, result_addr }, error.AccessViolation }, // invalid b addr
+            .{ .{ 0x1337,      0x42,        1, result_addr }, error.AccessViolation }, // invalid both addr
+            .{ .{ vm_addr,     vm_addr,     1, 0x42        }, error.AccessViolation }, // invalid result addr
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
                 const a_ptr, const b_ptr, const len, const res_ptr = args;
@@ -927,13 +932,15 @@ test "memcpy syscall" {
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
         },
+        // zig fmt: off
         &.{
-            .{ .{ vm_addr, vm_addr + buf.len / 2, buf.len / 2, 0 }, {} }, // normal copy
-            .{ .{ vm_addr, vm_addr + 1, 3, 0 }, error.CopyOverlapping }, // overlapping copy
-            .{ .{ 0x1337, vm_addr, 5, 0 }, error.AccessViolation }, // invalid dst ptr
-            .{ .{ vm_addr, 0x1337, 5, 0 }, error.AccessViolation }, // invalid src ptr
-            .{ .{ 0x42, 0x1337, 5, 0 }, error.AccessViolation }, // invalid both ptr
+            .{ .{ vm_addr, vm_addr + buf.len / 2, buf.len / 2, 0 }, 0 }, // normal copy
+            .{ .{ vm_addr, vm_addr + 1,           3,           0 }, error.CopyOverlapping }, // overlapping copy
+            .{ .{ 0x1337,  vm_addr,               5,           0 }, error.AccessViolation }, // invalid dst ptr
+            .{ .{ vm_addr, 0x1337,                5,           0 }, error.AccessViolation }, // invalid src ptr
+            .{ .{ 0x42,    0x1337,                5,           0 }, error.AccessViolation }, // invalid both ptr
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
                 const dst_addr, const src_addr, const len, _ = args;
@@ -958,13 +965,15 @@ test "memmove syscall" {
         &.{
             memory.Region.init(.mutable, &buf, vm_addr),
         },
+        // zig fmt: off
         &.{
-            .{ .{ vm_addr, vm_addr + buf.len / 2, buf.len / 2, 0 }, {} }, // normal copy
-            .{ .{ vm_addr, vm_addr + 1, 3, 0 }, {} }, // overlapping src copy
-            .{ .{ vm_addr + 1, vm_addr, 3, 0 }, {} }, // overlapping dst copy
-            .{ .{ 0x1337, vm_addr, 5, 0 }, error.AccessViolation }, // invalid dst ptr
-            .{ .{ vm_addr, 0x1337, 5, 0 }, error.AccessViolation }, // invalid src ptr
+            .{ .{ vm_addr,     vm_addr + buf.len / 2, buf.len / 2, 0 }, 0 }, // normal copy
+            .{ .{ vm_addr,     vm_addr + 1,           3,           0 }, 0 }, // overlapping src copy
+            .{ .{ vm_addr + 1, vm_addr,               3,           0 }, 0 }, // overlapping dst copy
+            .{ .{ 0x1337,      vm_addr,               5,           0 }, error.AccessViolation }, // invalid dst ptr
+            .{ .{ vm_addr,     0x1337,                5,           0 }, error.AccessViolation }, // invalid src ptr
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
                 const dst_addr, const src_addr, const len, _ = args;

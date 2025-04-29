@@ -1,6 +1,6 @@
 //! Hashing syscalls
-const phash = @import("poseidon");
 const std = @import("std");
+const phash = @import("poseidon");
 const cpi = @import("cpi.zig");
 const sig = @import("../../sig.zig");
 
@@ -242,19 +242,20 @@ test sha256 {
             memory.Region.init(.constant, bytes1, bytes_to_hash[0].ptr),
             memory.Region.init(.constant, bytes2, bytes_to_hash[1].ptr),
         },
+        // zig fmt: off
         &.{
-            // zig fmt: off
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0 }, {} },
+           
+            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0 }, 0 },
             .{ .{ memory.RODATA_START - 1, 2, memory.STACK_START,     0 }, error.AccessViolation },
             .{ .{ memory.RODATA_START,     3, memory.STACK_START,     0 }, error.AccessViolation }, 
             .{ .{ memory.RODATA_START,     2, memory.STACK_START - 1, 0 }, error.AccessViolation }, 
-            // zig fmt: on
             // only gave enough budget for 4 runs
             .{
                 .{ memory.RODATA_START, 2, memory.STACK_START, 0 },
                 error.ComputationalBudgetExceeded,
             },
         },
+        // zig fmt: on
         struct {
             fn verify(tc: *TransactionContext, memory_map: *MemoryMap, args: anytype) !void {
                 _, _, const result_addr, _ = args;

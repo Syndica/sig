@@ -2938,8 +2938,12 @@ test "function without return" {
 pub fn testSyscall(
     comptime syscall_func: anytype,
     regions: []const memory.Region,
-    comptime test_cases: []const struct { [4]u64, syscalls.Error!void },
-    comptime verify_func: anytype,
+    comptime test_cases: []const struct { [4]u64, syscalls.Error!u64 },
+    comptime verify_func: ?fn (
+        *sig.runtime.TransactionContext,
+        *MemoryMap,
+        anytype,
+    ) anyerror!void,
     config: struct {
         align_memory_map: bool = false,
         version: sbpf.Version = .v3,
@@ -2981,9 +2985,10 @@ pub fn testSyscall(
         }
 
         const result = syscall_func(&tc, &memory_map, &registers);
-        if (expected) |_| {
+        if (expected) |value| {
             try result;
-            try verify_func(&tc, &memory_map, args);
+            try std.testing.expectEqual(value, registers.get(.r0));
+            if (verify_func) |func| try func(&tc, &memory_map, args);
         } else |expected_err| {
             try std.testing.expectError(expected_err, result);
         }

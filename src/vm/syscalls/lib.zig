@@ -4,6 +4,7 @@ const sig = @import("../../sig.zig");
 
 pub const memops = @import("memops.zig");
 pub const hash = @import("hash.zig");
+pub const ecc = @import("ecc.zig");
 
 const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
@@ -125,11 +126,11 @@ pub fn register(
 
     // Elliptic Curve
     if (feature_set.isActive(features.CURVE25519_SYSCALL_ENABLED, slot)) {
-        // _ = try syscalls.functions.registerHashed(
-        //     allocator,
-        //     "sol_curve_validate_point",
-        //     curveValidatePoint,
-        // );
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_curve_validate_point",
+            ecc.curvePointValidation,
+        );
         // _ = try syscalls.functions.registerHashed(
         //     allocator,
         //     "sol_curve_group_op",
@@ -538,11 +539,15 @@ pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void 
     return SyscallError.Abort;
 }
 
-pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
+pub fn panic(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
     const file = registers.get(.r1);
     const len = registers.get(.r2);
 
-    try ctx.consumeCompute(len);
+    try tc.consumeCompute(len);
 
     const message = try memory_map.vmap(.constant, file, len);
     if (!std.unicode.utf8ValidateSlice(message)) {
@@ -555,6 +560,8 @@ pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
 // Syscall Tests
 
 test "set and get return data" {
+    const allocator = std.testing.allocator;
+
     const src_addr = 0x100000000;
     const dst_addr = 0x200000000;
     const program_id_addr = 0x300000000;
@@ -563,17 +570,18 @@ test "set and get return data" {
     var data_buffer: [16]u8 = .{0} ** 16;
     var id_buffer: [32]u8 = .{0} ** 32;
 
-    const testing = sig.runtime.testing;
-    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
-
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
-        .accounts = &.{.{
-            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
-            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-        }},
-        .compute_meter = 10_000,
-    });
+    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{.{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            .compute_meter = 10_000,
+        },
+    );
     defer {
         ec.deinit();
         allocator.destroy(ec);

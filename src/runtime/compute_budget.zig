@@ -44,6 +44,34 @@ pub const ComputeBudget = struct {
     sha256_byte_cost: u64,
     /// Maximum number of slices hashed per syscall
     sha256_max_slices: u64,
+    /// Number of compute units consumed to validate a curve25519 edwards point
+    curve25519_edwards_validate_point_cost: u64,
+    /// Number of compute units consumed to add two curve25519 edwards points
+    curve25519_edwards_add_cost: u64,
+    /// Number of compute units consumed to subtract two curve25519 edwards points
+    curve25519_edwards_subtract_cost: u64,
+    /// Number of compute units consumed to multiply a curve25519 edwards point
+    curve25519_edwards_multiply_cost: u64,
+    /// Number of compute units consumed for a multiscalar multiplication (msm) of edwards points.
+    /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
+    curve25519_edwards_msm_base_cost: u64,
+    /// Number of compute units consumed for a multiscalar multiplication (msm) of edwards points.
+    /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
+    curve25519_edwards_msm_incremental_cost: u64,
+    /// Number of compute units consumed to validate a curve25519 ristretto point
+    curve25519_ristretto_validate_point_cost: u64,
+    /// Number of compute units consumed to add two curve25519 ristretto points
+    curve25519_ristretto_add_cost: u64,
+    /// Number of compute units consumed to subtract two curve25519 ristretto points
+    curve25519_ristretto_subtract_cost: u64,
+    /// Number of compute units consumed to multiply a curve25519 ristretto point
+    curve25519_ristretto_multiply_cost: u64,
+    /// Number of compute units consumed for a multiscalar multiplication (msm) of ristretto points.
+    /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
+    curve25519_ristretto_msm_base_cost: u64,
+    /// Number of compute units consumed for a multiscalar multiplication (msm) of ristretto points.
+    /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
+    curve25519_ristretto_msm_incremental_cost: u64,
 
     pub fn default(compute_unit_limit: u64) ComputeBudget {
         return .{
@@ -64,6 +92,18 @@ pub const ComputeBudget = struct {
             .sha256_base_cost = 85,
             .sha256_byte_cost = 1,
             .sha256_max_slices = 20_000,
+            .curve25519_edwards_validate_point_cost = 159,
+            .curve25519_edwards_add_cost = 473,
+            .curve25519_edwards_subtract_cost = 475,
+            .curve25519_edwards_multiply_cost = 2_177,
+            .curve25519_edwards_msm_base_cost = 2_273,
+            .curve25519_edwards_msm_incremental_cost = 758,
+            .curve25519_ristretto_validate_point_cost = 169,
+            .curve25519_ristretto_add_cost = 521,
+            .curve25519_ristretto_subtract_cost = 519,
+            .curve25519_ristretto_multiply_cost = 2_208,
+            .curve25519_ristretto_msm_base_cost = 2303,
+            .curve25519_ristretto_msm_incremental_cost = 788,
         };
     }
 
