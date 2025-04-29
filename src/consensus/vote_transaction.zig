@@ -116,57 +116,21 @@ pub const VoteTransaction = union(enum) {
                     self_vote.hash.eql(other_vote.hash) and
                     self_vote.timestamp == other_vote.timestamp;
             },
-            .vote_state_update => |self_vsu| {
-                const other_vsu = other.vote_state_update;
-                if (self_vsu.lockouts.items.len != other_vsu.lockouts.items.len or
-                    !self_vsu.hash.eql(other_vsu.hash) or
-                    self_vsu.timestamp != other_vsu.timestamp)
+            inline //
+            .vote_state_update,
+            .compact_vote_state_update,
+            .tower_sync,
+            => |self_payload, tag| {
+                const other_payload = @field(other, @tagName(tag));
+                if (self_payload.lockouts.items.len != other_payload.lockouts.items.len or
+                    !self_payload.hash.eql(other_payload.hash) or
+                    self_payload.timestamp != other_payload.timestamp)
                 {
                     return false;
                 }
                 for (
-                    self_vsu.lockouts.items,
-                    other_vsu.lockouts.items,
-                ) |self_lockout, other_lockout| {
-                    if (self_lockout.slot != other_lockout.slot or
-                        self_lockout.confirmation_count != other_lockout.confirmation_count)
-                    {
-                        return false;
-                    }
-                }
-                return true;
-            },
-            .compact_vote_state_update => |self_vsu| {
-                const other_vsu = other.compact_vote_state_update;
-                if (self_vsu.lockouts.items.len != other_vsu.lockouts.items.len or
-                    !self_vsu.hash.eql(other_vsu.hash) or
-                    self_vsu.timestamp != other_vsu.timestamp)
-                {
-                    return false;
-                }
-                for (
-                    self_vsu.lockouts.items,
-                    other_vsu.lockouts.items,
-                ) |self_lockout, other_lockout| {
-                    if (self_lockout.slot != other_lockout.slot or
-                        self_lockout.confirmation_count != other_lockout.confirmation_count)
-                    {
-                        return false;
-                    }
-                }
-                return true;
-            },
-            .tower_sync => |self_ts| {
-                const other_ts = other.tower_sync;
-                if (self_ts.lockouts.items.len != other_ts.lockouts.items.len or
-                    !self_ts.hash.eql(other_ts.hash) or
-                    self_ts.timestamp != other_ts.timestamp)
-                {
-                    return false;
-                }
-                for (
-                    self_ts.lockouts.items,
-                    other_ts.lockouts.items,
+                    self_payload.lockouts.items,
+                    other_payload.lockouts.items,
                 ) |self_lockout, other_lockout| {
                     if (self_lockout.slot != other_lockout.slot or
                         self_lockout.confirmation_count != other_lockout.confirmation_count)
