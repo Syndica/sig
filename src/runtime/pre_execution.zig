@@ -8,19 +8,24 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
+/// Various constants needed for the block and slot, a reference into accountsdb, and a slice of
+/// transactions.
 const ProcessingEnv = struct {
-    // replace with blockhash queue?
-    blockhash: sig.core.Hash,
+    // replace with reference to blockhash queue?
+    blockhash: sig.core.Hash, // should this be "prev_blockhash"? We use it as one.
     blockhash_lamports_per_signature: u64,
 
-    epoch_total_stake: u64,
+    epoch_total_stake: u64, // ignore this maybe? Don't see usage
+
     rent_collector: *const sig.runtime.rent_collector.RentCollector,
     slot_context: *const sig.runtime.SlotContext,
 
     // if we take this out, we could reuse the struct for all batches in the same slot?
     raw_transactions: []const sig.core.Transaction, // TODO: assuming sanitized already (!)
 
-    bank: sig.runtime.account_loader.MockedBank, // TODO: maybe could just have accountsdb, "Bank" is a bit much
+    // TODO: maybe could just have accountsdb, "Bank" is a bit much - this is just so the loader can
+    // get accounts.
+    bank: sig.runtime.account_loader.MockedBank,
 
     fn testingDefault(
         transactions: []const sig.core.Transaction,
@@ -47,26 +52,7 @@ const ProcessingEnv = struct {
     }
 };
 
-// const TransactionCheck = union(enum) {
-//     Err: TransactionError,
-//     Ok: CheckedTransactionDetails,
-// };
-// const NonceInfo = struct {
-//     address: Pubkey,
-//     account: AccountSharedData,
-// };
-// const CheckedTransactionDetails = struct {
-//     nonce: ?NonceInfo,
-//     compute_budget_and_limits:
-// };
-
-const TransactionResult = struct {
-    /// log[instr_idx] -> string
-    /// null => failed to load accounts | failed to allocate logs
-    logs: ?[]const []const u8,
-    err: ?anyerror, // TODO: use transaction error set
-};
-
+// TODO: add something like ProcessedTransactionCounts
 const Output = struct {
     // .len == raw_instructions.len
     processing_results: []const TransactionResult,
@@ -77,9 +63,72 @@ const Output = struct {
                 for (log) |log_line| allocator.free(log_line);
                 allocator.free(log);
             }
+            switch (result.result) {
+                .FeesOnlyTransaction => {},
+                .LoadedTransaction => |loaded| {
+                    for (loaded.accounts) |account| {
+                        allocator.free(account.data);
+                    }
+                    allocator.free(loaded.accounts);
+                    allocator.free(loaded.rent_debits);
+                },
+            }
         }
         allocator.free(self.processing_results);
     }
+};
+
+const TransactionResult = struct {
+    const Kind = enum { Executed, FeesOnly };
+    const Result = union(Kind) { FeesOnly, Loaded: Executed };
+
+    const FeesOnly = struct {
+        load_error: anyerror, // TODO: narrow this to accountsdb load error
+    };
+
+    const Executed = struct {
+        /// indexes of accounts and rent_debits correspond to the indexes in the transaction - get pubkeys
+        /// this way.
+        const LoadedTransaction = struct {
+            const RentDebit = struct { rent_collected: u64, post_balance: u64 };
+
+            // TODO: could transactions share the same account.datas?
+            accounts: []const AccountSharedData,
+
+            // program_indicies: seems useless, skipping
+            // fee_details: lifted to TransactionResult (shared between this and FeesOnlyTransaction)
+            // rollback_accounts: ignored for now, still unclear on what exactly it's for
+            // compute_budget: Not sure why this would be stored here
+
+            rent: u64,
+            rent_debits: []const RentDebit, // TODO: maybe better to use a bounded array
+            loaded_accounts_data_size: u32,
+        };
+
+        const TransactionReturnData = struct {
+            program_id: Pubkey, // what program_id is returned?
+            data: []u8,
+        };
+
+        loaded_transaction: LoadedTransaction,
+        executed_units: u64,
+        /// only valid in successful transactions
+        accounts_data_len_delta: i64,
+        return_data: ?TransactionReturnData,
+        programs_modified_by_tx: void = {}, // TODO: program cache not yet implemented (!)
+        err: ?anyerror, // TODO: narrow to transaction error
+    };
+
+    /// null => failed to load accounts | failed to allocate logs
+    logs: ?[]const []const u8,
+    result: Result,
+};
+
+const ProcessedTransactionCounts = struct {
+    processed_transactions_count: u64,
+    processed_non_vote_transactions_count: u64,
+    processed_with_successful_result_count: u64,
+    signature_count: u64,
 };
 
 // simplified ~= agave's load_and_execute_sanitized_transactions
