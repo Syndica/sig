@@ -2951,12 +2951,10 @@ pub fn testSyscall(
     var prng = std.Random.DefaultPrng.init(0);
 
     const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
-        .accounts = &.{
-            .{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            },
-        },
+        .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }},
         .compute_meter = config.compute_meter,
     });
     defer {

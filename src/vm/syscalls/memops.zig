@@ -349,7 +349,7 @@ pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     }
 }
 
-fn isOverlapping(src_addr: u64, src_len: u64, dst_addr: u64, dst_len: u64) bool {
+pub fn isOverlapping(src_addr: u64, src_len: u64, dst_addr: u64, dst_len: u64) bool {
     if (src_addr > dst_addr) {
         return (src_addr -| dst_addr) < dst_len;
     } else {
