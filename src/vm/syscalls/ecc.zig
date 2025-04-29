@@ -36,6 +36,7 @@ pub const GroupOp = enum(u64) {
     }
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1042-L1106
 pub fn curvePointValidation(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -72,6 +73,7 @@ pub fn curvePointValidation(
     registers.set(.r0, @intFromBool(is_error));
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1108-L1332
 pub fn curveGroupOp(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -157,6 +159,116 @@ pub fn curveGroupOp(
 
     registers.set(.r0, 1);
     return;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1334-L1445
+pub fn curveMultiscalarMul(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
+        if (tc.ec.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+            return SyscallError.InvalidAttribute;
+        } else {
+            registers.set(.r0, 1);
+            return;
+        }
+    };
+    const scalars_addr = registers.get(.r2);
+    const points_addr = registers.get(.r3);
+    const points_len = registers.get(.r4);
+    const result_point_addr = registers.get(.r5);
+
+    if (points_len > 512) return SyscallError.InvalidLength;
+
+    const cost = switch (curve_id) {
+        .edwards => tc.compute_budget.curve25519_edwards_msm_base_cost,
+        .ristretto => tc.compute_budget.curve25519_ristretto_msm_base_cost,
+    };
+    try tc.consumeCompute(cost);
+
+    const scalars = try memory_map.translateSlice(
+        [32]u8,
+        .constant,
+        scalars_addr,
+        points_len,
+        tc.getCheckAligned(),
+    );
+
+    const point_data = try memory_map.translateSlice(
+        [32]u8,
+        .constant,
+        points_addr,
+        points_len,
+        tc.getCheckAligned(),
+    );
+
+    switch (curve_id) {
+        inline .edwards, .ristretto => |id| {
+            const T = switch (id) {
+                .edwards => Edwards25519,
+                .ristretto => Ristretto255,
+            };
+
+            const result = multiScalarMultiply(T, scalars, point_data) catch {
+                registers.set(.r0, 1);
+                return;
+            };
+
+            const result_point_data = try memory_map.translateType(
+                [32]u8,
+                .mutable,
+                result_point_addr,
+                tc.getCheckAligned(),
+            );
+            result_point_data.* = result.toBytes();
+
+            registers.set(.r0, 0);
+        },
+    }
+}
+
+/// Batches scalar multiplication to the nearest power of 2 number of scalars.
+///
+/// TODO: Explore fixed-length padding with identies, if that's faster?
+fn multiScalarMultiply(comptime T: type, scalars: []const [32]u8, point_data: []const [32]u8) !T {
+    std.debug.assert(scalars.len == point_data.len);
+    std.debug.assert(scalars.len <= 512);
+
+    var points: std.BoundedArray(Edwards25519, 512) = .{};
+    for (point_data) |encoded| {
+        const point = try T.fromBytes(encoded);
+        points.appendAssumeCapacity(switch (T) {
+            Edwards25519 => point,
+            Ristretto255 => point.p,
+            else => unreachable,
+        });
+    }
+
+    var length = scalars.len;
+    var accumulator = Edwards25519.identityElement;
+    while (length > 0) {
+        switch (std.math.floorPowerOfTwo(u64, length)) {
+            inline 1, 2, 8, 16, 32, 64, 128, 256, 512 => |N| {
+                const current = scalars.len - length;
+                const segment = try Edwards25519.mulMulti(
+                    N,
+                    points.constSlice()[current..][0..N].*,
+                    scalars[current..][0..N].*,
+                );
+                accumulator = accumulator.add(segment);
+                length -= N;
+            },
+            else => unreachable,
+        }
+    }
+
+    return switch (T) {
+        Ristretto255 => .{ .p = accumulator },
+        Edwards25519 => accumulator,
+        else => unreachable,
+    };
 }
 
 test "edwards curve point validation" {
@@ -505,5 +617,248 @@ test "ristretto curve group operations" {
             119, 109, 136, 20,  153, 24,  124, 21,  101, 124, 80,  19,
             119, 100, 77,  108, 65,  187, 228, 5,
         }, &result_point);
+    }
+}
+
+test "multiscalar multiplication" {
+    const allocator = std.testing.allocator;
+
+    const scalar_a = [_]u8{
+        254, 198, 23, 138, 67, 243, 184, 110, 236, 115, 236, 205, 205, 215,
+        79,  114, 45, 250, 78, 137, 3,   107, 136, 237, 49,  126, 117, 223,
+        37,  191, 88, 6,
+    };
+    const scalar_b = [_]u8{
+        254, 198, 23, 138, 67, 243, 184, 110, 236, 115, 236, 205, 205, 215,
+        79,  114, 45, 250, 78, 137, 3,   107, 136, 237, 49,  126, 117, 223,
+        37,  191, 88, 6,
+    };
+    const scalars: [2][32]u8 = .{ scalar_a, scalar_b };
+    const scalars_addr = 0x100000000;
+
+    const edwards_point_x = [_]u8{
+        252, 31,  230, 46,  173, 95, 144, 148, 158, 157, 63, 10, 8,   68,
+        58,  176, 142, 192, 168, 53, 61,  105, 194, 166, 43, 56, 246, 236,
+        28,  146, 114, 133,
+    };
+    const edwards_point_y = [_]u8{
+        10,  111, 8,   236, 97,  189, 124, 69,  89,  176, 222, 39,  199, 253,
+        111, 11,  248, 186, 128, 90,  120, 128, 248, 210, 232, 183, 93,  104,
+        111, 150, 7,   241,
+    };
+    const edwards_points: [2][32]u8 = .{ edwards_point_x, edwards_point_y };
+    const edwards_points_addr = 0x200000000;
+
+    const ristretto_point_x = [_]u8{
+        130, 35,  97,  25,  18,  199, 33, 239, 85,  143, 119, 111, 49,  51,
+        224, 40,  167, 185, 240, 179, 25, 194, 213, 41,  14,  155, 104, 18,
+        181, 197, 15,  112,
+    };
+    const ristretto_point_y = [_]u8{
+        152, 156, 155, 197, 152, 232, 92, 206, 219, 159, 193, 134, 121, 128,
+        139, 36,  56,  191, 51,  143, 72, 204, 87,  76,  110, 124, 101, 96,
+        238, 158, 42,  108,
+    };
+    const ristretto_points: [2][32]u8 = .{ ristretto_point_x, ristretto_point_y };
+    const ristretto_points_addr = 0x300000000;
+
+    var result_point: [32]u8 = undefined;
+    const result_point_addr = 0x400000000;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, std.mem.sliceAsBytes(&scalars), scalars_addr),
+        memory.Region.init(.constant, std.mem.sliceAsBytes(&edwards_points), edwards_points_addr),
+        memory.Region.init(
+            .constant,
+            std.mem.sliceAsBytes(&ristretto_points),
+            ristretto_points_addr,
+        ),
+        memory.Region.init(.mutable, &result_point, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    const compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const total_compute = compute_budget.curve25519_edwards_msm_base_cost +
+        compute_budget.curve25519_edwards_msm_incremental_cost +
+        compute_budget.curve25519_ristretto_msm_base_cost +
+        compute_budget.curve25519_ristretto_msm_incremental_cost;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{.{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            .compute_meter = total_compute,
+        },
+    );
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    {
+        registers.set(.r1, 0); // CURVE25519_EDWARDS
+        registers.set(.r2, scalars_addr);
+        registers.set(.r3, edwards_points_addr);
+        registers.set(.r4, 2);
+        registers.set(.r5, result_point_addr);
+
+        try curveMultiscalarMul(&tc, &memory_map, &registers);
+
+        try std.testing.expectEqual(0, registers.get(.r0));
+        try std.testing.expectEqualSlices(u8, &.{
+            30,  174, 168, 34,  160, 70,  63,  166, 236, 18,  74, 144, 185,
+            222, 208, 243, 5,   54,  223, 172, 185, 75,  244, 26, 70,  18,
+            248, 46,  207, 184, 235, 60,
+        }, &result_point);
+    }
+
+    {
+        registers.set(.r1, 1); // CURVE25519_RISTRETTO
+        registers.set(.r2, scalars_addr);
+        registers.set(.r3, ristretto_points_addr);
+        registers.set(.r4, 2);
+        registers.set(.r5, result_point_addr);
+
+        try curveMultiscalarMul(&tc, &memory_map, &registers);
+
+        try std.testing.expectEqual(0, registers.get(.r0));
+        try std.testing.expectEqualSlices(u8, &.{
+            78,  120, 86,  111, 152, 64, 146, 84, 14,  236, 77,  147, 237,
+            190, 251, 241, 136, 167, 21, 94,  84, 118, 92,  140, 120, 81,
+            30,  246, 173, 140, 195, 86,
+        }, &result_point);
+    }
+}
+
+test "multiscalar multiplication large" {
+    const allocator = std.testing.allocator;
+
+    const scalar = [_]u8{
+        254, 198, 23, 138, 67, 243, 184, 110, 236, 115, 236, 205, 205, 215,
+        79,  114, 45, 250, 78, 137, 3,   107, 136, 237, 49,  126, 117, 223,
+        37,  191, 88, 6,
+    };
+    const scalars: [513][32]u8 = .{scalar} ** 513;
+    const scalars_addr = 0x100000000;
+
+    const edwards_point = [_]u8{
+        252, 31,  230, 46,  173, 95, 144, 148, 158, 157, 63, 10, 8,   68,
+        58,  176, 142, 192, 168, 53, 61,  105, 194, 166, 43, 56, 246, 236,
+        28,  146, 114, 133,
+    };
+    const edwards_points: [513][32]u8 = .{edwards_point} ** 513;
+    const edwards_points_addr = 0x200000000;
+
+    const ristretto_point = [_]u8{
+        130, 35,  97,  25,  18,  199, 33, 239, 85,  143, 119, 111, 49,  51,
+        224, 40,  167, 185, 240, 179, 25, 194, 213, 41,  14,  155, 104, 18,
+        181, 197, 15,  112,
+    };
+    const ristretto_points: [513][32]u8 = .{ristretto_point} ** 513;
+    const ristretto_points_addr = 0x300000000;
+
+    var result_point: [32]u8 = undefined;
+    const result_point_addr = 0x400000000;
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, std.mem.sliceAsBytes(&scalars), scalars_addr),
+        memory.Region.init(.constant, std.mem.sliceAsBytes(&edwards_points), edwards_points_addr),
+        memory.Region.init(
+            .constant,
+            std.mem.sliceAsBytes(&ristretto_points),
+            ristretto_points_addr,
+        ),
+        memory.Region.init(.mutable, &result_point, result_point_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{.{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            .compute_meter = 500_000,
+        },
+    );
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    {
+        registers.set(.r1, 0); // CURVE25519_EDWARDS
+        registers.set(.r2, scalars_addr);
+        registers.set(.r3, edwards_points_addr);
+        registers.set(.r4, 512); // below maximum vector length
+        registers.set(.r5, result_point_addr);
+
+        try curveMultiscalarMul(&tc, &memory_map, &registers);
+
+        try std.testing.expectEqual(0, registers.get(.r0));
+        try std.testing.expectEqualSlices(u8, &.{
+            20,  146, 226, 37, 22, 61,  86,  249, 208, 40, 38,  11,  126,
+            101, 10,  82,  81, 77, 88,  209, 15,  76,  82, 251, 180, 133,
+            84,  243, 162, 0,  11, 145,
+        }, &result_point);
+    }
+
+    {
+        registers.set(.r1, 0); // CURVE25519_EDWARDS
+        registers.set(.r2, scalars_addr);
+        registers.set(.r3, edwards_points_addr);
+        registers.set(.r4, 513); // above maximum vector length
+        registers.set(.r5, result_point_addr);
+
+        try std.testing.expectError(
+            error.InvalidLength,
+            curveMultiscalarMul(&tc, &memory_map, &registers),
+        );
+    }
+
+    {
+        registers.set(.r1, 1); // CURVE25519_RISTRETTO
+        registers.set(.r2, scalars_addr);
+        registers.set(.r3, ristretto_points_addr);
+        registers.set(.r4, 512); // below maximum vector length
+        registers.set(.r5, result_point_addr);
+
+        try curveMultiscalarMul(&tc, &memory_map, &registers);
+
+        try std.testing.expectEqual(0, registers.get(.r0));
+        try std.testing.expectEqualSlices(u8, &.{
+            146, 224, 127, 193, 252, 64, 196, 181, 246, 104, 27, 116, 183, 52,
+            200, 239, 2,   108, 21,  27, 97,  44,  95,  65,  26, 218, 223, 39,
+            197, 132, 51,  49,
+        }, &result_point);
+    }
+
+    {
+        registers.set(.r1, 1); // CURVE25519_RISTRETTO
+        registers.set(.r2, scalars_addr);
+        registers.set(.r3, ristretto_points_addr);
+        registers.set(.r4, 513); // above maximum vector length
+        registers.set(.r5, result_point_addr);
+
+        try std.testing.expectError(
+            error.InvalidLength,
+            curveMultiscalarMul(&tc, &memory_map, &registers),
+        );
     }
 }

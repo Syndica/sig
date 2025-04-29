@@ -136,11 +136,11 @@ pub fn register(
             "sol_curve_group_op",
             ecc.curveGroupOp,
         );
-        // _ = try syscalls.functions.registerHashed(
-        //     allocator,
-        //     "sol_curve_multiscalar_mul",
-        //     curveMultiscalarMul,
-        // );
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_curve_multiscalar_mul",
+            ecc.curveMultiscalarMul,
+        );
     }
 
     // Sysvars
