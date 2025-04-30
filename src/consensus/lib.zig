@@ -6,3 +6,7 @@ pub const ForkWeight = fork_choice.ForkWeight;
 pub const ForkInfo = fork_choice.ForkInfo;
 
 pub const VoteTracker = vote_tracker.VoteTracker;
+
+comptime {
+    _ = @import("sigverify.zig");
+}
