@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cpi = @import("cpi.zig");
 const sig = @import("../../sig.zig");
 
@@ -587,14 +588,14 @@ pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regist
         check_aligned,
     );
 
-    var bump_seed = [_]u8{std.math.maxInt(u8)};
+    var bump_seed: u8 = std.math.maxInt(u8);
     for (0..255) |_| {
         const new_address = pubkey_utils.createProgramAddress(
-            seeds.slice(),
-            &bump_seed,
+            seeds.constSlice(),
+            &.{bump_seed},
             program_id,
         ) catch {
-            bump_seed[0] -|= 1;
+            bump_seed -|= 1;
             try tc.consumeCompute(cost);
             continue;
         };
@@ -615,7 +616,7 @@ pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regist
             address.len,
         )) return SyscallError.CopyOverlapping;
 
-        bump_seed_ref.* = bump_seed[0];
+        bump_seed_ref.* = bump_seed;
         @memcpy(address, std.mem.asBytes(&new_address));
         return; // r0 = 0
     }
@@ -693,6 +694,9 @@ fn translateAndCheckProgramAddressInputs(
 
 // Syscall Tests
 
+/// Meant only as a helper for tests below.
+/// Invokes either createProgramAddress or findProgramAddress syscalls with VM context setup.
+///
 /// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L4301
 fn callProgramAddressSyscall(
     allocator: std.mem.Allocator,
@@ -702,6 +706,8 @@ fn callProgramAddressSyscall(
     program_id: Pubkey,
     overlap_outputs: bool,
 ) !struct { Pubkey, u8 } {
+    comptime std.debug.assert(builtin.is_test);
+
     const seeds_addr = 0x100000000;
     const program_id_addr = 0x200000000;
     const address_addr = 0x300000000;
