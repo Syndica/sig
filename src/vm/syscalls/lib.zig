@@ -18,8 +18,6 @@ const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
 const BuiltinProgram = sig.vm.BuiltinProgram;
 const FeatureSet = sig.runtime.features.FeatureSet;
-const EpochContext = sig.runtime.EpochContext;
-const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 
@@ -882,12 +880,14 @@ test createProgramAddress {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{ .accounts = &.{
-        .{
-            .pubkey = Pubkey.initRandom(prng.random()),
-            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            },
         },
-    }, .compute_meter = 1 });
+    });
     defer {
         ec.deinit();
         allocator.destroy(ec);
