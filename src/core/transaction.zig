@@ -3,6 +3,8 @@ const sig = @import("../sig.zig");
 
 const leb = std.leb;
 
+const Blake3 = std.crypto.hash.Blake3;
+
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
@@ -92,8 +94,62 @@ pub const Transaction = struct {
         };
     }
 
+    /// Run some sanity checks on the message to ensure the internal data has consistency.
+    ///
+    /// Does *not* verify signatures. Call `verify` to verify signatures.
     pub fn validate(self: Transaction) !void {
         try self.msg.validate();
+    }
+
+    pub const VerifyError = error{
+        /// The message is larger than the largest allowed transaction message size.
+        NoSpaceLeft,
+        /// Signature verification failure due to input being in wrong form.
+        NonCanonical,
+        /// There are not as many accounts as there are signatures.
+        NotEnoughAccounts,
+        /// A signature was invalid.
+        SignatureVerificationFailed,
+        /// The message could not be serialized.
+        SerializationFailed,
+    };
+
+    /// Verify the transaction signatures.
+    ///
+    /// Does *not* ensure total internal consistency. Only does the minimum to
+    /// verify signatures. Call `validate` to ensure full consistency.
+    pub fn verify(self: Transaction) VerifyError!void {
+        const serialized_message = self.msg.serializeBounded(self.version) catch
+            return error.SerializationFailed;
+
+        if (self.msg.account_keys.len > self.signatures.len) {
+            return error.NotEnoughAccounts;
+        }
+        for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
+            if (!try signature.verify(pubkey, serialized_message.slice())) {
+                return error.SignatureVerificationFailed;
+            }
+        }
+    }
+
+    /// Verify the transaction signatures and return the blake3 hash of the message.
+    ///
+    /// Does *not* ensure total internal consistency. Only does the minimum to
+    /// verify signatures. Call `validate` to ensure full consistency.
+    pub fn verifyAndHashMessage(self: Transaction) VerifyError!Hash {
+        const serialized_message = self.msg.serializeBounded(self.version) catch
+            return error.SerializationFailed;
+
+        if (self.msg.account_keys.len > self.signatures.len) {
+            return error.NotEnoughAccounts;
+        }
+        for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
+            if (!try signature.verify(pubkey, serialized_message.slice())) {
+                return error.SignatureVerificationFailed;
+            }
+        }
+
+        return TransactionMessage.hash(serialized_message.slice());
     }
 };
 
@@ -199,6 +255,17 @@ pub const TransactionMessage = struct {
         return !(is_readonly_signed or is_readonly_unsigned);
     }
 
+    /// Returns the serialized message as a bounded array.
+    /// Returns an error if the message would exceed the maximum allowed transaction size.
+    pub fn serializeBounded(
+        self: TransactionMessage,
+        version: TransactionVersion,
+    ) !std.BoundedArray(u8, Transaction.MAX_BYTES) {
+        var buf: std.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
+        try self.serialize(buf.writer(), version);
+        return buf;
+    }
+
     pub fn serialize(self: TransactionMessage, writer: anytype, version: TransactionVersion) !void {
         try writer.writeByte(self.signature_count);
         try writer.writeByte(self.readonly_signed_count);
@@ -277,6 +344,16 @@ pub const TransactionMessage = struct {
                     return error.AccountIndexOutOfBounds;
             }
         }
+    }
+
+    /// Return the blake3 hash of the pre-serialized message.
+    pub fn hash(serialized_message: []const u8) Hash {
+        var hasher = Blake3.init(.{});
+        hasher.update("solana-tx-message-v1");
+        hasher.update(serialized_message);
+        var the_hash: Hash = undefined;
+        hasher.final(&the_hash.data);
+        return the_hash;
     }
 };
 

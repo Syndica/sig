@@ -649,7 +649,7 @@ pub fn getMerkleNode(shred: []const u8) !Hash {
 
 fn getMerkleNodeAt(shred: []const u8, start: usize, end: usize) !Hash {
     if (shred.len < end) return error.InvalidPayloadSize;
-    return hashv(&.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
+    return Hash.generateSha256(.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
 }
 
 /// [get_merkle_root](https://github.com/anza-xyz/agave/blob/ed500b5afc77bc78d9890d96455ea7a7f28edbf9/ledger/src/shred/merkle.rs#L702)
@@ -737,17 +737,11 @@ pub fn makeMerkleProof(
 
 fn joinNodes(lhs: []const u8, rhs: []const u8) Hash {
     // TODO check
-    return hashv(&.{
+    return Hash.generateSha256(.{
         MERKLE_HASH_PREFIX_NODE,
         lhs[0..merkle_proof_entry_size],
         rhs[0..merkle_proof_entry_size],
     });
-}
-
-pub fn hashv(vals: []const []const u8) Hash {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    for (vals) |val| hasher.update(val);
-    return .{ .data = hasher.finalResult() };
 }
 
 /// Where the merkle proof starts in the shred binary.

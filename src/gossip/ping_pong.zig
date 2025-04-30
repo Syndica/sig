@@ -61,7 +61,7 @@ pub const Pong = struct {
 
     pub fn init(ping: *const Ping, keypair: *const KeyPair) !Pong {
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
+        var hash = Hash.generateSha256(token_with_prefix[0..]);
         const signature = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return .{
@@ -173,7 +173,7 @@ pub const PingCache = struct {
         var prng = DefaultPrng.init(0);
         const ping = Ping.initRandom(prng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        const hash = Hash.generateSha256Hash(token_with_prefix[0..]);
+        const hash = Hash.generateSha256(token_with_prefix[0..]);
         _ = self.pending_cache.put(hash, peer_and_addr);
         _ = self.pings.put(peer_and_addr, now);
         return ping;

@@ -34,17 +34,44 @@ pub const Hash = extern struct {
 
     pub const ZEROES: Hash = .{ .data = .{0} ** SIZE };
 
-    pub fn generateSha256Hash(bytes: []const u8) Hash {
-        var data: [SIZE]u8 = undefined;
-        Sha256.hash(bytes, &data, .{});
-        return .{ .data = data };
+    /// Hashes the input byte slice(s) using SHA 256.
+    ///
+    /// If the passed-in type contains multiple byte slices, it will
+    /// iterate/recurse over them in order, updating the hasher for all of them
+    /// before finalizing at the end.
+    pub fn generateSha256(
+        /// May be a slice or array of bytes, or a slice, array, or tuple
+        /// containing slices or arrays of bytes nested with arbitrary depth.
+        ///
+        /// for example:
+        /// - []const u8
+        /// - []const []const u8
+        /// - [2]u8
+        /// - *[13]u8
+        /// - struct { [128]u8, []const []const u8, struct { []const u8 }, ... }
+        data: anytype,
+    ) Hash {
+        var hasher = Sha256.init(.{});
+        update(&hasher, data);
+        return .{ .data = hasher.finalResult() };
     }
 
-    pub fn extendAndHash(self: Hash, val: []const u8) Hash {
-        var hasher = Sha256.init(.{});
-        hasher.update(&self.data);
-        hasher.update(val);
-        return .{ .data = hasher.finalResult() };
+    /// re-hashes the current hash with the mixed-in byte slice(s).
+    pub fn extendAndHash(self: Hash, data: anytype) Hash {
+        return generateSha256(.{ self.data, data });
+    }
+
+    fn update(hasher: *Sha256, data: anytype) void {
+        const T = @TypeOf(data);
+
+        if (@typeInfo(T) == .Struct) {
+            inline for (data) |val| update(hasher, val);
+        } else if (std.meta.Elem(T) == u8) switch (@typeInfo(T)) {
+            .Array => hasher.update(&data),
+            else => hasher.update(data),
+        } else {
+            for (data) |val| update(hasher, val);
+        }
     }
 
     pub fn eql(self: Hash, other: Hash) bool {
