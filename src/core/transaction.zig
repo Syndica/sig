@@ -351,7 +351,7 @@ pub const TransactionMessage = struct {
         var hasher = Blake3.init(.{});
         hasher.update("solana-tx-message-v1");
         hasher.update(serialized_message);
-        var the_hash: Hash = undefined;
+        var the_hash: Hash = .{ .data = undefined };
         hasher.final(&the_hash.data);
         return the_hash;
     }
