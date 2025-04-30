@@ -694,3 +694,18 @@ pub const transaction_v0_example = struct {
         90,  0,
     };
 };
+
+test "verify and hash transaction" {
+    try transaction_legacy_example.as_struct.verify();
+    const hash = try transaction_legacy_example.as_struct.verifyAndHashMessage();
+    try std.testing.expectEqual(
+        try Hash.parseBase58String("FjoeKaxTd3J7xgt9vHMpuQb7j192weaEP3yMa1ntfQNo"),
+        hash,
+    );
+
+    try std.testing.expectError(error.NotEnoughAccounts, transaction_v0_example.as_struct.verify());
+    try std.testing.expectError(
+        error.NotEnoughAccounts,
+        transaction_v0_example.as_struct.verifyAndHashMessage(),
+    );
+}
