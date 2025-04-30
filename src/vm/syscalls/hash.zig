@@ -1,7 +1,6 @@
 //! Hashing syscalls
 const std = @import("std");
 const phash = @import("poseidon");
-const cpi = @import("cpi.zig");
 const sig = @import("../../sig.zig");
 
 const features = sig.runtime.features;
@@ -45,7 +44,7 @@ pub fn poseidon(
         tc.getCheckAligned(),
     );
     const inputs = try memory_map.translateSlice(
-        cpi.VmSlice,
+        memory.VmSlice,
         .constant,
         addr,
         len,
@@ -126,7 +125,7 @@ fn hashSyscall(comptime H: type) Syscall {
             var hasher = H.Hasher.init(.{});
             if (vals_len > 0) {
                 const vals = try memory_map.translateSlice(
-                    cpi.VmSlice,
+                    memory.VmSlice,
                     .constant,
                     vals_addr,
                     vals_len,
@@ -186,16 +185,16 @@ test sha256 {
     const bytes1: []const u8 = "Gaggablaghblagh!";
     const bytes2: []const u8 = "flurbos";
 
-    const mock_slice1: cpi.VmSlice = .{
+    const mock_slice1: memory.VmSlice = .{
         .ptr = memory.HEAP_START,
         .len = bytes1.len,
     };
-    const mock_slice2: cpi.VmSlice = .{
+    const mock_slice2: memory.VmSlice = .{
         .ptr = memory.INPUT_START,
         .len = bytes2.len,
     };
 
-    const bytes_to_hash: [2]cpi.VmSlice = .{ mock_slice1, mock_slice2 };
+    const bytes_to_hash: [2]memory.VmSlice = .{ mock_slice1, mock_slice2 };
     var hash_result: [32]u8 = .{0} ** 32;
 
     const compute_budget = sig.runtime.ComputeBudget.default(1_400_000);

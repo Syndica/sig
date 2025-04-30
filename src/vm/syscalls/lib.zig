@@ -625,6 +625,7 @@ pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regist
     rm.set(.r0, 1);
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L864
 pub fn createProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
     const seeds_addr = rm.get(.r1);
     const seeds_len = rm.get(.r2);
@@ -655,7 +656,7 @@ pub fn createProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regi
         check_aligned,
     );
     @memcpy(address, std.mem.asBytes(&new_address));
-    return; // r0 0
+    return; // r0 = 0
 }
 
 fn translateAndCheckProgramAddressInputs(
@@ -678,7 +679,7 @@ fn translateAndCheckProgramAddressInputs(
 
     var seeds: std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
     for (untranslated_seeds) |untranslated_seed| {
-        if (untranslated_seed.len > pubkey_utils.MAX_SEEDS) return SyscallError.BadSeeds;
+        if (untranslated_seed.len > pubkey_utils.MAX_SEED_LEN) return SyscallError.BadSeeds;
         seeds.appendAssumeCapacity(try mmap.translateSlice(
             u8,
             .constant,
@@ -834,7 +835,7 @@ test findProgramAddress {
         ),
     );
 
-    const exceeded_seed = [_]u8{127} ** (pubkey_utils.MAX_SEEDS + 1);
+    const exceeded_seed = [_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1);
     tc.compute_meter = cost * (max_tries - 1);
     try std.testing.expectError(
         SyscallError.BadSeeds,
@@ -872,6 +873,173 @@ test findProgramAddress {
             seeds,
             address,
             true,
+        ),
+    );
+}
+
+test createProgramAddress {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{ .accounts = &.{
+        .{
+            .pubkey = Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        },
+    }, .compute_meter = 1 });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    const cost = tc.compute_budget.create_program_address_units;
+    const address = sig.runtime.program.bpf_loader_program.v3.ID;
+    tc.compute_meter = cost * 12; // enough for 12 calls to createProgramAddress
+
+    const exceeded_seed: []const u8 = &([_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1));
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{exceeded_seed},
+            address,
+            false,
+        ),
+    );
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{ "short_seed", exceeded_seed },
+            address,
+            false,
+        ),
+    );
+
+    const max_seed: []const u8 = &([_]u8{0} ** pubkey_utils.MAX_SEED_LEN);
+    _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{max_seed},
+        address,
+        false,
+    );
+
+    comptime var exceeded_seeds: []const []const u8 = &.{};
+    inline for (1..16) |i| {
+        exceeded_seeds = exceeded_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
+    }
+    _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        exceeded_seeds,
+        address,
+        false,
+    );
+
+    comptime var max_seeds: []const []const u8 = &.{};
+    inline for (0..17) |i| {
+        max_seeds = max_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
+    }
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            max_seeds,
+            address,
+            false,
+        ),
+    );
+
+    var pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "", &.{1} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")).equals(&pk),
+    );
+
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "☉", &.{0} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")).equals(&pk),
+    );
+
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "Talking", "Squirrels" },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")).equals(&pk),
+    );
+
+    const seed_pk = try Pubkey.parseBase58String("SeedPubey1111111111111111111111111111111111");
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ &seed_pk.data, &.{1} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")).equals(&pk),
+    );
+
+    const pk_a, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "Talking", "Squirrels" },
+        address,
+        false,
+    );
+    const pk_b, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{"Talking"},
+        address,
+        false,
+    );
+    try std.testing.expect(!pk_a.equals(&pk_b));
+
+    tc.compute_meter = 0;
+    try std.testing.expectError(
+        InstructionError.ComputationalBudgetExceeded,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{ "", &.{1} },
+            address,
+            false,
         ),
     );
 }
