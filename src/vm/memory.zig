@@ -137,8 +137,8 @@ pub const MemoryMap = union(enum) {
         vm_addr: u64,
         check_aligned: bool,
     ) !(switch (state) {
-        .mutable => *T,
-        .constant => *const T,
+        .mutable => *align(1) T,
+        .constant => *align(1) const T,
     }) {
         if (comptime !hasTranslatableRepresentation(T)) {
             @compileError(@typeName(T) ++ " doesn't have a stable layout for translation");
@@ -163,8 +163,8 @@ pub const MemoryMap = union(enum) {
         len: u64,
         check_aligned: bool,
     ) !(switch (state) {
-        .mutable => []T,
-        .constant => []const T,
+        .mutable => []align(1) T,
+        .constant => []align(1) const T,
     }) {
         if (comptime !hasTranslatableRepresentation(T)) {
             @compileError(@typeName(T) ++ " doesn't have a stable layout for translation");
@@ -183,8 +183,8 @@ pub const MemoryMap = union(enum) {
         }
 
         return switch (state) {
-            .mutable => @as([*]T, @ptrFromInt(host_addr))[0..len],
-            .constant => @as([*]const T, @ptrFromInt(host_addr))[0..len],
+            .mutable => @as([*]align(1) T, @ptrFromInt(host_addr))[0..len],
+            .constant => @as([*]align(1) const T, @ptrFromInt(host_addr))[0..len],
         };
     }
 };
