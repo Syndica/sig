@@ -46,7 +46,7 @@ pub fn createWithSeed(
         return PubkeyError.IllegalOwner;
 
     return .{
-        .data = sig.runtime.tmp_utils.hashv(&.{ &base.data, seed, &owner.data }).data,
+        .data = sig.core.Hash.generateSha256(.{ &base.data, seed, &owner.data }).data,
     };
 }
 

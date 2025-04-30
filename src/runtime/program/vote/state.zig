@@ -2772,7 +2772,7 @@ test "state.VoteState.checkSlotsAreValid bad hash" {
 
     const slot_hashes = SlotHashes{
         .entries = &.{
-            .{ vote.slots[vote.slots.len - 1], Hash.generateSha256Hash(&vote.hash.data) },
+            .{ vote.slots[vote.slots.len - 1], Hash.generateSha256(&vote.hash.data) },
         },
     };
 
