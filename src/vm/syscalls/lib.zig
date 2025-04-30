@@ -589,15 +589,6 @@ pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regist
         check_aligned,
     );
 
-    const bump_seed_ref = try mmap.translateType(u8, .mutable, bump_seed_addr, check_aligned);
-    const address = try mmap.translateSlice(
-        u8,
-        .mutable,
-        address_addr,
-        @sizeOf(Pubkey),
-        check_aligned,
-    );
-
     var bump_seed = [_]u8{std.math.maxInt(u8)};
     for (0..255) |_| {
         const new_address = pubkey_utils.createProgramAddress(
@@ -609,6 +600,15 @@ pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regist
             try tc.consumeCompute(cost);
             continue;
         };
+
+        const bump_seed_ref = try mmap.translateType(u8, .mutable, bump_seed_addr, check_aligned);
+        const address = try mmap.translateSlice(
+            u8,
+            .mutable,
+            address_addr,
+            @sizeOf(Pubkey),
+            check_aligned,
+        );
 
         if (memops.isOverlapping(
             @intFromPtr(bump_seed_ref),
