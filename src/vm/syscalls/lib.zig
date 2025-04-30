@@ -269,9 +269,9 @@ pub fn register(
     // }
 
     // Sysvar Getter
-    // if (feature_set.isActive(feature_set.ENABLE_SYSVAR_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", getSysvar,);
-    // }
+    if (feature_set.isActive(feature_set.ENABLE_SYSVAR_SYSCALL, slot)) {
+        _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", getSysvar);
+    }
 
     // Get Epoch Stake
     // if (feature_set.isActive(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
@@ -504,6 +504,42 @@ pub fn remainingComputeUnits(
 ) Error!void {
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
     registers.set(.r0, tc.compute_meter);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L169
+pub fn getSysvar(
+    tc: *TransactionContext,
+    mmap: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const id_addr = registers.get(.r1);
+    const value_addr = registers.get(.r2);
+    const offset = registers.get(.r3);
+    const length = registers.get(.r4);
+
+    const id_cost = std.math.divFloor(u64, 32, tc.compute_budget.cpi_bytes_per_unit) orelse 0;
+    const buf_cost = std.math.divFloor(u64, length, tc.compute_budget.cpi_bytes_per_unit) orelse 0;
+    const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
+
+    try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
+
+    const check_aligned = tc.getCheckAligned();
+    const id = (try mmap.translateType(Pubkey, .constant, id_addr, check_aligned)).*;
+    const value = try mmap.translateSlice(u8, .mutable, value_addr, length, check_aligned);
+
+    const offset_len = std.math.add(u64, offset, length) catch
+        return InstructionError.ProgramArithmeticOverflow;
+    _ = std.math.add(u64, value_addr, length) catch
+        return InstructionError.ProgramArithmeticOverflow;
+
+    // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L164
+    const SYSVAR_NOT_FOUND = 2;
+    // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L165
+    const OFFSET_LENGTH_EXCEEDS_SYSVAR = 1;
+
+    const buf = tc.sc.sysvar_cache.getSlice(id) orelse return registers.set(.r0, SYSVAR_NOT_FOUND);
+    if (buf.len < offset_len) return registers.set(.r0, OFFSET_LENGTH_EXCEEDS_SYSVAR);
+    @memcpy(value, buf[offset..][0..length]);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630

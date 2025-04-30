@@ -19,6 +19,8 @@ pub const ComputeBudget = struct {
     log_pubkey_units: u64,
     /// Number of compute units consumed to do a syscall without any work
     syscall_base_cost: u64,
+    /// Base number of compute units consumed to get a sysvar
+    sysvar_base_cost: u64,
     /// program heap region size, default: solana_sdk::entrypoint::HEAP_LENGTH
     heap_size: u32,
     /// Number of compute units per additional 32k heap above the default (~.5
@@ -86,6 +88,7 @@ pub const ComputeBudget = struct {
             .stack_frame_size = 4096,
             .log_pubkey_units = 100,
             .syscall_base_cost = 100,
+            .sysvar_base_cost = 100,
             .cpi_bytes_per_unit = 250, // ~50MB at 200,000 units
             .heap_size = 32 * 1024,
             .heap_cost = 8,
