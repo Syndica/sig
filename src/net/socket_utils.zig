@@ -8,7 +8,7 @@ const Allocator = std.mem.Allocator;
 const UdpSocket = network.Socket;
 
 const Packet = sig.net.Packet;
-const PACKET_DATA_SIZE = sig.net.PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = Packet.DATA_SIZE;
 const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger;
 const ExitCondition = sig.sync.ExitCondition;
@@ -220,20 +220,20 @@ const XevThread = struct {
                         .ipv4 => |ipv4| std.net.Address.initIp4(ipv4.value, addr.port),
                         .ipv6 => @panic("TODO: ipv6 support"),
                     },
-                    .{ .slice = node.data.packet.data[0..node.data.packet.size] },
+                    .{ .slice = node.data.packet.data() },
                     List.Node,
                     node,
                     onSend,
                 );
             },
             .receiver => {
-                node.data.packet = Packet.default();
+                node.data.packet = Packet.ANY_EMPTY;
                 node.data.io = .pending;
                 node.data.udp.read(
                     loop,
                     &node.data.udp_completion,
                     &node.data.udp_state,
-                    .{ .slice = &node.data.packet.data },
+                    .{ .slice = &node.data.packet.buffer },
                     List.Node,
                     node,
                     onRecv,
@@ -378,8 +378,8 @@ const PerThread = struct {
         try st.socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
         while (st.exit.shouldRun()) {
-            var packet: Packet = Packet.default();
-            const recv_meta = st.socket.receiveFrom(&packet.data) catch |err| switch (err) {
+            var packet: Packet = Packet.ANY_EMPTY;
+            const recv_meta = st.socket.receiveFrom(&packet.buffer) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => |e| {
                     logger.err().logf("readSocket error: {s}", .{@errorName(e)});
@@ -409,7 +409,7 @@ const PerThread = struct {
             next_packet: while (st.channel.tryReceive()) |p| {
                 const bytes_sent = while (true) { // loop on error.SystemResources below.
                     if (st.exit.shouldExit()) return; // drop packets if exit prematurely.
-                    break st.socket.sendTo(p.addr, p.data[0..p.size]) catch |e| switch (e) {
+                    break st.socket.sendTo(p.addr, p.data()) catch |e| switch (e) {
                         // on macOS, sendto() returns ENOBUFS on full buffer instead of blocking.
                         // Wait for the socket to be writable (buffer has room) and retry.
                         error.SystemResources => {
@@ -581,7 +581,7 @@ pub const BenchmarkPacketProcessing = struct {
                 var timer = try std.time.Timer.start();
 
                 while (e.shouldRun()) {
-                    prng.fill(&packet.data);
+                    prng.fill(&packet.buffer);
                     packet.addr = addr;
                     packet.size = PACKET_DATA_SIZE;
                     try channel.send(packet);

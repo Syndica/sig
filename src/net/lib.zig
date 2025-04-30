@@ -14,4 +14,3 @@ pub const enablePortReuse = net.enablePortReuse;
 pub const endpointToString = net.endpointToString;
 
 pub const SOCKET_TIMEOUT_US = socket_utils.SOCKET_TIMEOUT_US;
-pub const PACKET_DATA_SIZE = packet.PACKET_DATA_SIZE;

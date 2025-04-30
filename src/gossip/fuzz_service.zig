@@ -27,7 +27,7 @@ const Channel = sig.sync.Channel;
 const getWallclockMs = sig.time.getWallclockMs;
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
 
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 
 const SHRED_VERSION = 19;
 const SLEEP_TIME = Duration.zero();
