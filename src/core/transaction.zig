@@ -95,6 +95,9 @@ pub const Transaction = struct {
         };
     }
 
+    /// Run some sanity checks on the message to ensure the internal data has consistency.
+    ///
+    /// Does *not* verify signatures. Call `verify` to verify signatures.
     pub fn validate(self: Transaction) !void {
         try self.msg.validate();
     }
@@ -112,23 +115,42 @@ pub const Transaction = struct {
         SerializationFailed,
     };
 
-    /// Verify the transaction signatures and return the blake3 hash of the message.
-    pub fn verifyAndHashMessage(self: Transaction) VerifyError!Hash {
-        var bytes: [MAX_BYTES]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&bytes);
-        self.msg.serialize(stream.writer(), self.version) catch return error.SerializationFailed;
-        const serialized_msg = stream.getWritten();
+    /// Verify the transaction signatures.
+    ///
+    /// Does *not* ensure total internal consistency. Only does the minimum to
+    /// verify signatures. Call `validate` to ensure full consistency.
+    pub fn verify(self: Transaction) VerifyError!void {
+        const serialized_message = self.msg.serializeBounded(self.version) catch
+            return error.SerializationFailed;
 
         if (self.msg.account_keys.len > self.signatures.len) {
             return error.NotEnoughAccounts;
         }
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
-            if (!try signature.verify(pubkey, serialized_msg)) {
+            if (!try signature.verify(pubkey, serialized_message.slice())) {
+                return error.SignatureVerificationFailed;
+            }
+        }
+    }
+
+    /// Verify the transaction signatures and return the blake3 hash of the message.
+    ///
+    /// Does *not* ensure total internal consistency. Only does the minimum to
+    /// verify signatures. Call `validate` to ensure full consistency.
+    pub fn verifyAndHashMessage(self: Transaction) VerifyError!Hash {
+        const serialized_message = self.msg.serializeBounded(self.version) catch
+            return error.SerializationFailed;
+
+        if (self.msg.account_keys.len > self.signatures.len) {
+            return error.NotEnoughAccounts;
+        }
+        for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
+            if (!try signature.verify(pubkey, serialized_message.slice())) {
                 return error.SignatureVerificationFailed;
             }
         }
 
-        return TransactionMessage.hash(serialized_msg);
+        return TransactionMessage.hash(serialized_message.slice());
     }
 };
 
@@ -232,6 +254,17 @@ pub const TransactionMessage = struct {
             index < self.account_keys.len - self.readonly_unsigned_count;
 
         return !(is_readonly_signed or is_readonly_unsigned);
+    }
+
+    /// Returns the serialized message as a bounded array.
+    /// Returns an error if the message would exceed the maximum allowed transaction size.
+    pub fn serializeBounded(
+        self: TransactionMessage,
+        version: TransactionVersion,
+    ) !std.BoundedArray(u8, Transaction.MAX_BYTES) {
+        var buf: std.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
+        try self.serialize(buf.writer(), version);
+        return buf;
     }
 
     pub fn serialize(self: TransactionMessage, writer: anytype, version: TransactionVersion) !void {
