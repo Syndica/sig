@@ -405,7 +405,13 @@ pub fn setReturnData(
     const return_data: []const u8 = if (len == 0)
         &.{}
     else
-        try memory_map.vmap(.constant, addr, len);
+        try memory_map.translateSlice(
+            u8,
+            .constant,
+            addr,
+            len,
+            tc.getCheckAligned(),
+        );
 
     if (tc.instruction_stack.len == 0) return error.CallDepth;
     const ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
@@ -549,7 +555,13 @@ pub fn panic(
 
     try tc.consumeCompute(len);
 
-    const message = try memory_map.vmap(.constant, file, len);
+    const message = try memory_map.translateSlice(
+        u8,
+        .constant,
+        file,
+        len,
+        tc.getCheckAligned(),
+    );
     if (!std.unicode.utf8ValidateSlice(message)) {
         return SyscallError.InvalidString;
     }
