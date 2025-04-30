@@ -384,20 +384,16 @@ pub const MockTransferService = struct {
     ) !sig.core.Transaction {
         const from_pubkey = Pubkey.fromPublicKey(&from_keypair.public_key);
 
-        const signatures = try allocator.alloc(Signature, 1);
-        errdefer allocator.free(signatures);
-
-        const addresses = try allocator.alloc(Pubkey, 3);
+        const addresses = try allocator.dupe(Pubkey, &.{
+            from_pubkey,
+            to_pubkey,
+            // TODO: replace with system_program_id once it's available
+            try Pubkey.parseBase58String("11111111111111111111111111111111"),
+        });
         errdefer allocator.free(addresses);
-        addresses[0] = from_pubkey;
-        addresses[1] = to_pubkey;
-        // TODO: replace with system_program_id once it's available
-        addresses[2] = try Pubkey.parseBase58String("11111111111111111111111111111111");
 
-        const account_indexes = try allocator.alloc(u8, 2);
+        const account_indexes = try allocator.dupe(u8, &.{ 0, 1 });
         errdefer allocator.free(account_indexes);
-        account_indexes[0] = 0;
-        account_indexes[1] = 1;
 
         var data = [_]u8{0} ** 12;
         var fbs = std.io.fixedBufferStream(&data);
@@ -413,7 +409,21 @@ pub const MockTransferService = struct {
             .data = try allocator.dupe(u8, &data),
         };
 
-        const transaction = sig.core.Transaction{
+        const signature: Signature = blk: {
+            const buffer = [_]u8{0} ** sig.core.Transaction.MAX_BYTES;
+            const signable = &buffer; //try transaction.msgwriteSignableToSlice(&buffer);
+
+            var noise: [KeyPair.seed_length]u8 = undefined;
+            random.bytes(&noise);
+
+            const signature = try from_keypair.sign(signable, noise);
+            break :blk .{ .data = signature.toBytes() };
+        };
+
+        const signatures = try allocator.dupe(Signature, &.{signature});
+        errdefer allocator.free(signatures);
+
+        return .{
             .signatures = signatures,
             .version = .legacy,
             .msg = .{
@@ -425,13 +435,5 @@ pub const MockTransferService = struct {
                 .instructions = instructions,
             },
         };
-
-        const buffer = [_]u8{0} ** sig.core.Transaction.MAX_BYTES;
-        const signable = &buffer; //try transaction.msgwriteSignableToSlice(&buffer);
-        var noise: [KeyPair.seed_length]u8 = undefined;
-        random.bytes(noise[0..]);
-        transaction.signatures[0] = .{ .data = (try from_keypair.sign(signable, noise)).toBytes() };
-
-        return transaction;
     }
 };
