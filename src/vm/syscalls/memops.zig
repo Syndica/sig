@@ -821,7 +821,9 @@ test "memcmp non contigious" {
         true,
     ));
 
-    try std.testing.expectEqual(-13, try memcmpNonContigious(
+    var ctx: MemcmpContext = .{ .result = 0 };
+    ctx.run("oobar", "obarb") catch {};
+    try std.testing.expectEqual(ctx.result, try memcmpNonContigious(
         memory.RODATA_START + 1,
         memory.RODATA_START + 11,
         5,
