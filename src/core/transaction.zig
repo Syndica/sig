@@ -122,7 +122,7 @@ pub const Transaction = struct {
         const serialized_message = self.msg.serializeBounded(self.version) catch
             return error.SerializationFailed;
 
-        if (self.msg.account_keys.len > self.signatures.len) {
+        if (self.msg.account_keys.len < self.signatures.len) {
             return error.NotEnoughAccounts;
         }
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
@@ -140,7 +140,7 @@ pub const Transaction = struct {
         const serialized_message = self.msg.serializeBounded(self.version) catch
             return error.SerializationFailed;
 
-        if (self.msg.account_keys.len > self.signatures.len) {
+        if (self.msg.account_keys.len < self.signatures.len) {
             return error.NotEnoughAccounts;
         }
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
@@ -703,9 +703,12 @@ test "verify and hash transaction" {
         hash,
     );
 
-    try std.testing.expectError(error.NotEnoughAccounts, transaction_v0_example.as_struct.verify());
     try std.testing.expectError(
-        error.NotEnoughAccounts,
+        error.SignatureVerificationFailed,
+        transaction_v0_example.as_struct.verify(),
+    );
+    try std.testing.expectError(
+        error.SignatureVerificationFailed,
         transaction_v0_example.as_struct.verifyAndHashMessage(),
     );
 }
