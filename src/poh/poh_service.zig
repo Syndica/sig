@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 const poh = @import("lib.zig");
 
 const Atomic = std.atomic.Value;
-const AtomicOrder = std.builtin.AtomicOrder;
 
 const Channel = sig.sync.Channel;
 const Hash = sig.core.Hash;
@@ -14,7 +13,6 @@ const PohRecorderError = poh.poh_recorder.PohRecorderError;
 const Bank = poh.poh_recorder.Bank;
 const WorkingBankEntry = poh.poh_recorder.WorkingBankEntry;
 
-const print = std.debug.print;
 const hash = std.crypto.hash.sha2.Sha256.hash;
 
 const default_hashes_per_tick = 2_000_000 / 160;

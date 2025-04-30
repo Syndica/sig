@@ -9,7 +9,6 @@ const Hash = sig.core.Hash;
 
 const poh_service = @import("poh_service.zig");
 const Poh = @import("poh.zig").Poh;
-const PohEntry = @import("poh.zig").PohEntry;
 const Entry = poh_service.Entry;
 const Transaction = poh_service.Transaction;
 

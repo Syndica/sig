@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const leb = std.leb;
 
-const Allocator = std.mem.Allocator;
 const Blake3 = std.crypto.hash.Blake3;
 
 const Hash = sig.core.Hash;

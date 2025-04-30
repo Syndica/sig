@@ -4,7 +4,6 @@ pub const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 const Hash = sig.core.hash.Hash;
 const Transaction = sig.core.transaction.Transaction;
-const Signature = sig.core.Signature;
 
 pub const Entry = struct {
     /// The number of hashes since the previous Entry ID.

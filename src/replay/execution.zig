@@ -9,13 +9,8 @@ const Allocator = std.mem.Allocator;
 const ThreadPool = sig.sync.ThreadPool;
 
 const Entry = sig.core.Entry;
-const Epoch = sig.core.Epoch;
-const EpochConstants = sig.core.EpochConstants;
-const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const SlotConstants = sig.core.SlotConstants;
-const SlotState = sig.core.SlotState;
 const Transaction = sig.core.Transaction;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
@@ -25,8 +20,6 @@ const AccountLocks = deps.AccountLocks;
 const EpochTracker = deps.EpochTracker;
 const ProgressMap = deps.ProgressMap;
 const SlotTracker = deps.SlotTracker;
-const Tower = deps.Tower;
-const tower_storage = deps.tower_storage;
 
 const EntryVerifier = replay.verifiers.EntryVerifier;
 const ListRecycler = replay.verifiers.ListRecycler;

@@ -1,9 +1,6 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
-
-const assert = std.debug.assert;
 
 /// Lock-free thread-safe ring buffer using atomic CAS loop for synchronization.
 pub fn RingBuffer(T: type) type {
