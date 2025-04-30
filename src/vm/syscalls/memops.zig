@@ -198,7 +198,7 @@ fn iterateMemoryPairs(
         const src_host = try memory_map.mapRegion(src_state, src_region, src_vm_addr, chunk_len);
         const dst_host = try memory_map.mapRegion(dst_state, dst_region, dst_vm_addr, chunk_len);
 
-        try ctx.run(dst_host, src_host);
+        try ctx.run(src_host, dst_host);
 
         src_chunk.?[2] -|= chunk_len;
         dst_chunk.?[2] -|= chunk_len;
@@ -219,7 +219,7 @@ const MemmoveContext = struct {
     // TODO(0.15): Use `@memmove` builtin.
     extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.C) ?[*]u8;
 
-    fn run(_: *@This(), dst: []u8, src: []const u8) !void {
+    fn run(_: *@This(), src: []const u8, dst: []u8) !void {
         std.debug.assert(dst.len == src.len);
         _ = @This().memmove(dst.ptr, src.ptr, src.len);
     }
@@ -277,8 +277,8 @@ fn memsetNonContigious(
 const MemcmpContext = struct {
     result: i32,
 
-    fn run(ctx: *MemcmpContext, dst: []const u8, src: []const u8) !void {
-        for (dst, src) |a, b| {
+    fn run(ctx: *MemcmpContext, s1: []const u8, s2: []const u8) !void {
+        for (s1, s2) |a, b| {
             if (a != b) {
                 ctx.result = @as(i32, a) -| @as(i32, b);
                 return error.Diff;
@@ -427,12 +427,12 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     const feature_set = tc.sc.ec.feature_set;
     const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
-        const cmp_result_slice = try memory_map.vmap(
+        const cmp_result = try memory_map.translateType(
+            i32,
             .mutable,
             cmp_result_addr,
-            @sizeOf(i32),
+            check_aligned,
         );
-        const cmp_result: *align(1) i32 = @ptrCast(cmp_result_slice.ptr);
 
         const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
         cmp_result.* = try memcmpNonContigious(
@@ -821,7 +821,9 @@ test "memcmp non contigious" {
         true,
     ));
 
-    try std.testing.expectEqual(-13, try memcmpNonContigious(
+    var ctx: MemcmpContext = .{ .result = 0 };
+    ctx.run("oobar", "obarb") catch {};
+    try std.testing.expectEqual(ctx.result, try memcmpNonContigious(
         memory.RODATA_START + 1,
         memory.RODATA_START + 11,
         5,
