@@ -573,7 +573,7 @@ const Packet = @import("../net/packet.zig").Packet;
 fn testPacketSender(chan: anytype, total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {
-        const packet = Packet.default();
+        const packet = Packet.ANY_EMPTY;
         chan.send(packet) catch |err| {
             std.debug.print("could not send on chan: {any}", .{err});
             @panic("could not send on channel!");
@@ -626,7 +626,7 @@ pub const BenchmarkChannel = struct {
     fn runSender(ctx: *Context) !void {
         ctx.start.wait();
         while (!ctx.stop.load(.monotonic)) {
-            try ctx.channel.send(Packet.default());
+            try ctx.channel.send(Packet.ANY_EMPTY);
         }
     }
 

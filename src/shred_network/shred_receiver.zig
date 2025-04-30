@@ -146,7 +146,7 @@ pub const ShredReceiver = struct {
         const repair_ping = bincode.readFromSlice(
             self.allocator,
             RepairPing,
-            &packet.data,
+            packet.data(),
             .{},
         ) catch {
             self.metrics.ping_deserialize_fail_count.inc();
@@ -160,8 +160,8 @@ pub const ShredReceiver = struct {
         self.metrics.valid_ping_count.inc();
         const reply: RepairMessage = .{ .Pong = try Pong.init(&ping, self.keypair) };
 
-        var reply_packet = Packet.default();
-        const reply_bytes = try bincode.writeToSlice(&reply_packet.data, reply, .{});
+        var reply_packet = Packet.ANY_EMPTY;
+        const reply_bytes = try bincode.writeToSlice(&reply_packet.buffer, reply, .{});
         reply_packet.size = reply_bytes.len;
         reply_packet.addr = packet.addr;
         return reply_packet;
