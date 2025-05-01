@@ -173,14 +173,6 @@ pub const TransactionReturnData = struct {
     }
 };
 
-// translate to use actaul error{} type?
-// pub const TxErr = error{};
-
-// const TxErrExtra = struct {
-//     err: TxErr,
-//     extra: union(enum) {},
-// };
-
 pub const TransactionError = union(enum) {
     /// An account is already being processed in another transaction in a way
     /// that does not support parallelism
