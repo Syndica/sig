@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
 const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
@@ -541,7 +542,7 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         switch_slot: Slot,
         ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
-        descendants: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const StakeAndVoteAccountsMap,
@@ -851,7 +852,7 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         switch_slot: Slot,
         ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
-        descendants: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+        descendants: *const AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
         progress: *const ProgressMap,
         total_stake: u64,
         epoch_vote_accounts: *const StakeAndVoteAccountsMap,
@@ -1547,7 +1548,7 @@ pub const Tower = struct {
         const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
             // We haven't seen any votes on this fork yet, so no stake
             return ThresholdDecision{
-                .failed_threshold = .{ @as(u64, threshold_depth), 0 },
+                .failed_threshold = .{ threshold_depth, 0 },
             };
         };
 
@@ -1577,7 +1578,7 @@ pub const Tower = struct {
         }
 
         return ThresholdDecision{
-            .failed_threshold = .{ @as(u64, threshold_depth), 0 },
+            .failed_threshold = .{ threshold_depth, 0 },
         };
     }
 
