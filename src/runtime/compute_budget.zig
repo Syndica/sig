@@ -9,6 +9,8 @@ pub const ComputeBudget = struct {
     compute_unit_limit: u64,
     /// Number of compute units consumed by a log_u64 call
     log_64_units: u64,
+    /// Number of compute units consumed by a create_program_address call
+    create_program_address_units: u64,
     /// Maximum SBF to BPF call depth
     max_call_depth: usize,
     /// Size of a stack frame in bytes, must match the size specified in the LLVM SBF backend
@@ -74,9 +76,11 @@ pub const ComputeBudget = struct {
     /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
     curve25519_ristretto_msm_incremental_cost: u64,
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/8363752bd5e41aaf8eaf9137711e8d8b11d84be6/program-runtime/src/execution_budget.rs#L162
     pub fn default(compute_unit_limit: u64) ComputeBudget {
         return .{
             .compute_unit_limit = compute_unit_limit,
+            .create_program_address_units = 1500,
             .log_64_units = 100,
             .max_call_depth = 64,
             .stack_frame_size = 4096,

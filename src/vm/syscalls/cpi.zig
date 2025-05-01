@@ -26,6 +26,7 @@ const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAc
 const SyscallError = sig.vm.syscalls.Error;
 const PRECOMPILES = sig.runtime.program.precompile_programs.PRECOMPILES;
 
+const VmSlice = memory.VmSlice;
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
 
@@ -166,13 +167,6 @@ fn VmValue(comptime T: type) type {
         }
     };
 }
-
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
-pub const VmSlice = extern struct {
-    ptr: u64,
-    len: u64,
-};
 
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L38
 fn checkAccountInfoPtr(

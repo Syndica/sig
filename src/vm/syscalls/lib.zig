@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cpi = @import("cpi.zig");
 const sig = @import("../../sig.zig");
 
@@ -8,11 +9,13 @@ pub const ecc = @import("ecc.zig");
 
 const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
+const pubkey_utils = sig.runtime.pubkey_utils;
 
 const memory = sig.vm.memory;
 const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
+const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
 const BuiltinProgram = sig.vm.BuiltinProgram;
 const FeatureSet = sig.runtime.features.FeatureSet;
@@ -99,8 +102,16 @@ pub fn register(
     );
 
     // Program derived addresses
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_create_program_address", createProgramAddress,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_try_find_program_address", createProgramAddress,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_create_program_address",
+        createProgramAddress,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_try_find_program_address",
+        findProgramAddress,
+    );
 
     // Sha256, Keccak256, Secp256k1Recover
     _ = try syscalls.functions.registerHashed(
@@ -350,7 +361,7 @@ pub fn logData(
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
 
     const vm_messages = try memory_map.translateSlice(
-        cpi.VmSlice,
+        memory.VmSlice,
         .constant,
         vm_addr,
         len,
@@ -497,26 +508,26 @@ pub fn remainingComputeUnits(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
 pub fn invokeSignedC(
-    ctx: *TransactionContext,
-    mmap: *MemoryMap,
-    rm: *RegisterMap,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
 ) Error!void {
-    return invokeSigned(cpi.AccountInfoC, ctx, mmap, rm);
+    return invokeSigned(cpi.AccountInfoC, tc, memory_map, registers);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
 pub fn invokeSignedRust(
-    ctx: *TransactionContext,
-    mmap: *MemoryMap,
-    rm: *RegisterMap,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
 ) Error!void {
-    return invokeSigned(cpi.AccountInfoRust, ctx, mmap, rm);
+    return invokeSigned(cpi.AccountInfoRust, tc, memory_map, registers);
 }
 
 fn invokeSigned(
     comptime AccountInfoType: type,
-    ctx: *TransactionContext,
-    mmap: *MemoryMap,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
     const instruction_addr = registers.get(.r1);
@@ -525,12 +536,12 @@ fn invokeSigned(
     const signers_seeds_addr = registers.get(.r4);
     const signers_seeds_len = registers.get(.r5);
 
-    const caller_ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+    const caller_ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
     return cpi.cpiCommon(
-        ctx.allocator,
+        tc.allocator,
         caller_ic,
-        mmap,
+        memory_map,
         AccountInfoType,
         instruction_addr,
         account_infos_addr,
@@ -569,7 +580,506 @@ pub fn panic(
     return SyscallError.Panic;
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L903
+pub fn findProgramAddress(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const seeds_addr = registers.get(.r1);
+    const seeds_len = registers.get(.r2);
+    const program_id_addr = registers.get(.r3);
+    const address_addr = registers.get(.r4);
+    const bump_seed_addr = registers.get(.r5);
+
+    const cost = tc.compute_budget.create_program_address_units;
+    try tc.consumeCompute(cost);
+
+    const check_aligned = tc.getCheckAligned();
+    const program_id, const seeds = try translateAndCheckProgramAddressInputs(
+        memory_map,
+        seeds_addr,
+        seeds_len,
+        program_id_addr,
+        check_aligned,
+    );
+
+    var bump_seed: u8 = std.math.maxInt(u8);
+    for (0..255) |_| {
+        const new_address = pubkey_utils.createProgramAddress(
+            seeds.constSlice(),
+            &.{bump_seed},
+            program_id,
+        ) catch {
+            bump_seed -|= 1;
+            try tc.consumeCompute(cost);
+            continue;
+        };
+
+        const bump_seed_ref = try memory_map.translateType(
+            u8,
+            .mutable,
+            bump_seed_addr,
+            check_aligned,
+        );
+        const address = try memory_map.translateSlice(
+            u8,
+            .mutable,
+            address_addr,
+            @sizeOf(Pubkey),
+            check_aligned,
+        );
+
+        if (memops.isOverlapping(
+            @intFromPtr(bump_seed_ref),
+            @sizeOf(u8),
+            @intFromPtr(address.ptr),
+            address.len,
+        )) return SyscallError.CopyOverlapping;
+
+        bump_seed_ref.* = bump_seed;
+        @memcpy(address, std.mem.asBytes(&new_address));
+        return; // r0 = 0
+    }
+
+    registers.set(.r0, 1);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L864
+pub fn createProgramAddress(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const seeds_addr = registers.get(.r1);
+    const seeds_len = registers.get(.r2);
+    const program_id_addr = registers.get(.r3);
+    const address_addr = registers.get(.r4);
+
+    const cost = tc.compute_budget.create_program_address_units;
+    try tc.consumeCompute(cost);
+
+    const check_aligned = tc.getCheckAligned();
+    const program_id, const seeds = try translateAndCheckProgramAddressInputs(
+        memory_map,
+        seeds_addr,
+        seeds_len,
+        program_id_addr,
+        check_aligned,
+    );
+
+    const new_address = pubkey_utils.createProgramAddress(seeds.slice(), &.{}, program_id) catch {
+        registers.set(.r0, 1);
+        return;
+    };
+    const address = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        address_addr,
+        @sizeOf(Pubkey),
+        check_aligned,
+    );
+    @memcpy(address, std.mem.asBytes(&new_address));
+    return; // r0 = 0
+}
+
+fn translateAndCheckProgramAddressInputs(
+    memory_map: *MemoryMap,
+    seeds_addr: u64,
+    seeds_len: u64,
+    program_id_addr: u64,
+    check_aligned: bool,
+) Error!struct { Pubkey, std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
+    const untranslated_seeds = try memory_map.translateSlice(
+        memory.VmSlice,
+        .constant,
+        seeds_addr,
+        seeds_len,
+        check_aligned,
+    );
+    if (untranslated_seeds.len > pubkey_utils.MAX_SEEDS) {
+        return SyscallError.BadSeeds; // PubkeyError.MaxSeedLengthExceeded
+    }
+
+    var seeds: std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
+    for (untranslated_seeds) |untranslated_seed| {
+        if (untranslated_seed.len > pubkey_utils.MAX_SEED_LEN) return SyscallError.BadSeeds;
+        seeds.appendAssumeCapacity(try memory_map.translateSlice(
+            u8,
+            .constant,
+            untranslated_seed.ptr,
+            untranslated_seed.len,
+            check_aligned,
+        ));
+    }
+
+    const program_id = try memory_map.translateType(
+        Pubkey,
+        .constant,
+        program_id_addr,
+        check_aligned,
+    );
+
+    return .{ program_id.*, seeds };
+}
+
 // Syscall Tests
+
+/// Meant only as a helper for tests below.
+/// Invokes either createProgramAddress or findProgramAddress syscalls with VM context setup.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L4301
+fn callProgramAddressSyscall(
+    allocator: std.mem.Allocator,
+    tc: *TransactionContext,
+    comptime syscall_fn: fn (*TransactionContext, *MemoryMap, *RegisterMap) Error!void,
+    seeds: []const []const u8,
+    program_id: Pubkey,
+    overlap_outputs: bool,
+) !struct { Pubkey, u8 } {
+    comptime std.debug.assert(builtin.is_test);
+
+    const seeds_addr = 0x100000000;
+    const program_id_addr = 0x200000000;
+    const address_addr = 0x300000000;
+    const bump_seed_addr = 0x400000000;
+    const seed_data_addr = 0x500000000;
+
+    var out_bump_seed: u8 = 0;
+    var out_address = Pubkey.ZEROES;
+
+    // Setup in/out params.
+    var regions = std.ArrayList(memory.Region).init(allocator);
+    defer regions.deinit();
+    try regions.appendSlice(&.{
+        memory.Region.init(.constant, std.mem.asBytes(&program_id), program_id_addr),
+        memory.Region.init(.mutable, std.mem.asBytes(&out_address), address_addr),
+        memory.Region.init(.mutable, std.mem.asBytes(&out_bump_seed), bump_seed_addr),
+    });
+
+    // Setup slice of VmSlices
+    var seed_slices = std.ArrayList(memory.VmSlice).init(allocator);
+    defer seed_slices.deinit();
+    for (seeds, 0..) |seed, i| {
+        const vm_addr = seed_data_addr +| (i *% 0x100000000);
+        try seed_slices.append(.{ .ptr = vm_addr, .len = seed.len });
+        try regions.append(memory.Region.init(.constant, seed, vm_addr));
+    }
+
+    // seeds_addr is only finalized now, but should appear before the others.
+    try regions.appendSlice(&.{
+        memory.Region.init(.constant, std.mem.sliceAsBytes(seed_slices.items), seeds_addr),
+    });
+    std.mem.sort(memory.Region, regions.items, {}, struct {
+        fn less(_: void, r1: memory.Region, r2: memory.Region) bool {
+            return r1.vm_addr_start < r2.vm_addr_start;
+        }
+    }.less);
+
+    var memory_map = try MemoryMap.init(allocator, regions.items, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r0, 0);
+    registers.set(.r1, seeds_addr);
+    registers.set(.r2, seeds.len);
+    registers.set(.r3, program_id_addr);
+    registers.set(.r4, address_addr);
+    registers.set(.r5, if (overlap_outputs) address_addr else bump_seed_addr);
+
+    try syscall_fn(tc, &memory_map, &registers);
+    return .{ out_address, out_bump_seed };
+}
+
+test findProgramAddress {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    const cost = tc.compute_budget.create_program_address_units;
+    const address = sig.runtime.program.bpf_loader_program.v3.ID;
+    const max_tries: u64 = 256; // once per seed
+
+    for (0..1000) |_| {
+        const new_address = Pubkey.initRandom(prng.random());
+        tc.compute_meter = cost * max_tries;
+        const found_address, const bump_seed = try callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            &.{ "Lil'", "Bits" },
+            new_address,
+            false,
+        );
+        const created_address, _ = try callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{ "Lil'", "Bits", &.{bump_seed} },
+            new_address,
+            false,
+        );
+        try std.testing.expect(found_address.equals(&created_address));
+    }
+
+    const seeds: []const []const u8 = &.{""};
+    tc.compute_meter = cost * max_tries;
+    _, const bump_seed = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        findProgramAddress,
+        seeds,
+        address,
+        false,
+    );
+    tc.compute_meter = cost * (max_tries - bump_seed);
+    _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        findProgramAddress,
+        seeds,
+        address,
+        false,
+    );
+    tc.compute_meter = cost * (max_tries - bump_seed - 1);
+    try std.testing.expectError(
+        InstructionError.ComputationalBudgetExceeded,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            seeds,
+            address,
+            false,
+        ),
+    );
+
+    const exceeded_seed = [_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1);
+    tc.compute_meter = cost * (max_tries - 1);
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            &.{&exceeded_seed},
+            address,
+            false,
+        ),
+    );
+
+    comptime var exceeded_seeds: []const []const u8 = &.{};
+    inline for (1..18) |i| exceeded_seeds = exceeded_seeds ++ &[_][]const u8{&[_]u8{@intCast(i)}};
+    tc.compute_meter = cost * (max_tries - 1);
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            exceeded_seeds,
+            address,
+            false,
+        ),
+    );
+
+    try std.testing.expectError(
+        SyscallError.CopyOverlapping,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            seeds,
+            address,
+            true,
+        ),
+    );
+}
+
+test createProgramAddress {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    const cost = tc.compute_budget.create_program_address_units;
+    const address = sig.runtime.program.bpf_loader_program.v3.ID;
+    tc.compute_meter = cost * 12; // enough for 12 calls to createProgramAddress
+
+    const exceeded_seed: []const u8 = &([_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1));
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{exceeded_seed},
+            address,
+            false,
+        ),
+    );
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{ "short_seed", exceeded_seed },
+            address,
+            false,
+        ),
+    );
+
+    const max_seed: []const u8 = &([_]u8{0} ** pubkey_utils.MAX_SEED_LEN);
+    _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{max_seed},
+        address,
+        false,
+    );
+
+    comptime var exceeded_seeds: []const []const u8 = &.{};
+    inline for (1..16) |i| {
+        exceeded_seeds = exceeded_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
+    }
+    _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        exceeded_seeds,
+        address,
+        false,
+    );
+
+    comptime var max_seeds: []const []const u8 = &.{};
+    inline for (0..17) |i| {
+        max_seeds = max_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
+    }
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            max_seeds,
+            address,
+            false,
+        ),
+    );
+
+    var pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "", &.{1} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")).equals(&pk),
+    );
+
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "☉", &.{0} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")).equals(&pk),
+    );
+
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "Talking", "Squirrels" },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")).equals(&pk),
+    );
+
+    const seed_pk = try Pubkey.parseBase58String("SeedPubey1111111111111111111111111111111111");
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ &seed_pk.data, &.{1} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")).equals(&pk),
+    );
+
+    const pk_a, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "Talking", "Squirrels" },
+        address,
+        false,
+    );
+    const pk_b, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{"Talking"},
+        address,
+        false,
+    );
+    try std.testing.expect(!pk_a.equals(&pk_b));
+
+    tc.compute_meter = 0;
+    try std.testing.expectError(
+        InstructionError.ComputationalBudgetExceeded,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{ "", &.{1} },
+            address,
+            false,
+        ),
+    );
+}
 
 test "set and get return data" {
     const allocator = std.testing.allocator;

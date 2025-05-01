@@ -6,7 +6,7 @@ const Pubkey = sig.core.Pubkey;
 // TODO: Consider moving the below to the pubkey module
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L26
-const MAX_SEED_LEN = 32;
+pub const MAX_SEED_LEN = 32;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L44-L45
 pub const MAX_SEEDS: usize = 16;
