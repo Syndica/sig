@@ -22,7 +22,17 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
 
         rent_collector: sig.core.rent_collector.RentCollector,
         slot_context: sig.runtime.SlotContext,
-        raw_transactions: []const sig.core.Transaction, // TODO: assuming sanitized already (!)
+        // TODO: assuming sanitized already (!)
+        raw_transactions: []const sig.core.Transaction,
+        /// raw_transactions.len == compute_budgets.len
+        /// This should come from inside the transaction, but it isn't in sig.core.Transaction
+        /// see: TransactionExecutionDetails
+        compute_budgets: []const sig.runtime.ComputeBudget,
+        /// raw_transactions.len == loaded_accounts_data_size_limit.len
+        /// This should come from inside the transaction, but it isn't in sig.core.Transaction
+        /// see: TransactionExecutionDetails
+        loaded_accounts_data_size_limits: []const u32,
+
         accounts_db: AccountsDb,
         slot: Slot,
 
@@ -30,6 +40,8 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
 
         fn testingDefault(
             transactions: []const sig.core.Transaction,
+            compute_budgets: []const sig.runtime.ComputeBudget,
+            loaded_accounts_data_size_limits: []const u32,
             accounts_db: AccountsDb,
         ) Self {
             if (!builtin.is_test) @compileError("testingDefault for testing only");
@@ -51,6 +63,8 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
                 },
                 .raw_transactions = transactions,
                 .accounts_db = accounts_db,
+                .compute_budgets = compute_budgets,
+                .loaded_accounts_data_size_limits = loaded_accounts_data_size_limits,
             };
         }
     };
@@ -110,7 +124,8 @@ pub const Output = struct {
     // .len == raw_instructions.len
     processing_results: []const TransactionResult,
 
-    // useful as the account cache effectively de-duplicates account datas
+    // useful as the account cache effectively de-duplicates account datas (we can't just loop over
+    // the accounts and deallocate them one by one)
     arena: std.heap.ArenaAllocator,
 
     pub fn deinit(self: Output) void {
@@ -148,14 +163,16 @@ pub fn loadAndExecuteBatch(
     );
     defer loader.deinit();
 
-    // incorrect - transaction details should contain this as a field
-    const requested_max_total_data_size = 100 * 1024 * 1024;
-
     const transaction_result = try output_allocator.alloc(TransactionResult, env.raw_transactions.len);
     errdefer output_allocator.free(transaction_result);
 
     // transactions must be executed in order
-    for (env.raw_transactions, 0..) |tx, tx_idx| {
+    for (
+        env.raw_transactions,
+        env.compute_budgets,
+        env.loaded_accounts_data_size_limits,
+        0..,
+    ) |tx, compute_budget, accounts_data_size_limit, tx_idx| {
         transaction_result[tx_idx].logs = null;
         // now would be a great time to *validate_transaction_nonce_and_fee_payer*
         // not doing it yet. Pretending it's valid for now.
@@ -166,7 +183,7 @@ pub fn loadAndExecuteBatch(
             accountsdb_kind,
             tmp_allocator,
             &tx,
-            requested_max_total_data_size,
+            accounts_data_size_limit,
             &loader,
             &env.slot_context.ec.feature_set,
             &env.rent_collector,
@@ -180,7 +197,14 @@ pub fn loadAndExecuteBatch(
 
         const accounts = loaded_accounts.accounts_buf[0..tx.msg.account_keys.len];
 
-        var ctx = try makeTransactionContext(accountsdb_kind, tmp_allocator, &env, accounts, &tx);
+        var ctx = try makeTransactionContext(
+            accountsdb_kind,
+            tmp_allocator,
+            &env,
+            accounts,
+            &tx,
+            compute_budget,
+        );
 
         var tx_executed: TransactionResult = .{
             .logs = null,
@@ -220,12 +244,70 @@ pub fn loadAndExecuteBatch(
     };
 }
 
+// [agave] SVMTransactionExecutionBudget
+pub const ExecutionBudget = struct {
+    /// Number of compute units that a transaction or individual instruction is
+    /// allowed to consume. Compute units are consumed by program execution,
+    /// resources they use, etc...
+    compute_unit_limit: u64,
+    /// Maximum program instruction invocation stack depth. Invocation stack
+    /// depth starts at 1 for transaction instructions and the stack depth is
+    /// incremented each time a program invokes an instruction and decremented
+    /// when a program returns.
+    max_instruction_stack_depth: usize,
+    /// Maximum cross-program invocation and instructions per transaction
+    max_instruction_trace_length: usize,
+    /// Maximum number of slices hashed per syscall
+    sha256_max_slices: u64,
+    /// Maximum SBF to BPF call depth
+    max_call_depth: usize,
+    /// Size of a stack frame in bytes, must match the size specified in the LLVM SBF backend
+    stack_frame_size: usize,
+    /// Maximum cross-program invocation instruction size
+    max_cpi_instruction_size: usize,
+    /// program heap region size, default: solana_sdk::entrypoint::HEAP_LENGTH
+    heap_size: u32,
+
+    const MAX_COMPUTE_UNIT_LIMIT = 1_400_00;
+    const MAX_INSTRUCTION_STACK_DEPTH = 5;
+    const MAX_CALL_DEPTH = 64;
+    const STACK_FRAME_SIZE = 4096;
+    const HEAP_LENGTH = 32 * 1024;
+
+    // [agave] https://github.com/anza-xyz/agave/blob/f4e69de681ea220608524b5e205c4ad3b2e4b871/program-runtime/src/execution_budget.rs#L57
+    pub const DEFAULT: ExecutionBudget = .{
+        .compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT,
+        .max_instruction_stack_depth = 5,
+        .max_instruction_trace_length = 64,
+        .sha256_max_slices = 20_000,
+        .max_call_depth = MAX_CALL_DEPTH,
+        .stack_frame_size = STACK_FRAME_SIZE,
+        .max_cpi_instruction_size = 1280, // "IPv6 Min MTU size"
+        .heap_size = HEAP_LENGTH,
+    };
+};
+
+pub const FeeDetails = struct { transaction_fee: u64, prioritization_fee: u64 };
+
+// ~= SVMTransactionExecutionAndFeeBudgetLimits
+// This should come from the bytes of the transaction, but we don't yet have it
+pub const TransactionExecutionDetails = struct {
+    pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
+
+    budget: ExecutionBudget,
+    // unused for now, needed for validation
+    fee_details: FeeDetails,
+    /// non-zero
+    loaded_accounts_data_size_limit: u32,
+};
+
 fn makeTransactionContext(
     comptime accountsdb_kind: account_loader.AccountsDbKind,
     allocator: std.mem.Allocator,
     env: *const ProcessingEnv(accountsdb_kind),
     accounts: []const AccountSharedData,
     raw_transaction: *const sig.core.Transaction,
+    compute_budget: sig.runtime.ComputeBudget,
 ) error{OutOfMemory}!sig.runtime.TransactionContext {
     const context_accounts = try allocator.alloc(sig.runtime.TransactionContextAccount, accounts.len);
     errdefer allocator.free(context_accounts);
@@ -246,11 +328,12 @@ fn makeTransactionContext(
         .accounts_resize_delta = 0,
         .compute_meter = 0,
         .custom_error = null,
-        .log_collector = sig.runtime.LogCollector.init(null), // TODO: should probably limit this
+        // 100KiB max log (we need *a* limit, but this is arbitrary)
+        .log_collector = sig.runtime.LogCollector.init(100 * 1024),
         .prev_blockhash = env.prev_blockhash,
         .serialized_accounts = .{},
         .prev_lamports_per_signature = env.prev_blockhash_lamports_per_signature,
-        .compute_budget = undefined, // TODO: plumb this through
+        .compute_budget = compute_budget,
     };
 }
 
@@ -419,7 +502,20 @@ test {
         .signatures = &.{},
     };
 
-    const env = ProcessingEnv(.Mocked).testingDefault(&.{ tx1, tx2, tx3, tx4, tx5 }, bank);
+    const compute_budgets = try allocator.alloc(sig.runtime.ComputeBudget, 5);
+    defer allocator.free(compute_budgets);
+    @memset(compute_budgets, sig.runtime.ComputeBudget.default(1_000_000));
+
+    const data_loaded_limit = try allocator.alloc(u32, 5);
+    defer allocator.free(data_loaded_limit);
+    @memset(data_loaded_limit, 10_000);
+
+    const env = ProcessingEnv(.Mocked).testingDefault(
+        &.{ tx1, tx2, tx3, tx4, tx5 },
+        compute_budgets,
+        data_loaded_limit,
+        bank,
+    );
 
     const output = try loadAndExecuteBatch(.Mocked, allocator, env);
     defer output.deinit();
