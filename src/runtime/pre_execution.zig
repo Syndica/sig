@@ -4,7 +4,6 @@ const sig = @import("../sig.zig");
 
 const account_loader = sig.runtime.account_loader;
 const AccountLoader = account_loader.AccountLoader;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const AccountSharedData = sig.runtime.AccountSharedData;
@@ -24,25 +23,6 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
         slot_context: sig.runtime.SlotContext,
         // TODO: assuming sanitized already (!)
         raw_transactions: []const sig.core.Transaction,
-        /// raw_transactions.len == compute_budgets.len
-        /// This should come from inside the transaction, but it isn't in sig.core.Transaction
-        /// see: TransactionExecutionDetails
-        ///
-        /// see calculate_signature_fee
-        ///
-        /// TODO: ComputeBudgetInstructionDetails try_from instructions
-        /// sanitize_and_convert_to_compute_budget_limits
-        /// impl From<ComputeBudgetLimits> for ComputeBudget {
-        ///
-        // compute_budgets: []const sig.runtime.ComputeBudget,
-        /// raw_transactions.len == loaded_accounts_data_size_limit.len
-        /// This should come from inside the transaction, but it isn't in sig.core.Transaction
-        /// see: TransactionExecutionDetails
-        ///
-        ///
-        /// comes from ComputeBudgetLimits
-        // loaded_accounts_data_size_limits: []const u32,
-
         accounts_db: AccountsDb,
         slot: Slot,
 
@@ -169,7 +149,10 @@ pub fn loadAndExecuteBatch(
     );
     defer loader.deinit();
 
-    const transaction_result = try output_allocator.alloc(TransactionResult, env.raw_transactions.len);
+    const transaction_result = try output_allocator.alloc(
+        TransactionResult,
+        env.raw_transactions.len,
+    );
     errdefer output_allocator.free(transaction_result);
 
     // transactions must be executed in order
@@ -314,7 +297,10 @@ fn makeTransactionContext(
     raw_transaction: *const sig.core.Transaction,
     compute_budget: sig.runtime.ComputeBudget,
 ) error{OutOfMemory}!sig.runtime.TransactionContext {
-    const context_accounts = try allocator.alloc(sig.runtime.TransactionContextAccount, accounts.len);
+    const context_accounts = try allocator.alloc(
+        sig.runtime.TransactionContextAccount,
+        accounts.len,
+    );
     errdefer allocator.free(context_accounts);
 
     for (accounts, raw_transaction.msg.account_keys, 0..) |account, key, account_idx| {
@@ -389,7 +375,9 @@ fn executeLoadedTransaction(
         const is_precompile_program =
             for (sig.runtime.program.precompile_programs.PRECOMPILES) |precompile|
         {
-            if (precompile.program_id.equals(&raw_transaction.msg.account_keys[instruction.program_index]))
+            if (precompile.program_id.equals(
+                &raw_transaction.msg.account_keys[instruction.program_index],
+            ))
                 break true;
         } else false;
 
@@ -562,7 +550,9 @@ const ComputeBudgetInstructionDetails = struct {
         const details = DEFAULT;
 
         for (tx.msg.instructions) |instr| {
-            if (tx.msg.account_keys[instr.program_index].equals(&sig.runtime.ids.COMPUTE_BUDGET_PROGRAM_ID)) {
+            if (tx.msg.account_keys[instr.program_index].equals(
+                &sig.runtime.ids.COMPUTE_BUDGET_PROGRAM_ID,
+            )) {
                 @panic("TODO: compute budget program unsupported");
             }
         }
