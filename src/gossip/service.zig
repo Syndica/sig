@@ -1232,16 +1232,17 @@ pub const GossipService = struct {
         );
 
         // randomly include an entrypoint in the pull if we dont have their contact info
-        var entrypoint_index: i16 = -1;
-        if (self.entrypoints.items.len != 0) blk: {
-            const maybe_entrypoint_index = random.intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
-            if (self.entrypoints.items[maybe_entrypoint_index].info) |_| {
+        const entrypoint_index: ?u15 = blk: {
+            if (self.entrypoints.items.len == 0) break :blk null;
+            const maybe_entrypoint_index = random.uintLessThan(u15, @intCast(self.entrypoints.items.len));
+            if (self.entrypoints.items[maybe_entrypoint_index].info != null) {
                 // early exit - we already have the peer in our contact info
-                break :blk;
+                break :blk null;
             }
+
             // we dont have them so well add them to the peer list (as default contact info)
-            entrypoint_index = @intCast(maybe_entrypoint_index);
-        }
+            break :blk maybe_entrypoint_index;
+        };
 
         // filter out peers who have responded to pings
         const ping_cache_result = blk: {
@@ -1257,10 +1258,9 @@ pub const GossipService = struct {
         defer pings_to_send_out.deinit();
         try self.sendPings(pings_to_send_out.items);
 
-        const should_send_to_entrypoint = entrypoint_index != -1;
         const num_peers = valid_gossip_peer_indexs.items.len;
 
-        if (num_peers == 0 and !should_send_to_entrypoint) {
+        if (num_peers == 0 and entrypoint_index == null) {
             return error.NoPeers;
         }
 
@@ -1287,7 +1287,7 @@ pub const GossipService = struct {
         // build packet responses
         var n_packets: usize = 0;
         if (num_peers != 0) n_packets += filters.items.len;
-        if (should_send_to_entrypoint) n_packets += filters.items.len;
+        if (entrypoint_index != null) n_packets += filters.items.len;
 
         var packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
         packet_batch.appendNTimesAssumeCapacity(Packet.ANY_EMPTY, n_packets);
@@ -1324,8 +1324,8 @@ pub const GossipService = struct {
         }
 
         // append entrypoint msgs
-        if (should_send_to_entrypoint) {
-            const entrypoint = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
+        if (entrypoint_index) |entrypoint_idx| {
+            const entrypoint = self.entrypoints.items[entrypoint_idx];
             for (filters.items) |filter| {
                 const packet = &packet_batch.items[packet_index];
                 const message: GossipMessage = .{ .PullRequest = .{ filter, my_contact_info_value } };
@@ -2325,7 +2325,7 @@ pub fn getClusterEntrypoints(cluster: sig.core.Cluster) []const []const u8 {
     };
 }
 
-const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
+const TestingLogger = sig.trace.log.DirectPrintLogger;
 
 test "handle pong messages" {
     const allocator = std.testing.allocator;
@@ -2880,25 +2880,47 @@ test "test build prune messages and handle push messages" {
     gossip_service.shutdown();
 }
 
-test "build pull requests" {
-    const allocator = std.testing.allocator;
+test testBuildPullRequests {
     var prng = std.rand.DefaultPrng.init(91);
-    var my_keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    const my_keypair = try KeyPair.create(.{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
     const contact_info = try localhostTestContactInfo(my_pubkey);
+    defer contact_info.deinit();
 
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+    try testBuildPullRequests(prng.random(), my_keypair, contact_info, null);
+    try testBuildPullRequests(
+        prng.random(),
+        my_keypair,
+        contact_info,
+        &.{contact_info.getSocket(.gossip).?},
+    );
+}
 
+fn testBuildPullRequests(
+    random: std.Random,
+    my_keypair: KeyPair,
+    contact_info: ContactInfo,
+    maybe_entrypoints: ?[]const SocketAddr,
+) !void {
+    const allocator = std.testing.allocator;
+
+    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     const logger = test_logger.logger();
 
-    var gossip_service = try GossipService.create(
-        allocator,
-        allocator,
-        contact_info,
-        my_keypair,
-        null,
-        logger,
-    );
+    const gossip_service = blk: {
+        const contact_info_clone = try contact_info.clone();
+        errdefer contact_info_clone.deinit();
+        break :blk try GossipService.create(
+            allocator,
+            allocator,
+            contact_info_clone,
+            my_keypair,
+            maybe_entrypoints,
+            logger,
+        );
+    };
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
@@ -2919,7 +2941,7 @@ test "build pull requests" {
         for (0..20) |i| {
             const rando_keypair = try KeyPair.create(null);
 
-            var lci = LegacyContactInfo.initRandom(prng.random());
+            var lci = LegacyContactInfo.initRandom(random);
             lci.id = Pubkey.fromPublicKey(&rando_keypair.public_key);
             lci.wallclock = now + 10 * i;
             lci.shred_version = contact_info.shred_version;
@@ -2930,7 +2952,7 @@ test "build pull requests" {
         }
     }
 
-    var packets = gossip_service.buildPullRequests(prng.random(), 2, now) catch |err| {
+    var packets = gossip_service.buildPullRequests(random, 2, now) catch |err| {
         std.log.err("\nThe failing now time is: '{d}'\n", .{now});
         return err;
     };
