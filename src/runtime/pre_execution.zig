@@ -27,11 +27,21 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
         /// raw_transactions.len == compute_budgets.len
         /// This should come from inside the transaction, but it isn't in sig.core.Transaction
         /// see: TransactionExecutionDetails
-        compute_budgets: []const sig.runtime.ComputeBudget,
+        ///
+        /// see calculate_signature_fee
+        ///
+        /// TODO: ComputeBudgetInstructionDetails try_from instructions
+        /// sanitize_and_convert_to_compute_budget_limits
+        /// impl From<ComputeBudgetLimits> for ComputeBudget {
+        ///
+        // compute_budgets: []const sig.runtime.ComputeBudget,
         /// raw_transactions.len == loaded_accounts_data_size_limit.len
         /// This should come from inside the transaction, but it isn't in sig.core.Transaction
         /// see: TransactionExecutionDetails
-        loaded_accounts_data_size_limits: []const u32,
+        ///
+        ///
+        /// comes from ComputeBudgetLimits
+        // loaded_accounts_data_size_limits: []const u32,
 
         accounts_db: AccountsDb,
         slot: Slot,
@@ -40,8 +50,6 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
 
         fn testingDefault(
             transactions: []const sig.core.Transaction,
-            compute_budgets: []const sig.runtime.ComputeBudget,
-            loaded_accounts_data_size_limits: []const u32,
             accounts_db: AccountsDb,
         ) Self {
             if (!builtin.is_test) @compileError("testingDefault for testing only");
@@ -63,8 +71,6 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
                 },
                 .raw_transactions = transactions,
                 .accounts_db = accounts_db,
-                .compute_budgets = compute_budgets,
-                .loaded_accounts_data_size_limits = loaded_accounts_data_size_limits,
             };
         }
     };
@@ -167,23 +173,22 @@ pub fn loadAndExecuteBatch(
     errdefer output_allocator.free(transaction_result);
 
     // transactions must be executed in order
-    for (
-        env.raw_transactions,
-        env.compute_budgets,
-        env.loaded_accounts_data_size_limits,
-        0..,
-    ) |tx, compute_budget, accounts_data_size_limit, tx_idx| {
+    for (env.raw_transactions, 0..) |tx, tx_idx| {
         transaction_result[tx_idx].logs = null;
         // now would be a great time to *validate_transaction_nonce_and_fee_payer*
         // not doing it yet. Pretending it's valid for now.
 
         // TODO: this loop needs a bunch more error handling
 
+        const instr_details = try ComputeBudgetInstructionDetails.fromInstructions(&tx);
+        const budget_limits = try instr_details.sanitizeAndConvertToComputeBudgetLimits();
+        const compute_budget = budget_limits.intoComputeBudget();
+
         const loaded_accounts = account_loader.loadTransactionAccountsInner(
             accountsdb_kind,
             tmp_allocator,
             &tx,
-            accounts_data_size_limit,
+            budget_limits.loaded_accounts_bytes,
             &loader,
             &env.slot_context.ec.feature_set,
             &env.rent_collector,
@@ -292,7 +297,7 @@ pub const FeeDetails = struct { transaction_fee: u64, prioritization_fee: u64 };
 // ~= SVMTransactionExecutionAndFeeBudgetLimits
 // This should come from the bytes of the transaction, but we don't yet have it
 pub const TransactionExecutionDetails = struct {
-    pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
+    pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024; // MVP <- use this as default
 
     budget: ExecutionBudget,
     // unused for now, needed for validation
@@ -390,6 +395,7 @@ fn executeLoadedTransaction(
 
         if (is_precompile_program) {
             // TODO
+            @panic("TODO");
         } else {
             // ~= process_instruction
             try sig.runtime.executor.executeInstruction(allocator, ctx, .{
@@ -454,21 +460,21 @@ test {
     );
     defer std.testing.allocator.free(ed25519_instruction.data);
 
-    // a precompile instruction (slightly different codepath)
-    const tx3: sig.core.Transaction = .{
-        .msg = .{
-            .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
-            .instructions = &.{
-                .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
-            },
-            .signature_count = 1,
-            .readonly_signed_count = 1,
-            .readonly_unsigned_count = 0,
-            .recent_blockhash = sig.core.Hash.ZEROES,
-        },
-        .version = .legacy,
-        .signatures = &.{},
-    };
+    // a precompile instruction (slightly different codepath) - impl
+    // const tx3: sig.core.Transaction = .{
+    //     .msg = .{
+    //         .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
+    //         .instructions = &.{
+    //             .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
+    //         },
+    //         .signature_count = 1,
+    //         .readonly_signed_count = 1,
+    //         .readonly_unsigned_count = 0,
+    //         .recent_blockhash = sig.core.Hash.ZEROES,
+    //     },
+    //     .version = .legacy,
+    //     .signatures = &.{},
+    // };
 
     // program not found
     const tx4 = sig.core.Transaction{
@@ -502,32 +508,128 @@ test {
         .signatures = &.{},
     };
 
-    const compute_budgets = try allocator.alloc(sig.runtime.ComputeBudget, 5);
-    defer allocator.free(compute_budgets);
-    @memset(compute_budgets, sig.runtime.ComputeBudget.default(1_000_000));
-
-    const data_loaded_limit = try allocator.alloc(u32, 5);
-    defer allocator.free(data_loaded_limit);
-    @memset(data_loaded_limit, 10_000);
-
-    const env = ProcessingEnv(.Mocked).testingDefault(
-        &.{ tx1, tx2, tx3, tx4, tx5 },
-        compute_budgets,
-        data_loaded_limit,
-        bank,
-    );
+    const env = ProcessingEnv(.Mocked).testingDefault(&.{ tx1, tx2, tx4, tx5 }, bank);
 
     const output = try loadAndExecuteBatch(.Mocked, allocator, env);
     defer output.deinit();
 
     for (output.processing_results, 0..) |res, i| {
-        std.debug.print("tx{} - err?: {?}\n", .{ i, res.err() });
-        if (res.logs) |logs| {
-            if (logs.len > 0) {
-                std.debug.print("log{{ \n", .{});
-                for (logs, 0..) |log, log_idx| std.debug.print("\t{: >3}: {s}\n", .{ log_idx, log });
-                std.debug.print("}}\n", .{});
-            }
-        }
+        try switch (i) {
+            0, 1 => std.testing.expect(res.err() == null),
+            2 => std.testing.expect(res.err().? == error.ProgramAccountNotFound),
+            3 => std.testing.expect(res.err().? == error.ComputationalBudgetExceeded), // correct?
+            else => unreachable,
+        };
     }
 }
+
+// [agave] https://github.com/anza-xyz/agave/blob/b70cac38827e499d34c3a521eac17c68fb1b5b1f/compute-budget-instruction/src/compute_budget_instruction_details.rs#L39
+const ComputeBudgetInstructionDetails = struct {
+    /// unimpl
+    const MigrationBuiltinFeatureCounter = struct {};
+
+    const Value32 = struct { instr_idx: u8, value: u32 };
+    const Value64 = struct { instr_idx: u8, value: u32 };
+
+    // compute-budget instruction details:
+    // the first field in tuple is instruction index, second field is the unsanitized value set by user
+    requested_compute_unit_limit: ?Value32,
+    requested_compute_unit_price: ?Value64,
+    requested_heap_size: ?Value32,
+    requested_loaded_accounts_data_size_limit: ?Value32,
+    num_non_compute_budget_instructions: u16,
+    // Additional builtin program counters
+    num_non_migratable_builtin_instructions: u16,
+    num_non_builtin_instructions: u16,
+    migrating_builtin_feature_counters: MigrationBuiltinFeatureCounter,
+
+    const DEFAULT: ComputeBudgetInstructionDetails = .{
+        .requested_compute_unit_limit = null,
+        .requested_compute_unit_price = null,
+        .requested_heap_size = null,
+        .requested_loaded_accounts_data_size_limit = null,
+        .num_non_compute_budget_instructions = 0,
+        .num_non_migratable_builtin_instructions = 0,
+        .num_non_builtin_instructions = 0,
+        .migrating_builtin_feature_counters = .{},
+    };
+
+    // This impl is a bit of a stub
+    // [agave] https://github.com/anza-xyz/agave/blob/b70cac38827e499d34c3a521eac17c68fb1b5b1f/compute-budget-instruction/src/compute_budget_instruction_details.rs#L54
+    fn fromInstructions(
+        tx: *const sig.core.Transaction,
+    ) !ComputeBudgetInstructionDetails {
+        const details = DEFAULT;
+
+        for (tx.msg.instructions) |instr| {
+            if (tx.msg.account_keys[instr.program_index].equals(&sig.runtime.ids.COMPUTE_BUDGET_PROGRAM_ID)) {
+                @panic("TODO: compute budget program unsupported");
+            }
+        }
+
+        return details;
+    }
+
+    const MIN_HEAP_FRAME_BYTES = ExecutionBudget.HEAP_LENGTH;
+    const MAX_HEAP_FRAME_BYTES = 256 * 1024;
+    const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT = 200_000;
+    const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
+
+    fn sanitizeRequestedHeapSize(bytes: u32) bool {
+        return bytes % 1024 == 0 and
+            bytes >= MIN_HEAP_FRAME_BYTES and bytes <= MAX_HEAP_FRAME_BYTES;
+    }
+
+    fn sanitizeAndConvertToComputeBudgetLimits(
+        self: ComputeBudgetInstructionDetails,
+    ) !ComputeBudgetLimits {
+        const updated_heap_bytes = @min(
+            MAX_HEAP_FRAME_BYTES,
+            if (self.requested_heap_size) |requested_heap_size| blk: {
+                if (sanitizeRequestedHeapSize(requested_heap_size.value)) {
+                    break :blk requested_heap_size.value;
+                } else {
+                    return error.InvalidInstructionData;
+                }
+            } else MIN_HEAP_FRAME_BYTES,
+        );
+
+        // TODO: the real impl for this one is more complicated
+        const compute_unit_limit = if (self.requested_compute_unit_limit) |limit|
+            limit.value
+        else
+            DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
+
+        const compute_unit_price = if (self.requested_compute_unit_price) |price|
+            price.value
+        else
+            0;
+
+        const loaded_bytes = if (self.requested_loaded_accounts_data_size_limit) |size_limit| blk: {
+            if (size_limit.value == 0) return error.InvalidLoadedAccountsDataSizeLimit;
+            break :blk @min(MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES, size_limit.value);
+        } else MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
+
+        return .{
+            .updated_heap_bytes = updated_heap_bytes,
+            .compute_unit_limit = compute_unit_limit,
+            .compute_unit_price = compute_unit_price,
+            .loaded_accounts_bytes = loaded_bytes,
+        };
+    }
+};
+
+// [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L28
+const ComputeBudgetLimits = struct {
+    updated_heap_bytes: u32,
+    compute_unit_limit: u32,
+    compute_unit_price: u64,
+    /// non-zero
+    loaded_accounts_bytes: u32,
+
+    fn intoComputeBudget(self: ComputeBudgetLimits) sig.runtime.ComputeBudget {
+        var default = sig.runtime.ComputeBudget.default(self.compute_unit_limit);
+        default.heap_size = self.updated_heap_bytes;
+        return default;
+    }
+};
