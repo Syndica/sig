@@ -75,14 +75,12 @@ pub const TowerError = error{
 };
 
 pub const Tower = struct {
-    logger: ScopedLogger(@typeName(Self)),
+    logger: ScopedLogger(@typeName(Tower)),
     vote_state: TowerVoteState,
-
-    const Self = @This();
 
     pub fn init(logger: Logger) Tower {
         var tower = Tower{
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(Tower)),
             .vote_state = .{},
         };
         // VoteState::root_slot is ensured to be Some in Tower
