@@ -40,11 +40,6 @@ pub fn poseidon(
     const cost = budget.poseidonCost(@intCast(len));
     try tc.consumeCompute(cost);
 
-    if (len == 0) {
-        registers.set(.r0, 1);
-        return;
-    }
-
     const hash_result = try memory_map.translateType(
         [32]u8,
         .mutable,
@@ -58,6 +53,11 @@ pub fn poseidon(
         len,
         tc.getCheckAligned(),
     );
+
+    if (len == 0) {
+        registers.set(.r0, 1);
+        return;
+    }
 
     // Agave handles poseidon errors in an annoying way.
     // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
