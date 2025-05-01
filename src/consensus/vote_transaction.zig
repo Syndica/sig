@@ -15,9 +15,7 @@ pub const VoteTransaction = union(enum) {
     compact_vote_state_update: VoteStateUpdate,
     tower_sync: TowerSync,
 
-    pub fn default(allocator: std.mem.Allocator) !VoteTransaction {
-        return VoteTransaction{ .tower_sync = try TowerSync.zeroes(allocator) };
-    }
+    pub const DEFAULT: VoteTransaction = .{ .tower_sync = TowerSync.ZEROES };
 
     pub fn deinit(self: *VoteTransaction, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -146,11 +144,11 @@ pub const VoteTransaction = union(enum) {
 
 const Lockout = sig.runtime.program.vote.state.Lockout;
 test "vote_transaction.VoteTransaction - default initialization" {
-    var vote_transaction = try VoteTransaction.default(std.testing.allocator);
+    var vote_transaction = VoteTransaction.DEFAULT;
     defer vote_transaction.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(
-        VoteTransaction{ .tower_sync = try TowerSync.zeroes(std.testing.allocator) },
+        VoteTransaction{ .tower_sync = TowerSync.ZEROES },
         vote_transaction,
     );
 }
