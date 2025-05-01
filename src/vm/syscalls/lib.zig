@@ -502,26 +502,26 @@ pub fn remainingComputeUnits(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
 pub fn invokeSignedC(
-    ctx: *TransactionContext,
-    mmap: *MemoryMap,
-    rm: *RegisterMap,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
 ) Error!void {
-    return invokeSigned(cpi.AccountInfoC, ctx, mmap, rm);
+    return invokeSigned(cpi.AccountInfoC, tc, memory_map, registers);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
 pub fn invokeSignedRust(
-    ctx: *TransactionContext,
-    mmap: *MemoryMap,
-    rm: *RegisterMap,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
 ) Error!void {
-    return invokeSigned(cpi.AccountInfoRust, ctx, mmap, rm);
+    return invokeSigned(cpi.AccountInfoRust, tc, memory_map, registers);
 }
 
 fn invokeSigned(
     comptime AccountInfoType: type,
-    ctx: *TransactionContext,
-    mmap: *MemoryMap,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
     const instruction_addr = registers.get(.r1);
@@ -530,12 +530,12 @@ fn invokeSigned(
     const signers_seeds_addr = registers.get(.r4);
     const signers_seeds_len = registers.get(.r5);
 
-    const caller_ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+    const caller_ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
     return cpi.cpiCommon(
-        ctx.allocator,
+        tc.allocator,
         caller_ic,
-        mmap,
+        memory_map,
         AccountInfoType,
         instruction_addr,
         account_infos_addr,
@@ -569,19 +569,23 @@ pub fn panic(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L903
-pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
-    const seeds_addr = rm.get(.r1);
-    const seeds_len = rm.get(.r2);
-    const program_id_addr = rm.get(.r3);
-    const address_addr = rm.get(.r4);
-    const bump_seed_addr = rm.get(.r5);
+pub fn findProgramAddress(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const seeds_addr = registers.get(.r1);
+    const seeds_len = registers.get(.r2);
+    const program_id_addr = registers.get(.r3);
+    const address_addr = registers.get(.r4);
+    const bump_seed_addr = registers.get(.r5);
 
     const cost = tc.compute_budget.create_program_address_units;
     try tc.consumeCompute(cost);
 
     const check_aligned = tc.getCheckAligned();
     const program_id, const seeds = try translateAndCheckProgramAddressInputs(
-        mmap,
+        memory_map,
         seeds_addr,
         seeds_len,
         program_id_addr,
@@ -600,8 +604,13 @@ pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regist
             continue;
         };
 
-        const bump_seed_ref = try mmap.translateType(u8, .mutable, bump_seed_addr, check_aligned);
-        const address = try mmap.translateSlice(
+        const bump_seed_ref = try memory_map.translateType(
+            u8,
+            .mutable,
+            bump_seed_addr,
+            check_aligned,
+        );
+        const address = try memory_map.translateSlice(
             u8,
             .mutable,
             address_addr,
@@ -621,22 +630,26 @@ pub fn findProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regist
         return; // r0 = 0
     }
 
-    rm.set(.r0, 1);
+    registers.set(.r0, 1);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L864
-pub fn createProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
-    const seeds_addr = rm.get(.r1);
-    const seeds_len = rm.get(.r2);
-    const program_id_addr = rm.get(.r3);
-    const address_addr = rm.get(.r4);
+pub fn createProgramAddress(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const seeds_addr = registers.get(.r1);
+    const seeds_len = registers.get(.r2);
+    const program_id_addr = registers.get(.r3);
+    const address_addr = registers.get(.r4);
 
     const cost = tc.compute_budget.create_program_address_units;
     try tc.consumeCompute(cost);
 
     const check_aligned = tc.getCheckAligned();
     const program_id, const seeds = try translateAndCheckProgramAddressInputs(
-        mmap,
+        memory_map,
         seeds_addr,
         seeds_len,
         program_id_addr,
@@ -644,10 +657,10 @@ pub fn createProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regi
     );
 
     const new_address = pubkey_utils.createProgramAddress(seeds.slice(), &.{}, program_id) catch {
-        rm.set(.r0, 1);
+        registers.set(.r0, 1);
         return;
     };
-    const address = try mmap.translateSlice(
+    const address = try memory_map.translateSlice(
         u8,
         .mutable,
         address_addr,
@@ -659,13 +672,13 @@ pub fn createProgramAddress(tc: *TransactionContext, mmap: *MemoryMap, rm: *Regi
 }
 
 fn translateAndCheckProgramAddressInputs(
-    mmap: *MemoryMap,
+    memory_map: *MemoryMap,
     seeds_addr: u64,
     seeds_len: u64,
     program_id_addr: u64,
     check_aligned: bool,
 ) Error!struct { Pubkey, std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
-    const untranslated_seeds = try mmap.translateSlice(
+    const untranslated_seeds = try memory_map.translateSlice(
         memory.VmSlice,
         .constant,
         seeds_addr,
@@ -679,7 +692,7 @@ fn translateAndCheckProgramAddressInputs(
     var seeds: std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
     for (untranslated_seeds) |untranslated_seed| {
         if (untranslated_seed.len > pubkey_utils.MAX_SEED_LEN) return SyscallError.BadSeeds;
-        seeds.appendAssumeCapacity(try mmap.translateSlice(
+        seeds.appendAssumeCapacity(try memory_map.translateSlice(
             u8,
             .constant,
             untranslated_seed.ptr,
@@ -688,7 +701,13 @@ fn translateAndCheckProgramAddressInputs(
         ));
     }
 
-    const program_id = try mmap.translateType(Pubkey, .constant, program_id_addr, check_aligned);
+    const program_id = try memory_map.translateType(
+        Pubkey,
+        .constant,
+        program_id_addr,
+        check_aligned,
+    );
+
     return .{ program_id.*, seeds };
 }
 
@@ -745,18 +764,18 @@ fn callProgramAddressSyscall(
         }
     }.less);
 
-    var mmap = try MemoryMap.init(allocator, regions.items, .v3, .{});
-    defer mmap.deinit(allocator);
+    var memory_map = try MemoryMap.init(allocator, regions.items, .v3, .{});
+    defer memory_map.deinit(allocator);
 
-    var rm = RegisterMap.initFill(0);
-    rm.set(.r0, 0);
-    rm.set(.r1, seeds_addr);
-    rm.set(.r2, seeds.len);
-    rm.set(.r3, program_id_addr);
-    rm.set(.r4, address_addr);
-    rm.set(.r5, if (overlap_outputs) address_addr else bump_seed_addr);
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r0, 0);
+    registers.set(.r1, seeds_addr);
+    registers.set(.r2, seeds.len);
+    registers.set(.r3, program_id_addr);
+    registers.set(.r4, address_addr);
+    registers.set(.r5, if (overlap_outputs) address_addr else bump_seed_addr);
 
-    try syscall_fn(tc, &mmap, &rm);
+    try syscall_fn(tc, &memory_map, &registers);
     return .{ out_address, out_bump_seed };
 }
 
