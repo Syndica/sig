@@ -60,8 +60,8 @@ pub const Pong = struct {
     signature: Signature,
 
     pub fn init(ping: *const Ping, keypair: *const KeyPair) !Pong {
-        var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        var hash = Hash.generateSha256(token_with_prefix[0..]);
+        const token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
+        const hash = Hash.generateSha256(token_with_prefix);
         const signature = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return .{

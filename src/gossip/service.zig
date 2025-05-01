@@ -1993,14 +1993,9 @@ pub const GossipService = struct {
         pings: []const PingAndSocketAddr,
     ) error{ OutOfMemory, ChannelClosed, SerializationError }!void {
         for (pings) |ping_and_addr| {
-            const message = GossipMessage{ .PingMessage = ping_and_addr.ping };
-
-            var packet = Packet.ANY_EMPTY;
-            const serialized_ping = bincode.writeToSlice(&packet.buffer, message, .{}) catch
+            const message: GossipMessage = .{ .PingMessage = ping_and_addr.ping };
+            const packet = Packet.initFromBincode(ping_and_addr.socket, message) catch
                 return error.SerializationError;
-            packet.size = serialized_ping.len;
-            packet.addr = ping_and_addr.socket.toEndpoint();
-
             try self.packet_outgoing_channel.send(packet);
             self.metrics.ping_messages_sent.add(1);
         }
