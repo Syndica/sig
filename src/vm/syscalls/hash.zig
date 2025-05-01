@@ -192,6 +192,22 @@ test poseidon {
     );
 }
 
+test "poseidon len 0" {
+    const budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const total_compute = budget.poseidonCost(0); // enough for one call
+    try sig.vm.tests.testSyscall(
+        poseidon,
+        &.{},
+        &.{
+            .{ .{ 0, 0, 0, 0, 0 }, 1 }, // fails because len == 0
+            // Make sure len == 0 still consumes compute
+            .{ .{ 0, 0, 0, 0, 0 }, error.ComputationalBudgetExceeded },
+        },
+        null,
+        .{ .compute_meter = total_compute },
+    );
+}
+
 test sha256 {
     const bytes1: []const u8 = "Gaggablaghblagh!";
     const bytes2: []const u8 = "flurbos";
