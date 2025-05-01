@@ -116,7 +116,7 @@ pub const TowerError = error{
 };
 
 pub const Tower = struct {
-    logger: ScopedLogger(@typeName(Self)),
+    logger: ScopedLogger(@typeName(Tower)),
     node_pubkey: Pubkey,
     /// This is the number of ancestor slots to consider when calculating the switch threshold.
     threshold_depth: usize,
@@ -140,16 +140,14 @@ pub const Tower = struct {
     stray_restored_slot: ?Slot,
     last_switch_threshold_check: ?struct { Slot, SwitchForkDecision },
 
-    const Self = @This();
-
-    pub fn default(allocator: std.mem.Allocator) !Tower {
+    pub fn default() Tower {
         var tower = Tower{
             .logger = .noop,
             .node_pubkey = Pubkey.ZEROES,
             .threshold_depth = 0,
             .threshold_size = 0,
             .vote_state = .{},
-            .last_vote = try VoteTransaction.default(allocator),
+            .last_vote = VoteTransaction.DEFAULT,
             .last_vote_tx_blockhash = .uninitialized,
             .last_timestamp = BlockTimestamp.ZEROES,
             .stray_restored_slot = null,
@@ -168,8 +166,8 @@ pub const Tower = struct {
         fork_root: Slot,
         accounts_db: *AccountsDB,
     ) !Tower {
-        var tower = try Tower.default(allocator);
-        tower.logger = logger.withScope(@typeName(Self));
+        var tower = Tower.default();
+        tower.logger = logger.withScope(@typeName(Tower));
         tower.node_pubkey = node_pubkey.*;
         try tower.initializeLockoutsFromBank(
             allocator,
@@ -969,10 +967,10 @@ pub const Tower = struct {
         // Sanity assertions for roots. Must be in the slot history
         std.debug.assert(slot_history.check(replayed_root) == .found);
 
-        var default_vote = try VoteTransaction.default(allocator);
+        var default_vote = VoteTransaction.DEFAULT;
         defer default_vote.deinit(allocator);
 
-        var default_tower = VoteTransaction{ .tower_sync = try TowerSync.zeroes(allocator) };
+        var default_tower = VoteTransaction{ .tower_sync = TowerSync.ZEROES };
         defer default_tower.deinit(allocator);
 
         // This ensures that if vote_state.votes is empty,
@@ -1617,7 +1615,7 @@ pub const Tower = struct {
 };
 
 test "tower: check vote threshold without votes" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -1637,7 +1635,7 @@ test "tower: check vote threshold without votes" {
 }
 
 test "tower: check vote threshold no skip lockout with new root" {
-    var tower = try createTestTower(std.testing.allocator, 4, 0.67);
+    var tower = try createTestTower(4, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -1666,7 +1664,7 @@ test "tower: check vote threshold no skip lockout with new root" {
 }
 
 test "tower: is slot confirmed not enough stake failure" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -1680,7 +1678,7 @@ test "tower: is slot confirmed not enough stake failure" {
 }
 
 test "tower: is slot confirmed unknown slot" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -1691,7 +1689,7 @@ test "tower: is slot confirmed unknown slot" {
 }
 
 test "tower: is slot confirmed pass" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -1747,7 +1745,7 @@ test "tower: is slot duplicate confirmed pass" {
 }
 
 test "tower: is locked out empty" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var ancestors = SortedSet(Slot).init(std.testing.allocator);
@@ -1762,7 +1760,7 @@ test "tower: is locked out empty" {
 }
 
 test "tower: is locked out root slot child pass" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var ancestors = SortedSet(Slot).init(std.testing.allocator);
@@ -1779,7 +1777,7 @@ test "tower: is locked out root slot child pass" {
 }
 
 test "tower: is locked out root slot sibling fail" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var ancestors = SortedSet(Slot).init(std.testing.allocator);
@@ -1805,7 +1803,7 @@ test "tower: is locked out root slot sibling fail" {
 }
 
 test "tower: check already voted" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     tower.vote_state.root_slot = 0;
@@ -1823,7 +1821,7 @@ test "tower: check already voted" {
 }
 
 test "tower: check recent slot" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     try std.testing.expect(tower.isRecent(1));
@@ -1846,7 +1844,7 @@ test "tower: check recent slot" {
 }
 
 test "tower: is locked out double vote" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var ancestors = SortedSet(Slot).init(std.testing.allocator);
@@ -1872,7 +1870,7 @@ test "tower: is locked out double vote" {
 }
 
 test "tower: is locked out child" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var ancestors = SortedSet(Slot).init(std.testing.allocator);
@@ -1896,7 +1894,7 @@ test "tower: is locked out child" {
 }
 
 test "tower: is locked out sibling" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var ancestors = SortedSet(Slot).init(std.testing.allocator);
@@ -1922,7 +1920,7 @@ test "tower: is locked out sibling" {
 }
 
 test "tower: is locked out last vote expired" {
-    var tower = try createTestTower(std.testing.allocator, 0, 0.67);
+    var tower = try createTestTower(0, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var ancestors = SortedSet(Slot).init(std.testing.allocator);
@@ -1961,7 +1959,7 @@ test "tower: is locked out last vote expired" {
 }
 
 test "tower: check vote threshold below threshold" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -1989,7 +1987,7 @@ test "tower: check vote threshold below threshold" {
 }
 
 test "tower: check vote threshold above threshold" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -2017,7 +2015,7 @@ test "tower: check vote threshold above threshold" {
 }
 
 test "tower: check vote thresholds above thresholds" {
-    var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
+    var tower = try createTestTower(VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -2050,7 +2048,7 @@ test "tower: check vote thresholds above thresholds" {
 }
 
 test "tower: check vote threshold deep below threshold" {
-    var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
+    var tower = try createTestTower(VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -2082,7 +2080,7 @@ test "tower: check vote threshold deep below threshold" {
 }
 
 test "tower: check vote threshold shallow below threshold" {
-    var tower = try createTestTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
+    var tower = try createTestTower(VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -2114,7 +2112,7 @@ test "tower: check vote threshold shallow below threshold" {
 }
 
 test "tower: check vote threshold above threshold after pop" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -2145,7 +2143,7 @@ test "tower: check vote threshold above threshold after pop" {
 }
 
 test "tower: check vote threshold above threshold no stake" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -2171,7 +2169,7 @@ test "tower: check vote threshold above threshold no stake" {
 }
 
 test "tower: check vote threshold lockouts not updated" {
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
@@ -2215,7 +2213,7 @@ test "tower: recent votes exact" {
 }
 
 test "tower: maybe timestamp" {
-    var tower = try Tower.default(std.testing.allocator);
+    var tower = Tower.default();
     try std.testing.expect(tower.maybeTimestamp(0) != null);
     try std.testing.expect(tower.maybeTimestamp(1) != null);
     // Refuse to timestamp an older slot
@@ -2235,7 +2233,7 @@ test "tower: maybe timestamp" {
 }
 
 test "tower: refresh last vote timestamp" {
-    var tower = try Tower.default(std.testing.allocator);
+    var tower = Tower.default();
 
     // Tower has no vote or timestamp
     tower.last_vote.setTimestamp(null);
@@ -2332,7 +2330,7 @@ test "tower: refresh last vote timestamp" {
 }
 
 test "tower: adjust lockouts after replay future slots" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     for (0..4) |i| {
@@ -2373,7 +2371,7 @@ test "tower: adjust lockouts after replay future slots" {
 }
 
 test "tower: adjust lockouts after replay not found slots" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     for (0..4) |i| {
@@ -2415,7 +2413,7 @@ test "tower: adjust lockouts after replay not found slots" {
 }
 
 test "tower: adjust lockouts after replay all rooted with no too old" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     for (0..3) |i| {
@@ -2452,7 +2450,7 @@ test "tower: adjust lockouts after replay all rooted with no too old" {
 }
 
 test "tower: adjust lockouts after replay all rooted with too old" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     for (0..3) |i| {
@@ -2488,7 +2486,7 @@ test "tower: adjust lockouts after replay all rooted with too old" {
 }
 
 test "tower: adjust lockouts after replay anchored future slots" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     for (0..5) |i| {
@@ -2528,7 +2526,7 @@ test "tower: adjust lockouts after replay anchored future slots" {
 }
 
 test "tower: adjust lockouts after replay all not found" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     for (5..7) |i| {
@@ -2569,7 +2567,7 @@ test "tower: adjust lockouts after replay all not found" {
 }
 
 test "tower: adjust lockouts after replay all not found even if rooted" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     tower.vote_state.root_slot = 4;
@@ -2603,7 +2601,7 @@ test "tower: adjust lockouts after replay all not found even if rooted" {
 }
 
 test "tower: test adjust lockouts after replay all future votes only root found" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     tower.vote_state.root_slot = 2;
@@ -2640,7 +2638,7 @@ test "tower: test adjust lockouts after replay all future votes only root found"
 }
 
 test "tower: adjust lockouts after replay empty" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
@@ -2657,7 +2655,7 @@ test "tower: adjust lockouts after replay empty" {
 }
 
 test "tower: adjust lockouts after replay too old tower" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     _ = try tower.recordBankVoteAndUpdateLockouts(
@@ -2686,7 +2684,7 @@ test "tower: adjust lockouts after replay too old tower" {
 }
 
 test "tower: adjust lockouts after replay time warped" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     try tower.vote_state.votes.append(
@@ -2720,7 +2718,7 @@ test "tower: adjust lockouts after replay time warped" {
 }
 
 test "tower: adjust lockouts after replay diverged ancestor" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     try tower.vote_state.votes.append(
@@ -2755,7 +2753,7 @@ test "tower: adjust lockouts after replay diverged ancestor" {
 }
 
 test "tower: adjust lockouts after replay out of order" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     try tower.vote_state.votes.append(
@@ -2793,7 +2791,7 @@ test "tower: adjust lockouts after replay out of order" {
 }
 
 test "tower: adjust lockouts after replay out of order via clearing history" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     try tower.vote_state.votes.append(
@@ -2830,7 +2828,7 @@ test "tower: adjust lockouts after replay out of order via clearing history" {
 }
 
 test "tower: adjust lockouts after replay reversed votes" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     try tower.vote_state.votes.append(
@@ -2865,7 +2863,7 @@ test "tower: adjust lockouts after replay reversed votes" {
 }
 
 test "tower: adjust lockouts after replay repeated non root votes" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     try tower.vote_state.votes.append(
@@ -2904,7 +2902,7 @@ test "tower: adjust lockouts after replay repeated non root votes" {
 }
 
 test "tower: adjust lockouts after replay vote on root" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     tower.vote_state.root_slot = 42;
@@ -2953,7 +2951,7 @@ test "tower: adjust lockouts after replay vote on root" {
 }
 
 test "tower: adjust lockouts after replay vote on genesis" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     try tower.vote_state.votes.append(
@@ -2983,7 +2981,7 @@ test "tower: adjust lockouts after replay vote on genesis" {
 }
 
 test "tower: adjust lockouts after replay future tower" {
-    var tower = try createTestTower(std.testing.allocator, 10, 0.9);
+    var tower = try createTestTower(10, 0.9);
     defer tower.deinit(std.testing.allocator);
 
     try tower.vote_state.votes.append(
@@ -3037,7 +3035,6 @@ test "tower: adjust lockouts after replay future tower" {
 
 test "tower: default tower has no stray last vote" {
     var tower = try createTestTower(
-        std.testing.allocator,
         VOTE_THRESHOLD_DEPTH,
         VOTE_THRESHOLD_SIZE,
     );
@@ -3049,14 +3046,13 @@ test "tower: default tower has no stray last vote" {
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 fn createTestTower(
-    allocator: std.mem.Allocator,
     threshold_depth: usize,
     threshold_size: f64,
 ) !Tower {
     if (!builtin.is_test) {
         @compileError("createTestTower should only be used in test");
     }
-    var tower = try Tower.default(allocator);
+    var tower = Tower.default();
     tower.threshold_depth = threshold_depth;
     tower.threshold_size = threshold_size;
     return tower;
@@ -3098,7 +3094,7 @@ fn voteAndCheckRecent(num_votes: usize) !void {
     if (!builtin.is_test) {
         @compileError("voteAndCheckRecent should only be used in test");
     }
-    var tower = try createTestTower(std.testing.allocator, 1, 0.67);
+    var tower = try createTestTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
     var slots = std.ArrayList(Lockout).init(std.testing.allocator);
