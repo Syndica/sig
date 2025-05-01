@@ -19,13 +19,12 @@ pub fn loadTransactionAccounts(
     allocator: std.mem.Allocator,
     tx: *const sig.core.Transaction,
     requested_max_total_data_size: u32, // should be inside the tx?
-    account_loader: *AccountLoader(.Mocked),
+    account_loader: *AccountLoader(.AccountsDb),
     features: *const runtime.FeatureSet,
     rent_collector: *const RentCollector,
 ) !LoadedAccounts {
-    std.debug.assert(tx.msg.account_keys.len <= 128); // TODO: this should be sanitised earlier
     return try loadTransactionAccountsInner(
-        .Mocked,
+        .AccountsDb,
         allocator,
         tx,
         requested_max_total_data_size,
@@ -43,35 +42,42 @@ pub const LoadedAccounts = struct {
     collected_rent: u64 = 0,
     loaded_account_data_size: u32 = 0,
 
+    /// n accounts loaded and returned (excludes loading of owner accounts)
+    n_loaded: u8,
     /// indexes correspond with tx.msg.account_keys
     accounts_buf: [MAX_TX_ACCOUNT_LOCKS]AccountSharedData,
     rent_debits: [MAX_TX_ACCOUNT_LOCKS]RentDebit,
+
+    pub fn accounts(self: *const LoadedAccounts) []const AccountSharedData {
+        return self.accounts_buf[0..self.n_loaded];
+    }
+
+    pub fn rentDebits(self: *const LoadedAccounts) []const RentDebit {
+        return self.accounts_buf[0..self.n_loaded];
+    }
 };
 
-const BankKind = enum {
+pub const AccountsDbKind = enum {
     AccountsDb,
     Mocked,
-    fn T(self: BankKind) type {
+    pub fn T(self: AccountsDbKind) type {
         return switch (self) {
-            .AccountsDb => sig.accounts_db.Bank,
-            .Mocked => MockedBank,
+            .AccountsDb => *sig.accounts_db.AccountsDB,
+            .Mocked => MockedAccountsDb,
         };
     }
 };
 
-pub const MockedBank = struct {
+pub const MockedAccountsDb = struct {
     allocator: std.mem.Allocator,
-    slot: Slot,
     accounts: std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account) = .{},
-    rent_collector: RentCollector,
-
-    fn deinit(self: *MockedBank) void {
+    fn deinit(self: *MockedAccountsDb) void {
         self.accounts.deinit(self.allocator);
     }
 };
 
 // TODO: if we're splitting up the bank, we might as well just take a "getAccount" fn.
-fn Bank(comptime kind: BankKind) type {
+fn AccountsDb(comptime kind: AccountsDbKind) type {
     return struct {
         inner: kind.T(),
         const Self = @This();
@@ -81,21 +87,9 @@ fn Bank(comptime kind: BankKind) type {
                 .Mocked => self.inner.allocator,
             };
         }
-        fn slot(self: Self) ?Slot {
-            return switch (kind) {
-                .AccountsDb => self.inner.bank_fields.slot,
-                .Mocked => self.inner.slot,
-            };
-        }
-        fn rentCollector(self: Self) RentCollector {
-            return switch (kind) {
-                .AccountsDb => self.inner.bank_fields.rent_collector,
-                .Mocked => self.inner.rent_collector,
-            };
-        }
         fn getAccount(self: Self, pubkey: *const sig.core.Pubkey) !sig.core.Account {
             return switch (kind) {
-                .AccountsDb => self.inner.accounts_db.getAccount(pubkey),
+                .AccountsDb => try self.inner.accounts_db.getAccount(pubkey),
                 .Mocked => self.inner.accounts.get(pubkey.*) orelse return error.PubkeyNotInIndex,
             };
         }
@@ -144,32 +138,40 @@ const LoadedTransactionAccount = struct {
 };
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
-pub fn AccountLoader(comptime bank_kind: BankKind) type {
+pub fn AccountLoader(comptime bank_kind: AccountsDbKind) type {
     return struct {
         const Self = @This();
         const Cache = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData);
 
-        // reviewer's note: Thinking we should allocate all shared accounts within a transaction
-        // with this allocator and use an arena?
-        allocator: std.mem.Allocator, // allocates Cache + all shared account data
+        account_allocator: std.mem.Allocator, // allocates all shared account data
+        cache_allocator: std.mem.Allocator, // allocates the account_cache
+
         account_cache: Cache = .{}, // never evicted from, exists for whole transaction
-        bank: Bank(bank_kind),
+        bank: AccountsDb(bank_kind),
         features: *const runtime.FeatureSet,
+        rent_collector: RentCollector,
+        slot: Slot,
 
         // note: no account overrides implemented here
         pub fn newWithCacheCapacity(
-            allocator: std.mem.Allocator,
+            account_allocator: std.mem.Allocator,
+            cache_allocator: std.mem.Allocator,
             bank: bank_kind.T(),
             features: *const runtime.FeatureSet,
+            rent_collector: RentCollector,
+            slot: Slot,
             capacity: usize,
         ) !Self {
             var account_cache: Cache = .{};
-            try account_cache.ensureUnusedCapacity(allocator, capacity);
+            try account_cache.ensureUnusedCapacity(account_allocator, capacity);
             return .{
-                .allocator = allocator,
+                .account_allocator = account_allocator,
+                .cache_allocator = cache_allocator,
                 .account_cache = account_cache,
                 .bank = .{ .inner = bank },
                 .features = features,
+                .rent_collector = rent_collector,
+                .slot = slot,
             };
         }
 
@@ -184,8 +186,8 @@ pub fn AccountLoader(comptime bank_kind: BankKind) type {
                     break :blk if (account.lamports == 0) null else account;
                 }
 
-                if (try self.bank.getAccountSharedData(self.allocator, key)) |account| {
-                    try self.account_cache.put(self.allocator, key.*, account);
+                if (try self.bank.getAccountSharedData(self.account_allocator, key)) |account| {
+                    try self.account_cache.put(self.cache_allocator, key.*, account);
                     break :blk account;
                 }
 
@@ -201,12 +203,17 @@ pub fn AccountLoader(comptime bank_kind: BankKind) type {
                 .loaded_size = found_account.data.len,
             } else null;
         }
+
+        pub fn deinit(self: *Self) void {
+            self.account_cache.deinit(self.cache_allocator);
+        }
     };
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L568
 fn loadTransactionAccount(
-    comptime bank_kind: BankKind,
+    comptime bank_kind: AccountsDbKind,
+    allocator: std.mem.Allocator,
     account_loader: *AccountLoader(bank_kind),
     tx: *const sig.core.Transaction,
     account_key: *const sig.core.Pubkey,
@@ -216,8 +223,16 @@ fn loadTransactionAccount(
 ) !LoadedTransactionAccount {
     if (account_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
         @setCold(true);
+        var account = try constructInstructionsAccount(allocator, tx);
+        const tmp_data = account.data;
+        defer allocator.free(tmp_data);
+
+        const duplicated_data = try account_loader.account_allocator.dupe(u8, account.data);
+
+        account.data = duplicated_data;
+
         return .{
-            .account = try constructInstructionsAccount(account_loader.allocator, tx),
+            .account = account,
             .loaded_size = 0,
             .rent_collected = 0,
         };
@@ -266,16 +281,20 @@ fn collectRentFromAccount(
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L425
-fn loadTransactionAccountsInner(
-    comptime bank_kind: BankKind,
-    allocator: std.mem.Allocator,
+pub fn loadTransactionAccountsInner(
+    comptime accountsdb_kind: AccountsDbKind,
+    tmp_allocator: std.mem.Allocator,
     tx: *const sig.core.Transaction,
     requested_max_total_data_size: u32, // should be inside the tx?
-    account_loader: *AccountLoader(bank_kind),
+    account_loader: *AccountLoader(accountsdb_kind),
     features: *const runtime.FeatureSet,
     rent_collector: *const sig.core.rent_collector.RentCollector,
 ) !LoadedAccounts {
+    std.debug.assert(tx.msg.account_keys.len <= 128); // TODO: this should be sanitised earlier
+
     var retval: LoadedAccounts = .{
+        .n_loaded = 0,
+
         // safe: upon success, these will be set for every account index
         .accounts_buf = undefined,
         .rent_debits = undefined,
@@ -283,7 +302,8 @@ fn loadTransactionAccountsInner(
     // attempt to load and collect accounts
     for (tx.msg.account_keys, 0..) |account_key, account_idx| {
         const loaded_account = try loadTransactionAccount(
-            bank_kind,
+            accountsdb_kind,
+            tmp_allocator,
             account_loader,
             tx,
             &account_key,
@@ -304,9 +324,11 @@ fn loadTransactionAccountsInner(
             loaded_account.loaded_size,
             requested_max_total_data_size,
         );
+
+        retval.n_loaded += 1;
     }
 
-    var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
+    var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(tmp_allocator);
     defer validated_loaders.deinit();
 
     // load and check the program of each instruction, and the owner of each program
@@ -439,16 +461,17 @@ fn constructInstructionsAccount(
 fn newAccountLoader(allocator: std.mem.Allocator) AccountLoader(.Mocked) {
     if (!@import("builtin").is_test) @compileError("newBank for testing only");
     return .{
-        .allocator = allocator,
+        .cache_allocator = allocator,
+        .account_allocator = allocator,
         .features = &runtime.FeatureSet.EMPTY,
         .bank = .{
             .inner = .{
                 .allocator = allocator,
-                .slot = 0,
                 .accounts = .{},
-                .rent_collector = sig.core.rent_collector.defaultCollector(0),
             },
         },
+        .rent_collector = sig.core.rent_collector.defaultCollector(0),
+        .slot = 1,
     };
 }
 
