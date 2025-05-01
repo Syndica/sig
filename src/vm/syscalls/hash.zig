@@ -31,11 +31,19 @@ pub fn poseidon(
     const len = registers.get(.r4);
     const result_addr = registers.get(.r5);
 
-    if (len > 12) return error.InvalidNumberOfInputs;
+    if (len > 12) {
+        try tc.log("Poseidon hashing {} sequences is not supported", .{len});
+        return error.InvalidLength;
+    }
 
     const budget = tc.compute_budget;
     const cost = budget.poseidonCost(@intCast(len));
     try tc.consumeCompute(cost);
+
+    if (len == 0) {
+        registers.set(.r0, 1);
+        return;
+    }
 
     const hash_result = try memory_map.translateType(
         [32]u8,
@@ -71,12 +79,14 @@ pub fn poseidon(
             registers.set(.r0, 1);
             return;
         }
+
         // If the input isn't 32-bytes long, we pad the rest with zeroes.
         var buffer: [32]u8 = .{0} ** 32;
         switch (endianness) {
             .little => @memcpy(buffer[0..slice.len], slice),
-            .big => std.mem.copyBackwards(u8, &buffer, slice),
+            .big => @memcpy(buffer[32 - slice.len ..], slice),
         }
+
         hasher.append(&buffer) catch {
             if (tc.ec.feature_set.active.contains(
                 features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
@@ -86,6 +96,7 @@ pub fn poseidon(
             } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
         };
     }
+
     const result = hasher.finish();
     @memcpy(hash_result, &result);
 }
@@ -178,6 +189,22 @@ test poseidon {
             .{ .name = "sol_panic_", .builtin_fn = sig.vm.syscalls.panic },
         },
         .{ 0, 48526 },
+    );
+}
+
+test "poseidon len 0" {
+    const budget = sig.runtime.ComputeBudget.default(1_400_000);
+    const total_compute = budget.poseidonCost(0); // enough for one call
+    try sig.vm.tests.testSyscall(
+        poseidon,
+        &.{},
+        &.{
+            .{ .{ 0, 0, 0, 0, 0 }, 1 }, // fails because len == 0
+            // Make sure len == 0 still consumes compute
+            .{ .{ 0, 0, 0, 0, 0 }, error.ComputationalBudgetExceeded },
+        },
+        null,
+        .{ .compute_meter = total_compute },
     );
 }
 

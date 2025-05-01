@@ -43,7 +43,6 @@ pub const SyscallError = error{
     ArithmeticOverflow,
     InvalidParameters,
     InvalidEndianness,
-    InvalidNumberOfInputs,
 };
 
 pub const EbpfError = error{
