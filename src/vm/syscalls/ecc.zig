@@ -104,7 +104,7 @@ pub fn curveGroupOp(
     try tc.consumeCompute(cost);
 
     switch (curve_id) {
-        inline .edwards, .ristretto => |id| err: {
+        inline .edwards, .ristretto => |id| {
             const T = switch (id) {
                 .edwards => Edwards25519,
                 .ristretto => Ristretto255,
@@ -124,24 +124,14 @@ pub fn curveGroupOp(
                 tc.getCheckAligned(),
             );
 
-            const result: T = switch (group_op) {
-                .add, .subtract => b: {
-                    const left_point = T.fromBytes(left_point_data.*) catch break :err;
-                    const right_point = T.fromBytes(right_point_data.*) catch break :err;
-                    break :b switch (group_op) {
-                        .add => left_point.add(right_point),
-                        // TODO:(0.15) Use the alias https://github.com/ziglang/zig/pull/23724
-                        .subtract => switch (id) {
-                            .edwards => left_point.sub(right_point),
-                            .ristretto => .{ .p = left_point.p.sub(right_point.p) },
-                        },
-                        else => unreachable,
-                    };
-                },
-                .multiply => b: {
-                    const input_point = T.fromBytes(right_point_data.*) catch break :err;
-                    break :b input_point.mul(left_point_data.*) catch break :err;
-                },
+            const result = groupOp(
+                T,
+                group_op,
+                left_point_data.*,
+                right_point_data.*,
+            ) catch {
+                registers.set(.r0, 1);
+                return;
             };
 
             const result_point = try memory_map.translateType(
@@ -151,12 +141,89 @@ pub fn curveGroupOp(
                 tc.getCheckAligned(),
             );
             result_point.* = result.toBytes();
-            return;
         },
     }
+}
 
-    registers.set(.r0, 1);
-    return;
+const weak_mul = struct {
+    inline fn cMov(p: *Edwards25519, a: Edwards25519, c: u64) void {
+        p.x.cMov(a.x, c);
+        p.y.cMov(a.y, c);
+        p.z.cMov(a.z, c);
+        p.t.cMov(a.t, c);
+    }
+
+    inline fn pcSelect(comptime n: usize, pc: *const [n]Edwards25519, b: u8) Edwards25519 {
+        var t = Edwards25519.identityElement;
+        comptime var i: u8 = 1;
+        inline while (i < pc.len) : (i += 1) {
+            cMov(&t, pc[i], ((@as(usize, b ^ i) -% 1) >> 8) & 1);
+        }
+        return t;
+    }
+
+    fn pcMul16(pc: *const [16]Edwards25519, s: [32]u8, comptime vartime: bool) !Edwards25519 {
+        var q = Edwards25519.identityElement;
+        var pos: usize = 252;
+        while (true) : (pos -= 4) {
+            const slot: u4 = @truncate((s[pos >> 3] >> @as(u3, @truncate(pos))));
+            if (vartime) {
+                if (slot != 0) {
+                    q = q.add(pc[slot]);
+                }
+            } else {
+                q = q.add(pcSelect(16, pc, slot));
+            }
+            if (pos == 0) break;
+            q = q.dbl().dbl().dbl().dbl();
+        }
+        // try q.rejectIdentity();
+        return q;
+    }
+
+    fn precompute(p: Edwards25519, comptime count: usize) [1 + count]Edwards25519 {
+        var pc: [1 + count]Edwards25519 = undefined;
+        pc[0] = Edwards25519.identityElement;
+        pc[1] = p;
+        var i: usize = 2;
+        while (i <= count) : (i += 1) {
+            pc[i] = if (i % 2 == 0) pc[i / 2].dbl() else pc[i - 1].add(p);
+        }
+        return pc;
+    }
+
+    pub fn mul(p: Edwards25519, s: [32]u8) !Edwards25519 {
+        const xpc = precompute(p, 15);
+        // if (xpc[4].rejectIdentity()) return error.WeakPublicKey;
+        return pcMul16(&xpc, s, false);
+    }
+};
+
+fn groupOp(comptime T: type, group_op: GroupOp, left: [32]u8, right: [32]u8) !T {
+    switch (group_op) {
+        .add, .subtract => {
+            const left_point = try T.fromBytes(left);
+            const right_point = try T.fromBytes(right);
+            return switch (group_op) {
+                .add => left_point.add(right_point),
+                // TODO:(0.15) Use the alias https://github.com/ziglang/zig/pull/23724
+                .subtract => switch (T) {
+                    Edwards25519 => left_point.sub(right_point),
+                    Ristretto255 => .{ .p = left_point.p.sub(right_point.p) },
+                    else => unreachable,
+                },
+                else => unreachable,
+            };
+        },
+        .multiply => {
+            const input_point = try T.fromBytes(right);
+            return switch (T) {
+                Edwards25519 => weak_mul.mul(input_point, left),
+                Ristretto255 => .{ .p = try weak_mul.mul(input_point.p, left) },
+                else => unreachable,
+            };
+        },
+    }
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1334-L1445
