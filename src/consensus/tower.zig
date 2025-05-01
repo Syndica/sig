@@ -1705,7 +1705,7 @@ pub const Tower = struct {
         // 1. Last vote has landed
         (my_latest_landed_vote_slot >= last_voted_slot) or
             // 2. Already voting at the tip
-            (last_voted_slot >= my_latest_landed_vote_slot) or
+            (last_voted_slot >= heaviest_slot) or
             // 3. Last vote is within slot hashes, regular refresh is enough
             slot_history.check(last_voted_slot) == .found;
     }
@@ -1717,6 +1717,12 @@ pub const Tower = struct {
     /// 2. Otherwise: stay on current fork (don't vote) to prevent network halts
     ///
     /// Prevents mass fork abandonment that could stall the network.
+    ///
+    /// In essence this function re-evaluates whether to:
+    ///
+    /// Force a vote on the current fork (if stuck).
+    /// Continue waiting (if switching is unsafe).
+    /// Record failures for diagnostics.
     pub fn recheckForkDecisionFailedSwitchThreshold(
         self: *const Tower,
         allocator: std.mem.Allocator,
@@ -1729,6 +1735,8 @@ pub const Tower = struct {
         switch_fork_decision: SwitchForkDecision,
         slot_history: *const SlotHistory,
     ) !SwitchForkDecision {
+        // Check if validator’s last vote is stuck (no block will include it).
+        // if, so force a new vote on the current fork (SameFork) to unblock progress.
         if (!self.lastVoteAbleToLand(reset_slot, progress, slot_history)) {
             // If we reach here, these assumptions are true:
             // 1. We can't switch because of threshold
@@ -1873,7 +1881,7 @@ pub const Tower = struct {
     /// Checks for all possible reasons we might not be able to vote on the candidate
     /// bank. Records any failure reasons, and doesn't early return so we can be sure
     /// to record all possible reasons.
-    pub fn canVoteOnCandidateBank(
+    pub fn canVoteOnCandidateSlot(
         self: *const Tower,
         allocator: std.mem.Allocator,
         candidate_vote_bank_slot: Slot,
@@ -1992,7 +2000,7 @@ pub const Tower = struct {
             fork_choice,
         );
 
-        // Select candidate banks
+        // Select candidate slots
         const slots = try self.selectCandidateVoteAndResetBanks(
             allocator,
             heaviest_slot,
@@ -2012,7 +2020,7 @@ pub const Tower = struct {
             };
         };
 
-        if (try self.canVoteOnCandidateBank(
+        if (try self.canVoteOnCandidateSlot(
             allocator,
             candidate_vote_slot,
             progress,
