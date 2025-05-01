@@ -270,7 +270,7 @@ pub fn register(
     // }
 
     // Sysvar Getter
-    if (feature_set.isActive(feature_set.ENABLE_SYSVAR_SYSCALL, slot)) {
+    if (feature_set.isActive(features.GET_SYSVAR_SYSCALL_ENABLED, slot)) {
         _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", getSysvar);
     }
 
