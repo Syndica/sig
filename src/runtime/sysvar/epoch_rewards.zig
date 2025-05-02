@@ -36,4 +36,14 @@ pub const EpochRewards = extern struct {
 
     pub const ID =
         Pubkey.parseBase58String("SysvarEpochRewards1111111111111111111111111") catch unreachable;
+
+    pub const DEFAULT = EpochRewards{
+        .distribution_starting_block_height = 0,
+        .num_partitions = 0,
+        .parent_blockhash = Hash.ZEROES,
+        .total_points = 0,
+        .total_rewards = 0,
+        .distributed_rewards = 0,
+        .active = false,
+    };
 };
