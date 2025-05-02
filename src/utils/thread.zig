@@ -132,11 +132,11 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             self.result = self.typed_task.run();
 
             // signal completion
+            assert(0 != self.num_running_tasks.fetchSub(1, .acq_rel));
             self.done_lock.lock();
             self.done.store(true, .release);
             self.done_notifier.broadcast();
             self.done_lock.unlock();
-            assert(0 != self.num_running_tasks.fetchSub(1, .release));
         }
 
         /// blocks until the task is complete.
