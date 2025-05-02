@@ -16,11 +16,11 @@ const Transaction = sig.core.Transaction;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
-const AccountLocks = deps.AccountLocks;
 const EpochTracker = deps.EpochTracker;
 const ProgressMap = deps.ProgressMap;
 const SlotTracker = deps.SlotTracker;
 
+const AccountLocks = replay.account_locks.AccountLocks;
 const EntryVerifier = replay.verifiers.EntryVerifier;
 const ListRecycler = replay.verifiers.ListRecycler;
 const RuntimeSanitizedTransaction = replay.verifiers.RuntimeSanitizedTransaction;
