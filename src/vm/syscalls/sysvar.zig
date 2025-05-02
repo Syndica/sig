@@ -2,12 +2,43 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const memory = sig.vm.memory;
+const sysvar = sig.runtime.sysvar;
+
 const Error = sig.vm.syscalls.Error;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
 const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
 const TransactionContext = sig.runtime.TransactionContext;
+
+fn getter(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMap) Error!void {
+    return struct {
+        fn getSyscall(
+            tc: *TransactionContext,
+            memory_map: *MemoryMap,
+            registers: *RegisterMap,
+        ) Error!void {
+            try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| @sizeOf(T));
+
+            const value_addr = registers.get(.r1);
+            const value = try memory_map.translateType(
+                T,
+                .mutable,
+                value_addr,
+                tc.getCheckAligned(),
+            );
+
+            value.* = try tc.sc.sysvar_cache.get(T);
+        }
+    }.getSyscall;
+}
+
+pub const getLastRestartSlot = getter(sysvar.LastRestartSlot);
+pub const getRent = getter(sysvar.Rent);
+pub const getFees = getter(sysvar.Fees);
+pub const getEpochRewards = getter(sysvar.EpochRewards);
+pub const getEpochSchedule = getter(sysvar.EpochSchedule);
+pub const getClock = getter(sysvar.Clock);
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L169
 pub fn getSysvar(
@@ -37,11 +68,16 @@ pub fn getSysvar(
 
     // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L164
     const SYSVAR_NOT_FOUND = 2;
+    const buf = tc.sc.sysvar_cache.getSlice(id) orelse {
+        return registers.set(.r0, SYSVAR_NOT_FOUND);
+    };
+
     // https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L165
     const OFFSET_LENGTH_EXCEEDS_SYSVAR = 1;
+    if (buf.len < offset_len) {
+        return registers.set(.r0, OFFSET_LENGTH_EXCEEDS_SYSVAR);
+    }
 
-    const buf = tc.sc.sysvar_cache.getSlice(id) orelse return registers.set(.r0, SYSVAR_NOT_FOUND);
-    if (buf.len < offset_len) return registers.set(.r0, OFFSET_LENGTH_EXCEEDS_SYSVAR);
     @memcpy(value, buf[offset..][0..length]);
 }
 
