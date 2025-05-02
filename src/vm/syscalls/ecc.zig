@@ -177,7 +177,7 @@ const weak_mul = struct {
             if (pos == 0) break;
             q = q.dbl().dbl().dbl().dbl();
         }
-        // try q.rejectIdentity();
+        try q.rejectIdentity();
         return q;
     }
 
@@ -194,7 +194,7 @@ const weak_mul = struct {
 
     pub fn mul(p: Edwards25519, s: [32]u8) !Edwards25519 {
         const xpc = precompute(p, 15);
-        // if (xpc[4].rejectIdentity()) return error.WeakPublicKey;
+        // xpc[4].rejectIdentity() catch return error.WeakPublicKey;
         return pcMul16(&xpc, s, false);
     }
 };
@@ -232,7 +232,15 @@ pub fn curveMultiscalarMul(
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
+    const attribute_id = registers.get(.r1);
+    const scalars_addr = registers.get(.r2);
+    const points_addr = registers.get(.r3);
+    const points_len = registers.get(.r4);
+    const result_point_addr = registers.get(.r5);
+
+    if (points_len > 512) return SyscallError.InvalidLength;
+
+    const curve_id = CurveId.wrap(attribute_id) orelse {
         if (tc.ec.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
             return SyscallError.InvalidAttribute;
         } else {
@@ -240,12 +248,6 @@ pub fn curveMultiscalarMul(
             return;
         }
     };
-    const scalars_addr = registers.get(.r2);
-    const points_addr = registers.get(.r3);
-    const points_len = registers.get(.r4);
-    const result_point_addr = registers.get(.r5);
-
-    if (points_len > 512) return SyscallError.InvalidLength;
 
     const cost = switch (curve_id) {
         .edwards => tc.compute_budget.curve25519_edwards_msm_base_cost,

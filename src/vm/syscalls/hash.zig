@@ -54,6 +54,19 @@ pub fn poseidon(
         tc.getCheckAligned(),
     );
 
+    // We need to translateSlice all of the inputs before checking the length for zero.
+    // We already know the top bound of the length is 12, so a BoundedArray works just fine.
+    var slices: std.BoundedArray([]const u8, 12) = .{};
+    for (inputs) |input| {
+        slices.appendAssumeCapacity(try memory_map.translateSlice(
+            u8,
+            .constant,
+            input.ptr,
+            input.len,
+            tc.getCheckAligned(),
+        ));
+    }
+
     if (len == 0) {
         registers.set(.r0, 1);
         return;
@@ -64,15 +77,7 @@ pub fn poseidon(
     // It is acitvated on all clusters, we still check for activation here and panic if it is not active.
     // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
     var hasher = phash.Hasher.init(endianness);
-    for (inputs) |input| {
-        const slice = try memory_map.translateSlice(
-            u8,
-            .constant,
-            input.ptr,
-            input.len,
-            tc.getCheckAligned(),
-        );
-
+    for (slices.constSlice()) |slice| {
         // Makes sure the input is a valid size, soft-error if it isn't.
         // [fd] https://github.com/firedancer-io/firedancer/blob/211dfccc1d84a50191a487a6abffd962f7954179/src/ballet/bn254/fd_poseidon.c#L101-L104
         if (slice.len == 0 or slice.len > 32) {
