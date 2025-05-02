@@ -12,4 +12,8 @@ pub const Fees = extern struct {
 
     pub const ID =
         Pubkey.parseBase58String("SysvarFees111111111111111111111111111111111") catch unreachable;
+
+    pub const DEFAULT = Fees{
+        .fee_calculator = .{ .lamports_per_signature = 0 },
+    };
 };
