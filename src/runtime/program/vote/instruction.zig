@@ -220,6 +220,73 @@ pub const Instruction = union(enum) {
     ///   2. `[SIGNER]` Current vote or withdraw authority
     authorize: Authorize,
 
+    /// A Vote instruction with recent votes
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to vote with
+    ///   1. `[]` Slot hashes sysvar
+    ///   2. `[]` Clock sysvar
+    ///   3. `[SIGNER]` Vote authority
+    vote: Vote,
+
+    /// Withdraw some amount of funds
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to withdraw from
+    ///   1. `[WRITE]` Recipient account
+    ///   2. `[SIGNER]` Withdraw authority
+    withdraw: u64,
+
+    /// Update the vote account's validator identity (node_pubkey)
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated with the given authority public key
+    ///   1. `[SIGNER]` New validator identity (node_pubkey)
+    ///   2. `[SIGNER]` Withdraw authority
+    update_validator_identity,
+
+    /// Update the commission for the vote account
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated
+    ///   1. `[SIGNER]` Withdraw authority
+    update_commission: u8,
+
+    /// A Vote instruction with recent votes
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to vote with
+    ///   1. `[]` Slot hashes sysvar
+    ///   2. `[]` Clock sysvar
+    ///   3. `[SIGNER]` Vote authority
+    vote_switch: VoteSwitch,
+
+    /// Authorize a key to send votes or issue a withdrawal
+    ///
+    /// This instruction behaves like `Authorize` with the additional requirement that the new vote
+    /// or withdraw authority must also be a signer.
+    ///
+    /// # Account references
+    ///   0. `[WRITE]` Vote account to be updated with the Pubkey for authorization
+    ///   1. `[]` Clock sysvar
+    ///   2. `[SIGNER]` Vote or withdraw authority
+    ///   3. `[SIGNER]` New vote or withdraw authority
+    authorize_checked: VoteAuthorize,
+
+    /// Update the onchain vote state for the signer.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    update_vote_state: VoteStateUpdate,
+
+    /// Update the onchain vote state for the signer along with a switching proof.
+    ///
+    /// # Account references
+    ///   0. `[Write]` Vote account to vote with
+    ///   1. `[SIGNER]` Vote authority
+    update_vote_state_switch: VoteStateUpdateSwitch,
+
     /// Given that the current Voter or Withdrawer authority is a derived key,
     /// this instruction allows someone who can sign for that derived key's
     /// base key to authorize a new Voter or Withdrawer for a vote account.
@@ -244,85 +311,27 @@ pub const Instruction = union(enum) {
     ///   3. `[SIGNER]` New vote or withdraw authority
     authorize_checked_with_seed: VoteAuthorizeCheckedWithSeedArgs,
 
-    /// Authorize a key to send votes or issue a withdrawal
-    ///
-    /// This instruction behaves like `Authorize` with the additional requirement that the new vote
-    /// or withdraw authority must also be a signer.
-    ///
-    /// # Account references
-    ///   0. `[WRITE]` Vote account to be updated with the Pubkey for authorization
-    ///   1. `[]` Clock sysvar
-    ///   2. `[SIGNER]` Vote or withdraw authority
-    ///   3. `[SIGNER]` New vote or withdraw authority
-    authorize_checked: VoteAuthorize,
-
-    /// Update the vote account's validator identity (node_pubkey)
-    ///
-    /// # Account references
-    ///   0. `[WRITE]` Vote account to be updated with the given authority public key
-    ///   1. `[SIGNER]` New validator identity (node_pubkey)
-    ///   2. `[SIGNER]` Withdraw authority
-    update_validator_identity,
-
-    /// Update the commission for the vote account
-    ///
-    /// # Account references
-    ///   0. `[WRITE]` Vote account to be updated
-    ///   1. `[SIGNER]` Withdraw authority
-    update_commission: u8,
-    /// Withdraw some amount of funds
-    ///
-    /// # Account references
-    ///   0. `[WRITE]` Vote account to withdraw from
-    ///   1. `[WRITE]` Recipient account
-    ///   2. `[SIGNER]` Withdraw authority
-    withdraw: u64,
-    /// A Vote instruction with recent votes
-    ///
-    /// # Account references
-    ///   0. `[WRITE]` Vote account to vote with
-    ///   1. `[]` Slot hashes sysvar
-    ///   2. `[]` Clock sysvar
-    ///   3. `[SIGNER]` Vote authority
-    vote: Vote,
-    /// A Vote instruction with recent votes
-    ///
-    /// # Account references
-    ///   0. `[WRITE]` Vote account to vote with
-    ///   1. `[]` Slot hashes sysvar
-    ///   2. `[]` Clock sysvar
-    ///   3. `[SIGNER]` Vote authority
-    vote_switch: VoteSwitch,
-    /// Update the onchain vote state for the signer.
-    ///
-    /// # Account references
-    ///   0. `[Write]` Vote account to vote with
-    ///   1. `[SIGNER]` Vote authority
-    update_vote_state: VoteStateUpdate,
-    /// Update the onchain vote state for the signer along with a switching proof.
-    ///
-    /// # Account references
-    ///   0. `[Write]` Vote account to vote with
-    ///   1. `[SIGNER]` Vote authority
-    update_vote_state_switch: VoteStateUpdateSwitch,
     /// Update the onchain vote state for the signer.
     ///
     /// # Account references
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
     compact_update_vote_state: VoteStateUpdate,
+
     /// Update the onchain vote state for the signer along with a switching proof.
     ///
     /// # Account references
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
     compact_update_vote_state_switch: VoteStateUpdateSwitch,
+
     /// Sync the onchain vote state with local tower
     ///
     /// # Account references
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
     tower_sync: TowerSync,
+
     /// Sync the onchain vote state with local tower along with a switching proof
     ///
     /// # Account references

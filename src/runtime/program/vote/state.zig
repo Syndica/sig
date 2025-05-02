@@ -10,7 +10,6 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMap;
-const RingBuffer = sig.utils.collections.RingBuffer;
 
 const Clock = sig.runtime.sysvar.Clock;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
@@ -328,6 +327,70 @@ pub const AuthorizedVoters = struct {
     }
 };
 
+const CircBufV0 = struct {
+    buf: [MAX_PRIOR_VOTERS]Entry,
+    idx: usize,
+
+    const Entry = struct { Pubkey, Epoch, Epoch, Slot };
+
+    pub fn init() CircBufV0 {
+        return .{
+            .buf = [_]Entry{std.mem.zeroes(Entry)} ** MAX_PRIOR_VOTERS,
+            .idx = MAX_PRIOR_VOTERS - 1,
+        };
+    }
+
+    pub fn append(self: *CircBufV0, entry: Entry) void {
+        self.idx = (self.idx + 1) % MAX_PRIOR_VOTERS;
+        self.buf[self.idx] = entry;
+    }
+};
+
+const CircBufV1 = struct {
+    buf: [MAX_PRIOR_VOTERS]Entry,
+    idx: usize,
+    is_empty: bool,
+
+    const Entry = PriorVote;
+
+    pub fn init() CircBufV1 {
+        return .{
+            .buf = [_]Entry{std.mem.zeroes(Entry)} ** MAX_PRIOR_VOTERS,
+            .idx = MAX_PRIOR_VOTERS - 1,
+            .is_empty = true,
+        };
+    }
+
+    pub fn append(self: *CircBufV1, entry: Entry) void {
+        self.idx = (self.idx + 1) % MAX_PRIOR_VOTERS;
+        self.buf[self.idx] = entry;
+        self.is_empty = false;
+    }
+
+    pub fn last(self: *CircBufV1) ?Entry {
+        if (self.is_empty) {
+            return null;
+        }
+        return self.buf[self.idx];
+    }
+
+    pub fn fromV0(v0: CircBufV0) CircBufV1 {
+        var self = CircBufV1.init();
+        self.idx = v0.idx;
+        self.is_empty = true;
+        for (v0.buf) |entry| {
+            if (!entry[0].equals(&Pubkey.ZEROES)) {
+                self.append(.{
+                    .key = entry[0],
+                    .start = entry[1],
+                    .end = entry[2],
+                });
+            }
+        }
+        return self;
+    }
+};
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
 pub const VoteStateVersions = union(enum) {
     v0_23_5: VoteState0_23_5,
@@ -376,7 +439,7 @@ pub const VoteStateVersions = union(enum) {
                     .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
                     .root_slot = state.root_slot,
                     .voters = authorized_voters,
-                    .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+                    .prior_voters = CircBufV1.fromV0(state.prior_voters),
                     .epoch_credits = state.epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
@@ -413,15 +476,17 @@ pub const VoteState0_23_5 = struct {
 
     /// the signer for vote transactions
     voter: Pubkey,
+
     /// when the authorized voter was set/initialized
     voter_epoch: Epoch,
 
     /// history of prior authorized voters and the epoch ranges for which
     ///  they were set
-    prior_voters: RingBuffer(PriorVote, MAX_PRIOR_VOTERS),
+    prior_voters: CircBufV0,
 
     /// the signer for withdrawals
     withdrawer: Pubkey,
+
     /// percentage (0-100) that represents what part of a rewards
     ///  payout should be given to this VoteAccount
     commission: u8,
@@ -450,7 +515,7 @@ pub const VoteState0_23_5 = struct {
             .node_pubkey = node_pubkey,
             .voter = authorized_voter,
             .voter_epoch = clock.epoch,
-            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = CircBufV0.init(),
             .withdrawer = withdrawer,
             .commission = commission,
             .votes = std.ArrayList(Lockout).init(allocator),
@@ -490,7 +555,7 @@ pub const VoteState1_14_11 = struct {
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
     /// the top of the range is exclusive
-    prior_voters: RingBuffer(PriorVote, MAX_PRIOR_VOTERS),
+    prior_voters: CircBufV1,
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
@@ -524,7 +589,7 @@ pub const VoteState1_14_11 = struct {
             .votes = std.ArrayList(Lockout).init(allocator),
             .root_slot = null,
             .voters = authorized_voters,
-            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = CircBufV1.init(),
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
@@ -560,7 +625,7 @@ pub const VoteState = struct {
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
     /// the top of the range is exclusive
-    prior_voters: RingBuffer(PriorVote, MAX_PRIOR_VOTERS),
+    prior_voters: CircBufV1,
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
@@ -583,7 +648,7 @@ pub const VoteState = struct {
             .voters = AuthorizedVoters{
                 .voters = SortedMap(Epoch, Pubkey).init(allocator),
             },
-            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = CircBufV1.init(),
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
@@ -612,7 +677,7 @@ pub const VoteState = struct {
             .commission = commission,
             .votes = std.ArrayList(LandedVote).init(allocator),
             .root_slot = null,
-            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = CircBufV1.init(),
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
@@ -1644,7 +1709,7 @@ pub fn createTestVoteState(
         .commission = commission,
         .votes = std.ArrayList(LandedVote).init(allocator),
         .root_slot = null,
-        .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+        .prior_voters = CircBufV1.init(),
         .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
         .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
     };
