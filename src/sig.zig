@@ -10,7 +10,6 @@ pub const gossip = @import("gossip/lib.zig");
 pub const identity = @import("identity.zig");
 pub const ledger = @import("ledger/lib.zig");
 pub const net = @import("net/lib.zig");
-pub const poh = @import("poh/lib.zig");
 pub const prometheus = @import("prometheus/lib.zig");
 pub const rand = @import("rand/rand.zig");
 pub const replay = @import("replay/lib.zig");
