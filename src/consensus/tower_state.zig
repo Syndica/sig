@@ -62,7 +62,7 @@ pub const TowerVoteState = struct {
         }
     }
 
-    pub fn doubleLockouts(self: *TowerVoteState) !void {
+    fn doubleLockouts(self: *TowerVoteState) !void {
         const stack_depth = self.votes.len;
 
         for (self.votes.slice(), 0..) |*vote, i| {
