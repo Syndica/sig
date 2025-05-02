@@ -141,6 +141,65 @@ pub const VoteStateUpdate = struct {
     }
 };
 
+pub fn serializeCompactVoteStateUpdate(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
+    // Calculate lockout offsets
+    var slot = data.root orelse 0;
+    var lockouts = std.BoundedArray(struct { Slot, u8 }, MAX_LOCKOUT_HISTORY){};
+    for (data.lockouts.items) |lockout| {
+        lockouts.appendAssumeCapacity(.{
+            try std.math.sub(Slot, lockout.slot, slot),
+            @intCast(lockout.confirmation_count),
+        });
+        slot = lockout.slot;
+    }
+
+    // Serialize in compact format
+    try writer.writeInt(Slot, slot, std.builtin.Endian.little);
+    try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockouts.len), .{});
+    for (lockouts.constSlice()) |lockout| {
+        try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockout[0]), .{});
+        try writer.writeInt(u8, @intCast(lockout[1]), std.builtin.Endian.little);
+    }
+    try writer.writeAll(&data.hash.data);
+    if (data.timestamp) |timestamp| {
+        try writer.writeInt(u8, 1, std.builtin.Endian.little);
+        try writer.writeInt(i64, timestamp, std.builtin.Endian.little);
+    } else {
+        try writer.writeInt(u8, 0, std.builtin.Endian.little);
+    }
+}
+
+pub fn deserializeCompactVoteStateUpdate(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) anyerror!VoteStateUpdate {
+    const root = try reader.readInt(Slot, std.builtin.Endian.little);
+
+    var slot = root;
+    const lockouts_len = try sig.bincode.varint.deserialize_short_u16(reader, .{});
+    const lockouts = try allocator.alloc(Lockout, lockouts_len);
+    errdefer allocator.free(lockouts);
+    for (lockouts) |*lockout| {
+        const offset = try sig.bincode.varint.deserialize_short_u16(reader, .{});
+        const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
+        slot = try std.math.add(Slot, slot, offset);
+        lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
+    }
+
+    var hash = Hash.ZEROES;
+    if (try reader.readAll(&hash.data) != Hash.SIZE) return error.NoBytesLeft;
+
+    const timestamp = switch (try reader.readInt(u8, std.builtin.Endian.little)) {
+        0 => null,
+        1 => try reader.readInt(i64, std.builtin.Endian.little),
+        else => return error.InvalidOptionalTimestamp,
+    };
+
+    return VoteStateUpdate{
+        .lockouts = .{ .items = lockouts, .capacity = lockouts_len },
+        .root = root,
+        .hash = hash,
+        .timestamp = timestamp,
+    };
+}
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L232
 pub const TowerSync = struct {
     /// The proposed tower
@@ -373,22 +432,6 @@ const CircBufV1 = struct {
         }
         return self.buf[self.idx];
     }
-
-    pub fn fromV0(v0: CircBufV0) CircBufV1 {
-        var self = CircBufV1.init();
-        self.idx = v0.idx;
-        self.is_empty = true;
-        for (v0.buf) |entry| {
-            if (!entry[0].equals(&Pubkey.ZEROES)) {
-                self.append(.{
-                    .key = entry[0],
-                    .start = entry[1],
-                    .end = entry[2],
-                });
-            }
-        }
-        return self;
-    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
@@ -439,7 +482,7 @@ pub const VoteStateVersions = union(enum) {
                     .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
                     .root_slot = state.root_slot,
                     .voters = authorized_voters,
-                    .prior_voters = CircBufV1.fromV0(state.prior_voters),
+                    .prior_voters = CircBufV1.init(),
                     .epoch_credits = state.epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };

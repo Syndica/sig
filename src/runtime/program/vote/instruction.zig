@@ -174,9 +174,42 @@ pub const VoteStateUpdate = struct {
     };
 };
 
+pub const CompactVoteStateUpdate = struct {
+    vote_state_update: vote_program.state.VoteStateUpdate,
+
+    pub const @"!bincode-config:vote_state_update": sig.bincode.FieldConfig(vote_program.state.VoteStateUpdate) = .{
+        .deserializer = vote_program.state.deserializeCompactVoteStateUpdate,
+        .serializer = vote_program.state.serializeCompactVoteStateUpdate,
+    };
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to vote with
+        account = 0,
+        /// `[]` Vote authority
+        vote_authority = 1,
+    };
+};
+
 pub const VoteStateUpdateSwitch = struct {
     vote_state_update: vote_program.state.VoteStateUpdate,
     hash: Hash,
+
+    pub const AccountIndex = enum(u8) {
+        /// `[WRITE]` Vote account to vote with
+        account = 0,
+        /// `[]` Vote authority
+        vote_authority = 1,
+    };
+};
+
+pub const CompactVoteStateUpdateSwitch = struct {
+    vote_state_update: vote_program.state.VoteStateUpdate,
+    hash: Hash,
+
+    pub const @"!bincode-config:vote_state_update": sig.bincode.FieldConfig(vote_program.state.VoteStateUpdate) = .{
+        .deserializer = vote_program.state.deserializeCompactVoteStateUpdate,
+        .serializer = vote_program.state.serializeCompactVoteStateUpdate,
+    };
 
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to vote with
@@ -210,7 +243,7 @@ pub const TowerSyncSwitch = struct {
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
-pub const Instruction = union(enum) {
+pub const Instruction = union(enum(u32)) {
     /// Initialize a vote account
     ///
     /// # Account references
@@ -324,14 +357,14 @@ pub const Instruction = union(enum) {
     /// # Account references
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
-    compact_update_vote_state: VoteStateUpdate,
+    compact_update_vote_state: CompactVoteStateUpdate,
 
     /// Update the onchain vote state for the signer along with a switching proof.
     ///
     /// # Account references
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
-    compact_update_vote_state_switch: VoteStateUpdateSwitch,
+    compact_update_vote_state_switch: CompactVoteStateUpdateSwitch,
 
     /// Sync the onchain vote state with local tower
     ///

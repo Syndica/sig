@@ -240,7 +240,14 @@ fn intializeAccount(
         clock,
     );
     defer vote_state.deinit();
-    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
@@ -345,7 +352,7 @@ fn authorize(
         allocator,
         vote_account,
         &vote_state,
-        ic.tc.rent,
+        &ic.tc.rent,
         &ic.tc.accounts_resize_delta,
     );
 }
@@ -537,7 +544,14 @@ fn updateValidatorIdentity(
     }
 
     vote_state.node_pubkey = new_identity;
-    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L121-L131
@@ -628,7 +642,14 @@ fn updateCommission(
     }
 
     vote_state.commission = commission;
-    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/a7092a20bb2f5d16375bdc531b71d2a164b43b93/programs/vote/src/vote_state/mod.rs#L798
@@ -826,7 +847,13 @@ fn processVoteWithAccount(
         }
     }
 
-    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_processor.rs#L156-L169
@@ -886,7 +913,13 @@ fn voteStateUpdate(
         return InstructionError.Custom;
     }
 
-    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_processor.rs#L202-L212
@@ -944,7 +977,13 @@ fn towerSync(
         return InstructionError.Custom;
     }
 
-    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        &ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L905
@@ -988,8 +1027,8 @@ fn validateIsSigner(
 fn setVoteState(
     allocator: std.mem.Allocator,
     account: *BorrowedAccount,
-    state: *VoteState,
-    rent: Rent,
+    state: *const VoteState,
+    rent: *const Rent,
     resize_delta: *i64,
 ) (error{OutOfMemory} || InstructionError)!void {
     if (account.constAccountData().len < VoteState.MAX_VOTE_STATE_SIZE and
