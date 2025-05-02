@@ -57,6 +57,10 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
 }
 
 pub const TransactionResult = struct {
+    /// null => failed to load accounts | failed to allocate logs
+    logs: ?[]const []const u8,
+    result: Result,
+
     pub const Kind = enum { FeesOnly, Executed };
     pub const Result = union(Kind) { FeesOnly: FeesOnly, Executed: Executed };
 
@@ -94,10 +98,6 @@ pub const TransactionResult = struct {
             };
         }
     };
-
-    /// null => failed to load accounts | failed to allocate logs
-    logs: ?[]const []const u8,
-    result: Result,
 
     fn err(self: TransactionResult) ?anyerror { // TODO: should narrow this
         return switch (self.result) {
@@ -163,8 +163,7 @@ pub fn loadAndExecuteBatch(
 
         // TODO: this loop needs a bunch more error handling
 
-        const instr_details = try ComputeBudgetInstructionDetails.fromInstructions(&tx);
-        const budget_limits = try instr_details.sanitizeAndConvertToComputeBudgetLimits();
+        const budget_limits = try sig.runtime.program.compute_budget.execute(&tx);
         const compute_budget = budget_limits.intoComputeBudget();
 
         const loaded_accounts = account_loader.loadTransactionAccountsInner(
@@ -185,7 +184,7 @@ pub fn loadAndExecuteBatch(
 
         const accounts = loaded_accounts.accounts_buf[0..tx.msg.account_keys.len];
 
-        var ctx = try makeTransactionContext(
+        var tc = try makeTransactionContext(
             accountsdb_kind,
             tmp_allocator,
             &env,
@@ -200,7 +199,7 @@ pub fn loadAndExecuteBatch(
         };
         defer {
             tx_executed.logs = blk: {
-                if (ctx.log_collector) |logger| {
+                if (tc.log_collector) |logger| {
                     break :blk logger.collectCloned(output_allocator) catch null;
                 }
                 break :blk null;
@@ -212,7 +211,7 @@ pub fn loadAndExecuteBatch(
             accountsdb_kind,
             tmp_allocator,
             &env,
-            &ctx,
+            &tc,
             accounts,
             &tx,
         ) catch |err| {
@@ -221,9 +220,9 @@ pub fn loadAndExecuteBatch(
         };
 
         // successful transaction
-        tx_executed.result.Executed.executed_units = ctx.compute_meter;
-        tx_executed.result.Executed.accounts_data_len_delta = ctx.accounts_resize_delta;
-        tx_executed.result.Executed.return_data = ctx.return_data;
+        tx_executed.result.Executed.executed_units = tc.compute_meter;
+        tx_executed.result.Executed.accounts_data_len_delta = tc.accounts_resize_delta;
+        tx_executed.result.Executed.return_data = tc.return_data;
     }
 
     return .{
@@ -231,63 +230,6 @@ pub fn loadAndExecuteBatch(
         .arena = output_arena,
     };
 }
-
-// [agave] SVMTransactionExecutionBudget
-pub const ExecutionBudget = struct {
-    /// Number of compute units that a transaction or individual instruction is
-    /// allowed to consume. Compute units are consumed by program execution,
-    /// resources they use, etc...
-    compute_unit_limit: u64,
-    /// Maximum program instruction invocation stack depth. Invocation stack
-    /// depth starts at 1 for transaction instructions and the stack depth is
-    /// incremented each time a program invokes an instruction and decremented
-    /// when a program returns.
-    max_instruction_stack_depth: usize,
-    /// Maximum cross-program invocation and instructions per transaction
-    max_instruction_trace_length: usize,
-    /// Maximum number of slices hashed per syscall
-    sha256_max_slices: u64,
-    /// Maximum SBF to BPF call depth
-    max_call_depth: usize,
-    /// Size of a stack frame in bytes, must match the size specified in the LLVM SBF backend
-    stack_frame_size: usize,
-    /// Maximum cross-program invocation instruction size
-    max_cpi_instruction_size: usize,
-    /// program heap region size, default: solana_sdk::entrypoint::HEAP_LENGTH
-    heap_size: u32,
-
-    const MAX_COMPUTE_UNIT_LIMIT = 1_400_00;
-    const MAX_INSTRUCTION_STACK_DEPTH = 5;
-    const MAX_CALL_DEPTH = 64;
-    const STACK_FRAME_SIZE = 4096;
-    const HEAP_LENGTH = 32 * 1024;
-
-    // [agave] https://github.com/anza-xyz/agave/blob/f4e69de681ea220608524b5e205c4ad3b2e4b871/program-runtime/src/execution_budget.rs#L57
-    pub const DEFAULT: ExecutionBudget = .{
-        .compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT,
-        .max_instruction_stack_depth = 5,
-        .max_instruction_trace_length = 64,
-        .sha256_max_slices = 20_000,
-        .max_call_depth = MAX_CALL_DEPTH,
-        .stack_frame_size = STACK_FRAME_SIZE,
-        .max_cpi_instruction_size = 1280, // "IPv6 Min MTU size"
-        .heap_size = HEAP_LENGTH,
-    };
-};
-
-pub const FeeDetails = struct { transaction_fee: u64, prioritization_fee: u64 };
-
-// ~= SVMTransactionExecutionAndFeeBudgetLimits
-// This should come from the bytes of the transaction, but we don't yet have it
-pub const TransactionExecutionDetails = struct {
-    pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024; // MVP <- use this as default
-
-    budget: ExecutionBudget,
-    // unused for now, needed for validation
-    fee_details: FeeDetails,
-    /// non-zero
-    loaded_accounts_data_size_limit: u32,
-};
 
 fn makeTransactionContext(
     comptime accountsdb_kind: account_loader.AccountsDbKind,
@@ -317,7 +259,7 @@ fn makeTransactionContext(
         .accounts = context_accounts,
         .return_data = .{},
         .accounts_resize_delta = 0,
-        .compute_meter = 0,
+        .compute_meter = compute_budget.compute_unit_limit,
         .custom_error = null,
         // 100KiB max log (we need *a* limit, but this is arbitrary)
         .log_collector = sig.runtime.LogCollector.init(100 * 1024),
@@ -502,124 +444,22 @@ test {
     defer output.deinit();
 
     for (output.processing_results, 0..) |res, i| {
+        errdefer {
+            std.debug.print("tx{} failed\n", .{i});
+            if (res.logs) |logs| {
+                if (logs.len > 0) {
+                    std.debug.print("log{{ \n", .{});
+                    for (logs, 0..) |log, log_idx|
+                        std.debug.print("\t{: >3}: {s}\n", .{ log_idx, log });
+                    std.debug.print("}}\n", .{});
+                }
+            }
+        }
         try switch (i) {
             0, 1 => std.testing.expect(res.err() == null),
             2 => std.testing.expect(res.err().? == error.ProgramAccountNotFound),
-            3 => std.testing.expect(res.err().? == error.ComputationalBudgetExceeded), // correct?
+            3 => std.testing.expect(res.err() != null), // invalid instruction, must fail
             else => unreachable,
         };
     }
 }
-
-// [agave] https://github.com/anza-xyz/agave/blob/b70cac38827e499d34c3a521eac17c68fb1b5b1f/compute-budget-instruction/src/compute_budget_instruction_details.rs#L39
-const ComputeBudgetInstructionDetails = struct {
-    /// unimpl
-    const MigrationBuiltinFeatureCounter = struct {};
-
-    const Value32 = struct { instr_idx: u8, value: u32 };
-    const Value64 = struct { instr_idx: u8, value: u32 };
-
-    // compute-budget instruction details:
-    // the first field in tuple is instruction index, second field is the unsanitized value set by user
-    requested_compute_unit_limit: ?Value32,
-    requested_compute_unit_price: ?Value64,
-    requested_heap_size: ?Value32,
-    requested_loaded_accounts_data_size_limit: ?Value32,
-    num_non_compute_budget_instructions: u16,
-    // Additional builtin program counters
-    num_non_migratable_builtin_instructions: u16,
-    num_non_builtin_instructions: u16,
-    migrating_builtin_feature_counters: MigrationBuiltinFeatureCounter,
-
-    const DEFAULT: ComputeBudgetInstructionDetails = .{
-        .requested_compute_unit_limit = null,
-        .requested_compute_unit_price = null,
-        .requested_heap_size = null,
-        .requested_loaded_accounts_data_size_limit = null,
-        .num_non_compute_budget_instructions = 0,
-        .num_non_migratable_builtin_instructions = 0,
-        .num_non_builtin_instructions = 0,
-        .migrating_builtin_feature_counters = .{},
-    };
-
-    // This impl is a bit of a stub
-    // [agave] https://github.com/anza-xyz/agave/blob/b70cac38827e499d34c3a521eac17c68fb1b5b1f/compute-budget-instruction/src/compute_budget_instruction_details.rs#L54
-    fn fromInstructions(
-        tx: *const sig.core.Transaction,
-    ) !ComputeBudgetInstructionDetails {
-        const details = DEFAULT;
-
-        for (tx.msg.instructions) |instr| {
-            if (tx.msg.account_keys[instr.program_index].equals(
-                &sig.runtime.ids.COMPUTE_BUDGET_PROGRAM_ID,
-            )) {
-                @panic("TODO: compute budget program unsupported");
-            }
-        }
-
-        return details;
-    }
-
-    const MIN_HEAP_FRAME_BYTES = ExecutionBudget.HEAP_LENGTH;
-    const MAX_HEAP_FRAME_BYTES = 256 * 1024;
-    const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT = 200_000;
-    const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
-
-    fn sanitizeRequestedHeapSize(bytes: u32) bool {
-        return bytes % 1024 == 0 and
-            bytes >= MIN_HEAP_FRAME_BYTES and bytes <= MAX_HEAP_FRAME_BYTES;
-    }
-
-    fn sanitizeAndConvertToComputeBudgetLimits(
-        self: ComputeBudgetInstructionDetails,
-    ) !ComputeBudgetLimits {
-        const updated_heap_bytes = @min(
-            MAX_HEAP_FRAME_BYTES,
-            if (self.requested_heap_size) |requested_heap_size| blk: {
-                if (sanitizeRequestedHeapSize(requested_heap_size.value)) {
-                    break :blk requested_heap_size.value;
-                } else {
-                    return error.InvalidInstructionData;
-                }
-            } else MIN_HEAP_FRAME_BYTES,
-        );
-
-        // TODO: the real impl for this one is more complicated
-        const compute_unit_limit = if (self.requested_compute_unit_limit) |limit|
-            limit.value
-        else
-            DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT;
-
-        const compute_unit_price = if (self.requested_compute_unit_price) |price|
-            price.value
-        else
-            0;
-
-        const loaded_bytes = if (self.requested_loaded_accounts_data_size_limit) |size_limit| blk: {
-            if (size_limit.value == 0) return error.InvalidLoadedAccountsDataSizeLimit;
-            break :blk @min(MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES, size_limit.value);
-        } else MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
-
-        return .{
-            .updated_heap_bytes = updated_heap_bytes,
-            .compute_unit_limit = compute_unit_limit,
-            .compute_unit_price = compute_unit_price,
-            .loaded_accounts_bytes = loaded_bytes,
-        };
-    }
-};
-
-// [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L28
-const ComputeBudgetLimits = struct {
-    updated_heap_bytes: u32,
-    compute_unit_limit: u32,
-    compute_unit_price: u64,
-    /// non-zero
-    loaded_accounts_bytes: u32,
-
-    fn intoComputeBudget(self: ComputeBudgetLimits) sig.runtime.ComputeBudget {
-        var default = sig.runtime.ComputeBudget.default(self.compute_unit_limit);
-        default.heap_size = self.updated_heap_bytes;
-        return default;
-    }
-};
