@@ -79,7 +79,7 @@ pub fn spawnThreadTasks(
         start_index = end_index;
     }
 
-    try thread_pool.joinFallible(allocator);
+    try thread_pool.joinFallible();
 }
 
 /// Wrapper for ThreadPool to run many tasks of the same type.
@@ -149,6 +149,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
     return struct {
         pool_allocator: ?Allocator,
+        task_pool: std.heap.MemoryPool(TaskAdapter),
         pool: *ThreadPool,
         tasks: std.ArrayListUnmanaged(*TaskAdapter) = .{},
         num_running_tasks: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
@@ -169,14 +170,20 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
             return .{
                 .pool_allocator = allocator,
+                .task_pool = std.heap.MemoryPool(TaskAdapter).init(allocator),
                 .pool = pool,
                 .max_concurrent_tasks = max_concurrent_tasks,
             };
         }
 
-        pub fn initBorrowed(pool: *ThreadPool, max_concurrent_tasks: ?usize) !Self {
+        pub fn initBorrowed(
+            allocator: Allocator,
+            pool: *ThreadPool,
+            max_concurrent_tasks: ?usize,
+        ) !Self {
             return .{
                 .pool_allocator = null,
+                .task_pool = std.heap.MemoryPool(TaskAdapter).init(allocator),
                 .pool = pool,
                 .max_concurrent_tasks = max_concurrent_tasks,
             };
@@ -192,6 +199,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             }
             assert(0 == self.tasks.items.len);
             self.tasks.deinit(schedule_allocator);
+            assert(self.task_pool.reset(.free_all));
         }
 
         /// Blocks until the task is scheduled. It will be immediate unless
@@ -229,8 +237,8 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
                 assert(max >= self.num_running_tasks.fetchAdd(1, .monotonic));
             }
 
-            const task = try allocator.create(TaskAdapter);
-            errdefer allocator.destroy(task);
+            const task = try self.task_pool.create();
+            errdefer self.task_pool.destroy(task);
             task.* = .{ .typed_task = typed_task, .num_running_tasks = &self.num_running_tasks };
 
             try self.tasks.append(allocator, task);
@@ -242,17 +250,17 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
         /// Blocks until all tasks are complete.
         /// Returns a list of all return values.
-        pub fn join(self: *Self, schedule_allocator: Allocator) Allocator.Error![]TaskResult {
+        pub fn join(self: *Self, allocator: Allocator) Allocator.Error![]TaskResult {
             for (self.tasks.items) |task| task.join();
 
-            const results = try schedule_allocator.alloc(TaskResult, self.tasks.items.len);
-            errdefer schedule_allocator.free(results);
+            const results = try allocator.alloc(TaskResult, self.tasks.items.len);
+            errdefer allocator.free(results);
 
             for (self.tasks.items, 0..) |task, i| {
                 results[i] = task.result;
             }
 
-            for (self.tasks.items) |task| schedule_allocator.destroy(task);
+            assert(self.task_pool.reset(.retain_capacity));
             self.tasks.clearRetainingCapacity();
 
             return results;
@@ -260,9 +268,9 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
         /// Like join, but it returns an error if any tasks failed, and otherwise discards task output.
         /// This will return the first error encountered which may be inconsistent between runs.
-        pub fn joinFallible(self: *Self, schedule_allocator: Allocator) !void {
+        pub fn joinFallible(self: *Self) !void {
             defer {
-                for (self.tasks.items) |task| schedule_allocator.destroy(task);
+                assert(self.task_pool.reset(.retain_capacity));
                 self.tasks.clearRetainingCapacity();
             }
 

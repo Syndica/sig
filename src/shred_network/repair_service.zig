@@ -176,7 +176,7 @@ pub const RepairService = struct {
                     .requests = addressed_requests.items[start..end],
                 });
             }
-            try self.thread_pool.joinFallible(self.allocator);
+            try self.thread_pool.joinFallible();
         }
 
         return addressed_requests.items.len;

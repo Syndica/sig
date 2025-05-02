@@ -163,7 +163,7 @@ pub fn parallelUntarToFileSystem(
     }
 
     // wait for all tasks
-    pool.joinFallible(allocator) catch |err|
+    pool.joinFallible() catch |err|
         logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
 }
 

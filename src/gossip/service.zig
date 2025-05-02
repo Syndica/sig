@@ -518,7 +518,7 @@ pub const GossipService = struct {
         }
 
         var pool = try HomogeneousThreadPool(VerifyMessageTask)
-            .initBorrowed(&self.thread_pool, VERIFY_PACKET_PARALLEL_TASKS);
+            .initBorrowed(self.allocator, &self.thread_pool, VERIFY_PACKET_PARALLEL_TASKS);
         defer pool.deinit(self.allocator);
 
         // loop until the previous service closes and triggers us to close
@@ -542,7 +542,7 @@ pub const GossipService = struct {
             }
         }
 
-        pool.joinFallible(self.allocator) catch |err|
+        pool.joinFallible() catch |err|
             self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
     }
 
