@@ -4,7 +4,6 @@ const tracy = @import("tracy");
 
 const TarOutputHeader = std.tar.output.Header;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
-const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 
 /// Unpack tarball is related to accounts_db so we reuse it's progress bar
