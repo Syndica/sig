@@ -80,60 +80,6 @@ pub fn spawnThreadTasks(
     try thread_pool.joinFallible(allocator);
 }
 
-pub fn ThreadPoolTask(comptime Entry: type) type {
-    return struct {
-        task: ThreadPool.Task,
-        entry: Entry,
-        available: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
-        result: CallbackError!void = {},
-        const Self = @This();
-
-        const CallbackError = blk: {
-            const CallbackFn = @TypeOf(Entry.callback);
-            const CallbackResult = @typeInfo(CallbackFn).Fn.return_type.?;
-            break :blk switch (@typeInfo(CallbackResult)) {
-                .ErrorUnion => |info| info.error_set,
-                else => error{},
-            };
-        };
-
-        pub fn init(allocator: Allocator, task_count: usize) ![]Self {
-            const tasks = try allocator.alloc(Self, task_count);
-            @memset(tasks, .{
-                .entry = undefined,
-                .task = .{ .callback = Self.callback },
-            });
-            return tasks;
-        }
-
-        fn callback(task: *ThreadPool.Task) void {
-            const self: *Self = @fieldParentPtr("task", task);
-            self.result = undefined;
-
-            std.debug.assert(!self.available.load(.acquire));
-            defer self.available.store(true, .release);
-
-            self.result = self.entry.callback();
-        }
-
-        /// Waits for any of the tasks in the slice to become available. Once one does,
-        /// it is atomically set to be unavailable, and its index is returned.
-        pub fn awaitAndAcquireFirstAvailableTask(tasks: []Self, start_index: usize) usize {
-            var task_index = start_index;
-            while (tasks[task_index].available.cmpxchgWeak(true, false, .acquire, .monotonic) != null) {
-                task_index = (task_index + 1) % tasks.len;
-            }
-            return task_index;
-        }
-
-        pub fn blockUntilCompletion(task: *Self) void {
-            while (!task.available.load(.acquire)) {
-                std.atomic.spinLoopHint();
-            }
-        }
-    };
-}
-
 /// Wrapper for ThreadPool to run many tasks of the same type.
 ///
 /// TaskType should have a method `run (*TaskType) void`
@@ -197,7 +143,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         tasks: std.ArrayListUnmanaged(*TaskAdapter) = .{},
         completed_tasks: std.ArrayListUnmanaged(*TaskAdapter) = .{},
         task_cursor: usize = 0,
-        max_concurrent_tasks: ?u32,
+        max_concurrent_tasks: ?usize,
 
         pub const Task = TaskType;
 
@@ -206,7 +152,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         pub fn init(
             allocator: Allocator,
             num_threads: u32,
-            max_concurrent_tasks: ?u32,
+            max_concurrent_tasks: ?usize,
         ) !Self {
             const pool = try allocator.create(ThreadPool);
             pool.* = ThreadPool.init(.{ .max_threads = num_threads });
@@ -218,7 +164,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             };
         }
 
-        pub fn initBorrowed(pool: *ThreadPool, max_concurrent_tasks: ?u32) !Self {
+        pub fn initBorrowed(pool: *ThreadPool, max_concurrent_tasks: ?usize) !Self {
             return .{
                 .pool_allocator = null,
                 .pool = pool,
