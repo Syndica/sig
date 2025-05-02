@@ -9,6 +9,7 @@ const Pubkey = sig.core.Pubkey;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const TransactionContext = sig.runtime.TransactionContext;
+const Rent = sig.runtime.sysvar.Rent;
 const WLockGuard = sig.runtime.TransactionContextAccount.WLockGuard;
 
 const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
@@ -228,7 +229,7 @@ pub const BorrowedAccount = struct {
     pub fn setExecutable(
         self: *BorrowedAccount,
         executable: bool,
-        rent: sysvar.Rent,
+        rent: Rent,
     ) InstructionError!void {
         if (!rent.isExempt(self.account.lamports, self.account.data.len) or
             !self.account.owner.equals(&self.context.program_id) or

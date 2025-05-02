@@ -292,22 +292,20 @@ fn authorize(
 
     switch (vote_authorize) {
         .voter => {
-            const current_epoch = clock.epoch;
-
             const authorized_withdrawer_signer = !std.meta.isError(validateIsSigner(
                 vote_state.withdrawer,
                 signers,
             ));
 
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L697-L701
-            const target_epoch = std.math.add(u64, current_epoch, 1) catch {
+            const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
             };
 
             // [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L872
             const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
                 allocator,
-                current_epoch,
+                clock.epoch,
             );
 
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
@@ -342,7 +340,14 @@ fn authorize(
             vote_state.withdrawer = authorized;
         },
     }
-    try vote_account.serializeIntoAccountData(VoteStateVersions{ .current = vote_state });
+
+    try setVoteState(
+        allocator,
+        vote_account,
+        &vote_state,
+        ic.tc.rent,
+        &ic.tc.accounts_resize_delta,
+    );
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
@@ -978,6 +983,38 @@ fn validateIsSigner(
         }
     }
     return InstructionError.MissingRequiredSignature;
+}
+
+fn setVoteState(
+    allocator: std.mem.Allocator,
+    account: *BorrowedAccount,
+    state: *VoteState,
+    rent: Rent,
+    resize_delta: *i64,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (account.constAccountData().len < VoteState.MAX_VOTE_STATE_SIZE and
+        (!rent.isExempt(account.account.lamports, VoteState.MAX_VOTE_STATE_SIZE) or
+        std.meta.isError(account.setDataLength(
+        allocator,
+        resize_delta,
+        VoteState.MAX_VOTE_STATE_SIZE,
+    )))) {
+        var votes = try std.ArrayList(Lockout).initCapacity(allocator, state.votes.items.len);
+        defer votes.deinit();
+        for (state.votes.items) |vote| votes.appendAssumeCapacity(vote.lockout);
+        return account.serializeIntoAccountData(VoteStateVersions{ .v1_14_11 = .{
+            .node_pubkey = state.node_pubkey,
+            .withdrawer = state.withdrawer,
+            .commission = state.commission,
+            .votes = votes,
+            .root_slot = state.root_slot,
+            .voters = state.voters,
+            .prior_voters = state.prior_voters,
+            .epoch_credits = state.epoch_credits,
+            .last_timestamp = state.last_timestamp,
+        } });
+    }
+    return account.serializeIntoAccountData(VoteStateVersions{ .current = state.* });
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3659

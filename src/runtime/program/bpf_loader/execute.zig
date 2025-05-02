@@ -463,7 +463,7 @@ pub fn executeV3DeployWithMaxDataLen(
         } });
         try program_account.setExecutable(
             true,
-            try ic.sc.sysvar_cache.get(sysvar.Rent),
+            ic.tc.rent,
         );
     }
 

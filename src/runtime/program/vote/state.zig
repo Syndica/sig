@@ -172,6 +172,11 @@ pub const TowerSync = struct {
 pub const AuthorizedVoters = struct {
     voters: SortedMap(Epoch, Pubkey),
 
+    pub const @"!bincode-config": sig.bincode.FieldConfig(AuthorizedVoters) = .{
+        .deserializer = deserialize,
+        .serializer = serialize,
+    };
+
     pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
         var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
         try authorized_voters.put(epoch, pubkey);
@@ -292,6 +297,33 @@ pub const AuthorizedVoters = struct {
             }
             const last_voter = values[values.len - 1];
             return .{ last_voter, false };
+        }
+    }
+
+    fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !AuthorizedVoters {
+        var authorized_voters = AuthorizedVoters{
+            .voters = SortedMap(Epoch, Pubkey).init(allocator),
+        };
+        errdefer authorized_voters.deinit();
+
+        for (try reader.readInt(usize, std.builtin.Endian.little)) |_| {
+            const epoch = try reader.readInt(u64, std.builtin.Endian.little);
+            var pubkey = Pubkey.ZEROES;
+            const bytes_read = try reader.readAll(&pubkey.data);
+            if (bytes_read != Pubkey.SIZE) return error.NoBytesLeft;
+            try authorized_voters.voters.put(epoch, pubkey);
+        }
+
+        return authorized_voters;
+    }
+
+    pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
+        var authorized_voters: AuthorizedVoters = data;
+        try writer.writeInt(usize, authorized_voters.len(), std.builtin.Endian.little);
+        const items = authorized_voters.voters.items();
+        for (items[0], items[1]) |k, v| {
+            try writer.writeInt(u64, k, std.builtin.Endian.little);
+            try writer.writeAll(&v.data);
         }
     }
 };
@@ -1585,8 +1617,8 @@ pub const VoteState = struct {
 };
 
 pub const VoteAuthorize = enum {
-    withdrawer,
     voter,
+    withdrawer,
 };
 
 pub fn createTestVoteState(
@@ -1640,6 +1672,41 @@ pub fn verifyAndGetVoteState(
     }
 
     return vote_state;
+}
+
+test "AuthorizeVoters.deserialize" {
+    const data_0 = &[_]u8{
+        3, 0, 0, 0, 0, 0, 0, 0,
+
+        0, 0, 0, 0, 0, 0, 0, 0,
+
+        0, 0, 0, 0, 0, 0, 0, 2,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+
+        1, 0, 0, 0, 0, 0, 0, 0,
+
+        0, 0, 0, 0, 0, 0, 0, 3,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+
+        2, 0, 0, 0, 0, 0, 0, 0,
+
+        0, 0, 0, 0, 0, 0, 0, 4,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    const allocator = std.testing.allocator;
+    const authorized_voters = try sig.bincode.readFromSlice(allocator, AuthorizedVoters, data_0, .{});
+    defer authorized_voters.deinit();
+    try std.testing.expectEqual(3, authorized_voters.count());
+
+    const data_1 = try sig.bincode.writeAlloc(allocator, authorized_voters, .{});
+    defer allocator.free(data_1);
+    try std.testing.expectEqualSlices(u8, data_0, data_1);
 }
 
 test "Lockout.lockout" {
