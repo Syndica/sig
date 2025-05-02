@@ -192,9 +192,10 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
     return struct {
         allocator: std.mem.Allocator,
-        pool: ThreadPool,
-        tasks: std.ArrayList(TaskAdapter),
-        results: std.ArrayList(TaskResult),
+        pool: *ThreadPool,
+        tasks: std.ArrayListUnmanaged(TaskAdapter),
+        results: std.ArrayListUnmanaged(TaskResult),
+        pool_is_owned: bool,
 
         pub const Task = TaskType;
 
@@ -205,25 +206,53 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             num_threads: u32,
             num_tasks: u64,
         ) !Self {
-            var tasks = try std.ArrayList(TaskAdapter).initCapacity(allocator, num_tasks);
-            errdefer tasks.deinit();
+            var tasks = try std.ArrayListUnmanaged(TaskAdapter).initCapacity(allocator, num_tasks);
+            errdefer tasks.deinit(allocator);
 
-            var results = try std.ArrayList(TaskResult).initCapacity(allocator, num_tasks);
-            errdefer results.deinit();
+            var results = try std.ArrayListUnmanaged(TaskResult).initCapacity(allocator, num_tasks);
+            errdefer results.deinit(allocator);
+
+            const pool = try allocator.create(ThreadPool);
+            pool.* = ThreadPool.init(.{ .max_threads = num_threads });
 
             return .{
                 .allocator = allocator,
-                .pool = ThreadPool.init(.{ .max_threads = num_threads }),
+                .pool = pool,
                 .tasks = tasks,
                 .results = results,
+                .pool_is_owned = true,
             };
         }
 
-        pub fn deinit(self: *Self) void {
-            self.pool.shutdown();
-            self.tasks.deinit();
-            self.results.deinit();
-            self.pool.deinit();
+        pub fn initBorrowed(
+            allocator: std.mem.Allocator,
+            pool: *ThreadPool,
+            num_tasks: u64,
+        ) !Self {
+            var tasks = try std.ArrayListUnmanaged(TaskAdapter).initCapacity(allocator, num_tasks);
+            errdefer tasks.deinit(allocator);
+
+            var results = try std.ArrayListUnmanaged(TaskResult).initCapacity(allocator, num_tasks);
+            errdefer results.deinit(allocator);
+
+            return .{
+                .allocator = allocator,
+                .pool = pool,
+                .tasks = tasks,
+                .results = results,
+                .pool_is_owned = false,
+            };
+        }
+
+        pub fn deinit(const_self: Self) void {
+            var self = const_self;
+            if (self.pool_is_owned) {
+                self.pool.shutdown();
+                self.pool.deinit();
+                self.allocator.destroy(self.pool);
+            }
+            self.tasks.deinit(self.allocator);
+            self.results.deinit(self.allocator);
         }
 
         pub fn schedule(self: *Self, typed_task: TaskType) void {
@@ -239,13 +268,14 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// returns a list of any results for tasks that did not have a pointer provided
         /// NOTE: if this fails then the result field is left in a bad state in which case the
         /// thread pool should be discarded/reset
-        pub fn join(self: *Self) std.mem.Allocator.Error!std.ArrayList(TaskResult) {
+        pub fn join(self: *Self) std.mem.Allocator.Error!std.ArrayListUnmanaged(TaskResult) {
             for (self.tasks.items) |*task| task.join();
 
             var results = self.results;
-            errdefer results.deinit();
+            errdefer results.deinit(self.allocator);
 
-            self.results = try std.ArrayList(TaskResult).initCapacity(self.allocator, self.tasks.capacity);
+            self.results = try std.ArrayListUnmanaged(TaskResult)
+                .initCapacity(self.allocator, self.tasks.capacity);
             self.tasks.clearRetainingCapacity();
             return results;
         }
@@ -254,7 +284,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// NOTE: this will return the first error encountered which may be inconsistent between runs.
         pub fn joinFallible(self: *Self) !void {
             var results = try self.join();
-            defer results.deinit();
+            defer results.deinit(self.allocator);
             for (results.items) |result| try result;
         }
     };
@@ -319,8 +349,8 @@ test "typed thread pool" {
     pool.schedule(.{ .a = 1, .b = 2 });
     pool.schedule(.{ .a = 1, .b = 4 });
 
-    const results = try pool.join();
-    defer results.deinit();
+    var results = try pool.join();
+    defer results.deinit(std.testing.allocator);
 
     try std.testing.expect(3 == results.items.len);
     try std.testing.expect(2 == results.items[0]);
