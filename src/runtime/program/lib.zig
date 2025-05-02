@@ -3,6 +3,7 @@ const sig = @import("../../sig.zig");
 
 pub const address_lookup_table = @import("address_lookup_table/lib.zig");
 pub const bpf_loader_program = @import("bpf_loader/lib.zig");
+pub const compute_budget = @import("compute_budget/lib.zig");
 pub const precompile_programs = @import("precompiles/lib.zig");
 pub const system_program = @import("system/lib.zig");
 pub const testing = @import("testing.zig");
