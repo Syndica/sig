@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const Allocator = std.mem.Allocator;
 const Condition = std.Thread.Condition;
 const Mutex = std.Thread.Mutex;
 
@@ -39,7 +40,7 @@ pub fn SpawnThreadTasksParams(comptime TaskFn: type) type {
 
 /// this function spawns a number of threads to run the same task function.
 pub fn spawnThreadTasks(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     comptime taskFn: anytype,
     config: SpawnThreadTasksParams(@TypeOf(taskFn)),
 ) !void {
@@ -57,14 +58,14 @@ pub fn spawnThreadTasks(
     var thread_pool = try HomogeneousThreadPool(S).init(
         allocator,
         @intCast(n_threads),
-        n_threads,
+        @intCast(n_threads),
     );
-    defer thread_pool.deinit();
+    defer thread_pool.deinit(allocator);
 
     var start_index: usize = 0;
     for (0..n_threads) |thread_id| {
         const end_index = if (thread_id == n_threads - 1) config.data_len else (start_index + chunk_size);
-        thread_pool.schedule(.{
+        try thread_pool.schedule(allocator, .{
             .task_params = .{
                 .start_index = start_index,
                 .end_index = end_index,
@@ -76,7 +77,7 @@ pub fn spawnThreadTasks(
         start_index = end_index;
     }
 
-    try thread_pool.joinFallible();
+    try thread_pool.joinFallible(allocator);
 }
 
 pub fn ThreadPoolTask(comptime Entry: type) type {
@@ -96,7 +97,7 @@ pub fn ThreadPoolTask(comptime Entry: type) type {
             };
         };
 
-        pub fn init(allocator: std.mem.Allocator, task_count: usize) ![]Self {
+        pub fn init(allocator: Allocator, task_count: usize) ![]Self {
             const tasks = try allocator.alloc(Self, task_count);
             @memset(tasks, .{
                 .entry = undefined,
@@ -152,7 +153,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
         /// whether the task has completed.
         /// do not touch without locking the mutex.
-        done: bool = false,
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         /// locks done to avoid infinite wait on the condition
         /// due to a potential race condition.
         done_lock: Mutex = .{},
@@ -166,18 +167,18 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// the return value of the task
         /// - points to undefined data until the task is complete
         /// - memory address may become invalid after task is joined, if caller decides to deinit results
-        result: *TaskResult,
+        result: TaskResult = undefined,
 
         const Self = @This();
 
         fn run(pool_task: *ThreadPool.Task) void {
             var self: *Self = @fieldParentPtr("pool_task", pool_task);
 
-            self.result.* = self.typed_task.run();
+            self.result = self.typed_task.run();
 
             // signal completion
             self.done_lock.lock();
-            self.done = true;
+            self.done.store(true, .release);
             self.done_notifier.broadcast();
             self.done_lock.unlock();
         }
@@ -185,107 +186,154 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// blocks until the task is complete.
         fn join(self: *Self) void {
             self.done_lock.lock();
-            while (!self.done) self.done_notifier.wait(&self.done_lock);
+            while (!self.done.load(.acquire)) self.done_notifier.wait(&self.done_lock);
             self.done_lock.unlock();
         }
     };
 
     return struct {
-        allocator: std.mem.Allocator,
+        pool_allocator: ?Allocator,
         pool: *ThreadPool,
-        tasks: std.ArrayListUnmanaged(TaskAdapter),
-        results: std.ArrayListUnmanaged(TaskResult),
-        pool_is_owned: bool,
+        tasks: std.ArrayListUnmanaged(*TaskAdapter) = .{},
+        completed_tasks: std.ArrayListUnmanaged(*TaskAdapter) = .{},
+        task_cursor: usize = 0,
+        max_concurrent_tasks: ?u32,
 
         pub const Task = TaskType;
 
         const Self = @This();
 
         pub fn init(
-            allocator: std.mem.Allocator,
+            allocator: Allocator,
             num_threads: u32,
-            num_tasks: u64,
+            max_concurrent_tasks: ?u32,
         ) !Self {
-            var tasks = try std.ArrayListUnmanaged(TaskAdapter).initCapacity(allocator, num_tasks);
-            errdefer tasks.deinit(allocator);
-
-            var results = try std.ArrayListUnmanaged(TaskResult).initCapacity(allocator, num_tasks);
-            errdefer results.deinit(allocator);
-
             const pool = try allocator.create(ThreadPool);
             pool.* = ThreadPool.init(.{ .max_threads = num_threads });
 
             return .{
-                .allocator = allocator,
+                .pool_allocator = allocator,
                 .pool = pool,
-                .tasks = tasks,
-                .results = results,
-                .pool_is_owned = true,
+                .max_concurrent_tasks = max_concurrent_tasks,
             };
         }
 
-        pub fn initBorrowed(
-            allocator: std.mem.Allocator,
-            pool: *ThreadPool,
-            num_tasks: u64,
-        ) !Self {
-            var tasks = try std.ArrayListUnmanaged(TaskAdapter).initCapacity(allocator, num_tasks);
-            errdefer tasks.deinit(allocator);
-
-            var results = try std.ArrayListUnmanaged(TaskResult).initCapacity(allocator, num_tasks);
-            errdefer results.deinit(allocator);
-
+        pub fn initBorrowed(pool: *ThreadPool, max_concurrent_tasks: ?u32) !Self {
             return .{
-                .allocator = allocator,
+                .pool_allocator = null,
                 .pool = pool,
-                .tasks = tasks,
-                .results = results,
-                .pool_is_owned = false,
+                .max_concurrent_tasks = max_concurrent_tasks,
             };
         }
 
-        pub fn deinit(const_self: Self) void {
+        /// join before calling this
+        pub fn deinit(const_self: Self, schedule_allocator: Allocator) void {
             var self = const_self;
-            if (self.pool_is_owned) {
+            if (self.pool_allocator) |pool_allocator| {
                 self.pool.shutdown();
                 self.pool.deinit();
-                self.allocator.destroy(self.pool);
+                pool_allocator.destroy(self.pool);
             }
-            self.tasks.deinit(self.allocator);
-            self.results.deinit(self.allocator);
+            std.debug.assert(0 == self.tasks.items.len);
+            std.debug.assert(0 == self.completed_tasks.items.len);
+            self.tasks.deinit(schedule_allocator);
+            self.completed_tasks.deinit(schedule_allocator);
         }
 
-        pub fn schedule(self: *Self, typed_task: TaskType) void {
-            // NOTE: this breaks other pre-scheduled tasks on re-allocs so we dont
-            // allow re-allocations
-            const result = self.results.addOneAssumeCapacity();
-            var task = self.tasks.addOneAssumeCapacity();
-            task.* = .{ .typed_task = typed_task, .result = result };
-            self.pool.schedule(Batch.from(&task.pool_task));
+        /// Blocks until the task is scheduled. It will be immediate unless
+        /// you've already scheduled max_concurrent_tasks and none have
+        /// finished.
+        pub fn schedule(
+            self: *Self,
+            allocator: Allocator,
+            typed_task: TaskType,
+        ) !void {
+            while (true) {
+                if (try self.trySchedule(allocator, typed_task)) return;
+                try std.Thread.yield();
+            }
         }
 
-        /// blocks until all tasks are complete
-        /// returns a list of any results for tasks that did not have a pointer provided
-        /// NOTE: if this fails then the result field is left in a bad state in which case the
-        /// thread pool should be discarded/reset
-        pub fn join(self: *Self) std.mem.Allocator.Error!std.ArrayListUnmanaged(TaskResult) {
-            for (self.tasks.items) |*task| task.join();
+        /// Attempt to schedule the task and return whether the task was
+        /// scheduled.
+        ///
+        /// Returns false if max_concurrent_tasks were already
+        /// scheduled, and they're all still running.
+        ///
+        /// Never returns false if max_concurrent_tasks == null
+        pub fn trySchedule(
+            self: *Self,
+            allocator: Allocator,
+            typed_task: TaskType,
+        ) Allocator.Error!bool {
+            if (self.max_concurrent_tasks != null and
+                self.tasks.items.len < self.max_concurrent_tasks.?)
+            {
+                const task = try allocator.create(TaskAdapter);
+                task.* = .{ .typed_task = typed_task };
 
-            var results = self.results;
-            errdefer results.deinit(self.allocator);
+                try self.tasks.append(allocator, task);
+                self.task_cursor += 1;
 
-            self.results = try std.ArrayListUnmanaged(TaskResult)
-                .initCapacity(self.allocator, self.tasks.capacity);
-            self.tasks.clearRetainingCapacity();
+                self.pool.schedule(Batch.from(&task.pool_task));
+                return true;
+            } else {
+                for (self.tasks.items) |*task_slot| {
+                    if (task_slot.*.done.load(.acquire)) {
+                        const task = try allocator.create(TaskAdapter);
+                        errdefer allocator.destroy(task);
+                        task.* = .{ .typed_task = typed_task };
+
+                        try self.completed_tasks.append(allocator, task_slot.*);
+                        task_slot.* = task;
+
+                        self.pool.schedule(Batch.from(&task.pool_task));
+                        return true;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        }
+
+        /// Blocks until all tasks are complete.
+        /// Returns a list of all return values.
+        pub fn join(self: *Self, schedule_allocator: Allocator) Allocator.Error![]TaskResult {
+            for (self.tasks.items) |task| task.join();
+
+            const num_results = self.tasks.items.len + self.completed_tasks.items.len;
+            const results = try schedule_allocator.alloc(TaskResult, num_results);
+            errdefer schedule_allocator.free(results);
+
+            var i: usize = 0;
+            inline for (.{ self.completed_tasks, self.tasks }) |tasks| {
+                for (tasks.items) |task| {
+                    results[i] = task.result;
+                    i += 1;
+                }
+            }
+
+            self.destroyTasks(schedule_allocator);
+
             return results;
         }
 
         /// Like join, but it returns an error if any tasks failed, and otherwise discards task output.
-        /// NOTE: this will return the first error encountered which may be inconsistent between runs.
-        pub fn joinFallible(self: *Self) !void {
-            var results = try self.join();
-            defer results.deinit(self.allocator);
-            for (results.items) |result| try result;
+        /// This will return the first error encountered which may be inconsistent between runs.
+        pub fn joinFallible(self: *Self, schedule_allocator: Allocator) !void {
+            defer self.destroyTasks(schedule_allocator);
+
+            for (self.tasks.items) |task| task.join();
+
+            for (self.completed_tasks.items) |task| try task.result;
+            for (self.tasks.items) |task| try task.result;
+        }
+
+        fn destroyTasks(self: *Self, schedule_allocator: Allocator) void {
+            for (self.tasks.items) |task| schedule_allocator.destroy(task);
+            for (self.completed_tasks.items) |task| schedule_allocator.destroy(task);
+            self.tasks.clearRetainingCapacity();
+            self.completed_tasks.clearRetainingCapacity();
         }
     };
 }
@@ -344,16 +392,16 @@ test "typed thread pool" {
         2,
         3,
     );
-    defer pool.deinit();
-    pool.schedule(.{ .a = 1, .b = 1 });
-    pool.schedule(.{ .a = 1, .b = 2 });
-    pool.schedule(.{ .a = 1, .b = 4 });
+    defer pool.deinit(std.testing.allocator);
+    try pool.schedule(std.testing.allocator, .{ .a = 1, .b = 1 });
+    try pool.schedule(std.testing.allocator, .{ .a = 1, .b = 2 });
+    try pool.schedule(std.testing.allocator, .{ .a = 1, .b = 4 });
 
-    var results = try pool.join();
-    defer results.deinit(std.testing.allocator);
+    const results = try pool.join(std.testing.allocator);
+    defer std.testing.allocator.free(results);
 
-    try std.testing.expect(3 == results.items.len);
-    try std.testing.expect(2 == results.items[0]);
-    try std.testing.expect(3 == results.items[1]);
-    try std.testing.expect(5 == results.items[2]);
+    try std.testing.expect(3 == results.len);
+    try std.testing.expect(2 == results[0]);
+    try std.testing.expect(3 == results[1]);
+    try std.testing.expect(5 == results[2]);
 }
