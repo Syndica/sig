@@ -177,7 +177,7 @@ const weak_mul = struct {
             if (pos == 0) break;
             q = q.dbl().dbl().dbl().dbl();
         }
-        // try q.rejectIdentity();
+        try q.rejectIdentity();
         return q;
     }
 
@@ -194,7 +194,7 @@ const weak_mul = struct {
 
     pub fn mul(p: Edwards25519, s: [32]u8) !Edwards25519 {
         const xpc = precompute(p, 15);
-        // if (xpc[4].rejectIdentity()) return error.WeakPublicKey;
+        // xpc[4].rejectIdentity() catch return error.WeakPublicKey;
         return pcMul16(&xpc, s, false);
     }
 };
