@@ -232,6 +232,7 @@ pub fn curveMultiscalarMul(
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
+    const attribute_id = registers.get(.r1);
     const scalars_addr = registers.get(.r2);
     const points_addr = registers.get(.r3);
     const points_len = registers.get(.r4);
@@ -239,7 +240,7 @@ pub fn curveMultiscalarMul(
 
     if (points_len > 512) return SyscallError.InvalidLength;
 
-    const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
+    const curve_id = CurveId.wrap(attribute_id) orelse {
         if (tc.ec.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
             return SyscallError.InvalidAttribute;
         } else {
