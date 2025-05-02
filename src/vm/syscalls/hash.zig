@@ -40,11 +40,6 @@ pub fn poseidon(
     const cost = budget.poseidonCost(@intCast(len));
     try tc.consumeCompute(cost);
 
-    if (len == 0) {
-        registers.set(.r0, 1);
-        return;
-    }
-
     const hash_result = try memory_map.translateType(
         [32]u8,
         .mutable,
@@ -58,6 +53,11 @@ pub fn poseidon(
         len,
         tc.getCheckAligned(),
     );
+
+    if (len == 0) {
+        registers.set(.r0, 1);
+        return;
+    }
 
     // Agave handles poseidon errors in an annoying way.
     // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
@@ -195,11 +195,14 @@ test poseidon {
 test "poseidon len 0" {
     const budget = sig.runtime.ComputeBudget.default(1_400_000);
     const total_compute = budget.poseidonCost(0); // enough for one call
+    var buffer: [32]u8 = undefined;
     try sig.vm.tests.testSyscall(
         poseidon,
-        &.{},
         &.{
-            .{ .{ 0, 0, 0, 0, 0 }, 1 }, // fails because len == 0
+            memory.Region.init(.mutable, &buffer, memory.RODATA_START),
+        },
+        &.{
+            .{ .{ 0, 0, 0, 0, memory.RODATA_START }, 1 }, // fails because len == 0
             // Make sure len == 0 still consumes compute
             .{ .{ 0, 0, 0, 0, 0 }, error.ComputationalBudgetExceeded },
         },
