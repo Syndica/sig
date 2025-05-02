@@ -13,27 +13,6 @@ const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 // TODO DUPLICATE_THRESHOLD is defined in replay stage in Agave
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
-// TODO Implemented as part of ProgressMap
-pub const ForkStats = struct {
-    computed: bool,
-    lockout_intervals: LockoutIntervals,
-};
-
-// TODO Implemented as part of ProgressMap
-pub const ForkProgress = struct {
-    fork_stats: ForkStats,
-};
-
-pub const ProgressMap = struct {
-    progress_map: std.AutoHashMap(Slot, ForkProgress),
-    pub fn getHash(_: ProgressMap, _: Slot) ?Hash {
-        @panic("Unimplemented");
-    }
-    pub fn getForkStats(_: ProgressMap, _: Slot) ?ForkStats {
-        @panic("Unimplemented");
-    }
-};
-
 pub const LatestValidatorVotesForFrozenBanks = struct {
     max_gossip_frozen_votes: std.AutoHashMap(Pubkey, struct { slot: Slot, hashes: []Hash }),
     pub fn checkAddVote(

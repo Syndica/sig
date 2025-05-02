@@ -10,11 +10,11 @@ const BankFields = sig.core.BankFields;
 const BlockTimestamp = sig.runtime.program.vote_program.state.BlockTimestamp;
 const Hash = sig.core.Hash;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
+const ProgressMap = sig.consensus.ProgressMap;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
 const Lockout = sig.runtime.program.vote_program.state.Lockout;
 const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
-const ProgressMap = sig.consensus.unimplemented.ProgressMap;
 const Pubkey = sig.core.Pubkey;
 const ReplayStage = sig.consensus.unimplemented.ReplayStage;
 const Slot = sig.core.Slot;
@@ -736,7 +736,7 @@ pub const Tower = struct {
             // for this bank that contain `last_vote`.
 
             var lockout_intervals = progress
-                .progress_map
+                .map
                 .get(candidate_slot).?
                 .fork_stats
                 .lockout_intervals;
@@ -744,25 +744,25 @@ pub const Tower = struct {
             // Find any locked out intervals for vote accounts in this bank with
             // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
             // `last_vote` on another fork.
-            const intervals_keyed_by_end = lockout_intervals.values()[last_voted_slot..];
+            const intervals_keyed_by_end = lockout_intervals.map.values()[last_voted_slot..];
             for (intervals_keyed_by_end) |interval_keyed_by_end| {
                 for (interval_keyed_by_end.items) |vote_account| {
-                    if (locked_out_vote_accounts.contains(vote_account.pubkey)) {
+                    if (locked_out_vote_accounts.contains(vote_account[1])) {
                         continue;
                     }
                     // Only count lockouts on slots that are:
                     // 1) Not ancestors of `last_vote`, meaning being on different fork
                     // 2) Not from before the current root as we can't determine if
                     // anything before the root was an ancestor of `last_vote` or not
-                    if (!last_vote_ancestors.contains(vote_account.slot) and (
+                    if (!last_vote_ancestors.contains(vote_account[0]) and (
                     // Given a `lockout_interval_start` < root that appears in a
                     // bank for a `candidate_slot`, it must be that `lockout_interval_start`
                     // is an ancestor of the current root, because `candidate_slot` is a
                     // descendant of the current root
-                        vote_account.slot > root))
+                        vote_account[0] > root))
                     {
                         const stake =
-                            if (epoch_vote_accounts.get(vote_account.pubkey)) |staked_account|
+                            if (epoch_vote_accounts.get(vote_account[1])) |staked_account|
                             staked_account[0]
                         else
                             0;
@@ -774,7 +774,7 @@ pub const Tower = struct {
                         ) > SWITCH_FORK_THRESHOLD) {
                             return SwitchForkDecision{ .switch_proof = switch_proof };
                         }
-                        try locked_out_vote_accounts.put(vote_account.pubkey);
+                        try locked_out_vote_accounts.put(vote_account[1]);
                     }
                 }
             }
