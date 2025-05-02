@@ -25,7 +25,8 @@ pub const LatestValidatorVotesForFrozenBanks = struct {
         _ = vote_pubkey;
         _ = frozend_hash;
         _ = is_replay_vote;
-        @panic("Unimplemented");
+        // TODO Implement
+        return .{ false, null };
     }
 };
 pub const VoteAccount = struct {};
