@@ -5,6 +5,7 @@ pub const download = @import("download.zig");
 pub const fuzz = @import("fuzz.zig");
 pub const fuzz_snapshot = @import("fuzz_snapshot.zig");
 pub const index = @import("index.zig");
+pub const manager = @import("manager.zig");
 pub const snapshots = @import("snapshots.zig");
 pub const swiss_map = @import("swiss_map.zig");
 

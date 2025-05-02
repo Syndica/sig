@@ -30,10 +30,10 @@ pub const EntryVerifier = struct {
 
         pub fn run(self: *Task) Allocator.Error!bool {
             return try verifyPoh(
+                self.entries,
                 self.allocator,
                 self.preallocated_nodes,
                 self.initial_hash,
-                self.entries,
             );
         }
     };

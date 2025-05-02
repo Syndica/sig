@@ -344,7 +344,7 @@ pub const BankFields = struct {
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapRandom(random, allocator, max_list_entries);
+        const epoch_stakes = try epochStakeMapRandom(random, allocator, 1, max_list_entries);
         errdefer epochStakeMapDeinit(epoch_stakes, allocator);
 
         return .{
@@ -366,7 +366,7 @@ pub const BankFields = struct {
             .slots_per_year = random.float(f64),
             .accounts_data_len = random.int(u64),
             .slot = random.int(Slot),
-            .epoch = random.int(Epoch),
+            .epoch = epoch_stakes.keys()[random.uintLessThan(usize, epoch_stakes.count())],
             .block_height = random.int(u64),
             .collector_id = Pubkey.initRandom(random),
             .collector_fees = random.int(u64),

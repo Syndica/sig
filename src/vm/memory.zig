@@ -137,8 +137,8 @@ pub const MemoryMap = union(enum) {
         vm_addr: u64,
         check_aligned: bool,
     ) !(switch (state) {
-        .mutable => *T,
-        .constant => *const T,
+        .mutable => *align(1) T,
+        .constant => *align(1) const T,
     }) {
         if (comptime !hasTranslatableRepresentation(T)) {
             @compileError(@typeName(T) ++ " doesn't have a stable layout for translation");
@@ -163,8 +163,8 @@ pub const MemoryMap = union(enum) {
         len: u64,
         check_aligned: bool,
     ) !(switch (state) {
-        .mutable => []T,
-        .constant => []const T,
+        .mutable => []align(1) T,
+        .constant => []align(1) const T,
     }) {
         if (comptime !hasTranslatableRepresentation(T)) {
             @compileError(@typeName(T) ++ " doesn't have a stable layout for translation");
@@ -183,8 +183,8 @@ pub const MemoryMap = union(enum) {
         }
 
         return switch (state) {
-            .mutable => @as([*]T, @ptrFromInt(host_addr))[0..len],
-            .constant => @as([*]const T, @ptrFromInt(host_addr))[0..len],
+            .mutable => @as([*]align(1) T, @ptrFromInt(host_addr))[0..len],
+            .constant => @as([*]align(1) const T, @ptrFromInt(host_addr))[0..len],
         };
     }
 };
@@ -631,6 +631,13 @@ fn hasTranslatableRepresentation(comptime T: type) bool {
         else => false,
     };
 }
+
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
+/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
+pub const VmSlice = extern struct {
+    ptr: u64,
+    len: u64,
+};
 
 const expectError = std.testing.expectError;
 const expectEqual = std.testing.expectEqual;

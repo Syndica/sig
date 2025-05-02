@@ -583,6 +583,7 @@ pub const Vm = struct {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
+                        registers.set(.r0, 0);
                         try entry.value(
                             self.transaction_context,
                             &self.memory_map,
@@ -622,6 +623,7 @@ pub const Vm = struct {
                 if (external) {
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                         resolved = true;
+                        registers.set(.r0, 0);
                         try entry.value(
                             self.transaction_context,
                             &self.memory_map,

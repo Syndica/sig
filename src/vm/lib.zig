@@ -1,4 +1,3 @@
-const std = @import("std");
 const sig = @import("../sig.zig");
 
 const executable = @import("executable.zig");
@@ -44,7 +43,6 @@ pub const SyscallError = error{
     ArithmeticOverflow,
     InvalidParameters,
     InvalidEndianness,
-    InvalidNumberOfInputs,
 };
 
 pub const EbpfError = error{
@@ -70,8 +68,10 @@ pub const EbpfError = error{
     SyscallError,
 };
 
-pub const ExecutionError =
-    SyscallError || EbpfError || InstructionError || std.fs.File.WriteError || error{
+pub const ExecutionError = SyscallError ||
+    EbpfError ||
+    InstructionError ||
+    error{
     OutOfMemory,
     Overflow,
 };

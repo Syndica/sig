@@ -1,16 +1,21 @@
-const phash = @import("poseidon");
 const std = @import("std");
+const builtin = @import("builtin");
 const cpi = @import("cpi.zig");
-const memops = @import("memops.zig");
 const sig = @import("../../sig.zig");
 
-const memory = sig.vm.memory;
+pub const memops = @import("memops.zig");
+pub const hash = @import("hash.zig");
+pub const ecc = @import("ecc.zig");
+
 const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
+const pubkey_utils = sig.runtime.pubkey_utils;
 
+const memory = sig.vm.memory;
 const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
-const MemoryMap = sig.vm.memory.MemoryMap;
+const MemoryMap = memory.MemoryMap;
+const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
 const BuiltinProgram = sig.vm.BuiltinProgram;
 const FeatureSet = sig.runtime.features.FeatureSet;
@@ -97,24 +102,57 @@ pub fn register(
     );
 
     // Program derived addresses
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_create_program_address", createProgramAddress,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_try_find_program_address", createProgramAddress,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_create_program_address",
+        createProgramAddress,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_try_find_program_address",
+        findProgramAddress,
+    );
 
     // Sha256, Keccak256, Secp256k1Recover
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_sha256", sha256,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_keccak256", keccak256,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_sha256",
+        hash.sha256,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_keccak256",
+        hash.keccak256,
+    );
     // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", secp256k1Recover,);
+
     // Blake3
-    // if (feature_set.isActive(feature_set.BLAKE3_SYSCALL_ENABLED, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_blake3", blake3,);
-    // }
+    if (feature_set.isActive(features.BLAKE3_SYSCALL_ENABLED, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_blake3",
+            hash.blake3,
+        );
+    }
 
     // Elliptic Curve
-    // if (feature_set.isActive(feature_set.CURVE25519_SYSCALL_ENABLED, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_validate_point", curveValidatePoint,);
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_group_op", curveGroupOp,);
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_curve_multiscalar_mul", curveMultiscalarMul,);
-    // }
+    if (feature_set.isActive(features.CURVE25519_SYSCALL_ENABLED, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_curve_validate_point",
+            ecc.curvePointValidation,
+        );
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_curve_group_op",
+            ecc.curveGroupOp,
+        );
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_curve_multiscalar_mul",
+            ecc.curveMultiscalarMul,
+        );
+    }
 
     // Sysvars
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_clock_sysvar", getClockSysvar,);
@@ -133,32 +171,36 @@ pub fn register(
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_memcpy_",
-        memcpy,
+        memops.memcpy,
     );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_memmove_",
-        memmove,
+        memops.memmove,
     );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_memset_",
-        memset,
+        memops.memset,
     );
 
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_memcmp_",
-        memcmp,
+        memops.memcmp,
     );
 
     // Processed Sibling
     // _ = try syscalls.functions.registerHashed(allocator, "sol_get_processed_sibling_instruction", getProcessedSiblingInstruction,);
 
     // Stack Height
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_stack_height", getStackHeight,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_get_stack_height",
+        getStackHeight,
+    );
 
     // Return Data
     _ = try syscalls.functions.registerHashed(
@@ -166,7 +208,11 @@ pub fn register(
         "sol_set_return_data",
         setReturnData,
     );
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_return_data", getReturnData,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_get_return_data",
+        getReturnData,
+    );
 
     // Cross Program Invocation
     _ = try syscalls.functions.registerHashed(
@@ -204,14 +250,18 @@ pub fn register(
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_poseidon",
-            poseidon,
+            hash.poseidon,
         );
     }
 
     // Remaining Compute Units
-    // if (feature_set.isActive(feature_set.ENABLE_REMAINING_COMPUTE_UNITS_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_remaining_compute_units", remainingComputeUnits,);
-    // }
+    if (feature_set.isActive(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_remaining_compute_units",
+            remainingComputeUnits,
+        );
+    }
 
     // Alt_bn_128_compression
     // if (feature_set.isActive(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL, slot)) {
@@ -311,7 +361,7 @@ pub fn logData(
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
 
     const vm_messages = try memory_map.translateSlice(
-        cpi.VmSlice,
+        memory.VmSlice,
         .constant,
         vm_addr,
         len,
@@ -337,12 +387,6 @@ pub fn logData(
     try stable_log.programData(tc, messages);
 }
 
-// memory operators
-pub const memcpy = memops.memcpy;
-pub const memset = memops.memset;
-pub const memcmp = memops.memcmp;
-pub const memmove = memops.memmove;
-
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     @panic("TODO: implement allocFree syscall");
@@ -353,148 +397,137 @@ pub const MAX_RETURN_DATA: usize = 1024;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/4f68141ba70b7574da0bc185ef5d08fe33d19887/programs/bpf_loader/src/syscalls/mod.rs#L1450
 pub fn setReturnData(
-    ctx: *TransactionContext,
+    tc: *TransactionContext,
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
     const addr = registers.get(.r1);
     const len = registers.get(.r2);
 
-    const cost = if (ctx.compute_budget.cpi_bytes_per_unit > 0)
-        (len / ctx.compute_budget.cpi_bytes_per_unit) +| ctx.compute_budget.syscall_base_cost
-    else
-        std.math.maxInt(u64);
+    const cost = (len / tc.compute_budget.cpi_bytes_per_unit) +|
+        tc.compute_budget.syscall_base_cost;
 
-    try ctx.consumeCompute(cost);
+    try tc.consumeCompute(cost);
 
     if (len > TransactionReturnData.MAX_RETURN_DATA) {
         return error.ReturnDataTooLarge;
     }
 
-    const empty_return_data: []const u8 = &[_]u8{};
-    const return_data = if (len == 0)
-        empty_return_data
+    const return_data: []const u8 = if (len == 0)
+        &.{}
     else
-        try memory_map.vmap(.constant, addr, len);
+        try memory_map.translateSlice(
+            u8,
+            .constant,
+            addr,
+            len,
+            tc.getCheckAligned(),
+        );
 
-    if (ctx.instruction_stack.len == 0) return error.CallDepth;
-    const ic = ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+    if (tc.instruction_stack.len == 0) return error.CallDepth;
+    const ic = tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
     const program_id = ic.ixn_info.program_meta.pubkey;
 
-    ctx.return_data.program_id = program_id;
-    ctx.return_data.data.len = 0;
-    ctx.return_data.data.appendSliceAssumeCapacity(return_data);
+    tc.return_data.program_id = program_id;
+    tc.return_data.data.len = 0;
+    tc.return_data.data.appendSliceAssumeCapacity(return_data);
 }
 
-// hashing
-const Parameters = enum(u64) {
-    Bn254X5 = 0,
-};
-
-const Slice = extern struct {
-    addr: [*]const u8,
-    len: u64,
-};
-
-pub fn poseidon(
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1495-L1557
+pub fn getReturnData(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    const parameters = std.meta.intToEnum(Parameters, registers.get(.r1)) catch
-        return error.InvalidParameters;
-    std.debug.assert(parameters == .Bn254X5);
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
 
-    const endianness = std.meta.intToEnum(std.builtin.Endian, registers.get(.r2)) catch
-        return error.InvalidEndianness;
-    const addr = registers.get(.r3);
-    const len = registers.get(.r4);
-    const result_addr = registers.get(.r5);
+    const return_data_addr = registers.get(.r1);
+    const input_length = registers.get(.r2);
+    const program_id_addr = registers.get(.r3);
 
-    if (len > 12) return error.InvalidNumberOfInputs;
+    const program_id = tc.return_data.program_id;
+    const return_data = tc.return_data.data.constSlice();
+    const length = @min(return_data.len, input_length);
 
-    const budget = tc.compute_budget;
-    const cost = budget.poseidonCost(@intCast(len));
-    try tc.consumeCompute(cost);
+    if (length != 0) {
+        const cost = (length +| @sizeOf(Pubkey)) / tc.compute_budget.cpi_bytes_per_unit;
+        try tc.consumeCompute(cost);
 
-    const hash_result = try memory_map.vmap(.mutable, result_addr, 32);
-    const input_bytes = try memory_map.vmap(
-        .constant,
-        addr,
-        len * @sizeOf(Slice),
-    );
-    const inputs = std.mem.bytesAsSlice(Slice, input_bytes);
-
-    // Agave handles poseidon errors in an annoying way.
-    // The feature SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES simplifies this handling.
-    // It is acitvated on all clusters, we still check for activation here and panic if it is not active.
-    // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
-    var hasher = phash.Hasher.init(endianness);
-    for (inputs) |input| {
-        const slice = try memory_map.vmap(
-            .constant,
-            @intFromPtr(input.addr),
-            input.len,
+        const return_data_result = try memory_map.translateSlice(
+            u8,
+            .mutable,
+            return_data_addr,
+            length,
+            tc.getCheckAligned(),
         );
-        hasher.append(slice[0..32]) catch {
-            if (tc.ec.feature_set.active.contains(
-                features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
-            )) {
-                registers.set(.r0, 1);
-                return;
-            } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
-        };
-    }
-    const result = hasher.finish();
-    @memcpy(hash_result, &result);
-}
 
-// special
-pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
-    return SyscallError.Abort;
-}
+        const source = return_data[0..length];
+        @memcpy(return_data_result, source);
 
-pub fn panic(ctx: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
-    const file = registers.get(.r1);
-    const len = registers.get(.r2);
+        const program_id_result = try memory_map.translateType(
+            Pubkey,
+            .mutable,
+            program_id_addr,
+            tc.getCheckAligned(),
+        );
 
-    try ctx.consumeCompute(len);
+        if (memops.isOverlapping(
+            @intFromPtr(return_data_result.ptr),
+            length,
+            @intFromPtr(program_id_result),
+            @sizeOf(Pubkey),
+        )) {
+            return SyscallError.CopyOverlapping;
+        }
 
-    const message = try memory_map.vmap(.constant, file, len);
-    if (!std.unicode.utf8ValidateSlice(message)) {
-        return SyscallError.InvalidString;
+        program_id_result.* = program_id;
     }
 
-    return SyscallError.Panic;
+    registers.set(.r0, return_data.len);
 }
 
-test poseidon {
-    try sig.vm.tests.testElfWithSyscalls(
-        .{},
-        sig.ELF_DATA_DIR ++ "poseidon_test.so",
-        &.{
-            .{ .name = "sol_poseidon", .builtin_fn = poseidon },
-            .{ .name = "log", .builtin_fn = log },
-            .{ .name = "sol_panic_", .builtin_fn = panic },
-        },
-        .{ 0, 48526 },
-    );
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1697-L1715
+pub fn getStackHeight(
+    tc: *TransactionContext,
+    _: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+    registers.set(.r0, tc.instruction_stack.len);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1968-L1986
+pub fn remainingComputeUnits(
+    tc: *TransactionContext,
+    _: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+    registers.set(.r0, tc.compute_meter);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
-pub fn invokeSignedC(ctx: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
-    return invokeSigned(cpi.AccountInfoC, ctx, mmap, rm);
+pub fn invokeSignedC(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    return invokeSigned(cpi.AccountInfoC, tc, memory_map, registers);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
-pub fn invokeSignedRust(ctx: *TransactionContext, mmap: *MemoryMap, rm: *RegisterMap) Error!void {
-    return invokeSigned(cpi.AccountInfoRust, ctx, mmap, rm);
+pub fn invokeSignedRust(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    return invokeSigned(cpi.AccountInfoRust, tc, memory_map, registers);
 }
 
 fn invokeSigned(
     comptime AccountInfoType: type,
-    ctx: *TransactionContext,
-    mmap: *MemoryMap,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
     const instruction_addr = registers.get(.r1);
@@ -503,12 +536,12 @@ fn invokeSigned(
     const signers_seeds_addr = registers.get(.r4);
     const signers_seeds_len = registers.get(.r5);
 
-    const caller_ic = &ctx.instruction_stack.buffer[ctx.instruction_stack.len - 1];
+    const caller_ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
     return cpi.cpiCommon(
-        ctx.allocator,
+        tc.allocator,
         caller_ic,
-        mmap,
+        memory_map,
         AccountInfoType,
         instruction_addr,
         account_infos_addr,
@@ -516,4 +549,618 @@ fn invokeSigned(
         signers_seeds_addr,
         signers_seeds_len,
     );
+}
+
+// special
+pub fn abort(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
+    return SyscallError.Abort;
+}
+
+pub fn panic(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const file = registers.get(.r1);
+    const len = registers.get(.r2);
+
+    try tc.consumeCompute(len);
+
+    const message = try memory_map.translateSlice(
+        u8,
+        .constant,
+        file,
+        len,
+        tc.getCheckAligned(),
+    );
+    if (!std.unicode.utf8ValidateSlice(message)) {
+        return SyscallError.InvalidString;
+    }
+
+    return SyscallError.Panic;
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L903
+pub fn findProgramAddress(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const seeds_addr = registers.get(.r1);
+    const seeds_len = registers.get(.r2);
+    const program_id_addr = registers.get(.r3);
+    const address_addr = registers.get(.r4);
+    const bump_seed_addr = registers.get(.r5);
+
+    const cost = tc.compute_budget.create_program_address_units;
+    try tc.consumeCompute(cost);
+
+    const check_aligned = tc.getCheckAligned();
+    const program_id, const seeds = try translateAndCheckProgramAddressInputs(
+        memory_map,
+        seeds_addr,
+        seeds_len,
+        program_id_addr,
+        check_aligned,
+    );
+
+    var bump_seed: u8 = std.math.maxInt(u8);
+    for (0..255) |_| {
+        const new_address = pubkey_utils.createProgramAddress(
+            seeds.constSlice(),
+            &.{bump_seed},
+            program_id,
+        ) catch {
+            bump_seed -|= 1;
+            try tc.consumeCompute(cost);
+            continue;
+        };
+
+        const bump_seed_ref = try memory_map.translateType(
+            u8,
+            .mutable,
+            bump_seed_addr,
+            check_aligned,
+        );
+        const address = try memory_map.translateSlice(
+            u8,
+            .mutable,
+            address_addr,
+            @sizeOf(Pubkey),
+            check_aligned,
+        );
+
+        if (memops.isOverlapping(
+            @intFromPtr(bump_seed_ref),
+            @sizeOf(u8),
+            @intFromPtr(address.ptr),
+            address.len,
+        )) return SyscallError.CopyOverlapping;
+
+        bump_seed_ref.* = bump_seed;
+        @memcpy(address, std.mem.asBytes(&new_address));
+        return; // r0 = 0
+    }
+
+    registers.set(.r0, 1);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L864
+pub fn createProgramAddress(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const seeds_addr = registers.get(.r1);
+    const seeds_len = registers.get(.r2);
+    const program_id_addr = registers.get(.r3);
+    const address_addr = registers.get(.r4);
+
+    const cost = tc.compute_budget.create_program_address_units;
+    try tc.consumeCompute(cost);
+
+    const check_aligned = tc.getCheckAligned();
+    const program_id, const seeds = try translateAndCheckProgramAddressInputs(
+        memory_map,
+        seeds_addr,
+        seeds_len,
+        program_id_addr,
+        check_aligned,
+    );
+
+    const new_address = pubkey_utils.createProgramAddress(seeds.slice(), &.{}, program_id) catch {
+        registers.set(.r0, 1);
+        return;
+    };
+    const address = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        address_addr,
+        @sizeOf(Pubkey),
+        check_aligned,
+    );
+    @memcpy(address, std.mem.asBytes(&new_address));
+    return; // r0 = 0
+}
+
+fn translateAndCheckProgramAddressInputs(
+    memory_map: *MemoryMap,
+    seeds_addr: u64,
+    seeds_len: u64,
+    program_id_addr: u64,
+    check_aligned: bool,
+) Error!struct { Pubkey, std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) } {
+    const untranslated_seeds = try memory_map.translateSlice(
+        memory.VmSlice,
+        .constant,
+        seeds_addr,
+        seeds_len,
+        check_aligned,
+    );
+    if (untranslated_seeds.len > pubkey_utils.MAX_SEEDS) {
+        return SyscallError.BadSeeds; // PubkeyError.MaxSeedLengthExceeded
+    }
+
+    var seeds: std.BoundedArray([]const u8, pubkey_utils.MAX_SEEDS) = .{};
+    for (untranslated_seeds) |untranslated_seed| {
+        if (untranslated_seed.len > pubkey_utils.MAX_SEED_LEN) return SyscallError.BadSeeds;
+        seeds.appendAssumeCapacity(try memory_map.translateSlice(
+            u8,
+            .constant,
+            untranslated_seed.ptr,
+            untranslated_seed.len,
+            check_aligned,
+        ));
+    }
+
+    const program_id = try memory_map.translateType(
+        Pubkey,
+        .constant,
+        program_id_addr,
+        check_aligned,
+    );
+
+    return .{ program_id.*, seeds };
+}
+
+// Syscall Tests
+
+/// Meant only as a helper for tests below.
+/// Invokes either createProgramAddress or findProgramAddress syscalls with VM context setup.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L4301
+fn callProgramAddressSyscall(
+    allocator: std.mem.Allocator,
+    tc: *TransactionContext,
+    comptime syscall_fn: fn (*TransactionContext, *MemoryMap, *RegisterMap) Error!void,
+    seeds: []const []const u8,
+    program_id: Pubkey,
+    overlap_outputs: bool,
+) !struct { Pubkey, u8 } {
+    comptime std.debug.assert(builtin.is_test);
+
+    const seeds_addr = 0x100000000;
+    const program_id_addr = 0x200000000;
+    const address_addr = 0x300000000;
+    const bump_seed_addr = 0x400000000;
+    const seed_data_addr = 0x500000000;
+
+    var out_bump_seed: u8 = 0;
+    var out_address = Pubkey.ZEROES;
+
+    // Setup in/out params.
+    var regions = std.ArrayList(memory.Region).init(allocator);
+    defer regions.deinit();
+    try regions.appendSlice(&.{
+        memory.Region.init(.constant, std.mem.asBytes(&program_id), program_id_addr),
+        memory.Region.init(.mutable, std.mem.asBytes(&out_address), address_addr),
+        memory.Region.init(.mutable, std.mem.asBytes(&out_bump_seed), bump_seed_addr),
+    });
+
+    // Setup slice of VmSlices
+    var seed_slices = std.ArrayList(memory.VmSlice).init(allocator);
+    defer seed_slices.deinit();
+    for (seeds, 0..) |seed, i| {
+        const vm_addr = seed_data_addr +| (i *% 0x100000000);
+        try seed_slices.append(.{ .ptr = vm_addr, .len = seed.len });
+        try regions.append(memory.Region.init(.constant, seed, vm_addr));
+    }
+
+    // seeds_addr is only finalized now, but should appear before the others.
+    try regions.appendSlice(&.{
+        memory.Region.init(.constant, std.mem.sliceAsBytes(seed_slices.items), seeds_addr),
+    });
+    std.mem.sort(memory.Region, regions.items, {}, struct {
+        fn less(_: void, r1: memory.Region, r2: memory.Region) bool {
+            return r1.vm_addr_start < r2.vm_addr_start;
+        }
+    }.less);
+
+    var memory_map = try MemoryMap.init(allocator, regions.items, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r0, 0);
+    registers.set(.r1, seeds_addr);
+    registers.set(.r2, seeds.len);
+    registers.set(.r3, program_id_addr);
+    registers.set(.r4, address_addr);
+    registers.set(.r5, if (overlap_outputs) address_addr else bump_seed_addr);
+
+    try syscall_fn(tc, &memory_map, &registers);
+    return .{ out_address, out_bump_seed };
+}
+
+test findProgramAddress {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    const cost = tc.compute_budget.create_program_address_units;
+    const address = sig.runtime.program.bpf_loader_program.v3.ID;
+    const max_tries: u64 = 256; // once per seed
+
+    for (0..1000) |_| {
+        const new_address = Pubkey.initRandom(prng.random());
+        tc.compute_meter = cost * max_tries;
+        const found_address, const bump_seed = try callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            &.{ "Lil'", "Bits" },
+            new_address,
+            false,
+        );
+        const created_address, _ = try callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{ "Lil'", "Bits", &.{bump_seed} },
+            new_address,
+            false,
+        );
+        try std.testing.expect(found_address.equals(&created_address));
+    }
+
+    const seeds: []const []const u8 = &.{""};
+    tc.compute_meter = cost * max_tries;
+    _, const bump_seed = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        findProgramAddress,
+        seeds,
+        address,
+        false,
+    );
+    tc.compute_meter = cost * (max_tries - bump_seed);
+    _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        findProgramAddress,
+        seeds,
+        address,
+        false,
+    );
+    tc.compute_meter = cost * (max_tries - bump_seed - 1);
+    try std.testing.expectError(
+        InstructionError.ComputationalBudgetExceeded,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            seeds,
+            address,
+            false,
+        ),
+    );
+
+    const exceeded_seed = [_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1);
+    tc.compute_meter = cost * (max_tries - 1);
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            &.{&exceeded_seed},
+            address,
+            false,
+        ),
+    );
+
+    comptime var exceeded_seeds: []const []const u8 = &.{};
+    inline for (1..18) |i| exceeded_seeds = exceeded_seeds ++ &[_][]const u8{&[_]u8{@intCast(i)}};
+    tc.compute_meter = cost * (max_tries - 1);
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            exceeded_seeds,
+            address,
+            false,
+        ),
+    );
+
+    try std.testing.expectError(
+        SyscallError.CopyOverlapping,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            findProgramAddress,
+            seeds,
+            address,
+            true,
+        ),
+    );
+}
+
+test createProgramAddress {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &.{
+            .{
+                .pubkey = Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            },
+        },
+    });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    const cost = tc.compute_budget.create_program_address_units;
+    const address = sig.runtime.program.bpf_loader_program.v3.ID;
+    tc.compute_meter = cost * 12; // enough for 12 calls to createProgramAddress
+
+    const exceeded_seed: []const u8 = &([_]u8{127} ** (pubkey_utils.MAX_SEED_LEN + 1));
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{exceeded_seed},
+            address,
+            false,
+        ),
+    );
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{ "short_seed", exceeded_seed },
+            address,
+            false,
+        ),
+    );
+
+    const max_seed: []const u8 = &([_]u8{0} ** pubkey_utils.MAX_SEED_LEN);
+    _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{max_seed},
+        address,
+        false,
+    );
+
+    comptime var exceeded_seeds: []const []const u8 = &.{};
+    inline for (1..16) |i| {
+        exceeded_seeds = exceeded_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
+    }
+    _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        exceeded_seeds,
+        address,
+        false,
+    );
+
+    comptime var max_seeds: []const []const u8 = &.{};
+    inline for (0..17) |i| {
+        max_seeds = max_seeds ++ &[_][]const u8{&[_]u8{@intCast(i + 1)}};
+    }
+    try std.testing.expectError(
+        SyscallError.BadSeeds,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            max_seeds,
+            address,
+            false,
+        ),
+    );
+
+    var pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "", &.{1} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe")).equals(&pk),
+    );
+
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "☉", &.{0} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19")).equals(&pk),
+    );
+
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "Talking", "Squirrels" },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk")).equals(&pk),
+    );
+
+    const seed_pk = try Pubkey.parseBase58String("SeedPubey1111111111111111111111111111111111");
+    pk, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ &seed_pk.data, &.{1} },
+        address,
+        false,
+    );
+    try std.testing.expect(
+        (try Pubkey.parseBase58String("976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL")).equals(&pk),
+    );
+
+    const pk_a, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{ "Talking", "Squirrels" },
+        address,
+        false,
+    );
+    const pk_b, _ = try callProgramAddressSyscall(
+        allocator,
+        &tc,
+        createProgramAddress,
+        &.{"Talking"},
+        address,
+        false,
+    );
+    try std.testing.expect(!pk_a.equals(&pk_b));
+
+    tc.compute_meter = 0;
+    try std.testing.expectError(
+        InstructionError.ComputationalBudgetExceeded,
+        callProgramAddressSyscall(
+            allocator,
+            &tc,
+            createProgramAddress,
+            &.{ "", &.{1} },
+            address,
+            false,
+        ),
+    );
+}
+
+test "set and get return data" {
+    const allocator = std.testing.allocator;
+
+    const src_addr = 0x100000000;
+    const dst_addr = 0x200000000;
+    const program_id_addr = 0x300000000;
+
+    const data: [24]u8 = .{42} ** 24;
+    var data_buffer: [16]u8 = .{0} ** 16;
+    var id_buffer: [32]u8 = .{0} ** 32;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{.{
+                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            .compute_meter = 10_000,
+        },
+    );
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    const program_id = sig.runtime.program.bpf_loader_program.v2.ID;
+    const instr_info = sig.runtime.InstructionInfo{
+        .program_meta = .{
+            .index_in_transaction = 0,
+            .pubkey = program_id,
+        },
+        .account_metas = .{},
+        .instruction_data = &.{},
+        .initial_account_lamports = 0,
+    };
+    try sig.runtime.executor.pushInstruction(&tc, instr_info);
+
+    var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+    var memory_map = try MemoryMap.init(allocator, &.{
+        memory.Region.init(.constant, &data, src_addr),
+        memory.Region.init(.mutable, &data_buffer, dst_addr),
+        memory.Region.init(.mutable, &id_buffer, program_id_addr),
+    }, .v3, .{});
+    defer memory_map.deinit(allocator);
+
+    {
+        registers.set(.r1, src_addr);
+        registers.set(.r2, data.len);
+
+        try setReturnData(&tc, &memory_map, &registers);
+
+        try std.testing.expectEqual(0, registers.get(.r0));
+    }
+
+    {
+        registers.set(.r1, dst_addr);
+        registers.set(.r2, data_buffer.len);
+        registers.set(.r3, program_id_addr);
+
+        try getReturnData(&tc, &memory_map, &registers);
+
+        try std.testing.expectEqual(data.len, registers.get(.r0));
+        try std.testing.expectEqualSlices(u8, &data_buffer, data[0..data_buffer.len]);
+        try std.testing.expectEqual(id_buffer, program_id.data);
+    }
+
+    {
+        registers.set(.r1, program_id_addr);
+        registers.set(.r2, data_buffer.len);
+        registers.set(.r3, program_id_addr);
+
+        try std.testing.expectError(
+            error.CopyOverlapping,
+            getReturnData(&tc, &memory_map, &registers),
+        );
+    }
 }

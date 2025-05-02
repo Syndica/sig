@@ -122,7 +122,7 @@ pub const Transaction = struct {
         const serialized_message = self.msg.serializeBounded(self.version) catch
             return error.SerializationFailed;
 
-        if (self.msg.account_keys.len > self.signatures.len) {
+        if (self.msg.account_keys.len < self.signatures.len) {
             return error.NotEnoughAccounts;
         }
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
@@ -140,7 +140,7 @@ pub const Transaction = struct {
         const serialized_message = self.msg.serializeBounded(self.version) catch
             return error.SerializationFailed;
 
-        if (self.msg.account_keys.len > self.signatures.len) {
+        if (self.msg.account_keys.len < self.signatures.len) {
             return error.NotEnoughAccounts;
         }
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
@@ -351,7 +351,7 @@ pub const TransactionMessage = struct {
         var hasher = Blake3.init(.{});
         hasher.update("solana-tx-message-v1");
         hasher.update(serialized_message);
-        var the_hash: Hash = undefined;
+        var the_hash: Hash = .{ .data = undefined };
         hasher.final(&the_hash.data);
         return the_hash;
     }
@@ -694,3 +694,21 @@ pub const transaction_v0_example = struct {
         90,  0,
     };
 };
+
+test "verify and hash transaction" {
+    try transaction_legacy_example.as_struct.verify();
+    const hash = try transaction_legacy_example.as_struct.verifyAndHashMessage();
+    try std.testing.expectEqual(
+        try Hash.parseBase58String("FjoeKaxTd3J7xgt9vHMpuQb7j192weaEP3yMa1ntfQNo"),
+        hash,
+    );
+
+    try std.testing.expectError(
+        error.SignatureVerificationFailed,
+        transaction_v0_example.as_struct.verify(),
+    );
+    try std.testing.expectError(
+        error.SignatureVerificationFailed,
+        transaction_v0_example.as_struct.verifyAndHashMessage(),
+    );
+}

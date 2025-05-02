@@ -45,33 +45,25 @@ pub fn epochStakeMapClone(
 pub fn epochStakeMapRandom(
     random: std.Random,
     allocator: Allocator,
+    min_list_entries: usize,
     max_list_entries: usize,
 ) Allocator.Error!EpochStakeMap {
-    var epoch_stakes = EpochStakeMap.Managed.init(allocator);
-    errdefer epochStakeMapDeinit(epoch_stakes.unmanaged, allocator);
+    var map: EpochStakeMap = .{};
+    errdefer epochStakeMapDeinit(map, allocator);
 
-    try sig.rand.fillHashmapWithRng(
-        &epoch_stakes,
-        random,
-        random.uintAtMost(usize, max_list_entries),
-        struct {
-            allocator: Allocator,
-            max_list_entries: usize,
+    const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+    try map.ensureTotalCapacity(allocator, map_len);
 
-            pub fn randomKey(_: @This(), rand: std.Random) !Epoch {
-                return rand.int(Epoch);
-            }
+    for (0..map_len) |_| {
+        const value_ptr = while (true) {
+            const gop = map.getOrPutAssumeCapacity(random.int(Epoch));
+            if (gop.found_existing) continue;
+            break gop.value_ptr;
+        };
+        value_ptr.* = try EpochStakes.initRandom(allocator, random, max_list_entries);
+    }
 
-            pub fn randomValue(ctx: @This(), rand: std.Random) !EpochStakes {
-                return try EpochStakes.initRandom(ctx.allocator, rand, ctx.max_list_entries);
-            }
-        }{
-            .allocator = allocator,
-            .max_list_entries = max_list_entries,
-        },
-    );
-
-    return epoch_stakes.unmanaged;
+    return map;
 }
 
 /// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
@@ -538,6 +530,17 @@ pub fn stakeAndVoteAccountsMapClone(
     }
 
     return cloned;
+}
+
+pub fn stakeAndVoteAccountsMapClearRetainingCapacity(
+    map: *StakeAndVoteAccountsMap,
+    allocator: Allocator,
+) void {
+    for (map.values()) |pair| {
+        _, const vote_account = pair;
+        vote_account.deinit(allocator);
+    }
+    map.clearRetainingCapacity();
 }
 
 pub fn stakeAndVoteAccountsMapRandom(

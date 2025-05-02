@@ -3,15 +3,16 @@ const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
 const deps = replay.deps;
+const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
 const ThreadPool = sig.sync.ThreadPool;
 
-const Entry = sig.core.Entry;
-const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
-const Transaction = sig.core.Transaction;
+const Entry = core.Entry;
+const Pubkey = core.Pubkey;
+const Slot = core.Slot;
+const Transaction = core.Transaction;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -44,7 +45,7 @@ pub const ReplayExecutionState = struct {
         allocator: Allocator,
         logger: sig.trace.Logger,
         thread_pool: *ThreadPool,
-        epoch_schedule: sig.core.EpochSchedule,
+        epoch_schedule: core.EpochSchedule,
         accounts_db: *AccountsDB,
         blockstore_reader: *BlockstoreReader,
     ) Allocator.Error!ReplayExecutionState {
@@ -264,7 +265,7 @@ fn verifyTicks(
     slot_full: bool,
     tick_hash_count: *u64,
 ) ?BlockError {
-    const next_bank_tick_height = config.tick_height + Entry.slice.tickCount(entries);
+    const next_bank_tick_height = config.tick_height + core.entry.tickCount(entries);
     const max_bank_tick_height = config.max_tick_height;
 
     if (next_bank_tick_height > max_bank_tick_height) {
@@ -290,7 +291,7 @@ fn verifyTicks(
     }
 
     const hashes_per_tick = config.hashes_per_tick orelse 0;
-    if (!Entry.slice.verifyTickHashCount(logger, entries, tick_hash_count, hashes_per_tick)) {
+    if (!core.entry.verifyTickHashCount(entries, logger, tick_hash_count, hashes_per_tick)) {
         logger.warn().logf("Tick with invalid number of hashes found in slot: {}", .{slot});
         return .InvalidTickHashCount;
     }

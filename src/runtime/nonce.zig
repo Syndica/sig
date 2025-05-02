@@ -85,7 +85,7 @@ pub const Data = struct {
 };
 
 pub fn initDurableNonceFromHash(blockhash: Hash) Hash {
-    return sig.runtime.tmp_utils.hashv(.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data });
+    return sig.core.Hash.generateSha256(.{ DURABLE_NONCE_HASH_PREFIX, &blockhash.data });
 }
 
 test "verify_durable_nonce" {

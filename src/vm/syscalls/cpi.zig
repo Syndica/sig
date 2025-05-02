@@ -26,6 +26,7 @@ const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAc
 const SyscallError = sig.vm.syscalls.Error;
 const PRECOMPILES = sig.runtime.program.precompile_programs.PRECOMPILES;
 
+const VmSlice = memory.VmSlice;
 const MemoryMap = memory.MemoryMap;
 const MM_INPUT_START = memory.INPUT_START;
 
@@ -154,8 +155,8 @@ fn VmValue(comptime T: type) type {
         translated: *T,
 
         pub fn get(self: Self, comptime state: memory.MemoryState) !(switch (state) {
-            .constant => *const T,
-            .mutable => *T,
+            .constant => *align(1) const T,
+            .mutable => *align(1) T,
         }) {
             switch (self) {
                 .translated => |ptr| return ptr,
@@ -166,13 +167,6 @@ fn VmValue(comptime T: type) type {
         }
     };
 }
-
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
-pub const VmSlice = extern struct {
-    ptr: u64,
-    len: u64,
-};
 
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L38
 fn checkAccountInfoPtr(
@@ -198,7 +192,7 @@ fn checkAccountInfoPtr(
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L96
 const CallerAccount = struct {
-    lamports: *u64,
+    lamports: *align(1) u64,
     owner: *Pubkey,
     // The original data length of the account at the start of the current
     // instruction. We use this to determine wether an account was shrunk or
@@ -222,7 +216,7 @@ const CallerAccount = struct {
         ic: *const InstructionContext,
         memory_map: *const MemoryMap,
         _vm_addr: u64,
-        account_info: *const AccountInfoRust,
+        account_info: *align(1) const AccountInfoRust,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
         _ = _vm_addr; // unused, but have same signature as fromAccountInfoC().
@@ -248,13 +242,13 @@ const CallerAccount = struct {
 
         // account_info points to host memory. The addresses used internally are
         // in vm space so they need to be translated.
-        const lamports: *u64 = blk: {
+        const lamports: *align(1) u64 = blk: {
             // Models the RefCell as_ptr() access here
             // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L151
             const lamports_addr: u64 = @intFromPtr(account_info.lamports_addr.deref().asPtr());
 
             // Double translate lamports out of RefCell
-            const ptr: *const u64 = try memory_map.translateType(
+            const ptr = try memory_map.translateType(
                 u64,
                 .constant,
                 lamports_addr,
@@ -380,7 +374,7 @@ const CallerAccount = struct {
         ic: *const InstructionContext,
         memory_map: *const MemoryMap,
         vm_addr: u64,
-        account_info: *const AccountInfoC,
+        account_info: *align(1) const AccountInfoC,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
         const direct_mapping = ic.ec.feature_set.active.contains(
@@ -857,7 +851,7 @@ fn translateSigners(
 ) !std.BoundedArray(Pubkey, MAX_SIGNERS) {
     if (signers_seeds_len == 0) return .{};
 
-    const signers_seeds: []const VmSlice = try memory_map.translateSlice(
+    const signers_seeds = try memory_map.translateSlice(
         VmSlice,
         .constant,
         signers_seeds_addr,

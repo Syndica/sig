@@ -90,6 +90,8 @@ pub fn main() !void {
     var current_config: config.Cmd = .{};
     current_config.log_level = cmd.log_level;
     current_config.metrics_port = cmd.metrics_port;
+    current_config.log_file = cmd.log_file;
+    current_config.tee_logs = cmd.tee_logs;
 
     switch (cmd.subcmd orelse return error.MissingSubcommand) {
         .identity => try identity(gpa, current_config),
@@ -569,7 +571,7 @@ const Cmd = struct {
                 .kind = .named,
                 .name_override = "max-shreds",
                 .alias = .none,
-                .default_value = 1_000,
+                .default_value = 5_000_000,
                 .config = {},
                 .help = "Max number of shreds to store in the blockstore",
             },
