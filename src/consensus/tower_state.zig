@@ -6,45 +6,26 @@ const Lockout = sig.runtime.program.vote_program.state.Lockout;
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
 
 pub const TowerVoteState = struct {
-    votes: std.ArrayListUnmanaged(Lockout),
-    root_slot: ?Slot,
-
-    pub fn default(allocator: std.mem.Allocator) !TowerVoteState {
-        return .{
-            .votes = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
-            .root_slot = null,
-        };
-    }
-
-    pub fn deinit(self: *TowerVoteState, allocator: std.mem.Allocator) void {
-        self.votes.deinit(allocator);
-    }
+    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
+    root_slot: ?Slot = null,
 
     pub fn lastLockout(self: *const TowerVoteState) ?Lockout {
-        if (self.votes.items.len == 0) return null;
-        return self.votes.items[self.votes.items.len - 1];
+        if (self.votes.len == 0) return null;
+        return self.votes.get(self.votes.len - 1);
     }
 
     pub fn lastVotedSlot(self: *const TowerVoteState) ?Slot {
         return if (self.lastLockout()) |last_lockout| last_lockout.slot else null;
     }
 
-    pub fn clone(
-        self: TowerVoteState,
-        allocator: std.mem.Allocator,
-    ) (error{OutOfMemory})!TowerVoteState {
-        return .{ .votes = try self.votes.clone(allocator), .root_slot = self.root_slot };
-    }
-
     pub fn nthRecentLockout(self: *const TowerVoteState, position: usize) ?Lockout {
-        const pos = std.math.sub(usize, self.votes.items.len, (position +| 1)) catch
+        const pos = std.math.sub(usize, self.votes.len, (position +| 1)) catch
             return null;
-        return self.votes.items[pos];
+        return self.votes.get(pos);
     }
 
     pub fn processNextVoteSlot(
         self: *TowerVoteState,
-        allocator: std.mem.Allocator,
         next_vote_slot: Slot,
     ) !void {
         // Ignore votes for slots earlier than we already have votes for
@@ -57,12 +38,11 @@ pub const TowerVoteState = struct {
         self.popExpiredVotes(next_vote_slot);
 
         // Once the stack is full, pop the oldest lockout and distribute rewards
-        if (self.votes.items.len == MAX_LOCKOUT_HISTORY) {
+        if (self.votes.len == MAX_LOCKOUT_HISTORY) {
             const rooted_vote = self.votes.orderedRemove(0);
             self.root_slot = rooted_vote.slot;
         }
         try self.votes.append(
-            allocator,
             Lockout{ .slot = next_vote_slot, .confirmation_count = 1 },
         );
         try self.doubleLockouts();
@@ -83,9 +63,9 @@ pub const TowerVoteState = struct {
     }
 
     pub fn doubleLockouts(self: *TowerVoteState) !void {
-        const stack_depth = self.votes.items.len;
+        const stack_depth = self.votes.len;
 
-        for (self.votes.items, 0..) |*vote, i| {
+        for (self.votes.slice(), 0..) |*vote, i| {
             // Don't increase the lockout for this vote until we get more confirmations
             // than the max number of confirmations this vote has seen
             const confirmation_count = vote.confirmation_count;
