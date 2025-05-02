@@ -386,7 +386,7 @@ fn multiScalarMultiply(comptime T: type, scalars: []const [32]u8, point_data: []
     var accumulator = Edwards25519.identityElement;
     while (length > 0) {
         switch (std.math.floorPowerOfTwo(u64, length)) {
-            inline 1, 2, 8, 16, 32, 64, 128, 256, 512 => |N| {
+            inline 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 => |N| {
                 const current = scalars.len - length;
                 const segment = try weak_mul.mulMulti(
                     N,
