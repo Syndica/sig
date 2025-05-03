@@ -785,13 +785,12 @@ pub const VoteState = struct {
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
-        const pubkey = self.voters
-            .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch |err| {
-            return switch (err) {
-                error.OutOfMemory => err,
-            };
-        } orelse return InstructionError.InvalidAccountData;
+        const maybe_pubkey = self.voters
+            .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch return error.OutOfMemory;
+        const pubkey = maybe_pubkey orelse return InstructionError.InvalidAccountData;
+
         _ = try self.voters.purgeAuthorizedVoters(allocator, current_epoch);
+
         return pubkey;
     }
 

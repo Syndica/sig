@@ -997,18 +997,20 @@ fn verifyAndGetVoteState(
         allocator,
         VoteStateVersions,
     );
-    errdefer versioned_state.deinit();
 
     if (versioned_state.isUninitialized()) {
-        return (InstructionError.UninitializedAccount);
+        versioned_state.deinit();
+        return InstructionError.UninitializedAccount;
     }
 
     var vote_state = try versioned_state.convertToCurrent(allocator);
+    errdefer vote_state.deinit();
 
     const authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(allocator, clock.epoch);
     if (!ic.ixn_info.isPubkeySigner(authorized_voter)) {
         return InstructionError.MissingRequiredSignature;
     }
+
     return vote_state;
 }
 
