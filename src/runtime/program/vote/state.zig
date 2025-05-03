@@ -170,7 +170,8 @@ pub fn serializeCompactVoteStateUpdate(writer: anytype, data: anytype, _: sig.bi
 }
 
 pub fn deserializeCompactVoteStateUpdate(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) anyerror!VoteStateUpdate {
-    const root = try reader.readInt(Slot, std.builtin.Endian.little);
+    var root = try reader.readInt(Slot, std.builtin.Endian.little);
+    root = if (root == std.math.maxInt(Slot)) 0 else root;
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
     const lockouts_len = try sig.bincode.varint.deserialize_short_u16(reader, .{});
@@ -225,6 +226,70 @@ pub const TowerSync = struct {
         };
     }
 };
+
+pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
+    // Calculate lockout offsets
+    var slot = data.root orelse 0;
+    var lockouts = std.BoundedArray(struct { Slot, u8 }, MAX_LOCKOUT_HISTORY){};
+    for (data.lockouts.items) |lockout| {
+        lockouts.appendAssumeCapacity(.{
+            try std.math.sub(Slot, lockout.slot, slot),
+            @intCast(lockout.confirmation_count),
+        });
+        slot = lockout.slot;
+    }
+
+    // Serialize in compact format
+    try writer.writeInt(Slot, slot, std.builtin.Endian.little);
+    try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockouts.len), .{});
+    for (lockouts.constSlice()) |lockout| {
+        try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockout[0]), .{});
+        try writer.writeInt(u8, @intCast(lockout[1]), std.builtin.Endian.little);
+    }
+    try writer.writeAll(&data.hash.data);
+    if (data.timestamp) |timestamp| {
+        try writer.writeInt(u8, 1, std.builtin.Endian.little);
+        try writer.writeInt(i64, timestamp, std.builtin.Endian.little);
+    } else {
+        try writer.writeInt(u8, 0, std.builtin.Endian.little);
+    }
+    try writer.writeAll(&data.block_id.data);
+}
+
+pub fn deserializeTowerSync(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) anyerror!TowerSync {
+    const root = try reader.readInt(Slot, std.builtin.Endian.little);
+
+    var slot = if (root == std.math.maxInt(Slot)) 0 else root;
+    const lockouts_len = try sig.bincode.varint.deserialize_short_u16(reader, .{});
+    const lockouts = try allocator.alloc(Lockout, lockouts_len);
+    errdefer allocator.free(lockouts);
+    for (lockouts) |*lockout| {
+        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(allocator, reader, .{});
+        const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
+        slot = try std.math.add(Slot, slot, offset);
+        lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
+    }
+
+    var hash = Hash.ZEROES;
+    if (try reader.readAll(&hash.data) != Hash.SIZE) return error.NoBytesLeft;
+
+    const timestamp = switch (try reader.readInt(u8, std.builtin.Endian.little)) {
+        0 => null,
+        1 => try reader.readInt(i64, std.builtin.Endian.little),
+        else => return error.InvalidOptionalTimestamp,
+    };
+
+    var block_id = Hash.ZEROES;
+    if (try reader.readAll(&block_id.data) != Hash.SIZE) return error.NoBytesLeft;
+
+    return TowerSync{
+        .lockouts = .{ .items = lockouts, .capacity = lockouts_len },
+        .root = root,
+        .hash = hash,
+        .timestamp = timestamp,
+        .block_id = block_id,
+    };
+}
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
 pub const AuthorizedVoters = struct {

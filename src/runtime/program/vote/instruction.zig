@@ -222,6 +222,11 @@ pub const CompactVoteStateUpdateSwitch = struct {
 pub const TowerSync = struct {
     tower_sync: vote_program.state.TowerSync,
 
+    pub const @"!bincode-config:tower_sync": sig.bincode.FieldConfig(vote_program.state.TowerSync) = .{
+        .deserializer = vote_program.state.deserializeTowerSync,
+        .serializer = vote_program.state.serializeTowerSync,
+    };
+
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to vote with
         account = 0,
@@ -233,6 +238,11 @@ pub const TowerSync = struct {
 pub const TowerSyncSwitch = struct {
     tower_sync: vote_program.state.TowerSync,
     hash: Hash,
+
+    pub const @"!bincode-config:tower_sync": sig.bincode.FieldConfig(vote_program.state.TowerSync) = .{
+        .deserializer = vote_program.state.deserializeTowerSync,
+        .serializer = vote_program.state.serializeTowerSync,
+    };
 
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to vote with

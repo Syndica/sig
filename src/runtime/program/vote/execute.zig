@@ -743,12 +743,16 @@ fn widthraw(
             return InstructionError.Custom;
         } else {
             // Deinitialize upon zero-balance
-            const deinitialized_state = VoteStateVersions{
-                .current = VoteState.default(allocator),
-            };
+            const deinitialized_state = VoteState.default(allocator);
             defer deinitialized_state.deinit();
 
-            try vote_account.serializeIntoAccountData(deinitialized_state);
+            try setVoteState(
+                allocator,
+                &vote_account,
+                &deinitialized_state,
+                &ic.tc.rent,
+                &ic.tc.accounts_resize_delta,
+            );
         }
     } else {
         const min_rent_exempt_balance = rent.minimumBalance(vote_account.constAccountData().len);
