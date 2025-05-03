@@ -101,6 +101,13 @@ pub const Transaction = struct {
         try self.msg.validate();
     }
 
+    pub const VerifyResult = enum {
+        /// All signatures were valid.
+        verified,
+        /// A signature was invalid.
+        failed,
+    };
+
     pub const VerifyError = error{
         /// The message is larger than the largest allowed transaction message size.
         NoSpaceLeft,
@@ -108,8 +115,6 @@ pub const Transaction = struct {
         NonCanonical,
         /// There are not as many accounts as there are signatures.
         NotEnoughAccounts,
-        /// A signature was invalid.
-        SignatureVerificationFailed,
         /// The message could not be serialized.
         SerializationFailed,
     };
@@ -118,25 +123,30 @@ pub const Transaction = struct {
     ///
     /// Does *not* ensure total internal consistency. Only does the minimum to
     /// verify signatures. Call `validate` to ensure full consistency.
-    pub fn verify(self: Transaction) VerifyError!void {
-        const serialized_message = self.msg.serializeBounded(self.version) catch
-            return error.SerializationFailed;
-
-        if (self.msg.account_keys.len < self.signatures.len) {
-            return error.NotEnoughAccounts;
-        }
-        for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
-            if (!try signature.verify(pubkey, serialized_message.slice())) {
-                return error.SignatureVerificationFailed;
-            }
-        }
+    pub fn verify(self: Transaction) VerifyError!VerifyResult {
+        return try self.verifyInternal();
     }
 
     /// Verify the transaction signatures and return the blake3 hash of the message.
     ///
     /// Does *not* ensure total internal consistency. Only does the minimum to
     /// verify signatures. Call `validate` to ensure full consistency.
-    pub fn verifyAndHashMessage(self: Transaction) VerifyError!Hash {
+    ///
+    /// Returns the hash on verification success, null on failure.
+    pub fn verifyAndHashMessage(self: Transaction) VerifyError!?Hash {
+        const serialized_message = switch (try self.verifyInternal()) {
+            .verified => |message| message,
+            .failed => return null,
+        };
+        return TransactionMessage.hash(serialized_message.constSlice());
+    }
+
+    fn verifyInternal(
+        self: Transaction,
+    ) VerifyError!union(VerifyResult) {
+        verified: TransactionMessage.BoundedSerialized,
+        failed,
+    } {
         const serialized_message = self.msg.serializeBounded(self.version) catch
             return error.SerializationFailed;
 
@@ -145,11 +155,11 @@ pub const Transaction = struct {
         }
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
             if (!try signature.verify(pubkey, serialized_message.slice())) {
-                return error.SignatureVerificationFailed;
+                return .failed;
             }
         }
 
-        return TransactionMessage.hash(serialized_message.slice());
+        return .{ .verified = serialized_message };
     }
 };
 
@@ -255,13 +265,15 @@ pub const TransactionMessage = struct {
         return !(is_readonly_signed or is_readonly_unsigned);
     }
 
+    pub const BoundedSerialized = std.BoundedArray(u8, Transaction.MAX_BYTES);
+
     /// Returns the serialized message as a bounded array.
     /// Returns an error if the message would exceed the maximum allowed transaction size.
     pub fn serializeBounded(
         self: TransactionMessage,
         version: TransactionVersion,
-    ) !std.BoundedArray(u8, Transaction.MAX_BYTES) {
-        var buf: std.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
+    ) !BoundedSerialized {
+        var buf: BoundedSerialized = .{};
         try self.serialize(buf.writer(), version);
         return buf;
     }
@@ -696,19 +708,19 @@ pub const transaction_v0_example = struct {
 };
 
 test "verify and hash transaction" {
-    try transaction_legacy_example.as_struct.verify();
+    try std.testing.expectEqual(.verified, transaction_legacy_example.as_struct.verify());
     const hash = try transaction_legacy_example.as_struct.verifyAndHashMessage();
     try std.testing.expectEqual(
         try Hash.parseBase58String("FjoeKaxTd3J7xgt9vHMpuQb7j192weaEP3yMa1ntfQNo"),
         hash,
     );
 
-    try std.testing.expectError(
-        error.SignatureVerificationFailed,
+    try std.testing.expectEqual(
+        .failed,
         transaction_v0_example.as_struct.verify(),
     );
-    try std.testing.expectError(
-        error.SignatureVerificationFailed,
+    try std.testing.expectEqual(
+        null,
         transaction_v0_example.as_struct.verifyAndHashMessage(),
     );
 }
