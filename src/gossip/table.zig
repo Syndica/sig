@@ -84,8 +84,8 @@ pub const GossipTable = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, gossip_data_allocator: std.mem.Allocator) !Self {
-        return Self{
-            .store = .{},
+        return .{
+            .store = GossipMap.INIT,
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
