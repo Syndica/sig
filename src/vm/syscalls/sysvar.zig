@@ -180,7 +180,7 @@ test getSysvar {
         tc.deinit();
     }
 
-    // Test clock sysvar
+    // // Test clock sysvar
     {
         var obj = sysvar.Clock.DEFAULT;
         const obj_addr = 0x100000000;
@@ -227,12 +227,12 @@ test getSysvar {
         );
     }
 
-    // Test epoch_schedule sysvar
+    // // Test epoch_schedule sysvar
     {
         var obj = sysvar.EpochSchedule.DEFAULT;
         const obj_addr = 0x100000000;
 
-        var buffer = std.mem.asBytes(&obj).*;
+        var buffer = std.mem.zeroes([@sizeOf(sysvar.EpochSchedule)]u8);
         const buffer_addr = 0x200000000;
         const id_addr = 0x300000000;
 
@@ -267,6 +267,167 @@ test getSysvar {
         });
         const obj_parsed = try bincode.readFromSlice(allocator, sysvar.EpochSchedule, &buffer, .{});
         try std.testing.expectEqual(obj_parsed, src.epoch_schedule);
+        try std.testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&src.fill(true, obj_parsed)),
+            std.mem.asBytes(&clean_obj),
+        );
+    }
+
+    // Test fees sysvar
+    {
+        var obj = sysvar.Fees.DEFAULT;
+        const obj_addr = 0x100000000;
+
+        var clean_obj = src.fill(true, obj); // has bytes/padding zeroed.
+        clean_obj.fee_calculator = src.fees.fee_calculator;
+
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{ memory.Region.init(.mutable, std.mem.asBytes(&obj), obj_addr) },
+            .v3,
+            .{},
+        );
+        defer memory_map.deinit(allocator);
+
+        try callSysvarSyscall(&tc, &memory_map, getFees, .{obj_addr});
+        try std.testing.expectEqual(obj, src.fees);
+        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&obj), std.mem.asBytes(&clean_obj));
+
+        // fees sysvar is not accessed via sol_get_sysvar so nothing further to test
+    }
+
+    // Test rent sysvar
+    {
+        var obj = src.fill(true, sysvar.Rent.DEFAULT);
+        const obj_addr = 0x100000000;
+
+        var buffer = std.mem.zeroes([@sizeOf(sysvar.Rent)]u8);
+        const buffer_addr = 0x200000000;
+        const id_addr = 0x300000000;
+
+        var clean_obj = src.fill(true, obj); // has bytes/padding zeroed.
+        clean_obj.lamports_per_byte_year = src.rent.lamports_per_byte_year;
+        clean_obj.exemption_threshold = src.rent.exemption_threshold;
+        clean_obj.burn_percent = src.rent.burn_percent;
+
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{
+                memory.Region.init(.mutable, std.mem.asBytes(&obj), obj_addr),
+                memory.Region.init(.mutable, &buffer, buffer_addr),
+                memory.Region.init(.constant, &sysvar.Rent.ID.data, id_addr),
+            },
+            .v3,
+            .{},
+        );
+        defer memory_map.deinit(allocator);
+
+        try callSysvarSyscall(&tc, &memory_map, getRent, .{obj_addr});
+        try std.testing.expectEqual(obj, src.rent);
+        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&obj), std.mem.asBytes(&clean_obj));
+
+        try callSysvarSyscall(&tc, &memory_map, getSysvar, .{
+            id_addr,
+            buffer_addr,
+            0,
+            @sizeOf(sysvar.Rent),
+        });
+        const obj_parsed = try bincode.readFromSlice(allocator, sysvar.Rent, &buffer, .{});
+        try std.testing.expectEqual(obj_parsed, src.rent);
+        try std.testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&src.fill(true, obj_parsed)),
+            std.mem.asBytes(&clean_obj),
+        );
+    }
+
+    // Test epoch rewards sysvar
+    {
+        var obj = src.fill(true, sysvar.EpochRewards.DEFAULT);
+        const obj_addr = 0x100000000;
+
+        var buffer = std.mem.zeroes([@sizeOf(sysvar.EpochRewards)]u8);
+        const buffer_addr = 0x200000000;
+        const id_addr = 0x300000000;
+
+        var clean_obj = src.fill(true, obj); // has bytes/padding zeroed.
+        clean_obj.distribution_starting_block_height =
+            src.rewards.distribution_starting_block_height;
+        clean_obj.num_partitions = src.rewards.num_partitions;
+        clean_obj.parent_blockhash = src.rewards.parent_blockhash;
+        clean_obj.total_points = src.rewards.total_points;
+        clean_obj.total_rewards = src.rewards.total_rewards;
+        clean_obj.distributed_rewards = src.rewards.distributed_rewards;
+        clean_obj.active = src.rewards.active;
+
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{
+                memory.Region.init(.mutable, std.mem.asBytes(&obj), obj_addr),
+                memory.Region.init(.mutable, &buffer, buffer_addr),
+                memory.Region.init(.constant, &sysvar.EpochRewards.ID.data, id_addr),
+            },
+            .v3,
+            .{},
+        );
+        defer memory_map.deinit(allocator);
+
+        try callSysvarSyscall(&tc, &memory_map, getEpochRewards, .{obj_addr});
+        try std.testing.expectEqual(obj, src.rewards);
+        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&obj), std.mem.asBytes(&clean_obj));
+
+        try callSysvarSyscall(&tc, &memory_map, getSysvar, .{
+            id_addr,
+            buffer_addr,
+            0,
+            @sizeOf(sysvar.EpochRewards),
+        });
+        const obj_parsed = try bincode.readFromSlice(allocator, sysvar.EpochRewards, &buffer, .{});
+        try std.testing.expectEqual(obj_parsed, src.rewards);
+        try std.testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&src.fill(true, obj_parsed)),
+            std.mem.asBytes(&clean_obj),
+        );
+    }
+
+    // Test last restart slot sysvar
+    {
+        var obj = sysvar.LastRestartSlot.DEFAULT;
+        const obj_addr = 0x100000000;
+
+        var buffer = std.mem.zeroes([@sizeOf(sysvar.LastRestartSlot)]u8);
+        const buffer_addr = 0x200000000;
+        const id_addr = 0x300000000;
+
+        var clean_obj = src.fill(true, obj); // has bytes/padding zeroed.
+        clean_obj.last_restart_slot = src.restart.last_restart_slot;
+
+        var memory_map = try MemoryMap.init(
+            allocator,
+            &.{
+                memory.Region.init(.mutable, std.mem.asBytes(&obj), obj_addr),
+                memory.Region.init(.mutable, &buffer, buffer_addr),
+                memory.Region.init(.constant, &sysvar.LastRestartSlot.ID.data, id_addr),
+            },
+            .v3,
+            .{},
+        );
+        defer memory_map.deinit(allocator);
+
+        try callSysvarSyscall(&tc, &memory_map, getLastRestartSlot, .{obj_addr});
+        try std.testing.expectEqual(obj, src.restart);
+        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&obj), std.mem.asBytes(&clean_obj));
+
+        try callSysvarSyscall(&tc, &memory_map, getSysvar, .{
+            id_addr,
+            buffer_addr,
+            0,
+            @sizeOf(sysvar.LastRestartSlot),
+        });
+        const obj_parsed = try bincode.readFromSlice(allocator, sysvar.LastRestartSlot, &buffer, .{});
+        try std.testing.expectEqual(obj_parsed, src.restart);
         try std.testing.expectEqualSlices(
             u8,
             std.mem.asBytes(&src.fill(true, obj_parsed)),
