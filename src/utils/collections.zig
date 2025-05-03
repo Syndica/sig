@@ -1,5 +1,4 @@
 const std = @import("std");
-const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -78,50 +77,34 @@ pub fn RecyclingList(
 ///
 /// This is accomplished by storing a struct of lists, with one list
 /// for each union variant, instead of storing a list of the union.
-pub fn SplitUnionList(TaggedUnion: type) type {
-    const Tag = @typeInfo(TaggedUnion).@"union".tag_type.?;
-
+pub fn SplitUnionList(comptime U: type) type {
+    const union_info = @typeInfo(U).@"union";
+    const ArrayTypes = SplitUnionListArrayTypes(U);
     return struct {
-        lists: sig.utils.types.EnumStruct(Tag, List),
+        lists: ArrayTypes.Lists,
 
-        const Self = @This();
-
+        pub const Tag = union_info.tag_type.?;
         pub const Index = struct {
             tag: Tag,
             index: usize,
         };
 
-        fn List(tag: Tag) type {
-            return std.ArrayListUnmanaged(FieldType(tag));
-        }
+        pub const INIT: SplitUnionList(U) = .{ .lists = .{} };
 
-        fn FieldType(tag: Tag) type {
-            inline for (@typeInfo(TaggedUnion).@"union".fields) |field| {
-                if (std.mem.eql(u8, field.name, @tagName(tag))) {
-                    return field.type;
-                }
+        pub fn deinit(self: *SplitUnionList(U), allocator: Allocator) void {
+            inline for (union_info.fields) |field| {
+                @field(self.lists, field.name).deinit(allocator);
             }
         }
 
-        pub fn init() Self {
-            var lists: sig.utils.types.EnumStruct(Tag, List) = undefined;
-            inline for (@typeInfo(Tag).@"enum".fields) |f| {
-                @field(lists, f.name) = .{};
-            }
-            return .{ .lists = lists };
-        }
-
-        pub fn deinit(self: *Self, allocator: Allocator) void {
-            inline for (@typeInfo(Tag).@"enum".fields) |f| {
-                @field(self.lists, f.name).deinit(allocator);
-            }
-        }
-
-        pub fn append(self: *Self, allocator: Allocator, item: TaggedUnion) Allocator.Error!Index {
-            switch (@as(Tag, item)) {
-                inline else => |tag| {
-                    const list = self.listMut(tag);
-                    const unwrapped_item = @field(item, @tagName(tag));
+        pub fn append(
+            self: *SplitUnionList(U),
+            allocator: Allocator,
+            item: U,
+        ) Allocator.Error!Index {
+            switch (item) {
+                inline else => |unwrapped_item, tag| {
+                    const list = self.listPtr(tag);
                     try list.append(allocator, unwrapped_item);
                     return .{
                         .tag = tag,
@@ -131,10 +114,14 @@ pub fn SplitUnionList(TaggedUnion: type) type {
             }
         }
 
-        pub fn addOne(self: *Self, allocator: Allocator, tag: Tag) Allocator.Error!Entry {
+        pub fn addOne(
+            self: *SplitUnionList(U),
+            allocator: Allocator,
+            tag: Tag,
+        ) Allocator.Error!Entry {
             switch (tag) {
                 inline else => |comptime_tag| {
-                    const list = self.listMut(comptime_tag);
+                    const list = self.listPtr(comptime_tag);
                     return .{
                         .ptr = try list.addOne(allocator),
                         .index = .{
@@ -150,16 +137,16 @@ pub fn SplitUnionList(TaggedUnion: type) type {
             ptr: *anyopaque,
             index: Index,
 
-            pub fn read(self: Entry) TaggedUnion {
+            pub fn read(self: Entry) U {
                 switch (self.index.tag) {
                     inline else => |tag| {
                         const ptr: *FieldType(tag) = @ptrCast(@alignCast(self.ptr));
-                        return @unionInit(TaggedUnion, @tagName(tag), ptr.*);
+                        return @unionInit(U, @tagName(tag), ptr.*);
                     },
                 }
             }
 
-            pub fn write(self: Entry, item: TaggedUnion) void {
+            pub fn write(self: Entry, item: U) void {
                 switch (self.index.tag) {
                     inline else => |tag| {
                         const ptr: *FieldType(tag) = @ptrCast(@alignCast(self.ptr));
@@ -169,68 +156,125 @@ pub fn SplitUnionList(TaggedUnion: type) type {
             }
         };
 
-        pub fn swapRemove(self: *Self, index: Index) TaggedUnion {
+        pub fn swapRemove(self: *SplitUnionList(U), index: Index) U {
             switch (index.tag) {
                 inline else => |tag| {
-                    const list = self.listMut(tag);
+                    const list = self.listPtr(tag);
                     const item = list.swapRemove(index.index);
-                    return @unionInit(TaggedUnion, @tagName(tag), item);
+                    return @unionInit(U, @tagName(tag), item);
                 },
             }
         }
 
         /// returns the number of contained items with this tag.
-        pub fn tagLen(self: *const Self, tag: Tag) usize {
+        pub fn tagLen(self: *const SplitUnionList(U), tag: Tag) usize {
             return switch (tag) {
-                inline else => |comptime_tag| self.listConst(comptime_tag).items.len,
+                inline else => |comptime_tag| self.sliceConst(comptime_tag).len,
             };
         }
 
-        pub fn get(self: *const Self, index: Index) TaggedUnion {
+        pub fn get(self: *const SplitUnionList(U), index: Index) U {
             return switch (index.tag) {
                 inline else => |comptime_tag| @unionInit(
-                    TaggedUnion,
+                    U,
                     @tagName(comptime_tag),
-                    self.listConst(comptime_tag).items[index.index],
+                    self.sliceConst(comptime_tag)[index.index],
                 ),
             };
         }
 
-        pub fn getEntry(self: *const Self, index: Index) Entry {
+        pub fn getEntry(self: *const SplitUnionList(U), index: Index) Entry {
             return switch (index.tag) {
                 inline else => |comptime_tag| .{
                     .index = index,
-                    .ptr = &self.listConst(comptime_tag).items[index.index],
+                    .ptr = &self.sliceMut(comptime_tag)[index.index],
                 },
             };
         }
 
         pub fn getTypedConst(
-            self: *const Self,
+            self: *const SplitUnionList(U),
             comptime tag: Tag,
-            index: Index,
+            index: usize,
         ) *const FieldType(tag) {
-            return &self.listConst(tag).items[index.index];
+            return &self.sliceConst(tag)[index];
         }
 
-        pub fn getTypedMut(self: *Self, comptime tag: Tag, index: Index) *FieldType(tag) {
-            return &self.listMut(tag).items[index.index];
+        pub fn getTypedMut(
+            self: *const SplitUnionList(U),
+            comptime tag: Tag,
+            index: usize,
+        ) *FieldType(tag) {
+            return &self.sliceMut(tag)[index];
         }
 
-        fn listConst(self: *const Self, comptime tag: Tag) *const List(tag) {
+        pub fn sliceConst(
+            self: *const SplitUnionList(U),
+            comptime tag: Tag,
+        ) []const FieldType(tag) {
+            return self.sliceMut(tag);
+        }
+
+        pub fn sliceMut(
+            self: *const SplitUnionList(U),
+            comptime tag: Tag,
+        ) []FieldType(tag) {
+            return @field(self.lists, @tagName(tag)).items;
+        }
+
+        fn listPtr(
+            self: *SplitUnionList(U),
+            comptime tag: Tag,
+        ) *std.ArrayListUnmanaged(FieldType(tag)) {
             return &@field(self.lists, @tagName(tag));
         }
 
-        fn listMut(self: *Self, comptime tag: Tag) *List(tag) {
-            return &@field(self.lists, @tagName(tag));
+        fn FieldType(tag: Tag) type {
+            inline for (@typeInfo(U).Union.fields) |field| {
+                if (std.mem.eql(u8, field.name, @tagName(tag))) {
+                    return field.type;
+                }
+            }
         }
+    };
+}
+
+fn SplitUnionListArrayTypes(comptime U: type) type {
+    const union_info = @typeInfo(U).Union;
+
+    const Type = std.builtin.Type;
+    const list_fields: [union_info.fields.len]Type.StructField = blk: {
+        var list_fields: [union_info.fields.len]Type.StructField = undefined;
+
+        for (union_info.fields, &list_fields) |u_field, *list_field| {
+            const List = std.ArrayListUnmanaged(u_field.type);
+            list_field.* = .{
+                .name = u_field.name,
+                .type = List,
+                .default_value = &List{},
+                .is_comptime = false,
+                .alignment = 0,
+            };
+        }
+
+        break :blk list_fields;
+    };
+
+    return struct {
+        pub const Lists = @Type(.{ .Struct = Type.Struct{
+            .layout = .auto,
+            .backing_integer = null,
+            .fields = &list_fields,
+            .decls = &.{},
+            .is_tuple = false,
+        } });
     };
 }
 
 test "SplitUnionList: addOne, get, and swapRemove" {
     const allocator = std.testing.allocator;
     const Union = union(enum) { one: u8, two: u32, three: u64 };
-    var list = SplitUnionList(Union).init();
+    var list = SplitUnionList(Union).INIT;
     defer list.deinit(allocator);
     var entry = try list.addOne(allocator, .one);
     entry.write(.{ .one = 0 });

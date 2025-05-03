@@ -34,7 +34,7 @@ const assert = std.debug.assert;
 /// of the item in the metadata list.
 pub const GossipMap = struct {
     key_to_index: std.AutoArrayHashMapUnmanaged(GossipKey, SplitUnionList(GossipData).Index) = .{},
-    gossip_data: SplitUnionList(GossipData) = SplitUnionList(GossipData).init(),
+    gossip_data: SplitUnionList(GossipData) = SplitUnionList(GossipData).INIT,
     metadata: std.ArrayListUnmanaged(Metadata) = .{},
 
     pub const Metadata = GossipMetadata; // TODO eliminate redundant alias
@@ -67,11 +67,12 @@ pub const GossipMap = struct {
     }
 
     pub fn getByIndex(self: *const GossipMap, index: usize) GossipVersionedData {
-        const metadata = self.metadata.items[index];
-        const tagged_index = self.key_to_index.values()[index];
         return .{
-            .metadata = metadata,
-            .data = self.gossip_data.get(tagged_index),
+            .metadata = self.metadata.items[index],
+            .data = self.gossip_data.get(.{
+                .tag = self.key_to_index.keys()[index],
+                .index = self.key_to_index.values()[index].index,
+            }),
         };
     }
 
@@ -81,16 +82,18 @@ pub const GossipMap = struct {
     }
 
     pub fn getEntryByIndex(self: *const GossipMap, index: usize) Entry {
-        const entries = self.key_to_index.entries.slice();
         return .{
-            .key_ptr = &entries.items(.key)[index],
+            .key_ptr = &self.key_to_index.keys()[index],
             .metadata_ptr = &self.metadata.items[index],
-            .gossip_data_entry = self.gossip_data.getEntry(entries.items(.value)[index]),
+            .gossip_data_entry = self.gossip_data.getEntry(.{
+                .tag = self.key_to_index.keys()[index],
+                .index = self.key_to_index.values()[index].index,
+            }),
             .index = index,
         };
     }
 
-    pub fn keys(self: *const GossipMap) []GossipKey {
+    pub fn keys(self: *const GossipMap) []const GossipKey {
         return self.key_to_index.keys();
     }
 
@@ -108,7 +111,7 @@ pub const GossipMap = struct {
         comptime tag: GossipDataTag,
         index: usize,
     ) *const tag.Value() {
-        return self.gossip_data.getTypedConst(tag, self.key_to_index.values()[index]);
+        return self.gossip_data.getTypedConst(tag, self.key_to_index.values()[index].index);
     }
 
     pub fn tagOfIndex(self: *const GossipMap, index: usize) GossipDataTag {

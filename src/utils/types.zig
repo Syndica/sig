@@ -96,28 +96,6 @@ pub fn toOptional(x: anytype) switch (@typeInfo(@TypeOf(x))) {
     return x;
 }
 
-/// Same as std.EnumFieldStruct, except every field may be a different type
-pub fn EnumStruct(comptime E: type, comptime Data: fn (E) type) type {
-    @setEvalBranchQuota(@typeInfo(E).@"enum".fields.len);
-    var struct_fields: [@typeInfo(E).@"enum".fields.len]std.builtin.Type.StructField = undefined;
-    for (&struct_fields, @typeInfo(E).@"enum".fields) |*struct_field, enum_field| {
-        const T = Data(@field(E, enum_field.name));
-        struct_field.* = .{
-            .name = enum_field.name,
-            .type = T,
-            .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf(T),
-        };
-    }
-    return @Type(.{ .@"struct" = .{
-        .layout = .auto,
-        .fields = &struct_fields,
-        .decls = &.{},
-        .is_tuple = false,
-    } });
-}
-
 pub const AllocManagement = enum {
     managed,
     unmanaged,
