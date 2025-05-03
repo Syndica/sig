@@ -86,8 +86,8 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
 };
 
 pub const VoteAuthorize = enum {
-    withdrawer,
     voter,
+    withdrawer,
 
     pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated with the Pubkey for authorization

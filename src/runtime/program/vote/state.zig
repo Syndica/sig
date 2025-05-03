@@ -172,12 +172,12 @@ pub fn serializeCompactVoteStateUpdate(writer: anytype, data: anytype, _: sig.bi
 pub fn deserializeCompactVoteStateUpdate(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) anyerror!VoteStateUpdate {
     const root = try reader.readInt(Slot, std.builtin.Endian.little);
 
-    var slot = root;
+    var slot = if (root == std.math.maxInt(Slot)) 0 else root;
     const lockouts_len = try sig.bincode.varint.deserialize_short_u16(reader, .{});
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try sig.bincode.varint.deserialize_short_u16(reader, .{});
+        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(allocator, reader, .{});
         const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -430,7 +430,7 @@ const CircBufV1 = struct {
         if (self.is_empty) {
             return null;
         }
-        return self.buf[self.idx];
+        return if (self.idx < self.buf.len) self.buf[self.idx] else null;
     }
 };
 

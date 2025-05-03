@@ -219,10 +219,10 @@ fn intializeAccount(
         return InstructionError.InvalidAccountData;
     }
 
-    const deserialized_state = try vote_account.deserializeFromAccountData(allocator, VoteState);
+    const versioned_vote_state = try vote_account.deserializeFromAccountData(allocator, VoteStateVersions);
 
-    if (!(VoteStateVersions{ .current = deserialized_state }).isUninitialized()) {
-        return (InstructionError.AccountAlreadyInitialized);
+    if (!versioned_vote_state.isUninitialized()) {
+        return InstructionError.AccountAlreadyInitialized;
     }
 
     // node must agree to accept this vote account
