@@ -261,9 +261,13 @@ pub fn register(
     }
 
     // Alt_bn128
-    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN128_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,);
-    // }
+    if (feature_set.isActive(features.ENABLE_ALT_BN128_SYSCALL, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_alt_bn128_group_op",
+            ecc.altBn128GroupOp,
+        );
+    }
 
     // Big_mod_exp
     // if (feature_set.isActive(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
