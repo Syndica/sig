@@ -77,6 +77,14 @@ pub const ComputeBudget = struct {
     /// Number of compute units consumed for a multiscalar multiplication (msm) of ristretto points.
     /// The total cost is calculated as `msm_base_cost + (length - 1) * msm_incremental_cost`.
     curve25519_ristretto_msm_incremental_cost: u64,
+    /// Number of compute units consumed to call alt_bn128_addition
+    alt_bn128_addition_cost: u64,
+    /// Number of compute units consumed to call alt_bn128_multiplication.
+    alt_bn128_multiplication_cost: u64,
+    /// Total cost will be alt_bn128_pairing_one_pair_cost_first
+    /// + alt_bn128_pairing_one_pair_cost_other * (num_elems - 1)
+    alt_bn128_pairing_one_pair_cost_first: u64,
+    alt_bn128_pairing_one_pair_cost_other: u64,
 
     /// [agave] https://github.com/anza-xyz/agave/blob/8363752bd5e41aaf8eaf9137711e8d8b11d84be6/program-runtime/src/execution_budget.rs#L162
     pub fn default(compute_unit_limit: u64) ComputeBudget {
@@ -112,6 +120,10 @@ pub const ComputeBudget = struct {
             .curve25519_ristretto_multiply_cost = 2_208,
             .curve25519_ristretto_msm_base_cost = 2303,
             .curve25519_ristretto_msm_incremental_cost = 788,
+            .alt_bn128_addition_cost = 334,
+            .alt_bn128_multiplication_cost = 3_840,
+            .alt_bn128_pairing_one_pair_cost_first = 36_364,
+            .alt_bn128_pairing_one_pair_cost_other = 12_121,
         };
     }
 
