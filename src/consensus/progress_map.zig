@@ -191,6 +191,58 @@ pub const ProgressMap = struct {
         const fork_progress = self.map.get(slot) orelse return null;
         return fork_progress.fork_stats.bank_hash;
     }
+
+    pub fn isPropagated(self: *const ProgressMap, slot: Slot) ?bool {
+        const stats = self.getPropagatedStats(slot) orelse return null;
+        return stats.is_propagated;
+    }
+
+    pub fn myLatestLandedVote(self: *const ProgressMap, slot: Slot) ?Slot {
+        const fork_progress = self.map.get(slot) orelse return null;
+        return fork_progress.fork_stats.my_latest_landed_vote;
+    }
+
+    pub fn getPropagatedStats(self: *const ProgressMap, slot: Slot) ?PropagatedStats {
+        const fork_progress = self.map.get(slot) orelse return null;
+        return fork_progress.propagated_stats;
+    }
+
+    pub fn getPropagatedStatsMustExist(
+        self: *const ProgressMap,
+        slot: Slot,
+    ) !PropagatedStats {
+        return self.getPropagatedStats(slot) orelse return error.MissingSlot;
+    }
+
+    pub fn getLatestLeaderSlotMustExist(
+        self: *const ProgressMap,
+        slot: Slot,
+    ) !?Slot {
+        const propagated_stats = try self.getPropagatedStatsMustExist(slot);
+        return if (propagated_stats.is_leader_slot)
+            slot
+        else
+            propagated_stats.prev_leader_slot;
+    }
+
+    pub fn getLeaderPropagationSlotMustExist(
+        self: *const ProgressMap,
+        slot: Slot,
+    ) !struct { bool, ?Slot } {
+        if (try self.getLatestLeaderSlotMustExist(slot)) |leader_slot| {
+            // If the leader's stats are None (isn't in the
+            // progress map), this means that prev_leader slot is
+            // rooted, so return true
+            const is_propagated = self.isPropagated(slot) orelse true;
+            return .{ is_propagated, leader_slot };
+        } else {
+            // prev_leader_slot doesn't exist because already rooted
+            // or this validator hasn't been scheduled as a leader
+            // yet. In both cases the latest leader is vacuously
+            // confirmed
+            return .{ true, null };
+        }
+    }
 };
 
 pub const ForkProgress = struct {
@@ -438,6 +490,10 @@ pub const ForkStats = struct {
             .bank_hash = self.bank_hash,
             .my_latest_landed_vote = self.my_latest_landed_vote,
         };
+    }
+
+    pub fn forkWeight(self: *const ForkStats) f64 {
+        return @as(f64, @floatFromInt(self.fork_stake)) / @as(f64, @floatFromInt(self.total_stake));
     }
 };
 

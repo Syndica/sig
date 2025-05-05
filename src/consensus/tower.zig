@@ -1915,8 +1915,8 @@ pub const Tower = struct {
         for (vote_thresholds.items) |threshold_failure| {
             if (threshold_failure != .failed_threshold) continue;
 
-            const vote_depth = threshold_failure.failed_threshold[0];
-            const fork_stake = threshold_failure.failed_threshold[1];
+            const vote_depth = threshold_failure.failed_threshold.vote_depth;
+            const fork_stake = threshold_failure.failed_threshold.observed_stake;
 
             try failure_reasons.append(allocator, .{ .FailedThreshold = .{
                 .slot = candidate_vote_bank_slot,
@@ -1933,7 +1933,7 @@ pub const Tower = struct {
 
         // Check leader slot propagation
         const propagation_confirmed = is_leader_slot or
-            progress.getLeaderPropagationSlotMustExist(candidate_vote_bank_slot)[0];
+            (try progress.getLeaderPropagationSlotMustExist(candidate_vote_bank_slot))[0];
         if (!propagation_confirmed) {
             try failure_reasons.append(allocator, .{ .NoPropagatedConfirmation = .{
                 .slot = candidate_vote_bank_slot,
@@ -1970,7 +1970,7 @@ pub const Tower = struct {
         heaviest_slot_on_same_voted_fork: ?Slot,
         heaviest_epoch: Epoch,
         ancestors: *const AutoHashMapUnmanaged(u64, SortedSet(u64)),
-        descendants: *const AutoHashMapUnmanaged(u64, SortedSet(u64)),
+        descendants: *const AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
         progress: *const ProgressMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         fork_choice: *const HeaviestSubtreeForkChoice,
