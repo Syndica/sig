@@ -153,7 +153,6 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         pool: *ThreadPool,
         tasks: std.ArrayListUnmanaged(*TaskAdapter) = .{},
         num_running_tasks: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-        task_cursor: usize = 0,
         max_concurrent_tasks: ?usize,
 
         pub const Task = TaskType;
@@ -242,7 +241,6 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             task.* = .{ .typed_task = typed_task, .num_running_tasks = &self.num_running_tasks };
 
             try self.tasks.append(allocator, task);
-            self.task_cursor += 1;
 
             self.pool.schedule(Batch.from(&task.pool_task));
             return true;
