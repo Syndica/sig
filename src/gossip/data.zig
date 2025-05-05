@@ -24,7 +24,7 @@ const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;
 
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 const var_int_config_u16 = sig.bincode.varint.var_int_config_u16;
 const var_int_config_u64 = sig.bincode.varint.var_int_config_u64;
 

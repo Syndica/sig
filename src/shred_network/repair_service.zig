@@ -381,11 +381,12 @@ pub const RepairRequester = struct {
         for (requests) |request| {
             var packet: Packet = .{
                 .addr = request.recipient_addr.toEndpoint(),
-                .data = undefined,
+                .buffer = undefined,
                 .size = undefined,
+                .flags = .{},
             };
             const data = try serializeRepairRequest(
-                &packet.data,
+                &packet.buffer,
                 request.request,
                 self.keypair,
                 request.recipient,

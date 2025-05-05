@@ -11,7 +11,7 @@ const Duration = sig.time.Duration;
 /// information needed to send the transaction, track retries and timeouts, etc.
 pub const TransactionInfo = struct {
     signature: Signature,
-    wire_transaction: [sig.net.packet.PACKET_DATA_SIZE]u8,
+    wire_transaction: [sig.net.Packet.DATA_SIZE]u8,
     wire_transaction_size: usize,
     last_valid_block_height: u64,
     durable_nonce_info: ?struct { Pubkey, Hash },
