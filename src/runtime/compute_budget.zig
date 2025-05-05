@@ -91,6 +91,12 @@ pub const ComputeBudget = struct {
     alt_bn128_g2_compress: u64,
     /// Number of compute units consumed to call alt_bn128_g2_decompress.
     alt_bn128_g2_decompress: u64,
+    /// Big integer modular exponentiation base cost
+    big_modular_exponentiation_base_cost: u64,
+    /// Big integer moduler exponentiation cost divisor
+    /// The modular exponentiation cost is computed as
+    /// `input_length`/`big_modular_exponentiation_cost_divisor` + `big_modular_exponentiation_base_cost`
+    big_modular_exponentiation_cost_divisor: u64,
 
     /// [agave] https://github.com/anza-xyz/agave/blob/8363752bd5e41aaf8eaf9137711e8d8b11d84be6/program-runtime/src/execution_budget.rs#L162
     pub fn default(compute_unit_limit: u64) ComputeBudget {
@@ -133,6 +139,8 @@ pub const ComputeBudget = struct {
             .alt_bn128_g1_decompress = 398,
             .alt_bn128_g2_compress = 86,
             .alt_bn128_g2_decompress = 13610,
+            .big_modular_exponentiation_base_cost = 190,
+            .big_modular_exponentiation_cost_divisor = 2,
         };
     }
 

@@ -245,8 +245,12 @@ pub fn register(
     }
 
     // Big_mod_exp
-    // if (feature_set.isActive(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", bigModExp,);
+    // if (feature_set.isActive(features.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
+    //     _ = try syscalls.functions.registerHashed(
+    //         allocator,
+    //         "sol_big_mod_exp",
+    //         ecc.bigModExp,
+    //     );
     // }
 
     // Poseidon

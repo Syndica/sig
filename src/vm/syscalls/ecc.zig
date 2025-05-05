@@ -611,6 +611,75 @@ fn altBn128Operation(
     }
 }
 
+const BigModExpParams = extern struct {
+    base_addr: u64,
+    base_len: u64,
+    exponent_addr: u64,
+    exponent_len: u64,
+    modulus_addr: u64,
+    modulus_len: u64,
+};
+
+fn bigModExp(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const params_addr = registers.get(.r1);
+    const return_value_addr = registers.get(.r2);
+    _ = return_value_addr;
+
+    const params: BigModExpParams = (try memory_map.translateSlice(
+        BigModExpParams,
+        .constant,
+        params_addr,
+        1,
+        tc.getCheckAligned(),
+    ))[0];
+
+    const input_length = @max(
+        params.base_len,
+        params.exponent_len,
+        params.modulus_len,
+    );
+    if (input_length > 512) return SyscallError.InvalidLength;
+
+    // The compute units are calculated by the quadratic equation `0.5 input_len^2 + 190`
+    const cb = tc.compute_budget;
+    const cost = cb.syscall_base_cost +|
+        (input_length *| input_length /
+        cb.big_modular_exponentiation_cost_divisor +|
+        cb.big_modular_exponentiation_base_cost);
+
+    try tc.consumeCompute(cost);
+
+    const base = try memory_map.translateSlice(
+        u8,
+        .constant,
+        params.base_addr,
+        params.base_len,
+        tc.getCheckAligned(),
+    );
+    const exponent = try memory_map.translateSlice(
+        u8,
+        .constant,
+        params.exponent_addr,
+        params.exponent_len,
+        tc.getCheckAligned(),
+    );
+    const modulus = try memory_map.translateSlice(
+        u8,
+        .constant,
+        params.modulus_addr,
+        params.modulus_len,
+        tc.getCheckAligned(),
+    );
+
+    _ = base;
+    _ = exponent;
+    _ = modulus;
+}
+
 test "edwards curve point validation" {
     const valid_bytes = [_]u8{
         201, 179, 241, 122, 180, 185, 239, 50,  183, 52,  221, 0,  153,
@@ -1531,21 +1600,23 @@ test "alt_bn128 g2 compress/decompress" {
     const result_point_addr = 0x200000000;
 
     inline for (.{ &.{
-        40, 57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,  247, 147,
-        47, 130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176, 110, 34,  151, 212,
-        66, 180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196, 92,  159, 75,  174, 81,  168,
-        18, 86,  176, 56,  16,  26,  210, 20,  18,  81,  122, 142, 104, 62,  251, 169, 98,  141, 21,  253,
-        50, 130, 182, 15,  33,  109, 228, 31,  79,  183, 88,  147, 174, 108, 4,   22,  14,  129, 168, 6,
-        80, 246, 254, 100, 218, 131, 94,  49,  247, 211, 3,   245, 22,  200, 177, 91,  60,  144, 147, 174,
-        90, 17,  19,  189, 62,  147, 152, 18,
+        40,  57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,
+        247, 147, 47,  130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176,
+        110, 34,  151, 212, 66,  180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196,
+        92,  159, 75,  174, 81,  168, 18,  86,  176, 56,  16,  26,  210, 20,  18,  81,  122, 142,
+        104, 62,  251, 169, 98,  141, 21,  253, 50,  130, 182, 15,  33,  109, 228, 31,  79,  183,
+        88,  147, 174, 108, 4,   22,  14,  129, 168, 6,   80,  246, 254, 100, 218, 131, 94,  49,
+        247, 211, 3,   245, 22,  200, 177, 91,  60,  144, 147, 174, 90,  17,  19,  189, 62,  147,
+        152, 18,
     }, &.{
-        40,  57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,  247, 147,
-        47,  130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176, 110, 34,  151, 212,
-        66,  180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196, 92,  159, 75,  174, 81,  168,
-        18,  86,  176, 56,  32,  73,  124, 94,  206, 224, 37,  155, 80,  17,  74,  13,  30,  244, 66,  96,
-        100, 254, 180, 130, 71,  3,   230, 109, 236, 105, 51,  131, 42,  16,  249, 49,  33,  226, 166, 108,
-        144, 58,  161, 196, 221, 204, 231, 132, 137, 174, 84,  104, 128, 184, 185, 54,  43,  225, 54,  222,
-        226, 15,  120, 89,  153, 233, 101, 53,
+        40,  57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,
+        247, 147, 47,  130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176,
+        110, 34,  151, 212, 66,  180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196,
+        92,  159, 75,  174, 81,  168, 18,  86,  176, 56,  32,  73,  124, 94,  206, 224, 37,  155,
+        80,  17,  74,  13,  30,  244, 66,  96,  100, 254, 180, 130, 71,  3,   230, 109, 236, 105,
+        51,  131, 42,  16,  249, 49,  33,  226, 166, 108, 144, 58,  161, 196, 221, 204, 231, 132,
+        137, 174, 84,  104, 128, 184, 185, 54,  43,  225, 54,  222, 226, 15,  120, 89,  153, 233,
+        101, 53,
     } }) |entry| {
         var buffer: [128]u8 = undefined;
 
