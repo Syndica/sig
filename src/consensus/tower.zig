@@ -1984,6 +1984,7 @@ pub const Tower = struct {
         );
         defer failure_reasons.deinit(allocator);
 
+        const epoch_stake = epoch_stakes.get(heaviest_epoch) orelse return error.StakeNotFound;
         // Check switch threshold conditions
         const initial_decision = try self.checkSwitchThreshold(
             allocator,
@@ -1991,11 +1992,8 @@ pub const Tower = struct {
             ancestors,
             descendants,
             progress,
-            // TODO revisit safety.
-            epoch_stakes
-                .get(heaviest_epoch).?.total_stake,
-            &epoch_stakes
-                .get(heaviest_epoch).?.stakes.vote_accounts.accounts,
+            epoch_stake.total_stake,
+            &epoch_stake.stakes.vote_accounts.accounts,
             latest_validator_votes_for_frozen_banks,
             fork_choice,
         );
