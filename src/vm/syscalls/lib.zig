@@ -268,9 +268,13 @@ pub fn register(
     }
 
     // Alt_bn_128_compression
-    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", altBn128Compression,);
-    // }
+    if (feature_set.isActive(features.ENABLE_ALT_BN128_COMPRESSION_SYSCALL, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_alt_bn_128_compression",
+            ecc.altBn128Compression,
+        );
+    }
 
     // Sysvar Getter
     // if (feature_set.isActive(feature_set.ENABLE_SYSVAR_SYSCALL, slot)) {
