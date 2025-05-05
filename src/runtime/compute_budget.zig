@@ -85,6 +85,14 @@ pub const ComputeBudget = struct {
     /// + alt_bn128_pairing_one_pair_cost_other * (num_elems - 1)
     alt_bn128_pairing_one_pair_cost_first: u64,
     alt_bn128_pairing_one_pair_cost_other: u64,
+    /// Number of compute units consumed to call alt_bn128_g1_compress.
+    alt_bn128_g1_compress: u64,
+    /// Number of compute units consumed to call alt_bn128_g1_decompress.
+    alt_bn128_g1_decompress: u64,
+    /// Number of compute units consumed to call alt_bn128_g2_compress.
+    alt_bn128_g2_compress: u64,
+    /// Number of compute units consumed to call alt_bn128_g2_decompress.
+    alt_bn128_g2_decompress: u64,
 
     /// [agave] https://github.com/anza-xyz/agave/blob/8363752bd5e41aaf8eaf9137711e8d8b11d84be6/program-runtime/src/execution_budget.rs#L162
     pub fn default(compute_unit_limit: u64) ComputeBudget {
@@ -124,6 +132,10 @@ pub const ComputeBudget = struct {
             .alt_bn128_multiplication_cost = 3_840,
             .alt_bn128_pairing_one_pair_cost_first = 36_364,
             .alt_bn128_pairing_one_pair_cost_other = 12_121,
+            .alt_bn128_g1_compress = 30,
+            .alt_bn128_g1_decompress = 398,
+            .alt_bn128_g2_compress = 86,
+            .alt_bn128_g2_decompress = 13610,
         };
     }
 
