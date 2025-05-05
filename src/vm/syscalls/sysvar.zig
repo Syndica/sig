@@ -463,6 +463,93 @@ test getSysvar {
     }
 }
 
+test "getSysvar(StakeHistory, partial)" {
+    try testGetStakeHistory(false);
+}
+
+test "getSysvar(StakeHistory, full)" {
+    try testGetStakeHistory(true);
+}
+
+fn testGetStakeHistory(filled: bool) !void {
+    const allocator = std.testing.allocator;
+    const epochs: u64 = if (filled)
+        sysvar.StakeHistory.MAX_ENTRIES + 1
+    else
+        sysvar.StakeHistory.MAX_ENTRIES / 2;
+
+    var entries: std.BoundedArray(
+        sysvar.StakeHistory.Entry,
+        sysvar.StakeHistory.MAX_ENTRIES + 1,
+    ) = .{};
+    for (1..epochs) |epoch| {
+        try entries.append(.{
+            epoch,
+            .{
+                .effective = epoch * 2,
+                .activating = epoch * 3,
+                .deactivating = epoch * 5,
+            },
+        });
+    }
+
+    const src_history = sysvar.StakeHistory{
+        .entries = entries.constSlice(),
+    };
+
+    {
+        const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.SIZE_OF);
+        defer allocator.free(src_history_buf);
+        _ = try bincode.writeToSlice(src_history_buf, src_history, .{});
+    }
+
+    const testing = sig.runtime.testing;
+    var prng = std.Random.DefaultPrng.init(0);
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &.{},
+        .compute_meter = std.math.maxInt(u64),
+        .sysvar_cache = .{ .stake_history = src_history },
+    });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    var buffer = std.mem.zeroes([sysvar.StakeHistory.SIZE_OF]u8);
+    const buffer_addr = 0x100000000;
+    const id_addr = 0x200000000;
+
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.mutable, &buffer, buffer_addr),
+            memory.Region.init(.constant, &sysvar.StakeHistory.ID.data, id_addr),
+        },
+        .v3,
+        .{},
+    );
+    defer memory_map.deinit(allocator);
+
+    try callSysvarSyscall(&tc, &memory_map, getSysvar, .{
+        id_addr,
+        buffer_addr,
+        0,
+        sysvar.StakeHistory.SIZE_OF,
+    });
+
+    const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
+    defer allocator.free(obj_parsed.entries);
+
+    try std.testing.expectEqualSlices(
+        sysvar.StakeHistory.Entry,
+        obj_parsed.entries,
+        src_history.entries,
+    );
+}
+
 test "getSysvar(SlotHashes, partial)" {
     try testGetSlotHashes(false);
 }
