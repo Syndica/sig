@@ -14,6 +14,16 @@ pub const SlotHashes = struct {
     pub const ID =
         Pubkey.parseBase58String("SysvarS1otHashes111111111111111111111111111") catch unreachable;
 
+    pub const DEFAULT = SlotHashes{
+        .entries = &.{},
+    };
+
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/834edeb5acf996377210729b0982819c42027227/sysvar/src/slot_hashes.rs#L59
+    pub const SIZE_OF: usize = 20_488;
+
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/9148b5cc95b43319f3451391ec66d0086deb5cfa/slot-hashes/src/lib.rs#L21
+    pub const MAX_ENTRIES: usize = 512;
+
     fn compareFn(context: void, key: Slot, mid_item: Entry) std.math.Order {
         _ = context;
         return std.math.order(key, mid_item[0]);

@@ -21,13 +21,16 @@ pub const SlotHistory = @import("slot_history.zig").SlotHistory;
 pub const instruction = @import("instruction.zig");
 
 /// Serialize a sysvar value into bytes, keeping the correct buffer length.
-/// Needed for "sol_get_sysvar".
+/// Needed for "sol_get_sysvar" buffer range checks.
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/9148b5cc95b43319f3451391ec66d0086deb5cfa/account/src/lib.rs#L725
 pub fn serialize(allocator: std.mem.Allocator, value: anytype) ![]u8 {
     var stream = std.io.countingWriter(std.io.null_writer);
     try bincode.write(stream.writer(), value, .{});
 
-    const size = @max(stream.bytes_written, @sizeOf(@TypeOf(value)));
+    const T = @TypeOf(value);
+    const size_of: usize = if (@hasDecl(T, "SIZE_OF")) T.SIZE_OF else @sizeOf(T);
+    const size = @max(stream.bytes_written, size_of);
+
     const buffer = try allocator.alloc(u8, size);
     errdefer allocator.free(buffer);
 

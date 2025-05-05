@@ -6,6 +6,7 @@ const bincode = sig.bincode;
 const memory = sig.vm.memory;
 const sysvar = sig.runtime.sysvar;
 
+const Hash = sig.core.Hash;
 const Error = sig.vm.syscalls.Error;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
@@ -65,7 +66,6 @@ pub fn getSysvar(
     const id_cost = std.math.divFloor(u64, 32, tc.compute_budget.cpi_bytes_per_unit) catch 0;
     const buf_cost = std.math.divFloor(u64, length, tc.compute_budget.cpi_bytes_per_unit) catch 0;
     const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
-
     try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
 
     const check_aligned = tc.getCheckAligned();
@@ -80,6 +80,7 @@ pub fn getSysvar(
     const buf = tc.sc.sysvar_cache.getSlice(id) orelse {
         return registers.set(.r0, SYSVAR_NOT_FOUND);
     };
+
     if (buf.len < offset_len) {
         return registers.set(.r0, OFFSET_LENGTH_EXCEEDS_SYSVAR);
     }
@@ -218,7 +219,13 @@ test getSysvar {
             0,
             @sizeOf(sysvar.Clock),
         });
-        const obj_parsed = try bincode.readFromSlice(allocator, sysvar.Clock, &buffer, .{});
+
+        const obj_parsed = try bincode.readFromSlice(
+            std.testing.failing_allocator, // this shouldnt need to allocate
+            sysvar.Clock,
+            &buffer,
+            .{},
+        );
         try std.testing.expectEqual(obj_parsed, src.clock);
         try std.testing.expectEqualSlices(
             u8,
@@ -265,7 +272,12 @@ test getSysvar {
             0,
             @sizeOf(sysvar.EpochSchedule),
         });
-        const obj_parsed = try bincode.readFromSlice(allocator, sysvar.EpochSchedule, &buffer, .{});
+        const obj_parsed = try bincode.readFromSlice(
+            std.testing.failing_allocator, // this shouldnt need to allocate
+            sysvar.EpochSchedule,
+            &buffer,
+            .{},
+        );
         try std.testing.expectEqual(obj_parsed, src.epoch_schedule);
         try std.testing.expectEqualSlices(
             u8,
@@ -284,7 +296,7 @@ test getSysvar {
 
         var memory_map = try MemoryMap.init(
             allocator,
-            &.{ memory.Region.init(.mutable, std.mem.asBytes(&obj), obj_addr) },
+            &.{memory.Region.init(.mutable, std.mem.asBytes(&obj), obj_addr)},
             .v3,
             .{},
         );
@@ -333,7 +345,12 @@ test getSysvar {
             0,
             @sizeOf(sysvar.Rent),
         });
-        const obj_parsed = try bincode.readFromSlice(allocator, sysvar.Rent, &buffer, .{});
+        const obj_parsed = try bincode.readFromSlice(
+            std.testing.failing_allocator, // this shouldnt need to allocate
+            sysvar.Rent,
+            &buffer,
+            .{},
+        );
         try std.testing.expectEqual(obj_parsed, src.rent);
         try std.testing.expectEqualSlices(
             u8,
@@ -383,7 +400,12 @@ test getSysvar {
             0,
             @sizeOf(sysvar.EpochRewards),
         });
-        const obj_parsed = try bincode.readFromSlice(allocator, sysvar.EpochRewards, &buffer, .{});
+        const obj_parsed = try bincode.readFromSlice(
+            std.testing.failing_allocator, // this shouldnt need to allocate
+            sysvar.EpochRewards,
+            &buffer,
+            .{},
+        );
         try std.testing.expectEqual(obj_parsed, src.rewards);
         try std.testing.expectEqualSlices(
             u8,
@@ -426,7 +448,12 @@ test getSysvar {
             0,
             @sizeOf(sysvar.LastRestartSlot),
         });
-        const obj_parsed = try bincode.readFromSlice(allocator, sysvar.LastRestartSlot, &buffer, .{});
+        const obj_parsed = try bincode.readFromSlice(
+            std.testing.allocator, // this shouldnt need to allocate
+            sysvar.LastRestartSlot,
+            &buffer,
+            .{},
+        );
         try std.testing.expectEqual(obj_parsed, src.restart);
         try std.testing.expectEqualSlices(
             u8,
@@ -434,4 +461,83 @@ test getSysvar {
             std.mem.asBytes(&clean_obj),
         );
     }
+}
+
+test "getSysvar(SlotHashes, partial)" {
+    try testGetSlotHashes(false);
+}
+
+test "getSysvar(SlotHashes, full)" {
+    try testGetSlotHashes(true);
+}
+
+fn testGetSlotHashes(filled: bool) !void {
+    const allocator = std.testing.allocator;
+    const slots: u64 = if (filled)
+        sysvar.SlotHashes.MAX_ENTRIES + 1
+    else
+        sysvar.SlotHashes.MAX_ENTRIES / 2;
+
+    var entries: std.BoundedArray(sysvar.SlotHashes.Entry, sysvar.SlotHashes.MAX_ENTRIES + 1) = .{};
+    for (1..slots) |slot| {
+        var result: Hash = undefined;
+        std.crypto.hash.sha2.Sha256.hash(std.mem.asBytes(&@as(u64, slot)), &result.data, .{});
+        try entries.append(.{ slot, result });
+    }
+
+    const src_hashes = sysvar.SlotHashes{
+        .entries = entries.constSlice(),
+    };
+
+    {
+        const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.SIZE_OF);
+        defer allocator.free(src_hashes_buf);
+        _ = try bincode.writeToSlice(src_hashes_buf, src_hashes, .{});
+    }
+
+    const testing = sig.runtime.testing;
+    var prng = std.Random.DefaultPrng.init(0);
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &.{},
+        .compute_meter = std.math.maxInt(u64),
+        .sysvar_cache = .{ .slot_hashes = src_hashes },
+    });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    var buffer = std.mem.zeroes([sysvar.SlotHashes.SIZE_OF]u8);
+    const buffer_addr = 0x100000000;
+    const id_addr = 0x200000000;
+
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.mutable, &buffer, buffer_addr),
+            memory.Region.init(.constant, &sysvar.SlotHashes.ID.data, id_addr),
+        },
+        .v3,
+        .{},
+    );
+    defer memory_map.deinit(allocator);
+
+    try callSysvarSyscall(&tc, &memory_map, getSysvar, .{
+        id_addr,
+        buffer_addr,
+        0,
+        sysvar.SlotHashes.SIZE_OF,
+    });
+
+    const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
+    defer allocator.free(obj_parsed.entries);
+
+    try std.testing.expectEqualSlices(
+        sysvar.SlotHashes.Entry,
+        obj_parsed.entries,
+        src_hashes.entries,
+    );
 }
