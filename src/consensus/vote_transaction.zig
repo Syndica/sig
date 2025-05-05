@@ -26,15 +26,6 @@ pub const VoteTransaction = union(enum) {
         }
     }
 
-    pub fn deinit(self: *VoteTransaction, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .vote => |_| {},
-            .vote_state_update => |*args| args.lockouts.deinit(allocator),
-            .compact_vote_state_update => |*args| args.lockouts.deinit(allocator),
-            .tower_sync => |*args| args.lockouts.deinit(allocator),
-        }
-    }
-
     pub fn timestamp(self: *const VoteTransaction) ?UnixTimestamp {
         return switch (self.*) {
             inline //
