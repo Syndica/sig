@@ -607,7 +607,7 @@ fn altBn128Operation(
             // Writes to the first 32-bytes.
             return result[0..32];
         },
-        else => @panic("TODO"),
+        .sub => unreachable,
     }
 }
 
