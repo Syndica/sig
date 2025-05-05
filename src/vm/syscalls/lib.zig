@@ -303,7 +303,7 @@ pub fn register(
     if (feature_set.isActive(features.ENABLE_ALT_BN128_COMPRESSION_SYSCALL, slot)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
-            "sol_alt_bn_128_compression",
+            "sol_alt_bn128_compression",
             ecc.altBn128Compression,
         );
     }
