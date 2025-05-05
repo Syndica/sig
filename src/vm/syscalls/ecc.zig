@@ -420,6 +420,18 @@ const AltBn128GroupOp = enum(u8) {
     }
 };
 
+const AltBn128CompressionOp = enum(u8) {
+    g1_compress = 0,
+    g1_decompress = 1,
+    g2_compress = 2,
+    g2_decompress = 3,
+
+    fn wrap(id: u64) ?AltBn128CompressionOp {
+        if (id > 3) return null;
+        return @enumFromInt(id);
+    }
+};
+
 /// [agave] https://github.com/anza-xyz/agave/blob/b11ca828cfc658b93cb86a6c5c70561875abe237/programs/bpf_loader/src/syscalls/mod.rs#L1687-L1789
 pub fn altBn128GroupOp(
     tc: *TransactionContext,
@@ -490,6 +502,63 @@ pub fn altBn128GroupOp(
     std.debug.assert(result_point.len == output_length);
 
     @memcpy(call_result, result_point);
+}
+
+pub fn altBn128Compression(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const attribute_id = registers.get(.r1);
+    const input_addr = registers.get(.r2);
+    const input_size = registers.get(.r3);
+    const result_addr = registers.get(.r4);
+
+    const group_id = AltBn128CompressionOp.wrap(attribute_id) orelse {
+        return error.InvalidAttribute;
+    };
+
+    const cb = tc.compute_budget;
+    const cost, const output_length: u32 = switch (group_id) {
+        .g1_compress => .{ cb.alt_bn128_g1_compress, 32 },
+        .g1_decompress => .{ cb.alt_bn128_g1_decompress, 64 },
+        .g2_compress => .{ cb.alt_bn128_g2_compress, 64 },
+        .g2_decompress => .{ cb.alt_bn128_g2_decompress, 128 },
+    };
+
+    try tc.consumeCompute(cost);
+
+    const input = try memory_map.translateSlice(
+        u8,
+        .constant,
+        input_addr,
+        input_size,
+        tc.getCheckAligned(),
+    );
+    const call_result = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        result_addr,
+        output_length,
+        tc.getCheckAligned(),
+    );
+
+    // Largest result is 128-bytes from g2_decompress.
+    var result: [128]u8 = undefined;
+    if (switch (group_id) {
+        .g1_compress => ff.bn254_compress_g1_syscall(input.ptr, &result),
+        .g1_decompress => ff.bn254_decompress_g1_syscall(input.ptr, &result),
+        .g2_compress => ff.bn254_compress_g2_syscall(input.ptr, &result),
+        .g2_decompress => ff.bn254_decompress_g2_syscall(input.ptr, &result),
+    } != 0) {
+        if (tc.feature_set.active.contains(
+            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
+        )) {
+            registers.set(.r0, 1);
+            return;
+        } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
+    }
+    @memcpy(call_result, result[0..output_length]);
 }
 
 fn altBn128Operation(
@@ -1137,13 +1206,10 @@ test "alt_bn128 add" {
     const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
         allocator,
         prng.random(),
-        .{
-            .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            }},
-            .compute_meter = 334,
-        },
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 334 },
     );
     defer {
         ec.deinit();
@@ -1212,13 +1278,10 @@ test "alt_bn128 mul" {
     const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
         allocator,
         prng.random(),
-        .{
-            .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            }},
-            .compute_meter = 3_840,
-        },
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 3_840 },
     );
     defer {
         ec.deinit();
@@ -1283,13 +1346,10 @@ test "alt_bn128 pairing" {
     const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
         allocator,
         prng.random(),
-        .{
-            .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
-                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-            }},
-            .compute_meter = 48_986,
-        },
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 48_986 },
     );
     defer {
         ec.deinit();
@@ -1367,4 +1427,130 @@ test "alt_bn128 pairing" {
         error.ComputationalBudgetExceeded,
         altBn128GroupOp(&tc, &memory_map, &registers),
     );
+}
+
+test "alt_bn128 g1 compress/decompress" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 428 * 2 },
+    );
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+
+    const input_addr = 0x100000000;
+    const result_point_addr = 0x200000000;
+
+    var buffer: [64]u8 = undefined;
+
+    inline for (.{ &.{
+        45,  206, 255, 166, 152, 55,  128, 138, 79,  217, 145, 164, 25,  74,  120, 234, 234, 217,
+        68,  149, 162, 44,  133, 120, 184, 205, 12,  44,  175, 98,  168, 172, 20,  24,  216, 15,
+        209, 175, 106, 75,  147, 236, 90,  101, 123, 219, 245, 151, 209, 202, 218, 104, 148, 8,
+        32,  254, 243, 191, 218, 122, 42,  81,  193, 84,
+    }, &.{
+        45,  206, 255, 166, 152, 55,  128, 138, 79, 217, 145, 164, 25,  74,  120, 234, 234, 217,
+        68,  149, 162, 44,  133, 120, 184, 205, 12, 44,  175, 98,  168, 172, 28,  75,  118, 99,
+        15,  130, 53,  222, 36,  99,  235, 81,  5,  165, 98,  197, 197, 182, 144, 40,  212, 105,
+        169, 142, 72,  96,  177, 156, 174, 43,  59, 243,
+    } }) |entry| {
+        var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+        var memory_map = try MemoryMap.init(allocator, &.{
+            memory.Region.init(.constant, entry, input_addr),
+            memory.Region.init(.mutable, &buffer, result_point_addr),
+        }, .v3, .{});
+        defer memory_map.deinit(allocator);
+
+        {
+            registers.set(.r1, 0); // g1_compress
+            registers.set(.r2, input_addr);
+            registers.set(.r3, entry.len);
+            registers.set(.r4, result_point_addr);
+
+            try altBn128Compression(&tc, &memory_map, &registers);
+        }
+        {
+            registers.set(.r1, 1); // g1_decompress
+            registers.set(.r2, result_point_addr);
+            registers.set(.r3, 32);
+            registers.set(.r4, result_point_addr);
+
+            try altBn128Compression(&tc, &memory_map, &registers);
+        }
+
+        try std.testing.expectEqualSlices(u8, entry, &buffer);
+    }
+
+    try std.testing.expectEqual(0, tc.compute_meter);
+}
+
+test "alt_bn128 g2 compress/decompress" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .accounts = &.{.{
+            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        }}, .compute_meter = 13_696 * 2 },
+    );
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+
+    const input_addr = 0x100000000;
+    const result_point_addr = 0x200000000;
+
+    inline for (.{ &.{
+        40, 57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,  247, 147,
+        47, 130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176, 110, 34,  151, 212,
+        66, 180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196, 92,  159, 75,  174, 81,  168,
+        18, 86,  176, 56,  16,  26,  210, 20,  18,  81,  122, 142, 104, 62,  251, 169, 98,  141, 21,  253,
+        50, 130, 182, 15,  33,  109, 228, 31,  79,  183, 88,  147, 174, 108, 4,   22,  14,  129, 168, 6,
+        80, 246, 254, 100, 218, 131, 94,  49,  247, 211, 3,   245, 22,  200, 177, 91,  60,  144, 147, 174,
+        90, 17,  19,  189, 62,  147, 152, 18,
+    }, &.{
+        40,  57,  233, 205, 180, 46,  35,  111, 215, 5,   23,  93,  12,  71,  118, 225, 7,   46,  247, 147,
+        47,  130, 106, 189, 184, 80,  146, 103, 141, 52,  242, 25,  0,   203, 124, 176, 110, 34,  151, 212,
+        66,  180, 238, 151, 236, 189, 133, 209, 17,  137, 205, 183, 168, 196, 92,  159, 75,  174, 81,  168,
+        18,  86,  176, 56,  32,  73,  124, 94,  206, 224, 37,  155, 80,  17,  74,  13,  30,  244, 66,  96,
+        100, 254, 180, 130, 71,  3,   230, 109, 236, 105, 51,  131, 42,  16,  249, 49,  33,  226, 166, 108,
+        144, 58,  161, 196, 221, 204, 231, 132, 137, 174, 84,  104, 128, 184, 185, 54,  43,  225, 54,  222,
+        226, 15,  120, 89,  153, 233, 101, 53,
+    } }) |entry| {
+        var buffer: [128]u8 = undefined;
+
+        var registers = sig.vm.interpreter.RegisterMap.initFill(0);
+        var memory_map = try MemoryMap.init(allocator, &.{
+            memory.Region.init(.constant, entry, input_addr),
+            memory.Region.init(.mutable, &buffer, result_point_addr),
+        }, .v3, .{});
+        defer memory_map.deinit(allocator);
+
+        {
+            registers.set(.r1, 2); // g2_compress
+            registers.set(.r2, input_addr);
+            registers.set(.r3, entry.len);
+            registers.set(.r4, result_point_addr);
+
+            try altBn128Compression(&tc, &memory_map, &registers);
+        }
+        {
+            registers.set(.r1, 3); // g2_decompress
+            registers.set(.r2, result_point_addr);
+            registers.set(.r3, 64);
+            registers.set(.r4, result_point_addr);
+
+            try altBn128Compression(&tc, &memory_map, &registers);
+        }
+
+        try std.testing.expectEqualSlices(u8, entry, &buffer);
+    }
+
+    try std.testing.expectEqual(0, tc.compute_meter);
 }
