@@ -13,8 +13,9 @@ const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 // TODO DUPLICATE_THRESHOLD is defined in replay stage in Agave
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
+pub const FrozenVotes = struct { slot: Slot, hashes: []Hash };
 pub const LatestValidatorVotesForFrozenBanks = struct {
-    max_gossip_frozen_votes: std.AutoHashMap(Pubkey, struct { slot: Slot, hashes: []Hash }),
+    max_gossip_frozen_votes: std.AutoHashMap(Pubkey, FrozenVotes),
     pub fn checkAddVote(
         self: *LatestValidatorVotesForFrozenBanks,
         vote_pubkey: Pubkey,
