@@ -121,7 +121,7 @@ pub const RepairService = struct {
         self.exit.store(true, .release);
         self.peer_provider.deinit();
         self.requester.deinit();
-        self.thread_pool.deinit();
+        self.thread_pool.deinit(self.allocator);
         self.report.deinit();
     }
 
@@ -171,7 +171,7 @@ pub const RepairService = struct {
             for (0..num_threads) |i| {
                 const start = (addressed_requests.items.len * i) / num_threads;
                 const end = (addressed_requests.items.len * (i + 1)) / num_threads;
-                self.thread_pool.schedule(.{
+                try self.thread_pool.schedule(self.allocator, .{
                     .requester = &self.requester,
                     .requests = addressed_requests.items[start..end],
                 });

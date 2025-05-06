@@ -3,8 +3,7 @@ const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
 const TarOutputHeader = std.tar.output.Header;
-const ThreadPoolTask = sig.utils.thread.ThreadPoolTask;
-const ThreadPool = sig.sync.thread_pool.ThreadPool;
+const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 
 /// Unpack tarball is related to accounts_db so we reuse it's progress bar
@@ -29,13 +28,13 @@ fn stripComponents(path: []const u8, count: u32) ![]const u8 {
 /// Two zeroed out blocks representing the end of an archive.
 pub const sentinel_blocks: [512 * 2]u8 = .{0} ** (512 * 2);
 
-pub const UnTarEntry = struct {
+pub const UnTarTask = struct {
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
     file_name: []const u8,
     contents: []u8,
 
-    pub fn callback(self: *UnTarEntry) !void {
+    pub fn run(self: *UnTarTask) !void {
         defer {
             self.allocator.free(self.file_name);
             self.allocator.free(self.contents);
@@ -61,9 +60,6 @@ pub const UnTarEntry = struct {
     }
 };
 
-/// interface struct for queueing untar tasks
-pub const UnTarTask = ThreadPoolTask(UnTarEntry);
-
 const Logger = @import("../trace/log.zig").Logger;
 
 pub fn parallelUntarToFileSystem(
@@ -78,19 +74,11 @@ pub fn parallelUntarToFileSystem(
     defer zone.deinit();
 
     const logger = logger_.withScope(LOG_SCOPE);
-    var thread_pool = ThreadPool.init(.{
-        .max_threads = @intCast(n_threads),
-    });
-    defer {
-        thread_pool.shutdown();
-        thread_pool.deinit();
-    }
 
-    logger
-        .info()
-        .logf("using {d} threads to unpack snapshot", .{n_threads});
-    const tasks = try UnTarTask.init(allocator, n_threads);
-    defer allocator.free(tasks);
+    logger.info().logf("using {d} threads to unpack snapshot", .{n_threads});
+
+    var pool = try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
+    defer pool.deinit(allocator);
 
     var timer = try sig.time.Timer.start();
     var progress_timer = try sig.time.Timer.start();
@@ -156,19 +144,14 @@ pub fn parallelUntarToFileSystem(
                 try reader.skipBytes(pad_len, .{});
 
                 const file_name = try allocator.dupe(u8, file_name_stripped);
-                errdefer comptime unreachable;
+                errdefer allocator.free(file_name);
 
-                const task_ptr = &tasks[UnTarTask.awaitAndAcquireFirstAvailableTask(tasks, 0)];
-                task_ptr.result catch |err| logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
-                task_ptr.entry = .{
+                try pool.schedule(allocator, .{
                     .allocator = allocator,
                     .contents = contents,
                     .dir = dir,
                     .file_name = file_name,
-                };
-
-                const batch = ThreadPool.Batch.from(&task_ptr.task);
-                thread_pool.schedule(batch);
+                });
             },
             .global_extended_header, .extended_header => {
                 return error.TarUnsupportedFileType;
@@ -180,10 +163,8 @@ pub fn parallelUntarToFileSystem(
     }
 
     // wait for all tasks
-    for (tasks) |*task| {
-        task.blockUntilCompletion();
-        task.result catch |err| logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
-    }
+    pool.joinFallible() catch |err|
+        logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
 }
 
 pub fn writeTarHeader(writer: anytype, typeflag: TarOutputHeader.FileType, path: []const u8, size: u64) !void {
