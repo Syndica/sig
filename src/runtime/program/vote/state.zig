@@ -154,14 +154,16 @@ pub fn serializeCompactVoteStateUpdate(
     }, MAX_LOCKOUT_HISTORY){};
     for (data.lockouts.items) |lockout| {
         lockouts.appendAssumeCapacity(.{
-            try std.math.sub(Slot, lockout.slot, slot),
-            @intCast(lockout.confirmation_count),
+            std.math.sub(Slot, lockout.slot, slot) catch
+                return error.InvalidVoteLockout,
+            std.math.cast(u8, lockout.confirmation_count) orelse
+                return error.InvalidConfirmationCount,
         });
         slot = lockout.slot;
     }
 
     // Serialize in compact format
-    try writer.writeInt(Slot, slot, std.builtin.Endian.little);
+    try writer.writeInt(Slot, data.root orelse 0, std.builtin.Endian.little);
     try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockouts.len), .{});
     for (lockouts.constSlice()) |lockout| {
         try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockout[0]), .{});
@@ -251,18 +253,24 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
     }, MAX_LOCKOUT_HISTORY){};
     for (data.lockouts.items) |lockout| {
         lockouts.appendAssumeCapacity(.{
-            try std.math.sub(Slot, lockout.slot, slot),
-            @intCast(lockout.confirmation_count),
+            std.math.sub(Slot, lockout.slot, slot) catch
+                return error.InvalidVoteLockout,
+            std.math.cast(u8, lockout.confirmation_count) orelse
+                return error.InvalidConfirmationCount,
         });
         slot = lockout.slot;
     }
 
     // Serialize in compact format
-    try writer.writeInt(Slot, slot, std.builtin.Endian.little);
+    try writer.writeInt(Slot, data.root orelse 0, std.builtin.Endian.little);
     try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockouts.len), .{});
     for (lockouts.constSlice()) |lockout| {
-        try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockout[0]), .{});
-        try writer.writeInt(u8, @intCast(lockout[1]), std.builtin.Endian.little);
+        try sig.bincode.varint.var_int_config_u64.serializer.?(
+            writer,
+            lockout[0],
+            .{},
+        );
+        try writer.writeInt(u8, lockout[1], std.builtin.Endian.little);
     }
     try writer.writeAll(&data.hash.data);
     if (data.timestamp) |timestamp| {
