@@ -22,6 +22,8 @@ const BuiltinProgram = sig.vm.BuiltinProgram;
 const FeatureSet = sig.runtime.features.FeatureSet;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
+const InstructionInfo = sig.runtime.InstructionInfo;
+const AccountMeta = cpi.AccountMetaRust;
 
 pub const Error = sig.vm.ExecutionError;
 
@@ -218,7 +220,11 @@ pub fn register(
     );
 
     // Processed Sibling
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_processed_sibling_instruction", getProcessedSiblingInstruction,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_get_processed_sibling_instruction",
+        getProcessedSiblingInstruction,
+    );
 
     // Stack Height
     _ = try syscalls.functions.registerHashed(
@@ -415,6 +421,281 @@ pub fn logData(
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     @panic("TODO: implement allocFree syscall");
+}
+
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ac11e3e568952977e63bce6bb20e37f26a61e151/instruction/src/lib.rs#L296
+const ProcessedSiblingInstruction = extern struct {
+    data_len: u64,
+    accounts_len: u64,
+};
+
+/// [agave] https://github.com/anza-xyz/agave/blob/4d9d57c433b491689ba7793aa9339eae22c218d3/programs/bpf_loader/src/syscalls/mod.rs#L1529
+pub fn getProcessedSiblingInstruction(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const index = registers.get(.r1);
+    const meta_addr = registers.get(.r2);
+    const program_id_addr = registers.get(.r3);
+    const data_addr = registers.get(.r4);
+    const accounts_addr = registers.get(.r5);
+
+    try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+
+    var reverse_index: usize = 0;
+    const stack_height = tc.instruction_stack.len;
+    const maybe_info = for (0..tc.instruction_trace.len) |i| {
+        const trace = &tc.instruction_trace.buffer[tc.instruction_trace.len - i - 1]; // reversed
+        if (trace.depth < stack_height) break null;
+        if (trace.depth == stack_height) {
+            if (index +| 1 == reverse_index) break &trace.ixn_info;
+            reverse_index +|= 1;
+        }
+    } else null;
+
+    const info = maybe_info orelse {
+        return registers.set(.r0, 0);
+    };
+
+    const check_aligned = tc.getCheckAligned();
+    const header = try memory_map.translateType(
+        ProcessedSiblingInstruction,
+        .mutable,
+        meta_addr,
+        check_aligned,
+    );
+
+    if (header.data_len == info.instruction_data.len and
+        header.accounts_len == info.account_metas.len)
+    {
+        const program_id = try memory_map.translateType(
+            Pubkey,
+            .mutable,
+            program_id_addr,
+            check_aligned,
+        );
+        const data = try memory_map.translateSlice(
+            u8,
+            .mutable,
+            data_addr,
+            header.data_len,
+            check_aligned,
+        );
+        const accounts = try memory_map.translateSlice(
+            AccountMeta,
+            .mutable,
+            accounts_addr,
+            header.accounts_len,
+            check_aligned,
+        );
+        if (memops.isOverlapping(
+            @intFromPtr(header),
+            @sizeOf(ProcessedSiblingInstruction),
+            @intFromPtr(program_id),
+            @sizeOf(Pubkey),
+        ) or memops.isOverlapping(
+            @intFromPtr(header),
+            @sizeOf(ProcessedSiblingInstruction),
+            @intFromPtr(accounts.ptr),
+            accounts.len *| @sizeOf(AccountMeta),
+        ) or memops.isOverlapping(
+            @intFromPtr(header),
+            @sizeOf(ProcessedSiblingInstruction),
+            @intFromPtr(data.ptr),
+            data.len,
+        ) or memops.isOverlapping(
+            @intFromPtr(program_id),
+            @sizeOf(Pubkey),
+            @intFromPtr(data.ptr),
+            data.len,
+        ) or memops.isOverlapping(
+            @intFromPtr(program_id),
+            @sizeOf(Pubkey),
+            @intFromPtr(accounts.ptr),
+            accounts.len *| @sizeOf(AccountMeta),
+        ) or memops.isOverlapping(
+            @intFromPtr(data.ptr),
+            data.len,
+            @intFromPtr(accounts.ptr),
+            accounts.len *| @sizeOf(AccountMeta),
+        )) {
+            return SyscallError.CopyOverlapping;
+        }
+
+        program_id.* = info.program_meta.pubkey;
+        @memcpy(data, info.instruction_data);
+
+        for (info.account_metas.slice(), 0..) |meta, i| {
+            accounts[i] = .{
+                .pubkey = meta.pubkey,
+                .is_signer = @intFromBool(meta.is_signer),
+                .is_writable = @intFromBool(meta.is_writable),
+            };
+        }
+
+        header.data_len = info.instruction_data.len;
+        header.accounts_len = info.account_metas.len;
+        return registers.set(.r0, 1);
+    }
+}
+
+test getProcessedSiblingInstruction {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    var account_params: [9]testing.ExecuteContextsParams.AccountParams = undefined;
+    for (&account_params) |*a| a.* = .{
+        .pubkey = Pubkey.initRandom(prng.random()),
+        .owner = sig.runtime.program.bpf_loader_program.v2.ID,
+    };
+
+    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+        .accounts = &account_params,
+    });
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    const trace_indexes: [8]u8 = std.simd.iota(u8, 8);
+    for ([_]u8{ 1, 2, 3, 2, 2, 3, 4, 3 }, 0..) |stack_height, index_in_trace| {
+        while (stack_height <= tc.instruction_stack.len) {
+            _ = tc.instruction_stack.pop();
+        }
+        if (stack_height > tc.instruction_stack.len) {
+            var info = InstructionInfo{
+                .program_meta = .{
+                    .pubkey = tc.accounts[0].pubkey,
+                    .index_in_transaction = 0,
+                },
+                .account_metas = .{},
+                .instruction_data = @as(*const [1]u8, &trace_indexes[index_in_trace]),
+            };
+
+            const index_in_tc = index_in_trace +| 1;
+            info.account_metas.appendAssumeCapacity(.{
+                .pubkey = tc.accounts[index_in_tc].pubkey,
+                .index_in_transaction = @intCast(index_in_tc),
+                .index_in_caller = 0, // inconsistent but not required
+                .index_in_callee = 0,
+                .is_signer = false,
+                .is_writable = false,
+            });
+
+            tc.instruction_stack.appendAssumeCapacity(.{
+                .ec = tc.ec,
+                .sc = tc.sc,
+                .tc = &tc,
+                .ixn_info = info,
+                .depth = tc.instruction_stack.len,
+            });
+            tc.instruction_trace.appendAssumeCapacity(.{
+                .ixn_info = info,
+                .depth = tc.instruction_stack.len,
+            });
+        }
+    }
+
+    const vm_addr = 0x100000000;
+    const meta_offset = 0;
+    const program_id_offset = meta_offset + @sizeOf(ProcessedSiblingInstruction);
+    const data_offset = program_id_offset + @sizeOf(Pubkey);
+    const accounts_offset = data_offset + 0x100;
+    const end_offset = accounts_offset + (@sizeOf(cpi.AccountInfoRust) * 4);
+
+    var buffer = std.mem.zeroes([end_offset]u8);
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{memory.Region.init(.mutable, &buffer, vm_addr)},
+        .v3,
+        .{},
+    );
+    defer memory_map.deinit(allocator);
+
+    const ps_instruction = try memory_map.translateType(
+        ProcessedSiblingInstruction,
+        .mutable,
+        vm_addr,
+        true,
+    );
+    ps_instruction.* = .{
+        .data_len = 1,
+        .accounts_len = 1,
+    };
+
+    const program_id = try memory_map.translateType(
+        Pubkey,
+        .mutable,
+        vm_addr +| program_id_offset,
+        true,
+    );
+    const data = try memory_map.translateSlice(
+        u8,
+        .mutable,
+        vm_addr +| data_offset,
+        ps_instruction.data_len,
+        true,
+    );
+    const accounts = try memory_map.translateSlice(
+        AccountMeta,
+        .mutable,
+        vm_addr +| accounts_offset,
+        ps_instruction.accounts_len,
+        true,
+    );
+
+    {
+        tc.compute_meter = tc.compute_budget.syscall_base_cost;
+        var registers = RegisterMap.initFill(0);
+        registers.set(.r1, 0);
+        registers.set(.r2, vm_addr +| meta_offset);
+        registers.set(.r3, vm_addr +| program_id_offset);
+        registers.set(.r4, vm_addr +| data_offset);
+        registers.set(.r5, vm_addr +| accounts_offset);
+        try getProcessedSiblingInstruction(&tc, &memory_map, &registers);
+
+        try std.testing.expectEqual(registers.get(.r0), 1);
+        try std.testing.expectEqual(ps_instruction.data_len, 1);
+        try std.testing.expectEqual(ps_instruction.accounts_len, 1);
+        try std.testing.expect(program_id.equals(&tc.accounts[0].pubkey));
+        try std.testing.expectEqualSlices(u8, data, &.{5});
+        try std.testing.expectEqualSlices(AccountMeta, accounts, &.{.{
+            .pubkey = tc.accounts[6].pubkey,
+            .is_signer = 0,
+            .is_writable = 0,
+        }});
+    }
+
+    {
+        tc.compute_meter = tc.compute_budget.syscall_base_cost;
+        var registers = RegisterMap.initFill(0);
+        registers.set(.r1, 1);
+        registers.set(.r2, vm_addr +| meta_offset);
+        registers.set(.r3, vm_addr +| program_id_offset);
+        registers.set(.r4, vm_addr +| data_offset);
+        registers.set(.r5, vm_addr +| accounts_offset);
+        try getProcessedSiblingInstruction(&tc, &memory_map, &registers);
+        try std.testing.expectEqual(registers.get(.r0), 0);
+    }
+
+    {
+        tc.compute_meter = tc.compute_budget.syscall_base_cost;
+        var registers = RegisterMap.initFill(0);
+        registers.set(.r1, 0);
+        registers.set(.r2, vm_addr +| meta_offset);
+        registers.set(.r3, vm_addr +| meta_offset);
+        registers.set(.r4, vm_addr +| meta_offset);
+        registers.set(.r5, vm_addr +| meta_offset);
+        try std.testing.expectError(
+            SyscallError.CopyOverlapping,
+            getProcessedSiblingInstruction(&tc, &memory_map, &registers),
+        );
+    }
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
