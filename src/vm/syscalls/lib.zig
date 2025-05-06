@@ -305,9 +305,9 @@ pub fn register(
     }
 
     // Get Epoch Stake
-    // if (feature_set.isActive(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake,);
-    // }
+    if (feature_set.isActive(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
+        _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake);
+    }
 
     return syscalls;
 }
@@ -421,6 +421,41 @@ pub fn logData(
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     @panic("TODO: implement allocFree syscall");
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/4d9d57c433b491689ba7793aa9339eae22c218d3/programs/bpf_loader/src/syscalls/mod.rs#L2144
+pub fn getEpochStake(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const addr = registers.get(.r1);
+    if (addr == 0) {
+        try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+
+        // TODO: Call get_epoch_stake() callback in tc. By deafult it's registered to return 0.
+        // https://github.com/anza-xyz/agave/blob/ba93776608b8302fa2865fb50ac4fc4147f0a418/svm-callback/src/lib.rs#L9
+        registers.set(.r0, 0);
+        return;
+    }
+
+    try tc.consumeCompute(
+        tc.compute_budget.syscall_base_cost +|
+            (32 / tc.compute_budget.cpi_bytes_per_unit) +|
+            tc.compute_budget.mem_op_base_cost,
+    );
+
+    const vote_address = try memory_map.translateType(
+        Pubkey,
+        .constant,
+        addr,
+        tc.getCheckAligned(),
+    );
+
+    // TODO: Call get_epoch_stake_for_vote_account() in tc. By default it's registered to return 0.
+    // https://github.com/anza-xyz/agave/blob/ba93776608b8302fa2865fb50ac4fc4147f0a418/svm-callback/src/lib.rs#L14
+    _ = vote_address;
+    registers.set(.r0, 0);
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ac11e3e568952977e63bce6bb20e37f26a61e151/instruction/src/lib.rs#L296
