@@ -42,19 +42,13 @@ pub const LoadedAccounts = struct {
     collected_rent: u64 = 0,
     loaded_account_data_size: u32 = 0,
 
-    /// n accounts loaded and returned (excludes loading of owner accounts)
-    n_loaded: u8,
-    /// indexes correspond with tx.msg.account_keys
-    accounts_buf: [MAX_TX_ACCOUNT_LOCKS]AccountSharedData,
-    rent_debits: [MAX_TX_ACCOUNT_LOCKS]RentDebit,
+    /// equal in length to accounts
+    account_is_instruction_account: std.BoundedArray(bool, MAX_TX_ACCOUNT_LOCKS) = .{},
 
-    pub fn accounts(self: *const LoadedAccounts) []const AccountSharedData {
-        return self.accounts_buf[0..self.n_loaded];
-    }
-
-    pub fn rentDebits(self: *const LoadedAccounts) []const RentDebit {
-        return self.accounts_buf[0..self.n_loaded];
-    }
+    /// equal in length to rent_debits
+    accounts: std.BoundedArray(AccountSharedData, MAX_TX_ACCOUNT_LOCKS) = .{},
+    /// equal in length to accounts
+    rent_debits: std.BoundedArray(RentDebit, MAX_TX_ACCOUNT_LOCKS) = .{},
 };
 
 pub const AccountsDbKind = enum {
@@ -123,6 +117,9 @@ const LoadedTransactionAccount = struct {
     loaded_size: usize,
     rent_collected: u64,
 
+    /// must be deallocated separately
+    is_instruction_account: bool = false,
+
     const DEFAULT: LoadedTransactionAccount = .{
         .account = .{
             .lamports = 0,
@@ -133,6 +130,7 @@ const LoadedTransactionAccount = struct {
         },
         .loaded_size = 0,
         .rent_collected = 0,
+        .is_instruction_account = false,
     };
 };
 
@@ -234,6 +232,7 @@ fn loadTransactionAccount(
             .account = account,
             .loaded_size = 0,
             .rent_collected = 0,
+            .is_instruction_account = true,
         };
     }
 
@@ -291,13 +290,7 @@ pub fn loadTransactionAccountsInner(
 ) !LoadedAccounts {
     std.debug.assert(tx.msg.account_keys.len <= 128); // TODO: this should be sanitised earlier
 
-    var retval: LoadedAccounts = .{
-        .n_loaded = 0,
-
-        // safe: upon success, these will be set for every account index
-        .accounts_buf = undefined,
-        .rent_debits = undefined,
-    };
+    var retval: LoadedAccounts = .{};
     // attempt to load and collect accounts
     for (tx.msg.account_keys, 0..) |account_key, account_idx| {
         const loaded_account = try loadTransactionAccount(
@@ -310,21 +303,23 @@ pub fn loadTransactionAccountsInner(
             rent_collector,
             features,
         );
-        retval.accounts_buf[account_idx] = loaded_account.account;
 
-        retval.collected_rent += loaded_account.rent_collected;
-        retval.rent_debits[account_idx] = .{
+        retval.accounts.appendAssumeCapacity(loaded_account.account);
+        retval.rent_debits.appendAssumeCapacity(.{
             .rent_collected = loaded_account.rent_collected,
             .rent_balance = loaded_account.account.lamports,
-        };
+        });
+        retval.account_is_instruction_account.appendAssumeCapacity(
+            loaded_account.is_instruction_account,
+        );
+
+        retval.collected_rent += loaded_account.rent_collected;
 
         try accumulateAndCheckLoadedAccountDataSize(
             &retval.loaded_account_data_size,
             loaded_account.loaded_size,
             requested_max_total_data_size,
         );
-
-        retval.n_loaded += 1;
     }
 
     var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(tmp_allocator);
@@ -521,7 +516,7 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expectEqual(0, loaded.collected_rent);
 
     var returned_accounts: usize = 0;
-    for (loaded.accounts_buf[0..tx.msg.account_keys.len]) |account| {
+    for (loaded.accounts.slice()) |account| {
         try std.testing.expectEqual(runtime.ids.SYSVAR_INSTRUCTIONS_ID, account.owner);
         try std.testing.expect(account.data.len > 0);
         allocator.free(account.data);
@@ -637,7 +632,7 @@ test "load accounts rent paid" {
     );
 
     var found: usize = 0;
-    for (loaded.accounts_buf[0..tx.msg.account_keys.len]) |account| {
+    for (loaded.accounts.slice()) |account| {
         found += 1;
         allocator.free(account.data);
     }
