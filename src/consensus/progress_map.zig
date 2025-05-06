@@ -1269,6 +1269,325 @@ test "ProgressMap memory ownership" {
     defer cloned.deinit(allocator);
 }
 
+test "ProgressMap.isPropagated" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(43125);
+    const random = prng.random();
+
+    var progress_map = ProgressMap.INIT;
+    defer progress_map.deinit(allocator);
+
+    const missing_slot = random.int(Slot);
+
+    // Check for slot missing from progress map.
+    try std.testing.expectEqual(null, progress_map.isPropagated(missing_slot));
+
+    {
+        // Check for slot in progress map but not propagated.
+        const slot_not_propagted = random.int(Slot);
+        const fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = blk: {
+                var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+                validator_stake_info.stake = 2;
+                validator_stake_info.total_epoch_stake = 100;
+                break :blk validator_stake_info;
+            },
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+        try progress_map.map.put(allocator, slot_not_propagted, fork_progress);
+        try std.testing.expect(!progress_map.isPropagated(slot_not_propagted).?);
+    }
+
+    {
+        // Check for slot in progress map and propagated.
+        const slot_propagated = random.int(Slot);
+        const fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = blk: {
+                var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+                validator_stake_info.stake = 0;
+                validator_stake_info.total_epoch_stake = 0;
+                break :blk validator_stake_info;
+            },
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+        try progress_map.map.put(allocator, slot_propagated, fork_progress);
+        try std.testing.expect(progress_map.isPropagated(slot_propagated).?);
+    }
+}
+
+test "ProgressMap.myLatestLandedVote" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(43125);
+    const random = prng.random();
+
+    var progress_map = ProgressMap.INIT;
+    defer progress_map.deinit(allocator);
+
+    const missing_slot = random.int(Slot);
+
+    // Check for slot missing from progress map.
+    try std.testing.expectEqual(null, progress_map.myLatestLandedVote(missing_slot));
+
+    {
+        // Check for slot in progress map but not landed.
+        const slot_not_landed = 100;
+        const fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+
+        try progress_map.map.put(allocator, slot_not_landed, fork_progress);
+        try std.testing.expect(
+            slot_not_landed != progress_map.myLatestLandedVote(slot_not_landed).?,
+        );
+    }
+
+    {
+        // Check for slot in progress map and landed.
+        const slot_landed = random.int(Slot);
+        var fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+        fork_progress.fork_stats.my_latest_landed_vote = slot_landed;
+
+        try progress_map.map.put(allocator, slot_landed, fork_progress);
+        try std.testing.expectEqual(slot_landed, progress_map.myLatestLandedVote(slot_landed));
+    }
+}
+
+test "ProgressMap.getPropagatedStats" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(43125);
+    const random = prng.random();
+
+    var progress_map = ProgressMap.INIT;
+    defer progress_map.deinit(allocator);
+
+    const missing_slot = random.int(Slot);
+
+    // Check for slot missing from progress map.
+    try std.testing.expectEqual(null, progress_map.getPropagatedStats(missing_slot));
+
+    {
+        // Check for slot's propagated stats.
+        const slot_propagated = random.int(Slot);
+        const fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+
+        try progress_map.map.put(allocator, slot_propagated, fork_progress);
+        try std.testing.expectEqualDeep(
+            fork_progress.propagated_stats,
+            progress_map.getPropagatedStats(slot_propagated),
+        );
+    }
+}
+
+test "ProgressMap.getPropagatedStatsMustExist" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(43125);
+    const random = prng.random();
+
+    var progress_map = ProgressMap.INIT;
+    defer progress_map.deinit(allocator);
+
+    const missing_slot = random.int(Slot);
+
+    // Check for slot missing from progress map.
+    try std.testing.expectEqual(
+        error.MissingSlot,
+        progress_map.getPropagatedStatsMustExist(missing_slot),
+    );
+
+    {
+        // Check for slot's propagated stats.
+        const slot_propagated = random.int(Slot);
+        const fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+
+        try progress_map.map.put(allocator, slot_propagated, fork_progress);
+        try std.testing.expectEqualDeep(
+            fork_progress.propagated_stats,
+            try progress_map.getPropagatedStatsMustExist(slot_propagated),
+        );
+    }
+}
+
+test "ProgressMap.getLatestLeaderSlotMustExist" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(43125);
+    const random = prng.random();
+
+    var progress_map = ProgressMap.INIT;
+    defer progress_map.deinit(allocator);
+
+    const missing_slot = random.int(Slot);
+
+    // Check for slot missing from progress map.
+    try std.testing.expectEqual(
+        error.MissingSlot,
+        progress_map.getLatestLeaderSlotMustExist(missing_slot),
+    );
+
+    {
+        // Check for slot with latest leader.
+        const slot_latest_leader = random.int(Slot);
+        const fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+
+        try progress_map.map.put(allocator, slot_latest_leader, fork_progress);
+        try std.testing.expectEqualDeep(
+            slot_latest_leader,
+            try progress_map.getLatestLeaderSlotMustExist(slot_latest_leader),
+        );
+    }
+
+    {
+        // Return previous leader.
+        const slot_latest_leader = random.int(Slot);
+        var fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+        fork_progress.propagated_stats.is_leader_slot = false;
+        try progress_map.map.put(allocator, slot_latest_leader, fork_progress);
+        try std.testing.expectEqualDeep(
+            9,
+            try progress_map.getLatestLeaderSlotMustExist(slot_latest_leader),
+        );
+    }
+}
+
+test "ProgressMap.getLeaderPropagationSlotMustExist" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(43125);
+    const random = prng.random();
+
+    var progress_map = ProgressMap.INIT;
+    defer progress_map.deinit(allocator);
+
+    const missing_slot = random.int(Slot);
+
+    // Check for slot missing from progress map.
+    try std.testing.expectEqual(
+        error.MissingSlot,
+        progress_map.getLeaderPropagationSlotMustExist(missing_slot),
+    );
+
+    {
+        // Check for slot in progress map but not propagated.
+        const slot_not_propagted = random.int(Slot);
+        const fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = blk: {
+                var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+                validator_stake_info.stake = 2;
+                validator_stake_info.total_epoch_stake = 100;
+                break :blk validator_stake_info;
+            },
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+        try progress_map.map.put(allocator, slot_not_propagted, fork_progress);
+        const is_propagated, const slot = try progress_map
+            .getLeaderPropagationSlotMustExist(slot_not_propagted);
+
+        try std.testing.expect(!is_propagated);
+        try std.testing.expectEqual(slot, slot_not_propagted);
+    }
+
+    {
+        // Check for slot in progress map and propagated.
+        const slot_propagated = random.int(Slot);
+        const fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = blk: {
+                var validator_stake_info = ValidatorStakeInfo.DEFAULT;
+                validator_stake_info.stake = 0;
+                validator_stake_info.total_epoch_stake = 0;
+                break :blk validator_stake_info;
+            },
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+        try progress_map.map.put(allocator, slot_propagated, fork_progress);
+
+        const is_propagated, const slot = try progress_map
+            .getLeaderPropagationSlotMustExist(slot_propagated);
+
+        try std.testing.expect(is_propagated);
+        try std.testing.expectEqual(slot, slot_propagated);
+    }
+
+    {
+        // Return with no previous leader.
+        const slot_latest_leader = random.int(Slot);
+        var fork_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = null,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+        fork_progress.propagated_stats.is_leader_slot = false;
+        try progress_map.map.put(allocator, slot_latest_leader, fork_progress);
+        const is_propagated, const slot = try progress_map
+            .getLeaderPropagationSlotMustExist(slot_latest_leader);
+
+        try std.testing.expect(is_propagated);
+        try std.testing.expectEqual(null, slot);
+    }
+}
+
 test "ForkProgress.init" {
     const allocator = std.testing.allocator;
 
