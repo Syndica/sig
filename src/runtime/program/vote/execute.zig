@@ -219,7 +219,10 @@ fn intializeAccount(
         return InstructionError.InvalidAccountData;
     }
 
-    const versioned_vote_state = try vote_account.deserializeFromAccountData(allocator, VoteStateVersions);
+    const versioned_vote_state = try vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
 
     if (!versioned_vote_state.isUninitialized()) {
         return InstructionError.AccountAlreadyInitialized;

@@ -141,10 +141,17 @@ pub const VoteStateUpdate = struct {
     }
 };
 
-pub fn serializeCompactVoteStateUpdate(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
+pub fn serializeCompactVoteStateUpdate(
+    writer: anytype,
+    data: anytype,
+    _: sig.bincode.Params,
+) anyerror!void {
     // Calculate lockout offsets
     var slot = data.root orelse 0;
-    var lockouts = std.BoundedArray(struct { Slot, u8 }, MAX_LOCKOUT_HISTORY){};
+    var lockouts = std.BoundedArray(struct {
+        Slot,
+        u8,
+    }, MAX_LOCKOUT_HISTORY){};
     for (data.lockouts.items) |lockout| {
         lockouts.appendAssumeCapacity(.{
             try std.math.sub(Slot, lockout.slot, slot),
@@ -169,7 +176,11 @@ pub fn serializeCompactVoteStateUpdate(writer: anytype, data: anytype, _: sig.bi
     }
 }
 
-pub fn deserializeCompactVoteStateUpdate(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) anyerror!VoteStateUpdate {
+pub fn deserializeCompactVoteStateUpdate(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    _: sig.bincode.Params,
+) anyerror!VoteStateUpdate {
     var root = try reader.readInt(Slot, std.builtin.Endian.little);
     root = if (root == std.math.maxInt(Slot)) 0 else root;
 
@@ -178,7 +189,11 @@ pub fn deserializeCompactVoteStateUpdate(allocator: std.mem.Allocator, reader: a
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(allocator, reader, .{});
+        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(
+            allocator,
+            reader,
+            .{},
+        );
         const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -230,7 +245,10 @@ pub const TowerSync = struct {
 pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
     // Calculate lockout offsets
     var slot = data.root orelse 0;
-    var lockouts = std.BoundedArray(struct { Slot, u8 }, MAX_LOCKOUT_HISTORY){};
+    var lockouts = std.BoundedArray(struct {
+        Slot,
+        u8,
+    }, MAX_LOCKOUT_HISTORY){};
     for (data.lockouts.items) |lockout| {
         lockouts.appendAssumeCapacity(.{
             try std.math.sub(Slot, lockout.slot, slot),
@@ -256,7 +274,11 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
     try writer.writeAll(&data.block_id.data);
 }
 
-pub fn deserializeTowerSync(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) anyerror!TowerSync {
+pub fn deserializeTowerSync(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    _: sig.bincode.Params,
+) anyerror!TowerSync {
     const root = try reader.readInt(Slot, std.builtin.Endian.little);
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
@@ -264,7 +286,11 @@ pub fn deserializeTowerSync(allocator: std.mem.Allocator, reader: anytype, _: si
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(allocator, reader, .{});
+        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(
+            allocator,
+            reader,
+            .{},
+        );
         const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -423,7 +449,11 @@ pub const AuthorizedVoters = struct {
         }
     }
 
-    fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !AuthorizedVoters {
+    fn deserialize(
+        allocator: std.mem.Allocator,
+        reader: anytype,
+        _: sig.bincode.Params,
+    ) !AuthorizedVoters {
         var authorized_voters = AuthorizedVoters{
             .voters = SortedMap(Epoch, Pubkey).init(allocator),
         };
@@ -1872,7 +1902,12 @@ test "AuthorizeVoters.deserialize" {
         0, 0, 0, 0, 0, 0, 0, 0,
     };
     const allocator = std.testing.allocator;
-    const authorized_voters = try sig.bincode.readFromSlice(allocator, AuthorizedVoters, data_0, .{});
+    const authorized_voters = try sig.bincode.readFromSlice(
+        allocator,
+        AuthorizedVoters,
+        data_0,
+        .{},
+    );
     defer authorized_voters.deinit();
     try std.testing.expectEqual(3, authorized_voters.count());
 

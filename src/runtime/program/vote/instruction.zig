@@ -50,9 +50,9 @@ pub const VoteAuthorizeWithSeedArgs = struct {
     current_authority_derived_key_seed: []const u8,
     new_authority: Pubkey,
 
-    pub const @"!bincode-config:current_authority_derived_key_seed": sig.bincode.FieldConfig([]const u8) = .{
-        .deserializer = sig.bincode.readUtf8String,
-    };
+    pub const @"!bincode-config:current_authority_derived_key_seed": sig.bincode.FieldConfig(
+        []const u8,
+    ) = .{ .deserializer = sig.bincode.readUtf8String };
 
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to be updated
@@ -69,9 +69,9 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 
-    pub const @"!bincode-config:current_authority_derived_key_seed": sig.bincode.FieldConfig([]const u8) = .{
-        .deserializer = sig.bincode.readUtf8String,
-    };
+    pub const @"!bincode-config:current_authority_derived_key_seed": sig.bincode.FieldConfig(
+        []const u8,
+    ) = .{ .deserializer = sig.bincode.readUtf8String };
 
     pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated
@@ -177,7 +177,9 @@ pub const VoteStateUpdate = struct {
 pub const CompactVoteStateUpdate = struct {
     vote_state_update: vote_program.state.VoteStateUpdate,
 
-    pub const @"!bincode-config:vote_state_update": sig.bincode.FieldConfig(vote_program.state.VoteStateUpdate) = .{
+    pub const @"!bincode-config:vote_state_update": sig.bincode.FieldConfig(
+        vote_program.state.VoteStateUpdate,
+    ) = .{
         .deserializer = vote_program.state.deserializeCompactVoteStateUpdate,
         .serializer = vote_program.state.serializeCompactVoteStateUpdate,
     };
@@ -206,7 +208,9 @@ pub const CompactVoteStateUpdateSwitch = struct {
     vote_state_update: vote_program.state.VoteStateUpdate,
     hash: Hash,
 
-    pub const @"!bincode-config:vote_state_update": sig.bincode.FieldConfig(vote_program.state.VoteStateUpdate) = .{
+    pub const @"!bincode-config:vote_state_update": sig.bincode.FieldConfig(
+        vote_program.state.VoteStateUpdate,
+    ) = .{
         .deserializer = vote_program.state.deserializeCompactVoteStateUpdate,
         .serializer = vote_program.state.serializeCompactVoteStateUpdate,
     };
@@ -222,7 +226,9 @@ pub const CompactVoteStateUpdateSwitch = struct {
 pub const TowerSync = struct {
     tower_sync: vote_program.state.TowerSync,
 
-    pub const @"!bincode-config:tower_sync": sig.bincode.FieldConfig(vote_program.state.TowerSync) = .{
+    pub const @"!bincode-config:tower_sync": sig.bincode.FieldConfig(
+        vote_program.state.TowerSync,
+    ) = .{
         .deserializer = vote_program.state.deserializeTowerSync,
         .serializer = vote_program.state.serializeTowerSync,
     };
@@ -239,7 +245,9 @@ pub const TowerSyncSwitch = struct {
     tower_sync: vote_program.state.TowerSync,
     hash: Hash,
 
-    pub const @"!bincode-config:tower_sync": sig.bincode.FieldConfig(vote_program.state.TowerSync) = .{
+    pub const @"!bincode-config:tower_sync": sig.bincode.FieldConfig(
+        vote_program.state.TowerSync,
+    ) = .{
         .deserializer = vote_program.state.deserializeTowerSync,
         .serializer = vote_program.state.serializeTowerSync,
     };
