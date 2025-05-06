@@ -2042,6 +2042,45 @@ pub const Tower = struct {
         }
     }
 
+    test "tower: selectVoteAndResetForks stake not found" {
+        const allocator = std.testing.allocator;
+        const FrozenVotes = sig.consensus.unimplemented.FrozenVotes;
+        const fork_tuples = sig.consensus.fork_choice.fork_tuples;
+
+        var fork_choice = try sig.consensus.fork_choice.forkChoiceForTest(
+            allocator,
+            fork_tuples[0..],
+        );
+        defer fork_choice.deinit();
+
+        var tower = try createTestTower(allocator, 8, 0.66);
+        defer tower.deinit(allocator);
+
+        const latest = LatestValidatorVotesForFrozenBanks{
+            .max_gossip_frozen_votes = std.AutoHashMap(Pubkey, FrozenVotes).init(allocator),
+        };
+
+        var slot_history = try createTestSlotHistory(std.testing.allocator);
+        defer slot_history.deinit(allocator);
+
+        try std.testing.expectError(
+            error.StakeNotFound,
+            tower.selectVoteAndResetForks(
+                std.testing.allocator,
+                100,
+                null,
+                100,
+                &.{},
+                &.{},
+                &ProgressMap.INIT,
+                &latest,
+                &fork_choice,
+                .{},
+                &slot_history,
+            ),
+        );
+    }
+
     /// Handles fork selection when switch fails due to duplicate rollback
     pub fn selectCandidatesFailedSwitchDuplicateRollback(
         allocator: std.mem.Allocator,

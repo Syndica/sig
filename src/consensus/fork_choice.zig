@@ -2008,7 +2008,7 @@ pub fn forkChoiceForTest(
 
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
-const fork_tuples = [_]TreeNode{
+pub const fork_tuples = [_]TreeNode{
     // (0)
     // └── (1)
     //     ├── (2)
