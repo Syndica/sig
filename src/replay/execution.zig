@@ -213,10 +213,10 @@ const EntryConfirmer = struct {
 
         self.replay_entries.clearRetainingCapacity();
         try self.replay_entries.ensureTotalCapacity(self.allocator, entries.len);
-        self.transaction_verifier.start(entries, self.replay_entries.items);
+        try self.transaction_verifier.start(entries, self.replay_entries.items);
         try self.transaction_verifier.finish(); // TODO accountsdb for lookup tables
 
-        self.entry_verifier.start(progress.last_entry, entries);
+        try self.entry_verifier.start(progress.last_entry, entries);
 
         // TODO: executes entry transactions and verify results
         //     TODO: call process_entries

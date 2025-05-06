@@ -47,7 +47,7 @@ const stubs = struct {
         fn epochVoteAccountsForNodeId(
             self: Bank,
             node_id: Pubkey,
-        ) ?*const sig.accounts_db.snapshots.NodeVoteAccounts {
+        ) ?*const sig.core.stake.NodeVoteAccounts {
             const epoch_stakes = self.data.epoch_stakes.getPtr(self.data.epoch) orelse
                 std.debug.panic("Epoch stakes for bank's own epoch must exist", .{});
             return epoch_stakes.node_id_to_vote_accounts.getPtr(node_id);
@@ -557,7 +557,7 @@ pub const PropagatedStats = struct {
     ) std.mem.Allocator.Error!void {
         if (self.propagated_node_ids.contains(node_pubkey)) return;
         const nva = bank.epochVoteAccountsForNodeId(node_pubkey) orelse return;
-        const epoch_vote_accounts = bank.epochVoteAccounts(bank.epoch()) orelse std.debug.panic(
+        const epoch_vote_accounts = bank.epochVoteAccounts(bank.data.epoch) orelse std.debug.panic(
             "Epoch stakes for bank's own epoch must exist",
             .{},
         );
@@ -565,7 +565,7 @@ pub const PropagatedStats = struct {
             allocator,
             node_pubkey,
             nva.vote_accounts,
-            epoch_vote_accounts,
+            epoch_vote_accounts.*,
         );
     }
 

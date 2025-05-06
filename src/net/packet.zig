@@ -1,36 +1,69 @@
+const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
 
 const BitFlags = sig.utils.bitflags.BitFlags;
 
-/// Maximum over-the-wire size of a Transaction
-///   1280 is IPv6 minimum MTU
-///   40 bytes is the size of the IPv6 header
-///   8 bytes is the size of the fragment header
-pub const PACKET_DATA_SIZE: usize = 1232;
-
 pub const Packet = struct {
-    data: [PACKET_DATA_SIZE]u8,
+    buffer: [DATA_SIZE]u8,
     size: usize,
     addr: network.EndPoint,
-    flags: BitFlags(Flag) = .{},
+    flags: BitFlags(Flag),
 
-    const Self = @This();
+    /// Maximum over-the-wire size of a Transaction
+    ///   1280 is IPv6 minimum MTU
+    ///   40 bytes is the size of the IPv6 header
+    ///   8 bytes is the size of the fragment header
+    pub const DATA_SIZE: usize = 1232;
 
-    pub fn init(addr: network.EndPoint, data: [PACKET_DATA_SIZE]u8, size: usize) Self {
+    pub const ANY_EMPTY: Packet = .{
+        .addr = .{ .port = 0, .address = .{ .ipv4 = network.Address.IPv4.any } },
+        .buffer = .{0} ** DATA_SIZE,
+        .size = 0,
+        .flags = .{},
+    };
+
+    pub fn init(
+        addr: network.EndPoint,
+        data_init: [DATA_SIZE]u8,
+        size: usize,
+    ) Packet {
         return .{
             .addr = addr,
-            .data = data,
+            .buffer = data_init,
             .size = size,
+            .flags = .{},
         };
     }
 
-    pub fn default() Self {
-        return .{
-            .addr = .{ .port = 0, .address = .{ .ipv4 = network.Address.IPv4.any } },
-            .data = undefined,
-            .size = 0,
-        };
+    pub fn initFromBincode(
+        maybe_dest: ?sig.net.SocketAddr,
+        bincodable_data: anytype,
+    ) !Packet {
+        var result: Packet = ANY_EMPTY;
+        try result.populateFromBincode(maybe_dest, bincodable_data);
+        return result;
+    }
+
+    pub fn populateFromBincode(
+        self: *Packet,
+        maybe_dest: ?sig.net.SocketAddr,
+        bincodable_data: anytype,
+    ) !void {
+        var fbs = std.io.fixedBufferStream(&self.buffer);
+        try sig.bincode.write(fbs.writer(), bincodable_data, .{});
+        self.size = fbs.pos;
+        if (maybe_dest) |dest| {
+            self.addr = dest.toEndpoint();
+        }
+    }
+
+    pub fn data(self: *const Packet) []const u8 {
+        return self.buffer[0..self.size];
+    }
+
+    pub fn dataMut(self: *Packet) []u8 {
+        return self.buffer[0..self.size];
     }
 };
 

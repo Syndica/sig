@@ -11,7 +11,7 @@ const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 
 const getWallclockMs = sig.time.getWallclockMs;
 
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 pub const PRUNE_DATA_PREFIX: []const u8 = "\xffSOLANA_PRUNE_DATA";
 
 pub const PruneData = struct {

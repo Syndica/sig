@@ -452,7 +452,7 @@ pub fn Client(
 
                 if (stream.packet.size != lsquic.lsquic_stream_write(
                     maybe_lsquic_stream,
-                    &stream.packet.data,
+                    &stream.packet.buffer,
                     stream.packet.size,
                 )) {
                     @panic("failed to write complete packet to stream");

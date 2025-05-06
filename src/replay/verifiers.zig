@@ -9,6 +9,7 @@ const Entry = sig.core.Entry;
 const Hash = sig.core.Hash;
 const Transaction = sig.core.Transaction;
 
+const assert = std.debug.assert;
 const verifyPoh = sig.core.entry.verifyPoh;
 
 /// Verifies entries asynchronously in a thread pool by reproducing the poh
@@ -56,13 +57,17 @@ pub const EntryVerifier = struct {
     }
 
     pub fn deinit(self: EntryVerifier) void {
-        self.thread_pool.deinit();
+        self.thread_pool.deinit(self.allocator);
         self.allocator.free(self.preallocated_nodes);
     }
 
     /// Schedule verification tasks into the thread pool.
     /// Call `finish` to get the result.
-    pub fn start(self: *EntryVerifier, initial_hash: Hash, entries: []const Entry) void {
+    pub fn start(
+        self: *EntryVerifier,
+        initial_hash: Hash,
+        entries: []const Entry,
+    ) Allocator.Error!void {
         std.debug.assert(!self.running);
         self.running = true;
         if (entries.len == 0) return;
@@ -71,12 +76,12 @@ pub const EntryVerifier = struct {
         var batch_initial_hash = initial_hash;
         for (0..num_tasks) |i| {
             const end = if (i == num_tasks + 1) entries.len else i * entries_per_task;
-            self.thread_pool.schedule(.{
+            assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .allocator = self.allocator,
                 .preallocated_nodes = &self.preallocated_nodes[i],
                 .initial_hash = batch_initial_hash,
                 .entries = entries[i..end],
-            });
+            }));
             batch_initial_hash = entries[end - 1].hash;
         }
     }
@@ -84,9 +89,9 @@ pub const EntryVerifier = struct {
     /// Block until all verification tasks are complete, and return the result.
     pub fn finish(self: *EntryVerifier) Allocator.Error!bool {
         defer self.running = false;
-        var results = try self.thread_pool.join();
-        defer results.deinit(self.allocator);
-        for (results.items) |result| {
+        const results = try self.thread_pool.join(self.allocator);
+        defer self.allocator.free(results);
+        for (results) |result| {
             if (!try result) return false;
         }
         return true;
@@ -162,7 +167,7 @@ pub const TransactionVerifyAndHasher = struct {
         self: *TransactionVerifyAndHasher,
         input: []const Entry,
         output: []ReplayEntry,
-    ) void {
+    ) Allocator.Error!void {
         std.debug.assert(!self.running);
         std.debug.assert(input.len == output.len);
         self.running = true;
@@ -174,11 +179,11 @@ pub const TransactionVerifyAndHasher = struct {
         for (0..num_tasks) |i| {
             const end = if (i == num_tasks + 1) input.len else i * entries_per_task;
 
-            self.thread_pool.schedule(.{
+            assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .list_recycler = self.list_recycler,
                 .input = input[i..end],
                 .output = output[i..end],
-            });
+            }));
         }
     }
 

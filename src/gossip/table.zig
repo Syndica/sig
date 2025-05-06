@@ -21,7 +21,7 @@ const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
 
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8_192;
 // TODO: cli arg for this
 pub const MAX_TABLE_SIZE: usize = 1_000_000; // TODO: better value for this

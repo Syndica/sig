@@ -1099,8 +1099,8 @@ pub const layout = struct {
     }
 
     pub fn getShred(packet: *const Packet) ?[]const u8 {
-        if (getShredSize(packet) > packet.data.len) return null;
-        return packet.data[0..getShredSize(packet)];
+        if (getShredSize(packet) > Packet.DATA_SIZE) return null;
+        return packet.data()[0..getShredSize(packet)];
     }
 
     pub fn getShredSize(packet: *const Packet) usize {

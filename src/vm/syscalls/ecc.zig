@@ -26,9 +26,9 @@ pub const CurveId = enum(u64) {
 };
 
 pub const GroupOp = enum(u64) {
-    add,
-    subtract,
-    multiply,
+    add = 0,
+    subtract = 1,
+    multiply = 2,
 
     fn wrap(id: u64) ?GroupOp {
         if (id > 2) return null;
@@ -177,7 +177,7 @@ const weak_mul = struct {
             if (pos == 0) break;
             q = q.dbl().dbl().dbl().dbl();
         }
-        try q.rejectIdentity();
+        // try q.rejectIdentity();
         return q;
     }
 
@@ -192,10 +192,72 @@ const weak_mul = struct {
         return pc;
     }
 
-    pub fn mul(p: Edwards25519, s: [32]u8) !Edwards25519 {
-        const xpc = precompute(p, 15);
+    fn slide(s: [32]u8) [2 * 32]i8 {
+        const reduced = if ((s[s.len - 1] & 0x80) == 0) s else Edwards25519.scalar.reduce(s);
+        var e: [2 * 32]i8 = undefined;
+        for (reduced, 0..) |x, i| {
+            e[i * 2 + 0] = @as(i8, @as(u4, @truncate(x)));
+            e[i * 2 + 1] = @as(i8, @as(u4, @truncate(x >> 4)));
+        }
+        // Now, e[0..63] is between 0 and 15, e[63] is between 0 and 7
+        var carry: i8 = 0;
+        for (e[0..63]) |*x| {
+            x.* += carry;
+            carry = (x.* + 8) >> 4;
+            x.* -= carry * 16;
+        }
+        e[63] += carry;
+        // Now, e[*] is between -8 and 8, including e[63]
+        return e;
+    }
+
+    const basePointPc = pc: {
+        @setEvalBranchQuota(10000);
+        break :pc precompute(Edwards25519.basePoint, 15);
+    };
+
+    fn mul(p: Edwards25519, s: [32]u8) !Edwards25519 {
+        const xpc = if (p.is_base) basePointPc else precompute(p, 15);
         // xpc[4].rejectIdentity() catch return error.WeakPublicKey;
         return pcMul16(&xpc, s, false);
+    }
+
+    /// Multiscalar multiplication *IN VARIABLE TIME* for public data
+    /// Computes ps0*ss0 + ps1*ss1 + ps2*ss2... faster than doing many of these operations individually
+    fn mulMulti(comptime count: usize, ps: [count]Edwards25519, ss: [count][32]u8) !Edwards25519 {
+        var pcs: [count][9]Edwards25519 = undefined;
+
+        var bpc: [9]Edwards25519 = undefined;
+        @memcpy(&bpc, basePointPc[0..bpc.len]);
+
+        for (ps, 0..) |p, i| {
+            if (p.is_base) {
+                pcs[i] = bpc;
+            } else {
+                pcs[i] = precompute(p, 8);
+                // pcs[i][4].rejectIdentity() catch return error.WeakPublicKey;
+            }
+        }
+        var es: [count][2 * 32]i8 = undefined;
+        for (ss, 0..) |s, i| {
+            es[i] = slide(s);
+        }
+        var q = Edwards25519.identityElement;
+        var pos: usize = 2 * 32 - 1;
+        while (true) : (pos -= 1) {
+            for (es, 0..) |e, i| {
+                const slot = e[pos];
+                if (slot > 0) {
+                    q = q.add(pcs[i][@as(usize, @intCast(slot))]);
+                } else if (slot < 0) {
+                    q = q.sub(pcs[i][@as(usize, @intCast(-slot))]);
+                }
+            }
+            if (pos == 0) break;
+            q = q.dbl().dbl().dbl().dbl();
+        }
+        // try q.rejectIdentity();
+        return q;
     }
 };
 
@@ -216,6 +278,7 @@ fn groupOp(comptime T: type, group_op: GroupOp, left: [32]u8, right: [32]u8) !T 
             };
         },
         .multiply => {
+            try Edwards25519.scalar.rejectNonCanonical(left);
             const input_point = try T.fromBytes(right);
             return switch (T) {
                 Edwards25519 => weak_mul.mul(input_point, left),
@@ -253,7 +316,11 @@ pub fn curveMultiscalarMul(
         .edwards => tc.compute_budget.curve25519_edwards_msm_base_cost,
         .ristretto => tc.compute_budget.curve25519_ristretto_msm_base_cost,
     };
-    try tc.consumeCompute(cost);
+    const incremental_cost = switch (curve_id) {
+        .edwards => tc.compute_budget.curve25519_edwards_msm_incremental_cost,
+        .ristretto => tc.compute_budget.curve25519_ristretto_msm_incremental_cost,
+    } * (points_len -| 1);
+    try tc.consumeCompute(cost + incremental_cost);
 
     const scalars = try memory_map.translateSlice(
         [32]u8,
@@ -301,6 +368,10 @@ fn multiScalarMultiply(comptime T: type, scalars: []const [32]u8, point_data: []
     std.debug.assert(scalars.len == point_data.len);
     std.debug.assert(scalars.len <= 512);
 
+    for (scalars) |scalar| {
+        try Edwards25519.scalar.rejectNonCanonical(scalar);
+    }
+
     var points: std.BoundedArray(Edwards25519, 512) = .{};
     for (point_data) |encoded| {
         const point = try T.fromBytes(encoded);
@@ -315,9 +386,9 @@ fn multiScalarMultiply(comptime T: type, scalars: []const [32]u8, point_data: []
     var accumulator = Edwards25519.identityElement;
     while (length > 0) {
         switch (std.math.floorPowerOfTwo(u64, length)) {
-            inline 1, 2, 8, 16, 32, 64, 128, 256, 512 => |N| {
+            inline 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 => |N| {
                 const current = scalars.len - length;
-                const segment = try Edwards25519.mulMulti(
+                const segment = try weak_mul.mulMulti(
                     N,
                     points.constSlice()[current..][0..N].*,
                     scalars[current..][0..N].*,
@@ -868,6 +939,8 @@ test "multiscalar multiplication large" {
     }
 
     {
+        tc.compute_meter = 500_000;
+
         registers.set(.r1, 0); // CURVE25519_EDWARDS
         registers.set(.r2, scalars_addr);
         registers.set(.r3, edwards_points_addr);
@@ -885,6 +958,8 @@ test "multiscalar multiplication large" {
     }
 
     {
+        tc.compute_meter = 500_000;
+
         registers.set(.r1, 0); // CURVE25519_EDWARDS
         registers.set(.r2, scalars_addr);
         registers.set(.r3, edwards_points_addr);
@@ -898,6 +973,8 @@ test "multiscalar multiplication large" {
     }
 
     {
+        tc.compute_meter = 500_000;
+
         registers.set(.r1, 1); // CURVE25519_RISTRETTO
         registers.set(.r2, scalars_addr);
         registers.set(.r3, ristretto_points_addr);
@@ -915,6 +992,8 @@ test "multiscalar multiplication large" {
     }
 
     {
+        tc.compute_meter = 500_000;
+
         registers.set(.r1, 1); // CURVE25519_RISTRETTO
         registers.set(.r2, scalars_addr);
         registers.set(.r3, ristretto_points_addr);
