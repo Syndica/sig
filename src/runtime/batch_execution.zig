@@ -56,52 +56,60 @@ pub fn ProcessingEnv(accountsdb_kind: sig.runtime.account_loader.AccountsDbKind)
     };
 }
 
-pub const TransactionResult = struct {
-    /// null => failed to load accounts | failed to allocate logs
-    logs: ?[]const []const u8,
-    result: Result,
+pub const Kind = enum { FeesOnly, Executed };
 
-    pub const Kind = enum { FeesOnly, Executed };
-    pub const Result = union(Kind) { FeesOnly: FeesOnly, Executed: Executed };
+pub const TransactionResult = union(Kind) {
+    FeesOnly: FeesOnlyTransaction,
+    Executed: ExecutedTransaction,
 
-    // Transaction was not executed. Fees can be collected.
-    pub const FeesOnly = struct {
-        err: anyerror, // TODO: narrow this to accountsdb load error
-        // rollback_accounts: ignored for now, still unclear on what exactly it's for
-        // fee_details: ignored - this is passed in
-    };
+    fn err(self: TransactionResult) ?anyerror {
+        return switch (self) {
+            .FeesOnly => |fees_only| fees_only.err,
+            .Executed => |executed| executed.err,
+        };
+    }
 
-    /// Transaction was executed, may have failed. Fees can be collected.
-    pub const Executed = struct {
+    fn logs(self: TransactionResult) ?[]const []const u8 {
+        return switch (self) {
+            .FeesOnly => null,
+            .Executed => |executed| if (executed.logs.len > 0) executed.logs else null,
+        };
+    }
+};
+
+// Transaction was not executed. Fees can be collected.
+pub const FeesOnlyTransaction = struct {
+    err: anyerror, // TODO: narrow this to accountsdb load error
+    // rollback_accounts: ignored for now, still unclear on what exactly it's for
+    // fee_details: ignored - this is passed in
+};
+
+/// Transaction was executed, may have failed. Fees can be collected.
+pub const ExecutedTransaction = struct {
+    loaded_accounts: sig.runtime.account_loader.LoadedAccounts,
+    executed_units: u64,
+    /// only valid in successful transactions
+    accounts_data_len_delta: i64,
+    return_data: ?sig.runtime.transaction_context.TransactionReturnData,
+    err: ?anyerror, // TODO: narrow to transaction error
+    logs: []const []const u8,
+
+    programs_modified_by_tx: void = {}, // TODO: program cache not yet implemented (!)
+    // rollback_accounts: ignored for now, still unclear on what exactly it's for
+    // fee_details: ignored - this is passed in
+    // compute_budget: ignored - this is passed in
+    // program_indicies: seems useless, skipping
+
+    pub fn init(
         loaded_accounts: sig.runtime.account_loader.LoadedAccounts,
-        executed_units: u64,
-        /// only valid in successful transactions
-        accounts_data_len_delta: i64,
-        return_data: ?sig.runtime.transaction_context.TransactionReturnData,
-        err: ?anyerror, // TODO: narrow to transaction error
-
-        programs_modified_by_tx: void = {}, // TODO: program cache not yet implemented (!)
-        // rollback_accounts: ignored for now, still unclear on what exactly it's for
-        // fee_details: ignored - this is passed in
-        // compute_budget: ignored - this is passed in
-        // program_indicies: seems useless, skipping
-
-        pub fn init(
-            loaded_accounts: sig.runtime.account_loader.LoadedAccounts,
-        ) Executed {
-            return .{
-                .loaded_accounts = loaded_accounts,
-                .executed_units = 0,
-                .accounts_data_len_delta = 0,
-                .return_data = null,
-                .err = null,
-            };
-        }
-    };
-
-    fn err(self: TransactionResult) ?anyerror { // TODO: should narrow this
-        return switch (self.result) {
-            inline .FeesOnly, .Executed => |x| x.err,
+    ) ExecutedTransaction {
+        return .{
+            .loaded_accounts = loaded_accounts,
+            .executed_units = 0,
+            .accounts_data_len_delta = 0,
+            .return_data = null,
+            .err = null,
+            .logs = &.{},
         };
     }
 };
@@ -110,12 +118,28 @@ pub const Output = struct {
     // .len == raw_instructions.len
     processing_results: []const TransactionResult,
 
-    // useful as the account cache effectively de-duplicates account datas (we can't just loop over
-    // the accounts and deallocate them one by one)
-    arena: std.heap.ArenaAllocator,
+    /// allocated separately (not part of the account loader's cache)
+    instruction_account_datas: []const []const u8,
 
-    pub fn deinit(self: Output) void {
-        self.arena.deinit();
+    /// deinit the account datas with this
+    loader_cache: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+
+    pub fn deinit(self: *Output, allocator: std.mem.Allocator) void {
+        var iter = self.loader_cache.iterator();
+        while (iter.next()) |entry| allocator.free(entry.value_ptr.data);
+        self.loader_cache.deinit(allocator);
+
+        for (self.processing_results) |result| {
+            const logs = result.logs() orelse continue;
+            for (logs) |log| allocator.free(log);
+            allocator.free(logs);
+        }
+        allocator.free(self.processing_results);
+
+        for (self.instruction_account_datas) |data| {
+            allocator.free(data);
+        }
+        allocator.free(self.instruction_account_datas);
     }
 };
 
@@ -129,13 +153,9 @@ pub fn loadAndExecuteBatch(
     defer tmp_arena.deinit();
     const tmp_allocator = tmp_arena.allocator();
 
-    var output_arena = std.heap.ArenaAllocator.init(gpa_allocator);
-    errdefer output_arena.deinit();
-    const output_allocator = output_arena.allocator();
-
     var loader = try AccountLoader(accountsdb_kind).newWithCacheCapacity(
-        output_allocator,
-        tmp_allocator,
+        gpa_allocator,
+        gpa_allocator,
         env.accounts_db,
         &env.slot_context.ec.feature_set,
         env.rent_collector,
@@ -147,17 +167,26 @@ pub fn loadAndExecuteBatch(
             break :account_keys_sum sum;
         },
     );
-    defer loader.deinit();
+    errdefer {
+        var iter = loader.account_cache.iterator();
+        while (iter.next()) |entry| gpa_allocator.free(entry.value_ptr.data);
+        errdefer loader.deinit();
+    }
 
-    const transaction_result = try output_allocator.alloc(
+    const transaction_result = try gpa_allocator.alloc(
         TransactionResult,
         env.raw_transactions.len,
     );
-    errdefer output_allocator.free(transaction_result);
+    errdefer gpa_allocator.free(transaction_result);
+
+    var instruction_account_datas = std.ArrayList([]const u8).init(gpa_allocator);
+    errdefer {
+        for (instruction_account_datas.items) |account_data| gpa_allocator.free(account_data);
+        instruction_account_datas.deinit();
+    }
 
     // transactions must be executed in order
     for (env.raw_transactions, 0..) |tx, tx_idx| {
-        transaction_result[tx_idx].logs = null;
         // now would be a great time to *validate_transaction_nonce_and_fee_payer*
         // not doing it yet. Pretending it's valid for now.
 
@@ -175,14 +204,18 @@ pub fn loadAndExecuteBatch(
             &env.slot_context.ec.feature_set,
             &env.rent_collector,
         ) catch |err| {
-            transaction_result[tx_idx] = .{
-                .result = .{ .FeesOnly = .{ .err = err } },
-                .logs = null,
-            };
+            transaction_result[tx_idx] = .{ .FeesOnly = .{ .err = err } };
             continue;
         };
 
-        const accounts = loaded_accounts.accounts_buf[0..tx.msg.account_keys.len];
+        for (
+            loaded_accounts.accounts.constSlice(),
+            loaded_accounts.account_is_instruction_account.constSlice(),
+        ) |account, is_instr_account| {
+            if (is_instr_account) try instruction_account_datas.append(account.data);
+        }
+
+        const accounts = loaded_accounts.accounts.constSlice();
 
         var tc = try makeTransactionContext(
             accountsdb_kind,
@@ -194,15 +227,14 @@ pub fn loadAndExecuteBatch(
         );
 
         var tx_executed: TransactionResult = .{
-            .logs = null,
-            .result = .{ .Executed = TransactionResult.Executed.init(loaded_accounts) },
+            .Executed = ExecutedTransaction.init(loaded_accounts),
         };
         defer {
-            tx_executed.logs = blk: {
+            tx_executed.Executed.logs = blk: {
                 if (tc.log_collector) |logger| {
-                    break :blk logger.collectCloned(output_allocator) catch null;
+                    break :blk logger.collectCloned(gpa_allocator) catch &.{};
                 }
-                break :blk null;
+                break :blk &.{};
             };
             transaction_result[tx_idx] = tx_executed;
         }
@@ -215,19 +247,20 @@ pub fn loadAndExecuteBatch(
             accounts,
             &tx,
         ) catch |err| {
-            tx_executed.result.Executed.err = err;
+            tx_executed.Executed.err = err;
             continue;
         };
 
         // successful transaction
-        tx_executed.result.Executed.executed_units = tc.compute_meter;
-        tx_executed.result.Executed.accounts_data_len_delta = tc.accounts_resize_delta;
-        tx_executed.result.Executed.return_data = tc.return_data;
+        tx_executed.Executed.executed_units = tc.compute_meter;
+        tx_executed.Executed.accounts_data_len_delta = tc.accounts_resize_delta;
+        tx_executed.Executed.return_data = tc.return_data;
     }
 
     return .{
         .processing_results = transaction_result,
-        .arena = output_arena,
+        .loader_cache = loader.account_cache,
+        .instruction_account_datas = try instruction_account_datas.toOwnedSlice(),
     };
 }
 
@@ -440,13 +473,13 @@ test {
 
     const env = ProcessingEnv(.Mocked).testingDefault(&.{ tx1, tx2, tx4, tx5 }, bank);
 
-    const output = try loadAndExecuteBatch(.Mocked, allocator, env);
-    defer output.deinit();
+    var output = try loadAndExecuteBatch(.Mocked, allocator, env);
+    defer output.deinit(allocator);
 
     for (output.processing_results, 0..) |res, i| {
         errdefer {
             std.debug.print("tx{} failed\n", .{i});
-            if (res.logs) |logs| {
+            if (res.logs()) |logs| {
                 if (logs.len > 0) {
                     std.debug.print("log{{ \n", .{});
                     for (logs, 0..) |log, log_idx|
