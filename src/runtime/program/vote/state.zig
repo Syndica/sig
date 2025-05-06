@@ -164,9 +164,9 @@ pub fn serializeCompactVoteStateUpdate(
 
     // Serialize in compact format
     try writer.writeInt(Slot, data.root orelse 0, std.builtin.Endian.little);
-    try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockouts.len), .{});
+    try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
     for (lockouts.constSlice()) |lockout| {
-        try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockout[0]), .{});
+        try sig.bincode.varint.serializeShortU16(writer, @intCast(lockout[0]));
         try writer.writeInt(u8, @intCast(lockout[1]), std.builtin.Endian.little);
     }
     try writer.writeAll(&data.hash.data);
@@ -187,7 +187,7 @@ pub fn deserializeCompactVoteStateUpdate(
     root = if (root == std.math.maxInt(Slot)) 0 else root;
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
-    const lockouts_len = try sig.bincode.varint.deserialize_short_u16(reader, .{});
+    const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
@@ -263,7 +263,7 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
 
     // Serialize in compact format
     try writer.writeInt(Slot, data.root orelse 0, std.builtin.Endian.little);
-    try sig.bincode.varint.serialize_short_u16(writer, @intCast(lockouts.len), .{});
+    try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
     for (lockouts.constSlice()) |lockout| {
         try sig.bincode.varint.var_int_config_u64.serializer.?(
             writer,
@@ -290,7 +290,7 @@ pub fn deserializeTowerSync(
     const root = try reader.readInt(Slot, std.builtin.Endian.little);
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
-    const lockouts_len = try sig.bincode.varint.deserialize_short_u16(reader, .{});
+    const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {

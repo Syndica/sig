@@ -139,21 +139,6 @@ pub fn visitByte(
     const elem_val_shifted: u32 = elem_val <<| shift;
 
     const new_val = current_value | elem_val_shifted;
-    // const shift = std.math.cast(
-    //     u3,
-    //     (std.math.cast(u32, nth_byte) orelse U32_MAX) *| 7,
-    // ) orelse return error.ShiftOverflows;
-
-    // const shift_res = @shlWithOverflow(elem_val, shift);
-    // const result = shift_res.@"0";
-    // const overflow_bit = shift_res.@"1";
-    // if (overflow_bit == 1) {
-    //     elem_val = U32_MAX;
-    // } else {
-    //     elem_val = result;
-    // }
-
-    // const new_val = value | elem_val;
     const out_val = std.math.cast(u16, new_val) orelse return error.Overflow;
 
     if (elem_done) {
