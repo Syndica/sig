@@ -6,6 +6,7 @@ const leb = std.leb;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
+const Blake3 = std.crypto.hash.Blake3;
 
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
@@ -70,6 +71,15 @@ pub const Transaction = struct {
             .version = self.version,
             .msg = try self.msg.clone(allocator),
         };
+    }
+
+    pub fn hash(self: Transaction) Hash {
+        var hasher = Blake3.init(.{});
+        hasher.update("solana-tx-message-v1");
+        serialize(hasher.writer(), self, .{}) catch |err| switch (err) {};
+        var hash_buf: [Hash.SIZE]u8 = undefined;
+        hasher.final(&hash_buf);
+        return Hash{ .data = hash_buf };
     }
 
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
