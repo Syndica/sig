@@ -6,7 +6,6 @@ const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
 const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
-const BankFields = sig.core.BankFields;
 const EpochStakeMap = sig.core.stake.EpochStakeMap;
 const BlockTimestamp = sig.runtime.program.vote_program.state.BlockTimestamp;
 const Hash = sig.core.Hash;
@@ -314,7 +313,8 @@ pub const ReplayTower = struct {
     pub fn recordBankVote(
         self: *ReplayTower,
         allocator: std.mem.Allocator,
-        bank_fields: *const BankFields,
+        vote_slot: Slot,
+        vote_hash: Hash,
     ) !?Slot {
         // Returns the new root if one is made after applying a vote for the given bank to
         // `self.vote_state`
@@ -325,12 +325,12 @@ pub const ReplayTower = struct {
         const is_enable_tower_active = true;
 
         const new_root = try self.tower.recordBankVoteAndUpdateLockouts(
-            bank_fields.slot,
+            vote_slot,
         );
 
         try self.updateLastVoteFromVoteState(
             allocator,
-            bank_fields.hash,
+            vote_hash,
             is_enable_tower_active,
             block_id,
         );
@@ -372,36 +372,6 @@ pub const ReplayTower = struct {
 
         self.last_vote.deinit(allocator);
         self.last_vote = new_vote;
-    }
-
-    /// Used inside the validator to simulate making a vote for a bank before
-    /// it sends a vote transaction on-chain.
-    fn recordBankVoteAndUpdateLockouts(
-        self: *ReplayTower,
-        allocator: std.mem.Allocator,
-        vote_slot: Slot,
-        vote_hash: Hash,
-        enable_tower_sync_ix: bool,
-        block_id: Hash,
-    ) !?Slot {
-        if (self.tower.vote_state.lastVotedSlot()) |last_voted_sot| {
-            if (vote_slot <= last_voted_sot) {
-                return error.VoteTooOld;
-            }
-        }
-
-        const old_root = try self.tower.getRoot();
-
-        try self.tower.vote_state.processNextVoteSlot(vote_slot);
-        try self.updateLastVoteFromVoteState(allocator, vote_hash, enable_tower_sync_ix, block_id);
-
-        const new_root = try self.tower.getRoot();
-
-        if (old_root != new_root) {
-            return new_root;
-        } else {
-            return null;
-        }
     }
 
     pub fn lastVotedSlot(self: *const ReplayTower) ?Slot {
@@ -2212,8 +2182,8 @@ test "tower: check vote threshold without votes" {
 }
 
 test "tower: check vote threshold no skip lockout with new root" {
-    var tower = try createTestReplayTower(std.testing.allocator, 4, 0.67);
-    defer tower.deinit(std.testing.allocator);
+    var replay_tower = try createTestReplayTower(std.testing.allocator, 4, 0.67);
+    defer replay_tower.deinit(std.testing.allocator);
 
     var stakes = AutoHashMapUnmanaged(u64, u64){};
     defer stakes.deinit(std.testing.allocator);
@@ -2221,16 +2191,14 @@ test "tower: check vote threshold no skip lockout with new root" {
 
     for (0..(MAX_LOCKOUT_HISTORY + 1)) |i| {
         stakes.putAssumeCapacity(i, 1);
-        _ = try tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
 
-    const result = try tower.checkVoteStakeThresholds(
+    const result = try replay_tower.checkVoteStakeThresholds(
         std.testing.allocator,
         MAX_LOCKOUT_HISTORY + 1,
         &stakes,
@@ -2363,11 +2331,9 @@ test "tower: is locked out root slot sibling fail" {
 
     replay_tower.tower.vote_state.root_slot = 0;
 
-    _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+    _ = try replay_tower.recordBankVote(
         std.testing.allocator,
         1,
-        Hash.ZEROES,
-        true,
         Hash.ZEROES,
     );
 
@@ -2385,11 +2351,9 @@ test "tower: check already voted" {
 
     replay_tower.tower.vote_state.root_slot = 0;
 
-    _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+    _ = try replay_tower.recordBankVote(
         std.testing.allocator,
         0,
-        Hash.ZEROES,
-        true,
         Hash.ZEROES,
     );
 
@@ -2405,11 +2369,9 @@ test "tower: check recent slot" {
     try std.testing.expect(replay_tower.tower.isRecent(32));
 
     for (0..64) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2429,11 +2391,9 @@ test "tower: is locked out double vote" {
     try ancestors.put(0);
 
     for (0..2) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2454,11 +2414,9 @@ test "tower: is locked out child" {
     defer ancestors.deinit();
     try ancestors.put(0);
 
-    _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+    _ = try replay_tower.recordBankVote(
         std.testing.allocator,
         0,
-        Hash.ZEROES,
-        true,
         Hash.ZEROES,
     );
 
@@ -2479,11 +2437,9 @@ test "tower: is locked out sibling" {
     try ancestors.put(0);
 
     for (0..2) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2505,11 +2461,9 @@ test "tower: is locked out last vote expired" {
     try ancestors.put(0);
 
     for (0..2) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2521,11 +2475,9 @@ test "tower: is locked out last vote expired" {
 
     try std.testing.expect(!result);
 
-    _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+    _ = try replay_tower.recordBankVote(
         std.testing.allocator,
         4,
-        Hash.ZEROES,
-        true,
         Hash.ZEROES,
     );
 
@@ -2545,11 +2497,9 @@ test "tower: check vote threshold below threshold" {
 
     stakes.putAssumeCapacity(0, 1);
 
-    _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+    _ = try replay_tower.recordBankVote(
         std.testing.allocator,
         0,
-        Hash.ZEROES,
-        true,
         Hash.ZEROES,
     );
 
@@ -2573,11 +2523,9 @@ test "tower: check vote threshold above threshold" {
 
     stakes.putAssumeCapacity(0, 2);
 
-    _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+    _ = try replay_tower.recordBankVote(
         std.testing.allocator,
         0,
-        Hash.ZEROES,
-        true,
         Hash.ZEROES,
     );
 
@@ -2604,11 +2552,9 @@ test "tower: check vote thresholds above thresholds" {
     stakes.putAssumeCapacity(VOTE_THRESHOLD_DEPTH_SHALLOW - 1, 2);
 
     for (0..VOTE_THRESHOLD_DEPTH) |i| {
-        _ = try tower.recordBankVoteAndUpdateLockouts(
+        _ = try tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2636,11 +2582,9 @@ test "tower: check vote threshold deep below threshold" {
     stakes.putAssumeCapacity(VOTE_THRESHOLD_DEPTH_SHALLOW, 4);
 
     for (0..VOTE_THRESHOLD_DEPTH) |i| {
-        _ = try tower.recordBankVoteAndUpdateLockouts(
+        _ = try tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2668,11 +2612,9 @@ test "tower: check vote threshold shallow below threshold" {
     stakes.putAssumeCapacity(VOTE_THRESHOLD_DEPTH_SHALLOW, 1);
 
     for (0..VOTE_THRESHOLD_DEPTH) |i| {
-        _ = try tower.recordBankVoteAndUpdateLockouts(
+        _ = try tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2699,11 +2641,9 @@ test "tower: check vote threshold above threshold after pop" {
     stakes.putAssumeCapacity(0, 2);
 
     for (0..3) |i| {
-        _ = try tower.recordBankVoteAndUpdateLockouts(
+        _ = try tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2726,11 +2666,9 @@ test "tower: check vote threshold above threshold no stake" {
     var stakes = AutoHashMapUnmanaged(u64, u64){};
     defer stakes.deinit(std.testing.allocator);
 
-    _ = try tower.recordBankVoteAndUpdateLockouts(
+    _ = try tower.recordBankVote(
         std.testing.allocator,
         0,
-        Hash.ZEROES,
-        true,
         Hash.ZEROES,
     );
 
@@ -2757,11 +2695,9 @@ test "tower: check vote threshold lockouts not updated" {
     stakes.putAssumeCapacity(1, 2);
 
     for (0..3) |i| {
-        _ = try tower.recordBankVoteAndUpdateLockouts(
+        _ = try tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2911,11 +2847,9 @@ test "tower: adjust lockouts after replay future slots" {
     defer replay_tower.deinit(std.testing.allocator);
 
     for (0..4) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2952,11 +2886,9 @@ test "tower: adjust lockouts after replay not found slots" {
     defer replay_tower.deinit(std.testing.allocator);
 
     for (0..4) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -2994,11 +2926,9 @@ test "tower: adjust lockouts after replay all rooted with no too old" {
     defer replay_tower.deinit(std.testing.allocator);
 
     for (0..3) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -3031,11 +2961,9 @@ test "tower: adjust lockouts after replay all rooted with too old" {
     defer replay_tower.deinit(std.testing.allocator);
 
     for (0..3) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -3067,11 +2995,9 @@ test "tower: adjust lockouts after replay anchored future slots" {
     defer replay_tower.deinit(std.testing.allocator);
 
     for (0..5) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -3107,11 +3033,9 @@ test "tower: adjust lockouts after replay all not found" {
     defer replay_tower.deinit(std.testing.allocator);
 
     for (5..7) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -3150,11 +3074,9 @@ test "tower: adjust lockouts after replay all not found even if rooted" {
     replay_tower.tower.vote_state.root_slot = 4;
 
     for (5..7) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -3184,11 +3106,9 @@ test "tower: test adjust lockouts after replay all future votes only root found"
     replay_tower.tower.vote_state.root_slot = 2;
 
     for (3..6) |i| {
-        _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+        _ = try replay_tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
@@ -3235,11 +3155,9 @@ test "tower: adjust lockouts after replay too old tower" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
-    _ = try replay_tower.recordBankVoteAndUpdateLockouts(
+    _ = try replay_tower.recordBankVote(
         std.testing.allocator,
         0,
-        Hash.ZEROES,
-        true,
         Hash.ZEROES,
     );
 
@@ -3704,11 +3622,9 @@ fn voteAndCheckRecent(num_votes: usize) !void {
     };
 
     for (0..num_votes) |i| {
-        _ = try tower.recordBankVoteAndUpdateLockouts(
+        _ = try tower.recordBankVote(
             std.testing.allocator,
             i,
-            Hash.ZEROES,
-            true,
             Hash.ZEROES,
         );
     }
