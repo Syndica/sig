@@ -305,7 +305,7 @@ pub fn register(
     }
 
     // Get Epoch Stake
-    if (feature_set.isActive(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
+    if (feature_set.isActive(features.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
         _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake);
     }
 
