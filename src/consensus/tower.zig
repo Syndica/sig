@@ -1651,12 +1651,14 @@ pub const Tower = struct {
         self.vote_state.votes = retained;
     }
 
-    // Updating root is needed to correctly restore from newly-saved tower for the next
-    // boot
+    /// Updating root is needed to correctly restore from newly-saved tower for the next
+    /// boot.
     fn initializeRoot(self: *Tower, root_slot: Slot) void {
         self.vote_state.root_slot = root_slot;
     }
 
+    /// Record a vote in the tower.
+    /// Returns a new root slot when the oldest vote reaches maximum lockout.
     fn recordBankVoteAndUpdateLockouts(
         self: *Tower,
         vote_slot: Slot,
