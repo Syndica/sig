@@ -2,8 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
-const deps = replay.deps;
-
 const Allocator = std.mem.Allocator;
 
 const ThreadPool = sig.sync.ThreadPool;
