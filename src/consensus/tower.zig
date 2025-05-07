@@ -7,6 +7,7 @@ const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BankFields = sig.core.BankFields;
+const EpochStakeMap = sig.core.stake.EpochStakeMap;
 const BlockTimestamp = sig.runtime.program.vote_program.state.BlockTimestamp;
 const Hash = sig.core.Hash;
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
@@ -17,6 +18,7 @@ const Lockout = sig.runtime.program.vote_program.state.Lockout;
 const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
 const Pubkey = sig.core.Pubkey;
 const ReplayStage = sig.consensus.unimplemented.ReplayStage;
+const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
@@ -33,7 +35,6 @@ const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
 const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
-
 const UnixTimestamp = i64;
 
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
@@ -55,6 +56,15 @@ const SwitchForkDecision = union(enum) {
         Slot,
     },
     failed_switch_duplicate_rollback: Slot,
+
+    pub fn canVote(self: *const SwitchForkDecision) bool {
+        return switch (self.*) {
+            .failed_switch_threshold => false,
+            .failed_switch_duplicate_rollback => false,
+            .same_fork => true,
+            .switch_proof => true,
+        };
+    }
 };
 
 pub const Stake = u64;
@@ -76,6 +86,29 @@ const ComputedBankState = struct {
     // keyed by end of the range
     lockout_intervals: LockoutIntervals,
     my_latest_landed_vote: ?Slot,
+};
+
+pub const CandidateVoteAndResetSlots = struct {
+    // A slot that the validator will vote on given it passes all
+    // remaining vote checks
+    // Note: In Agave this is a Bank
+    candidate_vote_slot: ?Slot,
+
+    // A slot that the validator will reset its PoH to regardless
+    // of voting behavior
+    // Note: In Agave this is a Bank
+    reset_slot: ?Slot,
+
+    switch_fork_decision: SwitchForkDecision,
+};
+
+pub const SelectVoteAndResetForkResult = struct {
+    vote_slot: ?struct {
+        slot: Slot,
+        decision: SwitchForkDecision,
+    },
+    reset_slot: ?Slot,
+    heaviest_fork_failures: std.ArrayListUnmanaged(HeaviestForkFailures),
 };
 
 pub const ThresholdDecision = union(enum) {
@@ -113,6 +146,27 @@ pub const TowerError = error{
     // Converted into erros from panics (debugs) in Agave
     /// Slots in tower are not older than last_checked_slot
     FatallyInconsistentTowerSlotOrder,
+};
+
+pub const HeaviestForkFailures = union(enum) {
+    LockedOut: u64,
+    FailedThreshold: struct {
+        slot: Slot,
+        vote_depth: u64,
+        observed_stake: u64,
+        total_stake: u64,
+    },
+    /// Failed to meet stake threshold for switching forks
+    FailedSwitchThreshold: struct {
+        slot: Slot,
+        observed_stake: u64,
+        total_stake: u64,
+    },
+    NoPropagatedConfirmation: struct {
+        slot: Slot,
+        observed_stake: u64,
+        total_stake: u64,
+    },
 };
 
 pub const Tower = struct {
@@ -1613,6 +1667,446 @@ pub const Tower = struct {
                 entry_voted_stake.value_ptr += voted_stake;
             }
         }
+    }
+
+    /// [Audit] The implementations below are found in consensus::fork_choice in Agave
+    ///
+    /// Returns whether the last vote is able to land, which determines if we should
+    /// super refresh to vote at the tip.
+    pub fn lastVoteAbleToLand(
+        self: *const Tower,
+        reset_slot: ?Slot,
+        progress: *const ProgressMap,
+        slot_history: *const SlotHistory,
+    ) bool {
+        const heaviest_slot = reset_slot orelse {
+            // No reset slot means we are in the middle of dump & repair. Last vote
+            // landing is irrelevant.
+            return true;
+        };
+
+        const last_voted_slot = self.lastVotedSlot() orelse {
+            // No previous vote.
+            return true;
+        };
+
+        const my_latest_landed_vote_slot = progress.myLatestLandedVote(
+            heaviest_slot,
+        ) orelse {
+            // We've either never landed a vote or fork has been pruned or is in the
+            // middle of dump & repair. Either way, no need to super refresh.
+            return true;
+        };
+
+        // Check if our last vote is able to land in order to determine if we should
+        // super refresh to vote at the tip. If any of the following are true, we
+        // don't need to super refresh:
+        return
+        // 1. Last vote has landed
+        (my_latest_landed_vote_slot >= last_voted_slot) or
+            // 2. Already voting at the tip
+            (last_voted_slot >= heaviest_slot) or
+            // 3. Last vote is within slot hashes, regular refresh is enough
+            slot_history.check(last_voted_slot) == .found;
+    }
+
+    /// Handles fork selection when switch threshold fails.
+    ///
+    /// Two cases:
+    /// 1. If last vote can't land: vote at current fork tip (SameFork)
+    /// 2. Otherwise: stay on current fork (don't vote) to prevent network halts
+    ///
+    /// Prevents mass fork abandonment that could stall the network.
+    ///
+    /// In essence this function re-evaluates whether to:
+    ///
+    /// Force a vote on the current fork (if stuck).
+    /// Continue waiting (if switching is unsafe).
+    /// Record failures for diagnostics.
+    pub fn recheckForkDecisionFailedSwitchThreshold(
+        self: *const Tower,
+        allocator: std.mem.Allocator,
+        reset_slot: ?Slot,
+        progress: *const ProgressMap,
+        heaviest_bank_slot: Slot,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        switch_proof_stake: u64,
+        total_stake: u64,
+        switch_fork_decision: SwitchForkDecision,
+        slot_history: *const SlotHistory,
+    ) !SwitchForkDecision {
+        // Check if validator’s last vote is stuck (no block will include it).
+        // if, so force a new vote on the current fork (SameFork) to unblock progress.
+        if (!self.lastVoteAbleToLand(reset_slot, progress, slot_history)) {
+            // If we reach here, these assumptions are true:
+            // 1. We can't switch because of threshold
+            // 2. Our last vote is now outside slot hashes history of the tip of fork
+            // So, there was no hope of this last vote ever landing again.
+
+            // In this case, we do want to obey threshold, yet try to register our vote on
+            // the current fork, so we choose to vote at the tip of current fork instead.
+            // This will not cause longer lockout because lockout doesn't double after 512
+            // slots, it might be enough to get majority vote.
+            return SwitchForkDecision.same_fork;
+        }
+
+        // If we can't switch, then reset to the next votable bank on the same
+        // fork as our last vote, but don't vote.
+        // We don't just reset to the heaviest fork when switch threshold fails because
+        // a situation like this can occur:
+        // Figure 1:
+        //             slot 0
+        //                 |
+        //             slot 1
+        //             /        \
+        // slot 2 (last vote)     |
+        //             |      slot 8 (10%)
+        //     slot 4 (9%)
+        // Imagine 90% of validators voted on slot 4, but only 9% landed. If everybody that fails
+        // the switch threshold abandons slot 4 to build on slot 8 (because it's *currently* heavier),
+        // then there will be no blocks to include the votes for slot 4, and the network halts
+        // because 90% of validators can't vote
+        self.logger.info().logf(
+            \\ Waiting to switch vote to {d}, resetting to slot {?} for now, 
+            \\ switch proof stake: {d}, threshold stake: {d:.2}, total stake: {d}"
+        ,
+            .{
+                heaviest_bank_slot,
+                if (reset_slot) |slot| slot else null,
+                switch_proof_stake,
+                @as(f64, @floatFromInt(total_stake)) * SWITCH_FORK_THRESHOLD,
+                total_stake,
+            },
+        );
+
+        try failure_reasons.append(allocator, .{
+            .FailedSwitchThreshold = .{
+                .slot = heaviest_bank_slot,
+                .observed_stake = switch_proof_stake,
+                .total_stake = total_stake,
+            },
+        });
+
+        // Return the original switch_fork_decision.
+        return switch_fork_decision;
+    }
+
+    /// Handles candidate selection when fork switching fails threshold checks
+    pub fn selectCandidatesFailedSwitch(
+        self: *const Tower,
+        allocator: std.mem.Allocator,
+        heaviest_slot: Slot,
+        heaviest_slot_on_same_voted_fork: ?Slot,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        switch_proof_stake: u64,
+        total_stake: u64,
+        initial_switch_fork_decision: SwitchForkDecision,
+        slot_history: *const SlotHistory,
+    ) !CandidateVoteAndResetSlots {
+        // If our last vote is unable to land (even through normal refresh), then we
+        // temporarily "super" refresh our vote to the tip of our last voted fork.
+        const final_switch_fork_decision = try self.recheckForkDecisionFailedSwitchThreshold(
+            allocator,
+            if (heaviest_slot_on_same_voted_fork) |slot| slot else null,
+            progress,
+            heaviest_slot,
+            failure_reasons,
+            switch_proof_stake,
+            total_stake,
+            initial_switch_fork_decision,
+            slot_history,
+        );
+
+        const candidate_vote_slot = if (final_switch_fork_decision.canVote())
+            // We need to "super" refresh our vote to the tip of our last voted fork
+            // because our last vote is unable to land. This is inferred by
+            // initially determining we can't vote but then determining we can vote
+            // on the same fork.
+            heaviest_slot_on_same_voted_fork
+        else
+            // Return original vote candidate for logging purposes (can't actually vote)
+            heaviest_slot;
+
+        return CandidateVoteAndResetSlots{
+            .candidate_vote_slot = if (candidate_vote_slot) |slot| slot else null,
+            .reset_slot = if (heaviest_slot_on_same_voted_fork) |slot| slot else null,
+            .switch_fork_decision = final_switch_fork_decision,
+        };
+    }
+
+    /// Selects appropriate banks for voting and reset based on fork decision
+    pub fn selectCandidateVoteAndResetBanks(
+        self: *const Tower,
+        allocator: std.mem.Allocator,
+        heaviest_slot: Slot,
+        heaviest_slot_on_same_voted_fork: ?Slot,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        initial_switch_fork_decision: SwitchForkDecision,
+        slot_history: *const SlotHistory,
+    ) !CandidateVoteAndResetSlots {
+        return switch (initial_switch_fork_decision) {
+            .failed_switch_threshold => |data| try self.selectCandidatesFailedSwitch(
+                allocator,
+                heaviest_slot,
+                heaviest_slot_on_same_voted_fork,
+                progress,
+                failure_reasons,
+                data[0],
+                data[1],
+                initial_switch_fork_decision,
+                slot_history,
+            ),
+            .failed_switch_duplicate_rollback => |latest_duplicate_ancestor| blk: {
+                break :blk try Tower
+                    .selectCandidatesFailedSwitchDuplicateRollback(
+                    allocator,
+                    heaviest_slot,
+                    latest_duplicate_ancestor,
+                    failure_reasons,
+                    initial_switch_fork_decision,
+                );
+            },
+            .same_fork, .switch_proof => blk: {
+                break :blk CandidateVoteAndResetSlots{
+                    .candidate_vote_slot = heaviest_slot,
+                    .reset_slot = heaviest_slot,
+                    .switch_fork_decision = initial_switch_fork_decision,
+                };
+            },
+        };
+    }
+
+    /// Checks for all possible reasons we might not be able to vote on the candidate
+    /// bank. Records any failure reasons, and doesn't early return so we can be sure
+    /// to record all possible reasons.
+    pub fn canVoteOnCandidateSlot(
+        self: *const Tower,
+        allocator: std.mem.Allocator,
+        candidate_vote_bank_slot: Slot,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        switch_fork_decision: *const SwitchForkDecision,
+    ) !bool {
+        const fork_stats = progress.getForkStats(candidate_vote_bank_slot) orelse
+            return error.ForkStatsNotFound;
+        const propagated_stats = progress.getPropagatedStats(candidate_vote_bank_slot) orelse
+            return error.PropagatedStatsNotFound;
+
+        const is_locked_out = fork_stats.is_locked_out;
+        const vote_thresholds = &fork_stats.vote_threshold;
+        const propagated_stake = propagated_stats.propagated_validators_stake;
+        const is_leader_slot = propagated_stats.is_leader_slot;
+        const fork_weight = fork_stats.forkWeight();
+        const total_threshold_stake = fork_stats.total_stake;
+        const total_epoch_stake = propagated_stats.total_epoch_stake;
+
+        // Check if we are locked out
+        if (is_locked_out) {
+            try failure_reasons.append(
+                allocator,
+                .{ .LockedOut = candidate_vote_bank_slot },
+            );
+        }
+
+        // Check vote thresholds
+        var threshold_passed = true;
+        for (vote_thresholds.items) |threshold_failure| {
+            if (threshold_failure != .failed_threshold) continue;
+
+            const vote_depth = threshold_failure.failed_threshold.vote_depth;
+            const fork_stake = threshold_failure.failed_threshold.observed_stake;
+
+            try failure_reasons.append(allocator, .{ .FailedThreshold = .{
+                .slot = candidate_vote_bank_slot,
+                .vote_depth = vote_depth,
+                .observed_stake = fork_stake,
+                .total_stake = total_threshold_stake,
+            } });
+
+            // Ignore shallow checks for voting purposes
+            if (vote_depth >= self.threshold_depth) {
+                threshold_passed = false;
+            }
+        }
+
+        // Check leader slot propagation
+        const propagation_confirmed = is_leader_slot or
+            (try progress.getLeaderPropagationSlotMustExist(candidate_vote_bank_slot))[0];
+        if (!propagation_confirmed) {
+            try failure_reasons.append(allocator, .{ .NoPropagatedConfirmation = .{
+                .slot = candidate_vote_bank_slot,
+                .observed_stake = propagated_stake,
+                .total_stake = total_epoch_stake,
+            } });
+        }
+
+        // Final decision
+        const can_vote = !is_locked_out and
+            threshold_passed and
+            propagation_confirmed and
+            switch_fork_decision.canVote();
+
+        if (can_vote) {
+            self.logger.info().logf(
+                "voting: {d} {d:.1}%",
+                .{ candidate_vote_bank_slot, 100.0 * fork_weight },
+            );
+        }
+
+        return can_vote;
+    }
+
+    /// Selects banks for voting and reset based on fork selection rules.
+    /// Returns a result containing:
+    /// - Optional bank to vote on (with decision)
+    /// - Optional bank to reset PoH to
+    /// - List of any fork selection failures
+    pub fn selectVoteAndResetForks(
+        self: *Tower,
+        allocator: std.mem.Allocator,
+        heaviest_slot: Slot,
+        heaviest_slot_on_same_voted_fork: ?Slot,
+        heaviest_epoch: Epoch,
+        ancestors: *const AutoHashMapUnmanaged(u64, SortedSet(u64)),
+        descendants: *const AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
+        progress: *const ProgressMap,
+        latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+        fork_choice: *const HeaviestSubtreeForkChoice,
+        epoch_stakes: EpochStakeMap,
+        slot_history: *const SlotHistory,
+    ) !SelectVoteAndResetForkResult {
+        // Initialize result with failure list
+        var failure_reasons = try std.ArrayListUnmanaged(HeaviestForkFailures).initCapacity(
+            allocator,
+            0,
+        );
+        defer failure_reasons.deinit(allocator);
+
+        const epoch_stake = epoch_stakes.get(heaviest_epoch) orelse return error.StakeNotFound;
+        // Check switch threshold conditions
+        const initial_decision = try self.checkSwitchThreshold(
+            allocator,
+            heaviest_slot,
+            ancestors,
+            descendants,
+            progress,
+            epoch_stake.total_stake,
+            &epoch_stake.stakes.vote_accounts.accounts,
+            latest_validator_votes_for_frozen_banks,
+            fork_choice,
+        );
+
+        // Select candidate slots
+        const slots = try self.selectCandidateVoteAndResetBanks(
+            allocator,
+            heaviest_slot,
+            heaviest_slot_on_same_voted_fork,
+            progress,
+            &failure_reasons,
+            initial_decision,
+            slot_history,
+        );
+
+        // Handle no viable candidate case
+        const candidate_vote_slot = slots.candidate_vote_slot orelse {
+            return SelectVoteAndResetForkResult{
+                .vote_slot = null,
+                .reset_slot = slots.reset_slot.?,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        };
+
+        if (try self.canVoteOnCandidateSlot(
+            allocator,
+            candidate_vote_slot,
+            progress,
+            &failure_reasons,
+            &slots.switch_fork_decision,
+        )) {
+            return SelectVoteAndResetForkResult{
+                .vote_slot = .{
+                    .slot = candidate_vote_slot,
+                    .decision = slots.switch_fork_decision,
+                },
+                .reset_slot = candidate_vote_slot,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        } else {
+            return SelectVoteAndResetForkResult{
+                .vote_slot = null,
+                .reset_slot = if (slots.reset_slot) |slot| slot else null,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        }
+    }
+
+    test "tower: selectVoteAndResetForks stake not found" {
+        const allocator = std.testing.allocator;
+        const FrozenVotes = sig.consensus.unimplemented.FrozenVotes;
+        const fork_tuples = sig.consensus.fork_choice.fork_tuples;
+
+        var fork_choice = try sig.consensus.fork_choice.forkChoiceForTest(
+            allocator,
+            fork_tuples[0..],
+        );
+        defer fork_choice.deinit();
+
+        var tower = try createTestTower(allocator, 8, 0.66);
+        defer tower.deinit(allocator);
+
+        const latest = LatestValidatorVotesForFrozenBanks{
+            .max_gossip_frozen_votes = std.AutoHashMap(Pubkey, FrozenVotes).init(allocator),
+        };
+
+        var slot_history = try createTestSlotHistory(std.testing.allocator);
+        defer slot_history.deinit(allocator);
+
+        try std.testing.expectError(
+            error.StakeNotFound,
+            tower.selectVoteAndResetForks(
+                std.testing.allocator,
+                100,
+                null,
+                100,
+                &.{},
+                &.{},
+                &ProgressMap.INIT,
+                &latest,
+                &fork_choice,
+                .{},
+                &slot_history,
+            ),
+        );
+    }
+
+    /// Handles fork selection when switch fails due to duplicate rollback
+    pub fn selectCandidatesFailedSwitchDuplicateRollback(
+        allocator: std.mem.Allocator,
+        heaviest_slot: Slot,
+        // [Audit] Only used in logging in Agave
+        _: Slot,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        initial_switch_fork_decision: SwitchForkDecision,
+    ) !CandidateVoteAndResetSlots {
+        // If we can't switch and our last vote was on an unconfirmed duplicate slot,
+        // we reset to the heaviest bank (even if not descendant of last vote)
+
+        try failure_reasons.append(allocator, .{
+            .FailedSwitchThreshold = .{
+                .slot = heaviest_slot,
+                .observed_stake = 0,
+                .total_stake = 0,
+            },
+        });
+
+        const reset_slot: ?Slot = heaviest_slot;
+        return CandidateVoteAndResetSlots{
+            .candidate_vote_slot = null,
+            .reset_slot = reset_slot,
+            .switch_fork_decision = initial_switch_fork_decision,
+        };
     }
 };
 
