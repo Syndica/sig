@@ -761,6 +761,32 @@ pub const ForkChoice = struct {
         return fork_info.isCandidate();
     }
 
+    /// Returns if a node with slot `maybe_ancestor_slot` is an ancestor of the node with
+    /// key `node_key`
+    pub fn isStrictAncestor(
+        self: *const ForkChoice,
+        maybe_ancestor_key: *const SlotAndHash,
+        node_key: *const SlotAndHash,
+    ) bool {
+        if (maybe_ancestor_key == node_key) {
+            return false;
+        }
+
+        if (maybe_ancestor_key.slot > node_key.slot) {
+            return false;
+        }
+
+        var ancestor_iterator = self.ancestorIterator(node_key.*);
+        while (ancestor_iterator.next()) |ancestor| {
+            if (ancestor.slot == maybe_ancestor_key.slot and
+                ancestor.hash.eql(maybe_ancestor_key.hash))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/tree_diff.rs#L12
     ///
     /// Find all nodes reachable from `root1`, excluding subtree at `root2`
@@ -1063,7 +1089,7 @@ pub const ForkChoice = struct {
     }
 
     fn ancestorIterator(
-        self: *ForkChoice,
+        self: *const ForkChoice,
         start_slot_hash_key: SlotAndHash,
     ) AncestorIterator {
         return AncestorIterator{
@@ -1911,6 +1937,45 @@ test "HeaviestSubtreeForkChoice.markForkValidandidate_mark_valid_then_ancestor_i
             .hash = Hash.ZEROES,
         }),
     );
+}
+
+test "HeaviestSubtreeForkChoice.isStrictAncestor_maybe_ancestor_same_as_key" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    const key = SlotAndHash{ .slot = 10, .hash = Hash.ZEROES };
+
+    try std.testing.expect(!fork_choice.isStrictAncestor(&key, &key));
+}
+
+test "HeaviestSubtreeForkChoice.isStrictAncestor_maybe_ancestor_slot_greater_than_key" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    const key = SlotAndHash{ .slot = 10, .hash = Hash.ZEROES };
+    const maybe_ancestor = SlotAndHash{ .slot = 11, .hash = Hash.ZEROES };
+
+    try std.testing.expect(!fork_choice.isStrictAncestor(&maybe_ancestor, &key));
+}
+
+test "HeaviestSubtreeForkChoice.isStrictAncestor_not_maybe_ancestor" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    const key = SlotAndHash{ .slot = 5, .hash = Hash.ZEROES };
+    const maybe_ancestor = SlotAndHash{ .slot = 4, .hash = Hash.ZEROES };
+
+    try std.testing.expect(!fork_choice.isStrictAncestor(&maybe_ancestor, &key));
+}
+
+test "HeaviestSubtreeForkChoice.isStrictAncestor_is_maybe_ancestor" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    const key = SlotAndHash{ .slot = 5, .hash = Hash.ZEROES };
+    const maybe_ancestor = SlotAndHash{ .slot = 1, .hash = Hash.ZEROES };
+
+    try std.testing.expect(fork_choice.isStrictAncestor(&maybe_ancestor, &key));
 }
 
 pub fn forkChoiceForTest(

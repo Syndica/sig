@@ -1,7 +1,9 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-
 const bincode = sig.bincode;
+
+pub const var_int_config_u16 = VarIntConfig(u16);
+pub const var_int_config_u64 = VarIntConfig(u64);
 
 pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
     const S = struct {
@@ -67,82 +69,81 @@ pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
     };
 }
 
-pub const var_int_config_u16 = VarIntConfig(u16);
-pub const var_int_config_u64 = VarIntConfig(u64);
-
-pub fn serialize_short_u16(writer: anytype, data: u16, _: bincode.Params) !void {
+pub fn serializeShortU16(writer: anytype, data: u16) error{WriterError}!void {
     var value = data;
     while (true) {
-        var elem = @as(u8, @intCast((value & 0x7f)));
+        const elem: u8 = @intCast(value & 0x7f);
         value >>= 7;
-        if (value == 0) {
-            try writer.writeByte(elem);
-            break;
+        if (value != 0) {
+            writer.writeByte(elem | 0x80) catch return error.WriterError;
         } else {
-            elem |= 0x80;
-            try writer.writeByte(elem);
+            writer.writeByte(elem) catch return error.WriterError;
+            break;
         }
     }
 }
 
-pub fn deserialize_short_u16(reader: anytype, _: bincode.Params) !u16 {
-    var val: u16 = 0;
-    for (0..MAX_ENCODING_LENGTH) |n| {
-        const elem: u8 = try reader.readByte();
-        switch (try visit_byte_2(elem, val, n)) {
-            .Done => |v| {
-                return v;
-            },
-            .More => |v| {
-                val = v;
-            },
+const MAX_ENCODING_LENGTH: u2 = 3;
+
+pub const DeserializeShortU16Error =
+    VisitByteError || error{
+    ReaderError,
+    EndOfStream,
+};
+
+pub fn deserializeShortU16(reader: anytype) DeserializeShortU16Error!struct { u16, u2 } {
+    var current_value: u16 = 0;
+    for (0..MAX_ENCODING_LENGTH) |byte_index| {
+        const elem: u8 = reader.readByte() catch return error.ReaderError;
+        switch (try visitByte(elem, current_value, byte_index)) {
+            .more => |value| current_value = value,
+            .done => |value| return .{ value, @intCast(byte_index + 1) },
         }
     }
-
     return error.ByteThreeContinues;
 }
 
-const DoneOrMore = union(enum) {
-    Done: u16,
-    More: u16,
+pub const VisitByteError = error{
+    ZeroAfterStart,
+    TooLong,
+    ByteThreeContinues,
+    Overflow,
 };
 
-const U32_MAX: u32 = 4_294_967_295;
-const MAX_ENCODING_LENGTH = 3;
+pub const DoneOrMore = union(enum) {
+    done: u16,
+    more: u16,
+};
 
-pub fn visit_byte_2(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
-    if (elem == 0 and nth_byte != 0) {
-        return error.VisitError;
+pub fn visitByte(
+    current_byte: u8,
+    current_value: u16,
+    byte_index: u64,
+) VisitByteError!DoneOrMore {
+    if (current_byte == 0 and byte_index != 0) {
+        return error.ZeroAfterStart;
     }
 
-    const value = @as(u32, val);
-    const element = @as(u32, elem);
-    var elem_val: u32 = element & 0x7f;
-    const elem_done = (element & 0x80) == 0;
+    const elem_val: u32 = current_byte & 0x7f;
+    const elem_done = (current_byte & 0x80) == 0;
 
-    if (nth_byte >= MAX_ENCODING_LENGTH) {
+    if (byte_index >= MAX_ENCODING_LENGTH) {
         return error.TooLong;
-    } else if (nth_byte == (MAX_ENCODING_LENGTH -| 1) and !elem_done) {
+    }
+
+    if (byte_index == @as(usize, MAX_ENCODING_LENGTH) -| 1 and !elem_done) {
         return error.ByteThreeContinues;
     }
 
-    const shift: u32 = (std.math.cast(u32, nth_byte) orelse U32_MAX) *| 7;
+    const shift: u32 = (std.math.cast(u32, byte_index) orelse std.math.maxInt(u32)) *| 7;
+    const elem_val_shifted: u32 = elem_val <<| shift;
 
-    const shift_res = @shlWithOverflow(elem_val, @as(u3, @intCast(shift)));
-    const result = shift_res.@"0";
-    const overflow_bit = shift_res.@"1";
-    if (overflow_bit == 1) {
-        elem_val = U32_MAX;
-    } else {
-        elem_val = result;
-    }
-
-    const new_val = value | elem_val;
+    const new_val = current_value | elem_val_shifted;
     const out_val = std.math.cast(u16, new_val) orelse return error.Overflow;
 
     if (elem_done) {
-        return .{ .Done = out_val };
+        return .{ .done = out_val };
     } else {
-        return .{ .More = out_val };
+        return .{ .more = out_val };
     }
 }

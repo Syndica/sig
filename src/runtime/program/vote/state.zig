@@ -32,6 +32,11 @@ pub const VOTE_CREDITS_MAXIMUM_PER_SLOT: u8 = 16;
 pub const BlockTimestamp = struct {
     slot: Slot,
     timestamp: i64,
+
+    pub const ZEROES = BlockTimestamp{
+        .slot = 0,
+        .timestamp = 0,
+    };
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L85
@@ -66,6 +71,11 @@ pub const Lockout = struct {
                 MAX_LOCKOUT_HISTORY,
             ),
         );
+    }
+
+    pub fn eql(self: Lockout, other: Lockout) bool {
+        return self.slot == other.slot and
+            self.confirmation_count == other.confirmation_count;
     }
 };
 
@@ -103,6 +113,12 @@ pub const Vote = struct {
     hash: Hash,
     /// processing timestamp of last slot
     timestamp: ?i64,
+
+    pub const ZEROES = Vote{
+        .slots = &[0]Slot{},
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    };
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L178
@@ -115,6 +131,15 @@ pub const VoteStateUpdate = struct {
     hash: Hash,
     /// processing timestamp of last slot
     timestamp: ?i64,
+
+    pub fn zeroes(allocator: std.mem.Allocator) !VoteStateUpdate {
+        return .{
+            .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        };
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L232
@@ -131,6 +156,16 @@ pub const TowerSync = struct {
     /// including this block. Does not require replaying
     /// in order to compute.
     block_id: Hash,
+
+    pub fn zeroes(allocator: std.mem.Allocator) !TowerSync {
+        return .{
+            .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        };
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11

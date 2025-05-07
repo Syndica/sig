@@ -13,7 +13,7 @@ const shortVecConfig = sig.bincode.shortvec.sliceConfig;
 
 pub const Transaction = struct {
     /// Signatures
-    signatures: []Signature,
+    signatures: []const Signature,
 
     /// The version, either legacy or v0.
     version: TransactionVersion,

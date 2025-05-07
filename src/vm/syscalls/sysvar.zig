@@ -63,8 +63,8 @@ pub fn getSysvar(
     const offset = registers.get(.r3);
     const length = registers.get(.r4);
 
-    const id_cost = std.math.divFloor(u64, 32, tc.compute_budget.cpi_bytes_per_unit) catch 0;
-    const buf_cost = std.math.divFloor(u64, length, tc.compute_budget.cpi_bytes_per_unit) catch 0;
+    const id_cost = 32 / tc.compute_budget.cpi_bytes_per_unit;
+    const buf_cost = length / tc.compute_budget.cpi_bytes_per_unit;
     const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
     try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
 
@@ -72,7 +72,7 @@ pub fn getSysvar(
     const id = (try memory_map.translateType(Pubkey, .constant, id_addr, check_aligned)).*;
     const value = try memory_map.translateSlice(u8, .mutable, value_addr, length, check_aligned);
 
-    const offset_len = std.math.add(u64, offset, length) catch
+    const offset_plus_len = std.math.add(u64, offset, length) catch
         return InstructionError.ProgramArithmeticOverflow;
     _ = std.math.add(u64, value_addr, length) catch
         return InstructionError.ProgramArithmeticOverflow;
@@ -81,7 +81,7 @@ pub fn getSysvar(
         return registers.set(.r0, SYSVAR_NOT_FOUND);
     };
 
-    if (buf.len < offset_len) {
+    if (buf.len < offset_plus_len) {
         return registers.set(.r0, OFFSET_LENGTH_EXCEEDS_SYSVAR);
     }
 

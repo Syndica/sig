@@ -220,7 +220,7 @@ fn dedupAndGroupShredsBySlot(
     for (shreds.items) |shred_packet| {
         const shred_id = try sig.ledger.shred.layout.getShredId(&shred_packet);
 
-        switch (deduper.dedup(&shred_id, &shred_packet.data, DEDUPER_MAX_DUPLICATE_COUNT)) {
+        switch (deduper.dedup(&shred_id, &shred_packet.buffer, DEDUPER_MAX_DUPLICATE_COUNT)) {
             .byte_duplicate => {
                 metrics.shred_byte_filtered_count.inc();
                 continue;
@@ -349,7 +349,7 @@ fn retransmitShreds(
                 children_with_addresses_count += 1;
                 try sender.send(Packet.init(
                     tvu_address.toEndpoint(),
-                    retransmit_info.shred_packet.data,
+                    retransmit_info.shred_packet.buffer,
                     retransmit_info.shred_packet.size,
                 ));
             }

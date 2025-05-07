@@ -8,7 +8,7 @@ const layout = sig.ledger.shred.layout;
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const KeyPair = sig.identity.KeyPair;
 const Socket = network.Socket;
 
 const Channel = sig.sync.Channel;
@@ -143,30 +143,77 @@ pub const ShredReceiver = struct {
 
     /// Handle a ping message and returns the repair message.
     fn handlePing(self: *const Self, packet: *const Packet) !?Packet {
+        return handlePingInner(self.allocator, packet, self.metrics, self.keypair);
+    }
+
+    fn handlePingInner(
+        allocator: std.mem.Allocator,
+        packet: *const Packet,
+        metrics: ShredReceiverMetrics,
+        keypair: *const KeyPair,
+    ) !?Packet {
         const repair_ping = bincode.readFromSlice(
-            self.allocator,
+            allocator,
             RepairPing,
-            &packet.data,
+            packet.data(),
             .{},
         ) catch {
-            self.metrics.ping_deserialize_fail_count.inc();
+            metrics.ping_deserialize_fail_count.inc();
             return null;
         };
-        const ping = repair_ping.Ping;
+        const ping = switch (repair_ping) {
+            .Ping => |ping| ping,
+        };
         ping.verify() catch {
-            self.metrics.ping_verify_fail_count.inc();
+            metrics.ping_verify_fail_count.inc();
             return null;
         };
-        self.metrics.valid_ping_count.inc();
-        const reply: RepairMessage = .{ .Pong = try Pong.init(&ping, self.keypair) };
+        metrics.valid_ping_count.inc();
 
-        var reply_packet = Packet.default();
-        const reply_bytes = try bincode.writeToSlice(&reply_packet.data, reply, .{});
-        reply_packet.size = reply_bytes.len;
-        reply_packet.addr = packet.addr;
-        return reply_packet;
+        const reply: RepairMessage = .{ .Pong = try Pong.init(&ping, keypair) };
+
+        return try Packet.initFromBincode(
+            sig.net.SocketAddr.fromEndpoint(&packet.addr),
+            reply,
+        );
     }
 };
+
+test "handlePing" {
+    const allocator = std.testing.allocator;
+    var metrics_registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer metrics_registry.deinit();
+
+    const shred_metrics = try metrics_registry.initStruct(ShredReceiverMetrics);
+
+    const my_keypair = try sig.identity.KeyPair.create(.{1} ** 32);
+    const ping = try Ping.init(.{1} ** 32, &my_keypair);
+    const pong = try Pong.init(&ping, &my_keypair);
+
+    const addr = sig.net.SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 88);
+    const input_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = ping });
+
+    const expected_pong_packet = try Packet.initFromBincode(addr, RepairMessage{ .Pong = pong });
+    const actual_pong_packet = try ShredReceiver.handlePingInner(
+        allocator,
+        &input_ping_packet,
+        shred_metrics,
+        &my_keypair,
+    );
+
+    try std.testing.expectEqual(expected_pong_packet, actual_pong_packet);
+
+    const evil_keypair = try sig.identity.KeyPair.create(.{64} ** 32);
+    var evil_ping = ping;
+    evil_ping.from = sig.core.Pubkey.fromPublicKey(&evil_keypair.public_key);
+    const evil_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = evil_ping });
+    try std.testing.expectEqual(null, try ShredReceiver.handlePingInner(
+        allocator,
+        &evil_ping_packet,
+        shred_metrics,
+        &evil_keypair,
+    ));
+}
 
 fn validateShred(
     packet: *const Packet,

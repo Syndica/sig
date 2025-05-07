@@ -26,7 +26,7 @@ const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
-const ThreadPoolTask = sig.utils.thread.ThreadPoolTask;
+const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
 const Batch = sig.sync.ThreadPool.Batch;
@@ -61,7 +61,7 @@ const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.time.getWallclockMs;
 const deinitMux = sig.sync.mux.deinitMux;
 
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = Packet.DATA_SIZE;
 const UNIQUE_PUBKEY_CAPACITY = sig.gossip.table.UNIQUE_PUBKEY_CAPACITY;
 const MAX_NUM_PULL_REQUESTS = sig.gossip.pull_request.MAX_NUM_PULL_REQUESTS;
 
@@ -461,19 +461,18 @@ pub const GossipService = struct {
         }
     }
 
-    const VerifyMessageTask = ThreadPoolTask(VerifyMessageEntry);
-    const VerifyMessageEntry = struct {
+    const VerifyMessageTask = struct {
         gossip_data_allocator: std.mem.Allocator,
         packet: Packet,
         verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
         logger: ScopedLogger,
 
-        pub fn callback(self: *VerifyMessageEntry) !void {
+        pub fn run(self: *VerifyMessageTask) !void {
             const packet = self.packet;
             var message = bincode.readFromSlice(
                 self.gossip_data_allocator,
                 GossipMessage,
-                packet.data[0..packet.size],
+                packet.data(),
                 bincode.Params.standard,
             ) catch |e| {
                 self.logger.err().logf("packet_verify: failed to deserialize: {s}", .{@errorName(e)});
@@ -518,18 +517,9 @@ pub const GossipService = struct {
             self.logger.debug().log("verifyPackets loop closed");
         }
 
-        const tasks = try VerifyMessageTask.init(self.allocator, VERIFY_PACKET_PARALLEL_TASKS);
-        defer self.allocator.free(tasks);
-
-        // pre-allocate all the tasks
-        for (tasks) |*task| {
-            task.entry = .{
-                .gossip_data_allocator = self.gossip_data_allocator,
-                .verified_incoming_channel = self.verified_incoming_channel,
-                .packet = undefined,
-                .logger = self.logger,
-            };
-        }
+        var pool = try HomogeneousThreadPool(VerifyMessageTask)
+            .initBorrowed(self.allocator, &self.thread_pool, VERIFY_PACKET_PARALLEL_TASKS);
+        defer pool.deinit(self.allocator);
 
         // loop until the previous service closes and triggers us to close
         while (true) {
@@ -540,26 +530,20 @@ pub const GossipService = struct {
 
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
-            var task_search_start_idx: usize = 0;
             while (self.packet_incoming_channel.tryReceive()) |packet| {
                 defer self.metrics.gossip_packets_received_total.inc();
 
-                const acquired_task_idx = VerifyMessageTask.awaitAndAcquireFirstAvailableTask(tasks, task_search_start_idx);
-                task_search_start_idx = (acquired_task_idx + 1) % tasks.len;
-
-                const task_ptr = &tasks[acquired_task_idx];
-                task_ptr.entry.packet = packet;
-                task_ptr.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
-
-                const batch = Batch.from(&task_ptr.task);
-                self.thread_pool.schedule(batch);
+                try pool.schedule(self.allocator, .{
+                    .gossip_data_allocator = self.gossip_data_allocator,
+                    .verified_incoming_channel = self.verified_incoming_channel,
+                    .packet = packet,
+                    .logger = self.logger,
+                });
             }
         }
 
-        for (tasks) |*task| {
-            task.blockUntilCompletion();
-            task.result catch |err| self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
-        }
+        pool.joinFallible() catch |err|
+            self.logger.err().logf("VerifyMessageTask encountered error: {s}", .{@errorName(err)});
     }
 
     // structs used in process_messages loop
@@ -1232,16 +1216,17 @@ pub const GossipService = struct {
         );
 
         // randomly include an entrypoint in the pull if we dont have their contact info
-        var entrypoint_index: i16 = -1;
-        if (self.entrypoints.items.len != 0) blk: {
-            const maybe_entrypoint_index = random.intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
-            if (self.entrypoints.items[maybe_entrypoint_index].info) |_| {
+        const entrypoint_index: ?u15 = blk: {
+            if (self.entrypoints.items.len == 0) break :blk null;
+            const maybe_entrypoint_index = random.uintLessThan(u15, @intCast(self.entrypoints.items.len));
+            if (self.entrypoints.items[maybe_entrypoint_index].info != null) {
                 // early exit - we already have the peer in our contact info
-                break :blk;
+                break :blk null;
             }
+
             // we dont have them so well add them to the peer list (as default contact info)
-            entrypoint_index = @intCast(maybe_entrypoint_index);
-        }
+            break :blk maybe_entrypoint_index;
+        };
 
         // filter out peers who have responded to pings
         const ping_cache_result = blk: {
@@ -1257,10 +1242,9 @@ pub const GossipService = struct {
         defer pings_to_send_out.deinit();
         try self.sendPings(pings_to_send_out.items);
 
-        const should_send_to_entrypoint = entrypoint_index != -1;
         const num_peers = valid_gossip_peer_indexs.items.len;
 
-        if (num_peers == 0 and !should_send_to_entrypoint) {
+        if (num_peers == 0 and entrypoint_index == null) {
             return error.NoPeers;
         }
 
@@ -1287,10 +1271,10 @@ pub const GossipService = struct {
         // build packet responses
         var n_packets: usize = 0;
         if (num_peers != 0) n_packets += filters.items.len;
-        if (should_send_to_entrypoint) n_packets += filters.items.len;
+        if (entrypoint_index != null) n_packets += filters.items.len;
 
         var packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
-        packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_packets);
+        packet_batch.appendNTimesAssumeCapacity(Packet.ANY_EMPTY, n_packets);
         var packet_index: usize = 0;
 
         // update wallclock and sign
@@ -1315,7 +1299,7 @@ pub const GossipService = struct {
                     const message: GossipMessage = .{ .PullRequest = .{ filter_i, my_contact_info_value } };
                     var packet = &packet_batch.items[packet_index];
 
-                    const bytes = try bincode.writeToSlice(&packet.data, message, bincode.Params{});
+                    const bytes = try bincode.writeToSlice(&packet.buffer, message, bincode.Params{});
                     packet.size = bytes.len;
                     packet.addr = gossip_addr.toEndpoint();
                     packet_index += 1;
@@ -1324,14 +1308,12 @@ pub const GossipService = struct {
         }
 
         // append entrypoint msgs
-        if (should_send_to_entrypoint) {
-            const entrypoint = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
+        if (entrypoint_index) |entrypoint_idx| {
+            const entrypoint = self.entrypoints.items[entrypoint_idx];
             for (filters.items) |filter| {
-                const message = GossipMessage{ .PullRequest = .{ filter, my_contact_info_value } };
-                var packet = &packet_batch.items[packet_index];
-                const bytes = try bincode.writeToSlice(&packet.data, message, bincode.Params{});
-                packet.size = bytes.len;
-                packet.addr = entrypoint.addr.toEndpoint();
+                const packet = &packet_batch.items[packet_index];
+                const message: GossipMessage = .{ .PullRequest = .{ filter, my_contact_info_value } };
+                try packet.populateFromBincode(entrypoint.addr, message);
                 packet_index += 1;
             }
         }
@@ -1541,9 +1523,9 @@ pub const GossipService = struct {
             const pong = try Pong.init(ping_message.ping, &self.my_keypair);
             const pong_message = GossipMessage{ .PongMessage = pong };
 
-            var packet = Packet.default();
+            var packet = Packet.ANY_EMPTY;
             const bytes_written = try bincode.writeToSlice(
-                &packet.data,
+                &packet.buffer,
                 pong_message,
                 bincode.Params.standard,
             );
@@ -1846,8 +1828,8 @@ pub const GossipService = struct {
             prune_data.sign(&self.my_keypair) catch return error.SignatureError;
             const msg = GossipMessage{ .PruneMessage = .{ self.my_pubkey, prune_data } };
 
-            var packet = Packet.default();
-            const written_slice = bincode.writeToSlice(&packet.data, msg, .{}) catch unreachable;
+            var packet = Packet.ANY_EMPTY;
+            const written_slice = bincode.writeToSlice(&packet.buffer, msg, .{}) catch unreachable;
             packet.size = written_slice.len;
             packet.addr = from_endpoint;
 
@@ -1995,13 +1977,9 @@ pub const GossipService = struct {
         pings: []const PingAndSocketAddr,
     ) error{ OutOfMemory, ChannelClosed, SerializationError }!void {
         for (pings) |ping_and_addr| {
-            const message = GossipMessage{ .PingMessage = ping_and_addr.ping };
-
-            var packet = Packet.default();
-            const serialized_ping = bincode.writeToSlice(&packet.data, message, .{}) catch return error.SerializationError;
-            packet.size = serialized_ping.len;
-            packet.addr = ping_and_addr.socket.toEndpoint();
-
+            const message: GossipMessage = .{ .PingMessage = ping_and_addr.ping };
+            const packet = Packet.initFromBincode(ping_and_addr.socket, message) catch
+                return error.SerializationError;
             try self.packet_outgoing_channel.send(packet);
             self.metrics.ping_messages_sent.add(1);
         }
@@ -2326,7 +2304,7 @@ pub fn getClusterEntrypoints(cluster: sig.core.Cluster) []const []const u8 {
     };
 }
 
-const TestingLogger = @import("../trace/log.zig").DirectPrintLogger;
+const TestingLogger = sig.trace.log.DirectPrintLogger;
 
 test "handle pong messages" {
     const allocator = std.testing.allocator;
@@ -2790,7 +2768,7 @@ test "handle pull request" {
             const message = try bincode.readFromSlice(
                 allocator,
                 GossipMessage,
-                response_packet.data[0..response_packet.size],
+                response_packet.data(),
                 bincode.Params.standard,
             );
             defer bincode.free(allocator, message);
@@ -2869,7 +2847,7 @@ test "test build prune messages and handle push messages" {
     const message = try bincode.readFromSlice(
         allocator,
         GossipMessage,
-        packet.data[0..packet.size],
+        packet.data(),
         bincode.Params.standard,
     );
     defer bincode.free(allocator, message);
@@ -2881,25 +2859,47 @@ test "test build prune messages and handle push messages" {
     gossip_service.shutdown();
 }
 
-test "build pull requests" {
-    const allocator = std.testing.allocator;
+test testBuildPullRequests {
     var prng = std.rand.DefaultPrng.init(91);
-    var my_keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    const my_keypair = try KeyPair.create(.{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+
     const contact_info = try localhostTestContactInfo(my_pubkey);
+    defer contact_info.deinit();
 
-    var test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+    try testBuildPullRequests(prng.random(), my_keypair, contact_info, null);
+    try testBuildPullRequests(
+        prng.random(),
+        my_keypair,
+        contact_info,
+        &.{contact_info.getSocket(.gossip).?},
+    );
+}
 
+fn testBuildPullRequests(
+    random: std.Random,
+    my_keypair: KeyPair,
+    contact_info: ContactInfo,
+    maybe_entrypoints: ?[]const SocketAddr,
+) !void {
+    const allocator = std.testing.allocator;
+
+    const test_logger = TestingLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     const logger = test_logger.logger();
 
-    var gossip_service = try GossipService.create(
-        allocator,
-        allocator,
-        contact_info,
-        my_keypair,
-        null,
-        logger,
-    );
+    const gossip_service = blk: {
+        const contact_info_clone = try contact_info.clone();
+        errdefer contact_info_clone.deinit();
+        break :blk try GossipService.create(
+            allocator,
+            allocator,
+            contact_info_clone,
+            my_keypair,
+            maybe_entrypoints,
+            logger,
+        );
+    };
     defer {
         gossip_service.shutdown();
         gossip_service.deinit();
@@ -2920,7 +2920,7 @@ test "build pull requests" {
         for (0..20) |i| {
             const rando_keypair = try KeyPair.create(null);
 
-            var lci = LegacyContactInfo.initRandom(prng.random());
+            var lci = LegacyContactInfo.initRandom(random);
             lci.id = Pubkey.fromPublicKey(&rando_keypair.public_key);
             lci.wallclock = now + 10 * i;
             lci.shred_version = contact_info.shred_version;
@@ -2931,14 +2931,14 @@ test "build pull requests" {
         }
     }
 
-    var packets = gossip_service.buildPullRequests(prng.random(), 2, now) catch |err| {
+    var packets = gossip_service.buildPullRequests(random, 2, now) catch |err| {
         std.log.err("\nThe failing now time is: '{d}'\n", .{now});
         return err;
     };
     defer packets.deinit();
 
     try std.testing.expect(packets.items.len > 1);
-    try std.testing.expect(!std.mem.eql(u8, &packets.items[0].data, &packets.items[1].data));
+    try std.testing.expect(!std.mem.eql(u8, packets.items[0].data(), packets.items[1].data()));
 }
 
 test "test build push messages" {
@@ -3277,7 +3277,7 @@ test "process contact info push packet" {
     // the ping message we sent, processed into a pong
     try std.testing.expectEqual(1, responder_channel.len());
     const out_packet = responder_channel.tryReceive().?;
-    const out_msg = try bincode.readFromSlice(std.testing.allocator, GossipMessage, &out_packet.data, .{});
+    const out_msg = try bincode.readFromSlice(std.testing.allocator, GossipMessage, out_packet.data(), .{});
     defer bincode.free(std.testing.allocator, out_msg);
     try std.testing.expect(out_msg == .PongMessage);
 
