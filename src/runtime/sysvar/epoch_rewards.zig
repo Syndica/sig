@@ -4,7 +4,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/epoch-rewards/src/lib.rs#L26
-pub const EpochRewards = struct {
+pub const EpochRewards = extern struct {
     /// The starting block height of the rewards distribution in the current
     /// epoch
     distribution_starting_block_height: u64,
@@ -20,7 +20,7 @@ pub const EpochRewards = struct {
     /// The total rewards points calculated for the current epoch, where points
     /// equals the sum of (delegated stake * credits observed) for all
     /// delegations
-    total_points: u128,
+    total_points: u128 align(16),
 
     /// The total rewards calculated for the current epoch. This may be greater
     /// than the total `distributed_rewards` at the end of the rewards period,
@@ -36,4 +36,14 @@ pub const EpochRewards = struct {
 
     pub const ID =
         Pubkey.parseBase58String("SysvarEpochRewards1111111111111111111111111") catch unreachable;
+
+    pub const DEFAULT = EpochRewards{
+        .distribution_starting_block_height = 0,
+        .num_partitions = 0,
+        .parent_blockhash = Hash.ZEROES,
+        .total_points = 0,
+        .total_rewards = 0,
+        .distributed_rewards = 0,
+        .active = false,
+    };
 };
