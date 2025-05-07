@@ -36,34 +36,88 @@ pub const VoteTracker = struct {
         .map = .{},
     };
 
-    pub const Map = std.AutoArrayHashMapUnmanaged(Slot, RwMuxSlotVoteTracker);
-    pub const RwMuxSlotVoteTracker = struct {
-        rwlock: std.Thread.RwLock,
-        tracker: SlotVoteTracker,
+    pub const Map = std.AutoArrayHashMapUnmanaged(Slot, *RcRwSlotVoteTracker);
+    pub const RcRwSlotVoteTracker = struct {
+        /// Must call `rc.acquire()` before sharing a reference to this slot vote tracker
+        /// with another thread. Should be done by any functions that directly get access
+        /// to a SVT, so that callers do not need to; a holder of a SVT needs to manage
+        /// the reference count appropriately after acquiring a SVT reference.
+        rc: sig.sync.ReferenceCounter,
+        tracker: sig.sync.RwMux(SlotVoteTracker),
 
-        pub const EMPTY_ZEROES: RwMuxSlotVoteTracker = .{
-            .rwlock = .{},
-            .tracker = SlotVoteTracker.EMPTY_ZEROES,
-        };
+        pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*RcRwSlotVoteTracker {
+            const self = try allocator.create(RcRwSlotVoteTracker);
+            self.* = .{
+                .rc = .{},
+                .tracker = sig.sync.RwMux(SlotVoteTracker).init(SlotVoteTracker.EMPTY_ZEROES),
+            };
+            return self;
+        }
+
+        /// Destroys `self` after freeing all of its resources if it is the last reference.
+        pub fn deinit(self: *RcRwSlotVoteTracker, allocator: std.mem.Allocator) void {
+            if (!self.rc.release()) return;
+            // can't unlock the rwmux, which is part of the freed memory,
+            // and in theory this is the only remaining reference anyway.
+            const tracker, _ = self.tracker.writeWithLock();
+            tracker.deinit(allocator);
+            allocator.destroy(self);
+        }
     };
 
     pub fn deinit(self: *VoteTracker, allocator: std.mem.Allocator) void {
         self.map_rwlock.lock();
         defer self.map_rwlock.unlock();
         const map = &self.map;
-        for (map.values()) |*svt| {
-            svt.rwlock.lock();
-            defer svt.rwlock.unlock();
-            svt.tracker.deinit(allocator);
+        for (map.values()) |rc_rw_svt| {
+            rc_rw_svt.deinit(allocator);
         }
         map.deinit(allocator);
     }
 
+    /// The caller is responsible for calling `.deinit(allocator)` on the result.
+    pub fn getOrInsertSlotTracker(
+        self: *VoteTracker,
+        allocator: std.mem.Allocator,
+        slot: Slot,
+    ) std.mem.Allocator.Error!*RcRwSlotVoteTracker {
+        blk: {
+            self.map_rwlock.lockShared();
+            defer self.map_rwlock.unlockShared();
+            const rc_rw_svt = self.map.get(slot) orelse break :blk;
+            // we acquired a lock on the map, this shouldn't be possible
+            std.debug.assert(rc_rw_svt.rc.acquire());
+            return rc_rw_svt;
+        }
+
+        self.map_rwlock.lock();
+        defer self.map_rwlock.unlock();
+
+        const gop = try self.map.getOrPut(allocator, slot);
+        errdefer std.debug.assert(self.map.pop().key == slot);
+
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try RcRwSlotVoteTracker.create(allocator);
+        }
+        // one reference for being in the map, another for the caller.
+        //
+        // we assert success because we just acquired a lock on the map,
+        // failure shouldn't be possible, because `deinit` and `purgeStaleState`
+        // would be waiting for the lock, meaning the one and only reference
+        // is still valid.
+        std.debug.assert(gop.value_ptr.*.rc.acquire());
+        return gop.value_ptr.*;
+    }
+
     /// TODO: investigate why this alias even exists in the agave code
-    const progressWithNewRootBank = purgeStaleState;
+    pub const progressWithNewRootBank = purgeStaleState;
 
     /// Purge any outdated slot data
-    fn purgeStaleState(self: *VoteTracker, new_root_bank_slot: Slot) void {
+    pub fn purgeStaleState(
+        self: *VoteTracker,
+        allocator: std.mem.Allocator,
+        new_root_bank_slot: Slot,
+    ) void {
         self.map_rwlock.lock();
         defer self.map_rwlock.unlock();
         const map = &self.map;
@@ -72,7 +126,7 @@ pub const VoteTracker = struct {
         outer: while (start_idx != map.count()) {
             for (map.keys()[start_idx..], start_idx..) |slot, i| {
                 if (slot >= new_root_bank_slot) continue;
-                std.debug.assert(map.swapRemove(slot));
+                map.fetchSwapRemove(slot).?.value.deinit(allocator);
                 start_idx = i;
                 continue :outer;
             }
@@ -94,16 +148,21 @@ pub const VoteTracker = struct {
 
         const gop = try map.getOrPut(allocator, slot);
         errdefer if (!gop.found_existing) std.debug.assert(map.pop().key == slot);
-        if (!gop.found_existing) gop.value_ptr.* = RwMuxSlotVoteTracker.EMPTY_ZEROES;
-        const w_slot_vote_tracker = &gop.value_ptr.tracker;
+        if (!gop.found_existing) gop.value_ptr.* = try RcRwSlotVoteTracker.create(allocator);
+        errdefer if (!gop.found_existing) gop.value_ptr.*.deinit(allocator);
+
+        const slot_vote_tracker, //
+        var slot_vote_tracker_lg //
+        = gop.value_ptr.*.tracker.writeWithLock();
+        defer slot_vote_tracker_lg.unlock();
 
         map.lockPointers();
         defer map.unlockPointers();
 
-        const voted = &w_slot_vote_tracker.voted;
+        const voted = &slot_vote_tracker.voted;
         errdefer if (!gop.found_existing) voted.deinit(allocator);
 
-        const voted_slot_updates = w_slot_vote_tracker.initAndOrGetUpdates();
+        const voted_slot_updates = slot_vote_tracker.initAndOrGetUpdates();
         errdefer if (!gop.found_existing) voted_slot_updates.deinit(allocator);
 
         if (!voted.contains(pubkey)) try voted.ensureUnusedCapacity(allocator, 1);
@@ -150,6 +209,16 @@ pub const SlotVoteTracker = struct {
         const vsu = self.voted_slot_updates orelse return null;
         self.voted_slot_updates = null;
         return vsu;
+    }
+
+    pub fn getOrInsertOptimisticVotesTracker(
+        self: *SlotVoteTracker,
+        allocator: std.mem.Allocator,
+        hash: Hash,
+    ) std.mem.Allocator.Error!*VoteStakeTracker {
+        const gop = try self.optimistic_votes_tracker.getOrPut(allocator, hash);
+        if (!gop.found_existing) gop.value_ptr.* = VoteStakeTracker.EMPTY_ZEROES;
+        return gop.value_ptr;
     }
 };
 
