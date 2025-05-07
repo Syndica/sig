@@ -1884,8 +1884,10 @@ pub fn verifyAndGetVoteState(
     return vote_state;
 }
 
-test "AuthorizeVoters.deserialize" {
-    const data_0 = &[_]u8{
+test "AuthorizeVoters.serialize" {
+    const allocator = std.testing.allocator;
+
+    const agave_bytes = &[_]u8{
         3, 0, 0, 0, 0, 0, 0, 0,
 
         0, 0, 0, 0, 0, 0, 0, 0,
@@ -1909,19 +1911,19 @@ test "AuthorizeVoters.deserialize" {
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0,
     };
-    const allocator = std.testing.allocator;
+
     const authorized_voters = try sig.bincode.readFromSlice(
         allocator,
         AuthorizedVoters,
-        data_0,
+        agave_bytes,
         .{},
     );
     defer authorized_voters.deinit();
-    try std.testing.expectEqual(3, authorized_voters.count());
 
-    const data_1 = try sig.bincode.writeAlloc(allocator, authorized_voters, .{});
-    defer allocator.free(data_1);
-    try std.testing.expectEqualSlices(u8, data_0, data_1);
+    const sig_bytes = try sig.bincode.writeAlloc(allocator, authorized_voters, .{});
+    defer allocator.free(sig_bytes);
+
+    try std.testing.expectEqualSlices(u8, agave_bytes, sig_bytes);
 }
 
 test "Lockout.lockout" {
