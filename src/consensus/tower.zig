@@ -324,13 +324,18 @@ pub const ReplayTower = struct {
         // TODO expose feature set on Bank
         const is_enable_tower_active = true;
 
-        return try self.recordBankVoteAndUpdateLockouts(
-            allocator,
+        const new_root = try self.tower.recordBankVoteAndUpdateLockouts(
             bank_fields.slot,
+        );
+
+        try self.updateLastVoteFromVoteState(
+            allocator,
             bank_fields.hash,
             is_enable_tower_active,
             block_id,
         );
+
+        return new_root;
     }
 
     pub fn updateLastVoteFromVoteState(
@@ -1650,6 +1655,29 @@ pub const Tower = struct {
     // boot
     fn initializeRoot(self: *Tower, root_slot: Slot) void {
         self.vote_state.root_slot = root_slot;
+    }
+
+    fn recordBankVoteAndUpdateLockouts(
+        self: *Tower,
+        vote_slot: Slot,
+    ) !?Slot {
+        if (self.vote_state.lastVotedSlot()) |last_voted_sot| {
+            if (vote_slot <= last_voted_sot) {
+                return error.VoteTooOld;
+            }
+        }
+
+        const old_root = try self.getRoot();
+
+        try self.vote_state.processNextVoteSlot(vote_slot);
+
+        const new_root = try self.getRoot();
+
+        if (old_root != new_root) {
+            return new_root;
+        } else {
+            return null;
+        }
     }
 
     pub fn towerSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
