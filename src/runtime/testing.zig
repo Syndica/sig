@@ -18,6 +18,7 @@ const SlotContext = sig.runtime.transaction_context.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
+const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub const ExecuteContextsParams = struct {
@@ -133,6 +134,7 @@ pub fn createExecutionContexts(
         .compute_meter = params.compute_meter,
         .compute_budget = params.compute_budget,
         .custom_error = params.custom_error,
+        .rent = Rent.DEFAULT,
         .log_collector = params.log_collector,
         .prev_blockhash = params.prev_blockhash,
         .prev_lamports_per_signature = params.prev_lamports_per_signature,

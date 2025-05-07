@@ -15,6 +15,7 @@ const SlotContext = sig.runtime.transaction_context.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const FeatureSet = sig.runtime.FeatureSet;
 const Hash = sig.core.Hash;
+const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub fn main() !void {
@@ -66,6 +67,7 @@ pub fn main() !void {
         .accounts_resize_delta = 0,
         .return_data = .{},
         .custom_error = null,
+        .rent = Rent.DEFAULT,
         .log_collector = null,
         .compute_meter = cmd.limit,
         .prev_blockhash = Hash.ZEROES,
