@@ -294,6 +294,7 @@ fn makeTransactionContext(
         .accounts_resize_delta = 0,
         .compute_meter = compute_budget.compute_unit_limit,
         .custom_error = null,
+        .rent = env.rent_collector.rent,
         // 100KiB max log (we need *a* limit, but this is arbitrary)
         .log_collector = sig.runtime.LogCollector.init(100 * 1024),
         .prev_blockhash = env.prev_blockhash,
