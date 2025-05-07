@@ -310,6 +310,7 @@ pub const ReplayTower = struct {
         self.last_vote_tx_blockhash = .hot_spare;
     }
 
+    /// Record the vote in the tower and keep track of the last vote.
     pub fn recordBankVote(
         self: *ReplayTower,
         allocator: std.mem.Allocator,
@@ -483,6 +484,20 @@ pub const ReplayTower = struct {
         return null;
     }
 
+    /// Determines whether the validator is allowed to switch forks by evaluating
+    /// the stake-weighted lockouts between the last voted slot and a candidate switch slot.
+    ///
+    /// It requires gathering of stake information from other validators’ lockouts to justify switching to a
+    /// different fork. It ensures safety by preventing forks from being abandoned prematurely.
+    ///
+    /// Returns a `SwitchForkDecision`, which indicates whether:
+    /// - The switch is on the same fork (no switch required).
+    /// - The switch is allowed (enough stake supports the fork change).
+    /// - The switch is rejected (insufficient locked-out stake).
+    /// - The last vote was purged due to duplication, allowing a fallback.
+    ///
+    /// Note that this function is purely computational. It Computes and
+    /// returns a SwitchForkDecision. No side effects or state update.
     pub fn makeCheckSwitchThresholdDecision(
         self: *const ReplayTower,
         allocator: std.mem.Allocator,
@@ -793,6 +808,8 @@ pub const ReplayTower = struct {
         return SwitchForkDecision{ .failed_switch_threshold = .{ locked_out_stake, total_stake } };
     }
 
+    /// Calls the makeCheckSwitchThresholdDecision and stores the result in
+    /// ReplayTower.last_switch_threshold_check if the result is different from the last check.
     pub fn checkSwitchThreshold(
         self: *ReplayTower,
         allocator: std.mem.Allocator,
@@ -834,6 +851,11 @@ pub const ReplayTower = struct {
         return self.last_switch_threshold_check == null;
     }
 
+    /// Checks whether voting for the given `slot` meets various stake threshold conditions.
+    /// Returns an array of failed `ThresholdDecision`s, if any.
+    ///
+    /// This is used to experiment with vote lockout behavior and assess whether a vote is
+    /// justified based on recent vote history, lockout depth, and voting stake.
     pub fn checkVoteStakeThresholds(
         self: *ReplayTower,
         allocator: std.mem.Allocator,
@@ -888,8 +910,12 @@ pub const ReplayTower = struct {
             self.stray_restored_slot == self.lastVotedSlot());
     }
 
-    ///  The tower root can be older/newer if the validator booted from a newer/older snapshot, so
-    /// tower lockouts may need adjustment
+    /// Adjusts the tower's lockouts after a replay of the blockstore up to `replayed_root`.
+    /// This helps synchronize the in-memory tower state with the on-disk ledger history,
+    /// particularly after a validator restart or divergence.
+    ///
+    /// The tower root can be older/newer if the validator booted from a newer/older snapshot, so
+    /// tower lockouts may need adjustment.
     pub fn adjustLockoutsAfterReplay(
         self: *ReplayTower,
         allocator: std.mem.Allocator,
@@ -991,6 +1017,10 @@ pub const ReplayTower = struct {
         }
     }
 
+    /// Ensures that the ReplayTower's lockouts are consistent with the provided
+    /// `slot_history`.
+    ///
+    /// On success, the tower's lockouts are reinitialized to match blockstore state.
     fn adjustLockoutsWithSlotHistory(
         self: *ReplayTower,
         allocator: std.mem.Allocator,
