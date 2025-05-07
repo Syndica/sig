@@ -9,45 +9,12 @@ const sig = @import("../sig.zig");
 
 const vote_program = sig.runtime.program.vote;
 
-const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Transaction = sig.core.Transaction;
 
-// #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-pub const VoteTransaction = union(enum) {
-    vote: sig.runtime.program.vote_program.state.Vote,
-    vote_state_update: sig.runtime.program.vote_program.state.VoteStateUpdate,
-    // #[serde(with = "serde_compact_vote_state_update")]
-    compact_vote_state_update: sig.runtime.program.vote_program.state.VoteStateUpdate,
-    // #[serde(with = "serde_tower_sync")]
-    tower_sync: sig.runtime.program.vote_program.state.TowerSync,
-
-    pub fn deinit(self: VoteTransaction, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .vote => |vote| vote.deinit(allocator),
-            .vote_state_update => |vsu| vsu.deinit(allocator),
-            .compact_vote_state_update => |cvsu| cvsu.deinit(allocator),
-            .tower_sync => |ts| ts.deinit(allocator),
-        }
-    }
-
-    pub fn lastVotedSlot(self: VoteTransaction) ?Slot {
-        return switch (self) {
-            .vote => |vote| if (vote.slots.len != 0) vote.slots[vote.slots.len - 1] else null,
-            inline //
-            .vote_state_update,
-            .compact_vote_state_update,
-            .tower_sync,
-            => |vsu_or_ts| blk: {
-                const lockouts = vsu_or_ts.lockouts.items;
-                if (lockouts.len == 0) break :blk null;
-                break :blk lockouts[lockouts.len - 1].slot;
-            },
-        };
-    }
-};
+const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 
 pub const ParsedVote = struct {
     key: Pubkey,
