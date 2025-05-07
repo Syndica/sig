@@ -242,17 +242,12 @@ pub const ReplayTower = struct {
     }
 
     pub fn lastVotedSlot(self: *const ReplayTower) ?Slot {
-        return if (self.last_vote.isEmpty())
-            null
-        else
-            self.last_vote.slot(self.last_vote.len() - 1);
+        return self.last_vote.lastVotedSlot();
     }
 
     pub fn lastVotedSlotHash(self: *const ReplayTower) ?SlotAndHash {
-        return if (self.lastVotedSlot()) |last_voted_slot|
-            .{ .slot = last_voted_slot, .hash = self.last_vote.hash() }
-        else
-            null;
+        const last_voted_slot = self.last_vote.lastVotedSlot() orelse return null;
+        return .{ .slot = last_voted_slot, .hash = self.last_vote.getHash() };
     }
 
     fn maybeTimestamp(self: *ReplayTower, current_slot: Slot) ?UnixTimestamp {
