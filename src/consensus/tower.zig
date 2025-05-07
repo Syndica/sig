@@ -1581,6 +1581,77 @@ pub const Tower = struct {
         return tower;
     }
 
+    fn initializeLockoutsFromBank(
+        self: *Tower,
+        allocator: std.mem.Allocator,
+        vote_account_pubkey: *const Pubkey,
+        fork_root: Slot,
+        accounts_db: *AccountsDB,
+    ) !void {
+        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch {
+            self.initializeRoot(fork_root);
+            return;
+        };
+
+        const vote_state = try stateFromAccount(
+            allocator,
+            &vote_account,
+            vote_account_pubkey,
+        );
+
+        var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
+            allocator,
+            vote_state.votes.items.len,
+        );
+        for (vote_state.votes.items) |landed| {
+            try lockouts.append(
+                allocator,
+                Lockout{
+                    .slot = landed.lockout.slot,
+                    .confirmation_count = landed.lockout.confirmation_count,
+                },
+            );
+        }
+        self.vote_state = TowerVoteState{
+            .votes = try std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY)
+                .fromSlice(try lockouts.toOwnedSlice(allocator)),
+            .root_slot = vote_state.root_slot,
+        };
+        self.initializeRoot(fork_root);
+
+        var flags = try std.DynamicBitSetUnmanaged.initEmpty(
+            allocator,
+            self.vote_state.votes.len,
+        );
+        defer flags.deinit(allocator);
+
+        for (self.vote_state.votes.constSlice(), 0..) |vote, i| {
+            flags.setValue(i, vote.slot > fork_root);
+        }
+
+        try self.initializeLockouts(flags);
+    }
+
+    fn initializeLockouts(
+        self: *Tower,
+        should_retain: std.DynamicBitSetUnmanaged,
+    ) !void {
+        std.debug.assert(should_retain.capacity() >= self.vote_state.votes.len);
+        var retained = try std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY).init(0);
+        for (self.vote_state.votes.constSlice(), 0..) |item, i| {
+            if (should_retain.isSet(i)) {
+                _ = try retained.append(item);
+            }
+        }
+        self.vote_state.votes = retained;
+    }
+
+    // Updating root is needed to correctly restore from newly-saved tower for the next
+    // boot
+    fn initializeRoot(self: *Tower, root_slot: Slot) void {
+        self.vote_state.root_slot = root_slot;
+    }
+
     pub fn towerSlots(self: *const Tower, allocator: std.mem.Allocator) ![]Slot {
         var slots = try allocator.alloc(Slot, self.vote_state.votes.len);
         for (self.vote_state.votes.constSlice(), 0..) |vote, i| {
@@ -1808,77 +1879,6 @@ pub const Tower = struct {
         }
 
         return;
-    }
-
-    fn initializeLockoutsFromBank(
-        self: *Tower,
-        allocator: std.mem.Allocator,
-        vote_account_pubkey: *const Pubkey,
-        fork_root: Slot,
-        accounts_db: *AccountsDB,
-    ) !void {
-        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch {
-            self.initializeRoot(fork_root);
-            return;
-        };
-
-        const vote_state = try stateFromAccount(
-            allocator,
-            &vote_account,
-            vote_account_pubkey,
-        );
-
-        var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
-            allocator,
-            vote_state.votes.items.len,
-        );
-        for (vote_state.votes.items) |landed| {
-            try lockouts.append(
-                allocator,
-                Lockout{
-                    .slot = landed.lockout.slot,
-                    .confirmation_count = landed.lockout.confirmation_count,
-                },
-            );
-        }
-        self.vote_state = TowerVoteState{
-            .votes = try std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY)
-                .fromSlice(try lockouts.toOwnedSlice(allocator)),
-            .root_slot = vote_state.root_slot,
-        };
-        self.initializeRoot(fork_root);
-
-        var flags = try std.DynamicBitSetUnmanaged.initEmpty(
-            allocator,
-            self.vote_state.votes.len,
-        );
-        defer flags.deinit(allocator);
-
-        for (self.vote_state.votes.constSlice(), 0..) |vote, i| {
-            flags.setValue(i, vote.slot > fork_root);
-        }
-
-        try self.initializeLockouts(flags);
-    }
-
-    fn initializeLockouts(
-        self: *Tower,
-        should_retain: std.DynamicBitSetUnmanaged,
-    ) !void {
-        std.debug.assert(should_retain.capacity() >= self.vote_state.votes.len);
-        var retained = try std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY).init(0);
-        for (self.vote_state.votes.constSlice(), 0..) |item, i| {
-            if (should_retain.isSet(i)) {
-                _ = try retained.append(item);
-            }
-        }
-        self.vote_state.votes = retained;
-    }
-
-    // Updating root is needed to correctly restore from newly-saved tower for the next
-    // boot
-    fn initializeRoot(self: *Tower, root_slot: Slot) void {
-        self.vote_state.root_slot = root_slot;
     }
 
     pub fn restore(
