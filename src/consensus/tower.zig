@@ -347,15 +347,12 @@ pub const Tower = struct {
     }
 
     pub fn lastVotedSlot(self: *const Tower) ?Slot {
-        return if (self.last_vote.isEmpty())
-            null
-        else
-            self.last_vote.slot(self.last_vote.len() - 1);
+        return self.last_vote.lastVotedSlot();
     }
 
     pub fn lastVotedSlotHash(self: *const Tower) ?SlotAndHash {
         return if (self.lastVotedSlot()) |last_voted_slot|
-            .{ .slot = last_voted_slot, .hash = self.last_vote.hash() }
+            .{ .slot = last_voted_slot, .hash = self.last_vote.getHash() }
         else
             null;
     }
