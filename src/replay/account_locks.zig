@@ -11,6 +11,13 @@ pub const AccountLocks = struct {
 
     const LockError = Allocator.Error || error{LockFailed};
 
+    pub fn deinit(self: AccountLocks, allocator: Allocator) void {
+        var write_locks = self.write_locks;
+        var readonly_locks = self.readonly_locks;
+        write_locks.deinit(allocator);
+        readonly_locks.deinit(allocator);
+    }
+
     /// Either locks all accounts, or locks none and returns an error.
     ///
     /// This function does not allow there to be any inner conflicts. In other
@@ -33,14 +40,19 @@ pub const AccountLocks = struct {
                 const entry = try self.write_locks.getOrPut(allocator, address);
                 if (entry.found_existing) {
                     return error.LockFailed;
+                } else {
+                    entry.value_ptr.* = 1;
                 }
-                entry.value_ptr.* += 1;
             } else {
                 if (self.write_locks.contains(address)) {
                     return error.LockFailed;
                 }
                 const entry = try self.readonly_locks.getOrPut(allocator, address);
-                entry.value_ptr.* += 1;
+                if (entry.found_existing) {
+                    entry.value_ptr.* += 1;
+                } else {
+                    entry.value_ptr.* = 1;
+                }
             }
         }
     }
@@ -71,11 +83,13 @@ pub const AccountLocks = struct {
         for (accounts, 0..) |account, i| {
             errdefer std.debug.assert(0 == self.unlock(accounts[0..i]));
             const address, const write = account;
-            if (write) {
-                _ = try self.write_locks.getOrPut(allocator, address);
-            } else {
-                const entry = try self.readonly_locks.getOrPut(allocator, address);
+            const locks = if (write) &self.write_locks else &self.readonly_locks;
+
+            const entry = try locks.getOrPut(allocator, address);
+            if (entry.found_existing) {
                 entry.value_ptr.* += 1;
+            } else {
+                entry.value_ptr.* = 1;
             }
         }
     }
@@ -90,14 +104,24 @@ pub const AccountLocks = struct {
         var already_unlocked: u64 = 0;
         for (accounts) |account| {
             const address, const write = account;
-            if (write) {
-                // if (!self.write_locks.swapRemove(address)) already_unlocked += 1;
-                already_unlocked += unlockOneGeneric(&self.write_locks, address);
-            } else {
-                already_unlocked += unlockOneGeneric(&self.readonly_locks, address);
-            }
+            const locks = if (write) &self.write_locks else &self.readonly_locks;
+            already_unlocked += unlockOneGeneric(locks, address);
         }
         return already_unlocked;
+    }
+
+    /// assumes that
+    fn lockOneGeneric(
+        allocator: Allocator,
+        locks: *std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+        address: Pubkey,
+    ) u64 {
+        const entry = try locks.getOrPut(allocator, address);
+        if (entry.found_existing) {
+            entry.value_ptr.* = 1;
+        } else {
+            entry.value_ptr.* += 1;
+        }
     }
 
     /// returns 0 if it was still locked, 1 if it was already unlocked.
@@ -121,3 +145,110 @@ pub const AccountLocks = struct {
         return 0;
     }
 };
+
+const expectError = std.testing.expectError;
+const expectEqual = std.testing.expectEqual;
+
+const test_keys = [_]Pubkey{
+    Pubkey.parseBase58String("3Thhhj3omvVFfbhEHdFe8djwDZT5oS6BQ4k5KrZkYt1r") catch unreachable,
+    Pubkey.parseBase58String("DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL") catch unreachable,
+    Pubkey.parseBase58String("9fRXX5Bj3XWfCHtVkYtQVvMnAfoy4KjcpgHTBSmymzRu") catch unreachable,
+    Pubkey.parseBase58String("5BUYHtAdv2rUM73A8iEWQ4hcVQXCRE8VrQFR39DKaWW8") catch unreachable,
+    Pubkey.parseBase58String("9jo7RYY8HgxpU3Zs5zPFyRAkcUtx8J5RHc2fN9Btxfmi") catch unreachable,
+    Pubkey.parseBase58String("FZgqDx8Guf649hif1WVuTb6mTV2LhotUFE12PYveAbC8") catch unreachable,
+    Pubkey.parseBase58String("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4") catch unreachable,
+    Pubkey.parseBase58String("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA") catch unreachable,
+};
+
+test "locking/unlocking basically works" {
+    const allocator = std.testing.allocator;
+    var locks = AccountLocks{};
+    defer locks.deinit(allocator);
+
+    inline for (.{ AccountLocks.lockStrict, AccountLocks.lockPermissive }) |lockFn| {
+        try lockFn(&locks, allocator, &.{
+            .{ test_keys[0], true },
+            .{ test_keys[1], false },
+            .{ test_keys[1], false },
+        });
+        try lockFn(&locks, allocator, &.{
+            .{ test_keys[1], false },
+        });
+
+        try expectError(error.LockFailed, lockFn(&locks, allocator, &.{
+            .{ test_keys[0], false },
+        }));
+        try expectError(error.LockFailed, lockFn(&locks, allocator, &.{
+            .{ test_keys[0], true },
+        }));
+        try expectError(error.LockFailed, lockFn(&locks, allocator, &.{
+            .{ test_keys[2], false },
+            .{ test_keys[3], true },
+            .{ test_keys[1], true },
+        }));
+
+        try expectEqual(0, locks.unlock(&.{
+            .{ test_keys[0], true },
+            .{ test_keys[1], false },
+            .{ test_keys[1], false },
+            .{ test_keys[1], false },
+        }));
+
+        try lockFn(&locks, allocator, &.{
+            .{ test_keys[0], true },
+        });
+
+        try expectEqual(0, locks.unlock(&.{
+            .{ test_keys[0], true },
+        }));
+
+        try expectEqual(6, locks.unlock(&.{
+            .{ test_keys[0], true },
+            .{ test_keys[1], false },
+            .{ test_keys[1], false },
+            .{ test_keys[1], false },
+            .{ test_keys[2], false },
+            .{ test_keys[3], true },
+        }));
+    }
+}
+
+test "lockStrict is strict" {
+    const allocator = std.testing.allocator;
+    var locks = AccountLocks{};
+    defer locks.deinit(allocator);
+
+    try expectError(error.LockFailed, locks.lockStrict(allocator, &.{
+        .{ test_keys[0], true },
+        .{ test_keys[0], true },
+    }));
+    try expectError(error.LockFailed, locks.lockStrict(allocator, &.{
+        .{ test_keys[0], true },
+        .{ test_keys[0], false },
+    }));
+
+    try expectEqual(0, locks.write_locks.count());
+    try expectEqual(0, locks.readonly_locks.count());
+}
+
+test "lockPermissive is permissive" {
+    const allocator = std.testing.allocator;
+    var locks = AccountLocks{};
+    defer locks.deinit(allocator);
+
+    try locks.lockPermissive(allocator, &.{
+        .{ test_keys[0], true },
+        .{ test_keys[0], true },
+    });
+    try locks.lockPermissive(allocator, &.{
+        .{ test_keys[1], true },
+        .{ test_keys[1], false },
+    });
+
+    try expectEqual(0, locks.unlock(&.{
+        .{ test_keys[0], true },
+        .{ test_keys[0], true },
+        .{ test_keys[1], true },
+        .{ test_keys[1], false },
+    }));
+}
