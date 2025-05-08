@@ -24,14 +24,13 @@ pub const VoteTracker = struct {
 
     /// Map from a slot to a set of validators who have voted for that slot.
     /// See the doc comment on `map_rwlock` for commentary on accessing this field and its contents.
-    map: Map,
+    map: std.AutoArrayHashMapUnmanaged(Slot, *RcRwSlotVoteTracker),
 
     pub const EMPTY: VoteTracker = .{
         .map_rwlock = .{},
         .map = .{},
     };
 
-    pub const Map = std.AutoArrayHashMapUnmanaged(Slot, *RcRwSlotVoteTracker);
     pub const RcRwSlotVoteTracker = struct {
         /// Must call `rc.acquire()` before sharing a reference to this slot vote tracker
         /// with another thread. Should be done by any functions that directly get access
