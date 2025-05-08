@@ -60,8 +60,7 @@ pub const VoteTracker = struct {
     };
 
     pub fn deinit(self: *VoteTracker, allocator: std.mem.Allocator) void {
-        self.map_rwlock.lock();
-        defer self.map_rwlock.unlock();
+        std.debug.assert(self.map_rwlock.tryLock());
         const map = &self.map;
         for (map.values()) |rc_rw_svt| {
             rc_rw_svt.deinit(allocator);
