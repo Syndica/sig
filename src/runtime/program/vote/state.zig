@@ -10,7 +10,6 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMap;
-const RingBuffer = sig.utils.collections.RingBuffer;
 
 const Clock = sig.runtime.sysvar.Clock;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
@@ -142,6 +141,83 @@ pub const VoteStateUpdate = struct {
     }
 };
 
+pub fn serializeCompactVoteStateUpdate(
+    writer: anytype,
+    data: anytype,
+    _: sig.bincode.Params,
+) anyerror!void {
+    // Calculate lockout offsets
+    var slot = data.root orelse 0;
+    var lockouts = std.BoundedArray(struct {
+        Slot,
+        u8,
+    }, MAX_LOCKOUT_HISTORY){};
+    for (data.lockouts.items) |lockout| {
+        lockouts.appendAssumeCapacity(.{
+            std.math.sub(Slot, lockout.slot, slot) catch
+                return error.InvalidVoteLockout,
+            std.math.cast(u8, lockout.confirmation_count) orelse
+                return error.InvalidConfirmationCount,
+        });
+        slot = lockout.slot;
+    }
+
+    // Serialize in compact format
+    try writer.writeInt(Slot, data.root orelse 0, std.builtin.Endian.little);
+    try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
+    for (lockouts.constSlice()) |lockout| {
+        try sig.bincode.varint.serializeShortU16(writer, @intCast(lockout[0]));
+        try writer.writeInt(u8, @intCast(lockout[1]), std.builtin.Endian.little);
+    }
+    try writer.writeAll(&data.hash.data);
+    if (data.timestamp) |timestamp| {
+        try writer.writeInt(u8, 1, std.builtin.Endian.little);
+        try writer.writeInt(i64, timestamp, std.builtin.Endian.little);
+    } else {
+        try writer.writeInt(u8, 0, std.builtin.Endian.little);
+    }
+}
+
+pub fn deserializeCompactVoteStateUpdate(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    _: sig.bincode.Params,
+) anyerror!VoteStateUpdate {
+    var root = try reader.readInt(Slot, std.builtin.Endian.little);
+    root = if (root == std.math.maxInt(Slot)) 0 else root;
+
+    var slot = if (root == std.math.maxInt(Slot)) 0 else root;
+    const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
+    const lockouts = try allocator.alloc(Lockout, lockouts_len);
+    errdefer allocator.free(lockouts);
+    for (lockouts) |*lockout| {
+        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(
+            allocator,
+            reader,
+            .{},
+        );
+        const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
+        slot = try std.math.add(Slot, slot, offset);
+        lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
+    }
+
+    var hash = Hash.ZEROES;
+    if (try reader.readAll(&hash.data) != Hash.SIZE) return error.NoBytesLeft;
+
+    const timestamp = switch (try reader.readInt(u8, std.builtin.Endian.little)) {
+        0 => null,
+        1 => try reader.readInt(i64, std.builtin.Endian.little),
+        else => return error.InvalidOptionalTimestamp,
+    };
+
+    return VoteStateUpdate{
+        .lockouts = .{ .items = lockouts, .capacity = lockouts_len },
+        .root = root,
+        .hash = hash,
+        .timestamp = timestamp,
+    };
+}
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L232
 pub const TowerSync = struct {
     /// The proposed tower
@@ -168,9 +244,95 @@ pub const TowerSync = struct {
     }
 };
 
+pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params) anyerror!void {
+    // Calculate lockout offsets
+    var slot = data.root orelse 0;
+    var lockouts = std.BoundedArray(struct {
+        Slot,
+        u8,
+    }, MAX_LOCKOUT_HISTORY){};
+    for (data.lockouts.items) |lockout| {
+        lockouts.appendAssumeCapacity(.{
+            std.math.sub(Slot, lockout.slot, slot) catch
+                return error.InvalidVoteLockout,
+            std.math.cast(u8, lockout.confirmation_count) orelse
+                return error.InvalidConfirmationCount,
+        });
+        slot = lockout.slot;
+    }
+
+    // Serialize in compact format
+    try writer.writeInt(Slot, data.root orelse 0, std.builtin.Endian.little);
+    try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
+    for (lockouts.constSlice()) |lockout| {
+        try sig.bincode.varint.var_int_config_u64.serializer.?(
+            writer,
+            lockout[0],
+            .{},
+        );
+        try writer.writeInt(u8, lockout[1], std.builtin.Endian.little);
+    }
+    try writer.writeAll(&data.hash.data);
+    if (data.timestamp) |timestamp| {
+        try writer.writeInt(u8, 1, std.builtin.Endian.little);
+        try writer.writeInt(i64, timestamp, std.builtin.Endian.little);
+    } else {
+        try writer.writeInt(u8, 0, std.builtin.Endian.little);
+    }
+    try writer.writeAll(&data.block_id.data);
+}
+
+pub fn deserializeTowerSync(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    _: sig.bincode.Params,
+) anyerror!TowerSync {
+    const root = try reader.readInt(Slot, std.builtin.Endian.little);
+
+    var slot = if (root == std.math.maxInt(Slot)) 0 else root;
+    const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
+    const lockouts = try allocator.alloc(Lockout, lockouts_len);
+    errdefer allocator.free(lockouts);
+    for (lockouts) |*lockout| {
+        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(
+            allocator,
+            reader,
+            .{},
+        );
+        const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
+        slot = try std.math.add(Slot, slot, offset);
+        lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
+    }
+
+    var hash = Hash.ZEROES;
+    if (try reader.readAll(&hash.data) != Hash.SIZE) return error.NoBytesLeft;
+
+    const timestamp = switch (try reader.readInt(u8, std.builtin.Endian.little)) {
+        0 => null,
+        1 => try reader.readInt(i64, std.builtin.Endian.little),
+        else => return error.InvalidOptionalTimestamp,
+    };
+
+    var block_id = Hash.ZEROES;
+    if (try reader.readAll(&block_id.data) != Hash.SIZE) return error.NoBytesLeft;
+
+    return TowerSync{
+        .lockouts = .{ .items = lockouts, .capacity = lockouts_len },
+        .root = root,
+        .hash = hash,
+        .timestamp = timestamp,
+        .block_id = block_id,
+    };
+}
+
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
 pub const AuthorizedVoters = struct {
     voters: SortedMap(Epoch, Pubkey),
+
+    pub const @"!bincode-config": sig.bincode.FieldConfig(AuthorizedVoters) = .{
+        .deserializer = deserialize,
+        .serializer = serialize,
+    };
 
     pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
         var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
@@ -294,6 +456,85 @@ pub const AuthorizedVoters = struct {
             return .{ last_voter, false };
         }
     }
+
+    fn deserialize(
+        allocator: std.mem.Allocator,
+        reader: anytype,
+        _: sig.bincode.Params,
+    ) !AuthorizedVoters {
+        var authorized_voters = AuthorizedVoters{
+            .voters = SortedMap(Epoch, Pubkey).init(allocator),
+        };
+        errdefer authorized_voters.deinit();
+
+        for (try reader.readInt(usize, std.builtin.Endian.little)) |_| {
+            const epoch = try reader.readInt(u64, std.builtin.Endian.little);
+            var pubkey = Pubkey.ZEROES;
+            const bytes_read = try reader.readAll(&pubkey.data);
+            if (bytes_read != Pubkey.SIZE) return error.NoBytesLeft;
+            try authorized_voters.voters.put(epoch, pubkey);
+        }
+
+        return authorized_voters;
+    }
+
+    pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
+        var authorized_voters: AuthorizedVoters = data;
+        try writer.writeInt(usize, authorized_voters.len(), std.builtin.Endian.little);
+        const items = authorized_voters.voters.items();
+        for (items[0], items[1]) |k, v| {
+            try writer.writeInt(u64, k, std.builtin.Endian.little);
+            try writer.writeAll(&v.data);
+        }
+    }
+};
+
+const CircBufV0 = struct {
+    buf: [MAX_PRIOR_VOTERS]Entry,
+    idx: usize,
+
+    const Entry = struct { Pubkey, Epoch, Epoch, Slot };
+
+    pub fn init() CircBufV0 {
+        return .{
+            .buf = [_]Entry{std.mem.zeroes(Entry)} ** MAX_PRIOR_VOTERS,
+            .idx = MAX_PRIOR_VOTERS - 1,
+        };
+    }
+
+    pub fn append(self: *CircBufV0, entry: Entry) void {
+        self.idx = (self.idx + 1) % MAX_PRIOR_VOTERS;
+        self.buf[self.idx] = entry;
+    }
+};
+
+const CircBufV1 = struct {
+    buf: [MAX_PRIOR_VOTERS]Entry,
+    idx: usize,
+    is_empty: bool,
+
+    const Entry = PriorVote;
+
+    pub fn init() CircBufV1 {
+        return .{
+            .buf = [_]Entry{std.mem.zeroes(Entry)} ** MAX_PRIOR_VOTERS,
+            .idx = MAX_PRIOR_VOTERS - 1,
+            .is_empty = true,
+        };
+    }
+
+    pub fn append(self: *CircBufV1, entry: Entry) void {
+        self.idx = (self.idx + 1) % MAX_PRIOR_VOTERS;
+        self.buf[self.idx] = entry;
+        self.is_empty = false;
+    }
+
+    pub fn last(self: *CircBufV1) ?Entry {
+        if (self.is_empty) {
+            return null;
+        }
+        return if (self.idx < self.buf.len) self.buf[self.idx] else null;
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
@@ -344,7 +585,7 @@ pub const VoteStateVersions = union(enum) {
                     .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
                     .root_slot = state.root_slot,
                     .voters = authorized_voters,
-                    .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+                    .prior_voters = CircBufV1.init(),
                     .epoch_credits = state.epoch_credits,
                     .last_timestamp = state.last_timestamp,
                 };
@@ -381,15 +622,17 @@ pub const VoteState0_23_5 = struct {
 
     /// the signer for vote transactions
     voter: Pubkey,
+
     /// when the authorized voter was set/initialized
     voter_epoch: Epoch,
 
     /// history of prior authorized voters and the epoch ranges for which
     ///  they were set
-    prior_voters: RingBuffer(PriorVote, MAX_PRIOR_VOTERS),
+    prior_voters: CircBufV0,
 
     /// the signer for withdrawals
     withdrawer: Pubkey,
+
     /// percentage (0-100) that represents what part of a rewards
     ///  payout should be given to this VoteAccount
     commission: u8,
@@ -418,7 +661,7 @@ pub const VoteState0_23_5 = struct {
             .node_pubkey = node_pubkey,
             .voter = authorized_voter,
             .voter_epoch = clock.epoch,
-            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = CircBufV0.init(),
             .withdrawer = withdrawer,
             .commission = commission,
             .votes = std.ArrayList(Lockout).init(allocator),
@@ -458,7 +701,7 @@ pub const VoteState1_14_11 = struct {
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
     /// the top of the range is exclusive
-    prior_voters: RingBuffer(PriorVote, MAX_PRIOR_VOTERS),
+    prior_voters: CircBufV1,
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
@@ -492,7 +735,7 @@ pub const VoteState1_14_11 = struct {
             .votes = std.ArrayList(Lockout).init(allocator),
             .root_slot = null,
             .voters = authorized_voters,
-            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = CircBufV1.init(),
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
@@ -528,7 +771,7 @@ pub const VoteState = struct {
     /// history of prior authorized voters and the epochs for which
     /// they were set, the bottom end of the range is inclusive,
     /// the top of the range is exclusive
-    prior_voters: RingBuffer(PriorVote, MAX_PRIOR_VOTERS),
+    prior_voters: CircBufV1,
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
@@ -551,7 +794,7 @@ pub const VoteState = struct {
             .voters = AuthorizedVoters{
                 .voters = SortedMap(Epoch, Pubkey).init(allocator),
             },
-            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = CircBufV1.init(),
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
@@ -580,7 +823,7 @@ pub const VoteState = struct {
             .commission = commission,
             .votes = std.ArrayList(LandedVote).init(allocator),
             .root_slot = null,
-            .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+            .prior_voters = CircBufV1.init(),
             .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
             .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
         };
@@ -645,13 +888,12 @@ pub const VoteState = struct {
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
-        const pubkey = self.voters
-            .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch |err| {
-            return switch (err) {
-                error.OutOfMemory => err,
-            };
-        } orelse return InstructionError.InvalidAccountData;
+        const maybe_pubkey = self.voters
+            .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch return error.OutOfMemory;
+        const pubkey = maybe_pubkey orelse return InstructionError.InvalidAccountData;
+
         _ = try self.voters.purgeAuthorizedVoters(allocator, current_epoch);
+
         return pubkey;
     }
 
@@ -1585,8 +1827,8 @@ pub const VoteState = struct {
 };
 
 pub const VoteAuthorize = enum {
-    withdrawer,
     voter,
+    withdrawer,
 };
 
 pub fn createTestVoteState(
@@ -1612,7 +1854,7 @@ pub fn createTestVoteState(
         .commission = commission,
         .votes = std.ArrayList(LandedVote).init(allocator),
         .root_slot = null,
-        .prior_voters = RingBuffer(PriorVote, MAX_PRIOR_VOTERS).DEFAULT,
+        .prior_voters = CircBufV1.init(),
         .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
         .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
     };
@@ -1640,6 +1882,48 @@ pub fn verifyAndGetVoteState(
     }
 
     return vote_state;
+}
+
+test "AuthorizeVoters.serialize" {
+    const allocator = std.testing.allocator;
+
+    const agave_bytes = &[_]u8{
+        3, 0, 0, 0, 0, 0, 0, 0,
+
+        0, 0, 0, 0, 0, 0, 0, 0,
+
+        0, 0, 0, 0, 0, 0, 0, 2,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+
+        1, 0, 0, 0, 0, 0, 0, 0,
+
+        0, 0, 0, 0, 0, 0, 0, 3,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+
+        2, 0, 0, 0, 0, 0, 0, 0,
+
+        0, 0, 0, 0, 0, 0, 0, 4,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+    };
+
+    const authorized_voters = try sig.bincode.readFromSlice(
+        allocator,
+        AuthorizedVoters,
+        agave_bytes,
+        .{},
+    );
+    defer authorized_voters.deinit();
+
+    const sig_bytes = try sig.bincode.writeAlloc(allocator, authorized_voters, .{});
+    defer allocator.free(sig_bytes);
+
+    try std.testing.expectEqualSlices(u8, agave_bytes, sig_bytes);
 }
 
 test "Lockout.lockout" {

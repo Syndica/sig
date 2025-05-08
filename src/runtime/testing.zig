@@ -18,6 +18,7 @@ const SlotContext = sig.runtime.transaction_context.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
+const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub const ExecuteContextsParams = struct {
@@ -133,6 +134,7 @@ pub fn createExecutionContexts(
         .compute_meter = params.compute_meter,
         .compute_budget = params.compute_budget,
         .custom_error = params.custom_error,
+        .rent = Rent.DEFAULT,
         .log_collector = params.log_collector,
         .prev_blockhash = params.prev_blockhash,
         .prev_lamports_per_signature = params.prev_lamports_per_signature,
@@ -173,22 +175,22 @@ pub fn createSysvarCache(
     errdefer sysvar_cache.deinit(allocator);
 
     if (params.clock) |clock| {
-        sysvar_cache.clock = try bincode.writeAlloc(allocator, clock, .{});
+        sysvar_cache.clock = try sysvar.serialize(allocator, clock);
     }
     if (params.epoch_schedule) |epoch_schedule| {
-        sysvar_cache.epoch_schedule = try bincode.writeAlloc(allocator, epoch_schedule, .{});
+        sysvar_cache.epoch_schedule = try sysvar.serialize(allocator, epoch_schedule);
     }
     if (params.epoch_rewards) |epoch_rewards| {
-        sysvar_cache.epoch_rewards = try bincode.writeAlloc(allocator, epoch_rewards, .{});
+        sysvar_cache.epoch_rewards = try sysvar.serialize(allocator, epoch_rewards);
     }
     if (params.rent) |rent| {
-        sysvar_cache.rent = try bincode.writeAlloc(allocator, rent, .{});
+        sysvar_cache.rent = try sysvar.serialize(allocator, rent);
     }
     if (params.last_restart_slot) |last_restart_slot| {
-        sysvar_cache.last_restart_slot = try bincode.writeAlloc(allocator, last_restart_slot, .{});
+        sysvar_cache.last_restart_slot = try sysvar.serialize(allocator, last_restart_slot);
     }
     if (params.slot_hashes) |slot_hashes| {
-        sysvar_cache.slot_hashes = try bincode.writeAlloc(allocator, slot_hashes, .{});
+        sysvar_cache.slot_hashes = try sysvar.serialize(allocator, slot_hashes);
         sysvar_cache.slot_hashes_obj = .{
             .entries = try allocator.dupe(
                 sysvar.SlotHashes.Entry,
@@ -197,7 +199,7 @@ pub fn createSysvarCache(
         };
     }
     if (params.stake_history) |stake_history| {
-        sysvar_cache.stake_history = try bincode.writeAlloc(allocator, stake_history, .{});
+        sysvar_cache.stake_history = try sysvar.serialize(allocator, stake_history);
         sysvar_cache.stake_history_obj = .{
             .entries = try allocator.dupe(
                 sysvar.StakeHistory.Entry,

@@ -6,12 +6,9 @@ const Allocator = std.mem.Allocator;
 const Epoch = sig.core.Epoch;
 const EpochConstants = sig.core.EpochConstants;
 const EpochSchedule = sig.core.EpochSchedule;
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
-const Tower = sig.consensus.tower.Tower;
 
 /// Central registry that tracks high-level info about slots and how they fork.
 ///

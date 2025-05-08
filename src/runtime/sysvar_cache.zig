@@ -78,8 +78,8 @@ pub const SysvarCache = struct {
 
     /// Returns the sysvar as a slice of bytes
     /// This should only be used by the getSysvar syscall
-    pub fn getSlice(self: SysvarCache, id: Pubkey) ?[]const u8 {
-        return if (id.equals(&sysvars.Clock.ID))
+    pub fn getSlice(self: *const SysvarCache, id: Pubkey) ?[]const u8 {
+        const field = if (id.equals(&sysvars.Clock.ID))
             self.clock
         else if (id.equals(&sysvars.EpochSchedule.ID))
             self.epoch_schedule
@@ -95,6 +95,9 @@ pub const SysvarCache = struct {
             self.last_restart_slot
         else
             return null;
+
+        // Should only return null on invalid ID rather than empty/null slice.
+        return field orelse &.{};
     }
 
     /// Deserialises the sysvar from bytes

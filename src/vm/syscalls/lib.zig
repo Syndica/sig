@@ -6,6 +6,7 @@ const sig = @import("../../sig.zig");
 pub const memops = @import("memops.zig");
 pub const hash = @import("hash.zig");
 pub const ecc = @import("ecc.zig");
+pub const sysvar = @import("sysvar.zig");
 
 const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
@@ -155,17 +156,41 @@ pub fn register(
     }
 
     // Sysvars
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_clock_sysvar", getClockSysvar,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_schedule_sysvar", getEpochScheduleSysvar,);
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", getFeesSysvar,);
-    // if (!feature_set.isActive(feature_set.DISABLE_FEES_SYSVAR, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_fees_sysvar", getFeesSysvar,);
-    // }
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_rent_sysvar", getRentSysvar,);
-    // if (feature_set.isActive(feature_set.LAST_RESTART_SLOT_SYSVAR, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_last_restart_slot", getLastRestartSlotSysvar,);
-    // }
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_rewards_sysvar", getEpochRewardsSysvar,);
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_get_clock_sysvar",
+        sysvar.getClock,
+    );
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_get_epoch_schedule_sysvar",
+        sysvar.getEpochSchedule,
+    );
+    if (!feature_set.isActive(features.DISABLE_FEES_SYSVAR, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_get_fees_sysvar",
+            sysvar.getFees,
+        );
+    }
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_get_rent_sysvar",
+        sysvar.getRent,
+    );
+    if (feature_set.isActive(features.LAST_RESTART_SLOT_SYSVAR, slot)) {
+        _ = try syscalls.functions.registerHashed(
+            allocator,
+            "sol_get_last_restart_slot",
+            sysvar.getLastRestartSlot,
+        );
+    }
+
+    _ = try syscalls.functions.registerHashed(
+        allocator,
+        "sol_get_epoch_rewards_sysvar",
+        sysvar.getEpochRewards,
+    );
 
     // Memory
     _ = try syscalls.functions.registerHashed(
@@ -269,9 +294,9 @@ pub fn register(
     // }
 
     // Sysvar Getter
-    // if (feature_set.isActive(feature_set.ENABLE_SYSVAR_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", getSysvar,);
-    // }
+    if (feature_set.isActive(features.GET_SYSVAR_SYSCALL_ENABLED, slot)) {
+        _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", sysvar.getSysvar);
+    }
 
     // Get Epoch Stake
     // if (feature_set.isActive(feature_set.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {

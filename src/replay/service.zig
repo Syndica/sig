@@ -6,18 +6,10 @@ const Allocator = std.mem.Allocator;
 
 const ThreadPool = sig.sync.ThreadPool;
 
-const Entry = sig.core.Entry;
-const Hash = sig.core.Hash;
-const Slot = sig.core.Slot;
-
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
-const EntryVerifier = replay.verifiers.EntryVerifier;
-const ListRecycler = replay.verifiers.ListRecycler;
-const RuntimeSanitizedTransaction = replay.verifiers.RuntimeSanitizedTransaction;
-const TransactionVerifyAndHasher = replay.verifiers.TransactionVerifyAndHasher;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
@@ -83,7 +75,7 @@ pub fn run(dependencies: ReplayDependencies) !void {
 fn advanceReplay(state: *ReplayState) !void {
     // TODO: generate_new_bank_forks
 
-    // TODO: replay_active_banks
+    // replay_active_banks
     _ = try replay.execution.replayActiveSlots(&state.execution);
 
     handleEdgeCases();
