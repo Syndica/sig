@@ -6,11 +6,6 @@ const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 
-/// TODO: these decls should be moved into their own actual namespaces in the codebase eventually.
-const commitment = struct {
-    pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
-};
-
 pub const VoteTracker = struct {
     /// Protects all access to `map`, and partial access to its elements.
     ///
@@ -245,44 +240,138 @@ pub const VoteStakeTracker = struct {
         voted.deinit(allocator);
     }
 
-    /// Returns tuple (reached_threshold_results, is_new) where
-    /// Each index in `reached_threshold_results` is true if the corresponding threshold in the input
-    /// `thresholds_to_check` was newly reached by adding the stake of the input `vote_pubkey`
-    /// `is_new` is true if the vote has not been seen before.
-    ///
-    /// The caller is responsible for freeing `reached_threshold_results` using `allocator`.
-    pub fn addVotePubkey(
+    pub fn ensureTotalCapacity(
         self: *VoteStakeTracker,
         allocator: std.mem.Allocator,
+        new_capacity: usize,
+    ) std.mem.Allocator.Error!void {
+        try self.voted.ensureTotalCapacity(allocator, new_capacity);
+    }
+
+    pub fn ensureUnusedCapacity(
+        self: *VoteStakeTracker,
+        allocator: std.mem.Allocator,
+        additional_capacity: usize,
+    ) std.mem.Allocator.Error!void {
+        try self.voted.ensureUnusedCapacity(allocator, additional_capacity);
+    }
+
+    pub const AddVotePubkeyResult = enum {
+        /// The vote has not been seen before.
+        is_new,
+        /// The vote has been seen before.
+        is_old,
+    };
+
+    pub const AddVotePubkeyParams = struct {
         vote_pubkey: Pubkey,
         stake: u64,
         total_stake: u64,
         thresholds_to_check: []const f64,
-    ) std.mem.Allocator.Error!struct { []const bool, bool } {
-        const is_new = !self.voted.contains(vote_pubkey);
-        if (is_new) {
-            try self.voted.put(allocator, vote_pubkey, {});
-            const old_stake = self.stake;
-            const new_stake = self.stake + stake;
-            self.stake = new_stake;
+    };
 
-            const reached_threshold_results = try allocator.alloc(bool, thresholds_to_check.len);
-            errdefer allocator.free(reached_threshold_results);
+    /// Returns tuple (reached_thresholds, is_new) where
+    /// Each index in `reached_thresholds` is true if the corresponding threshold in the input
+    /// `thresholds_to_check` was newly reached by adding the stake of the input `vote_pubkey`.
+    /// `is_new` is true if the vote has not been seen before.
+    ///
+    /// The caller is responsible for deiniting `reached_thresholds` using `allocator`.
+    pub fn addVotePubkey(
+        self: *VoteStakeTracker,
+        allocator: std.mem.Allocator,
+        params: AddVotePubkeyParams,
+    ) std.mem.Allocator.Error!struct { std.DynamicBitSetUnmanaged, AddVotePubkeyResult } {
+        try self.ensureUnusedCapacity(allocator, 1);
+        var reached_thresholds: std.DynamicBitSetUnmanaged = .{};
+        errdefer reached_thresholds.deinit(allocator);
+        try reached_thresholds.resize(allocator, params.thresholds_to_check.len, false);
+        const result = self.addVotePubkeyAssumeCapacity(&reached_thresholds, params);
+        return .{ reached_thresholds, result };
+    }
 
-            const total_stake_f64: f64 = @floatFromInt(total_stake);
-            for (reached_threshold_results, thresholds_to_check) |*result, threshold| {
-                const threshold_stake: u64 = @intFromFloat(total_stake_f64 * threshold);
-                result.* = old_stake <= threshold_stake and threshold_stake < new_stake;
-            }
+    /// Each index in `reached_thresholds` is true iff the corresponding threshold in the input
+    /// `thresholds_to_check` was newly reached by adding the stake of the input `vote_pubkey`.
+    /// Returns whether or not the vote has been seen before.
+    pub fn addVotePubkeyAssumeCapacity(
+        self: *VoteStakeTracker,
+        /// Must be one of:
+        /// - `*std.DynamicBitSetUnmanaged`
+        /// - `*std.bit_set.ArrayBitSet(MaskInt, size)`
+        /// - `*std.bit_set.IntegerBitSet(size)`
+        ///
+        /// `bit_length` must be equal to `thresholds_to_check.len`.
+        reached_thresholds: anytype,
+        params: AddVotePubkeyParams,
+    ) AddVotePubkeyResult {
+        const vote_pubkey = params.vote_pubkey;
+        const stake = params.stake;
+        const total_stake = params.total_stake;
+        const thresholds_to_check = params.thresholds_to_check;
 
-            return .{ reached_threshold_results, is_new };
-        } else {
-            const reached_threshold_results = try allocator.alloc(bool, thresholds_to_check.len);
-            errdefer allocator.free(reached_threshold_results);
+        const ReachedThresholds = @TypeOf(reached_thresholds.*);
+        const bit_set_kind = comptime bitSetKind(ReachedThresholds) orelse @compileError(
+            "Expected a bit set defined in the doc comment, got " ++
+                @typeName(ReachedThresholds),
+        );
 
-            @memset(reached_threshold_results, false);
-            return .{ reached_threshold_results, is_new };
+        std.debug.assert( // must reserve capacity for at least 1 more entry
+            self.voted.capacity() > self.voted.count(),
+        );
+        std.debug.assert( // thresholds inputs & outputs must be equal lengths
+            thresholds_to_check.len == reached_thresholds.capacity(),
+        );
+
+        switch (bit_set_kind) {
+            .dynamic => reached_thresholds.unsetAll(),
+            .integer, .array => reached_thresholds.* = ReachedThresholds.initEmpty(),
         }
+
+        const gop = self.voted.getOrPutAssumeCapacity(vote_pubkey);
+        gop.value_ptr.* = {};
+        if (gop.found_existing) return .is_old;
+
+        const old_stake = self.stake;
+        self.stake += stake;
+        const new_stake = self.stake;
+
+        const total_stake_f64: f64 = @floatFromInt(total_stake);
+        for (thresholds_to_check, 0..) |threshold, i| {
+            const threshold_stake: u64 = @intFromFloat(total_stake_f64 * threshold);
+            const reached_threshold = old_stake <= threshold_stake and threshold_stake < new_stake;
+            reached_thresholds.setValue(i, reached_threshold);
+        }
+
+        return .is_new;
+    }
+
+    inline fn bitSetKind(comptime ReachedThresholds: type) ?enum { dynamic, integer, array } {
+        if (!@inComptime()) comptime unreachable;
+        if (ReachedThresholds == std.DynamicBitSetUnmanaged) return .dynamic;
+
+        if (@typeInfo(ReachedThresholds) != .Struct) return null;
+
+        if (!@hasDecl(ReachedThresholds, "bit_length")) return null;
+        if (!@typeInfo(@TypeOf(&ReachedThresholds.bit_length)).Pointer.is_const) {
+            return null;
+        }
+
+        if (!@hasDecl(ReachedThresholds, "MaskInt")) return null;
+        if (@TypeOf(&ReachedThresholds.MaskInt) != *const type) {
+            return null;
+        }
+
+        const bit_length = ReachedThresholds.bit_length;
+        const MaskInt = ReachedThresholds.MaskInt;
+
+        if (bit_length > std.math.maxInt(usize)) return null;
+        if (bit_length <= std.math.maxInt(u16)) {
+            if (ReachedThresholds == std.bit_set.IntegerBitSet(bit_length)) return .integer;
+        }
+        if (std.math.isPowerOfTwo(@bitSizeOf(MaskInt))) {
+            if (ReachedThresholds == std.bit_set.ArrayBitSet(MaskInt, bit_length)) return .array;
+        }
+
+        return null;
     }
 };
 
@@ -298,55 +387,53 @@ test "VoteStakeTracker.addVotePubkey" {
 
     for (0..10) |i| {
         const pubkey = Pubkey.initRandom(random);
-        const is_confirmed_thresholds, //
-        const is_new //
-        = try vote_stake_tracker.addVotePubkey(
-            allocator,
-            pubkey,
-            1,
-            total_epoch_stake,
-            &.{ commitment.VOTE_THRESHOLD_SIZE, 0.0 },
-        );
-        defer allocator.free(is_confirmed_thresholds);
+        var is_confirmed_thresholds, //
+        const recency //
+        = try vote_stake_tracker.addVotePubkey(allocator, .{
+            .vote_pubkey = pubkey,
+            .stake = 1,
+            .total_stake = total_epoch_stake,
+            .thresholds_to_check = &.{ sig.consensus.tower.VOTE_THRESHOLD_SIZE, 0.0 },
+        });
+        defer is_confirmed_thresholds.deinit(allocator);
 
         const stake = vote_stake_tracker.stake;
 
-        const is_confirmed_thresholds2, //
-        const is_new2 //
-        = try vote_stake_tracker.addVotePubkey(
-            allocator,
-            pubkey,
-            1,
-            total_epoch_stake,
-            &.{ commitment.VOTE_THRESHOLD_SIZE, 0.0 },
-        );
-        defer allocator.free(is_confirmed_thresholds2);
+        var is_confirmed_thresholds2, //
+        const recency2 //
+        = try vote_stake_tracker.addVotePubkey(allocator, .{
+            .vote_pubkey = pubkey,
+            .stake = 1,
+            .total_stake = total_epoch_stake,
+            .thresholds_to_check = &.{ sig.consensus.tower.VOTE_THRESHOLD_SIZE, 0.0 },
+        });
+        defer is_confirmed_thresholds2.deinit(allocator);
 
         const stake2 = vote_stake_tracker.stake;
 
         // Stake should not change from adding same pubkey twice
         try std.testing.expectEqual(stake, stake2);
-        try std.testing.expectEqual(2, is_confirmed_thresholds.len);
-        try std.testing.expectEqual(2, is_confirmed_thresholds2.len);
-        try std.testing.expect(!is_new2);
-        try std.testing.expect(!is_confirmed_thresholds2[0]);
-        try std.testing.expect(!is_confirmed_thresholds2[1]);
+        try std.testing.expectEqual(2, is_confirmed_thresholds.bit_length);
+        try std.testing.expectEqual(2, is_confirmed_thresholds2.bit_length);
+        try std.testing.expectEqual(.is_old, recency2);
+        try std.testing.expect(!is_confirmed_thresholds2.isSet(0));
+        try std.testing.expect(!is_confirmed_thresholds2.isSet(1));
 
         // at i == 6, the voted stake is 70%, which is the first time crossing
         // the supermajority threshold
         if (i == 6) {
-            try std.testing.expect(is_confirmed_thresholds[0]);
+            try std.testing.expect(is_confirmed_thresholds.isSet(0));
         } else {
-            try std.testing.expect(!is_confirmed_thresholds[0]);
+            try std.testing.expect(!is_confirmed_thresholds.isSet(0));
         }
 
         // at i == 6, the voted stake is 10%, which is the first time crossing
         // the 0% threshold
         if (i == 0) {
-            try std.testing.expect(is_confirmed_thresholds[1]);
+            try std.testing.expect(is_confirmed_thresholds.isSet(1));
         } else {
-            try std.testing.expect(!is_confirmed_thresholds[1]);
+            try std.testing.expect(!is_confirmed_thresholds.isSet(1));
         }
-        try std.testing.expect(is_new);
+        try std.testing.expectEqual(.is_new, recency);
     }
 }
