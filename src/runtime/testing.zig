@@ -8,6 +8,7 @@ const sysvar = sig.runtime.sysvar;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
+const EpochStakes = sig.core.stake.EpochStakes;
 
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -23,6 +24,7 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 pub const ExecuteContextsParams = struct {
     // Epoch context
     feature_set: []const FeatureParams = &.{},
+    epoch_stakes: []const EpochStakeParam = &.{},
 
     // Slot Context
     sysvar_cache: SysvarCacheParams = .{},
@@ -41,6 +43,11 @@ pub const ExecuteContextsParams = struct {
     pub const FeatureParams = struct {
         pubkey: Pubkey,
         slot: Slot = 0,
+    };
+
+    pub const EpochStakeParam = struct {
+        pubkey: Pubkey,
+        stake: u64,
     };
 
     pub const SysvarCacheParams = struct {
@@ -82,6 +89,7 @@ pub fn createExecutionContexts(
     const ec = try allocator.create(EpochContext);
     ec.* = .{
         .allocator = allocator,
+        .epoch_stakes = try createEpochStakes(allocator, params.epoch_stakes),
         .feature_set = try createFeatureSet(allocator, params.feature_set),
     };
     errdefer ec.deinit();
@@ -139,6 +147,41 @@ pub fn createExecutionContexts(
     };
 
     return .{ ec, sc, tc };
+}
+
+pub fn createEpochStakes(
+    allocator: std.mem.Allocator,
+    params: []const ExecuteContextsParams.EpochStakeParam,
+) !EpochStakes {
+    var self: EpochStakes = .{
+        .stakes = .{
+            .vote_accounts = .{
+                .accounts = .{},
+                .staked_nodes = null,
+            },
+            .delegations = .{},
+            .unused = 0,
+            .epoch = 0,
+            .history = &.{},
+        },
+        .total_stake = 0,
+        .node_id_to_vote_accounts = .{},
+        .epoch_authorized_voters = .{},
+    };
+    errdefer self.stakes.deinit(allocator);
+
+    for (params) |param| {
+        self.total_stake += param.stake;
+        try self.stakes.delegations.put(allocator, param.pubkey, .{
+            .voter_pubkey = param.pubkey,
+            .stake = param.stake,
+            .activation_epoch = 0,
+            .deactivation_epoch = 0,
+            .deprecated_warmup_cooldown_rate = 0.0,
+        });
+    }
+
+    return self;
 }
 
 pub fn createFeatureSet(

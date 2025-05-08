@@ -32,8 +32,12 @@ pub const EpochContext = struct {
     /// Feature Set
     feature_set: FeatureSet,
 
+    // Exposes epoch stake variables to the VM
+    epoch_stakes: sig.core.stake.EpochStakes,
+
     pub fn deinit(self: EpochContext) void {
         self.feature_set.deinit(self.allocator);
+        self.epoch_stakes.deinit(self.allocator);
     }
 };
 
@@ -69,6 +73,9 @@ pub const TransactionContext = struct {
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ),
+
+    /// Used by syscall.allocFree to implement sbrk bump allocation
+    bpf_alloc_pos: u64 = 0,
 
     /// Instruction stack
     instruction_stack: InstructionStack,

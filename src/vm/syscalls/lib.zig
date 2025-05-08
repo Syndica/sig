@@ -11,6 +11,7 @@ pub const sysvar = @import("sysvar.zig");
 const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
 const pubkey_utils = sig.runtime.pubkey_utils;
+const serialize = sig.runtime.program.bpf.serialize;
 
 const memory = sig.vm.memory;
 const SyscallError = sig.vm.SyscallError;
@@ -419,8 +420,41 @@ pub fn logData(
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
-pub fn allocFree(_: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
-    @panic("TODO: implement allocFree syscall");
+pub fn allocFree(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const size = registers.get(.r1);
+    const free_addr = registers.get(.r2);
+    const alignment: u64 = if (tc.getCheckAligned()) serialize.BPF_ALIGN_OF_U128 else 1;
+
+    // Ensure aligning up size doesnt overflow isize.
+    // https://doc.rust-lang.org/beta/std/alloc/struct.Layout.html#method.from_size_align
+    const bump_to_align = (alignment - (size % alignment)) % alignment;
+    if ((size +| bump_to_align) > std.math.maxInt(isize)) {
+        return registers.set(.r0, 0);
+    }
+
+    // Freeing allocated memory is not implemented.
+    if (free_addr != 0) return registers.set(.r0, 0);
+
+    // Find the heap region to know how much can be bump allocated.
+    var bump_max: u64 = 0;
+    if (memory_map.region(.constant, memory.HEAP_START) catch null) |heap_region| {
+        bump_max = heap_region.constSlice().len;
+    }
+
+    // Bound check
+    const bytes_to_align = (alignment - (tc.bpf_alloc_pos % alignment)) % alignment;
+    const addr_offset = tc.bpf_alloc_pos +| bytes_to_align;
+    if (addr_offset +| size > bump_max) {
+        return registers.set(.r0, 0);
+    }
+
+    // Return bump allocated offset
+    tc.bpf_alloc_pos = addr_offset +| size;
+    return registers.set(.r0, memory.HEAP_START +| addr_offset);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/4d9d57c433b491689ba7793aa9339eae22c218d3/programs/bpf_loader/src/syscalls/mod.rs#L2144
@@ -429,13 +463,12 @@ pub fn getEpochStake(
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
-    const addr = registers.get(.r1);
-    if (addr == 0) {
-        try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+    const vote_pubkey_addr = registers.get(.r1);
 
-        // TODO: Call get_epoch_stake() callback in tc. By deafult it's registered to return 0.
-        // https://github.com/anza-xyz/agave/blob/ba93776608b8302fa2865fb50ac4fc4147f0a418/svm-callback/src/lib.rs#L9
-        registers.set(.r0, 0);
+    // On null voter vm address, return total active cluster stake (as defined by EpochContext).
+    if (vote_pubkey_addr == 0) {
+        try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
+        registers.set(.r0, tc.ec.epoch_stakes.total_stake);
         return;
     }
 
@@ -448,14 +481,15 @@ pub fn getEpochStake(
     const vote_address = try memory_map.translateType(
         Pubkey,
         .constant,
-        addr,
+        vote_pubkey_addr,
         tc.getCheckAligned(),
     );
 
-    // TODO: Call get_epoch_stake_for_vote_account() in tc. By default it's registered to return 0.
-    // https://github.com/anza-xyz/agave/blob/ba93776608b8302fa2865fb50ac4fc4147f0a418/svm-callback/src/lib.rs#L14
-    _ = vote_address;
-    registers.set(.r0, 0);
+    if (tc.ec.epoch_stakes.stakes.delegations.getPtr(vote_address.*)) |delegation| {
+        registers.set(.r0, delegation.stake);
+    } else {
+        registers.set(.r0, 0);
+    }
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ac11e3e568952977e63bce6bb20e37f26a61e151/instruction/src/lib.rs#L296
