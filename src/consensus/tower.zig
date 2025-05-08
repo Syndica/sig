@@ -1979,8 +1979,8 @@ fn greatestCommonAncestor(
     slot_a: Slot,
     slot_b: Slot,
 ) ?Slot {
-    var ancestors_a = ancestors.get(slot_a) orelse return null;
-    var ancestors_b = ancestors.get(slot_b) orelse return null;
+    const ancestors_a = ancestors.get(slot_a) orelse return null;
+    const ancestors_b = ancestors.get(slot_b) orelse return null;
 
     var max_slot: ?Slot = null;
 
@@ -2148,6 +2148,113 @@ pub fn selectCandidatesFailedSwitchDuplicateRollback(
         .reset_slot = reset_slot,
         .switch_fork_decision = initial_switch_fork_decision,
     };
+}
+
+test "greatestCommonAncestor" {
+    const allocator = std.testing.allocator;
+
+    // Test case: Basic common ancestor
+    {
+        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        defer {
+            var it = ancestors.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            ancestors.deinit(allocator);
+        }
+
+        try ancestors.put(allocator, 10, try createSet(allocator, &.{ 5, 3, 1 }));
+        try ancestors.put(allocator, 20, try createSet(allocator, &.{ 8, 5, 2 }));
+
+        // Both slots have common ancestor 5
+        try std.testing.expectEqual(
+            @as(?Slot, 5),
+            greatestCommonAncestor(&ancestors, 10, 20),
+        );
+    }
+
+    // Test case: No common ancestor
+    {
+        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        defer {
+            var it = ancestors.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            ancestors.deinit(allocator);
+        }
+
+        try ancestors.put(allocator, 10, try createSet(allocator, &.{ 3, 1 }));
+        try ancestors.put(allocator, 20, try createSet(allocator, &.{ 8, 2 }));
+
+        try std.testing.expectEqual(
+            @as(?Slot, null),
+            greatestCommonAncestor(&ancestors, 10, 20),
+        );
+    }
+
+    // Test case: One empty ancestor set
+    {
+        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        defer {
+            var it = ancestors.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            ancestors.deinit(allocator);
+        }
+
+        try ancestors.put(allocator, 10, try createSet(allocator, &.{ 5, 3 }));
+        try ancestors.put(allocator, 20, try createSet(allocator, &.{}));
+
+        try std.testing.expectEqual(
+            @as(?Slot, null),
+            greatestCommonAncestor(&ancestors, 10, 20),
+        );
+    }
+
+    // Test case: Missing slots
+    {
+        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        defer {
+            var it = ancestors.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            ancestors.deinit(allocator);
+        }
+
+        try ancestors.put(allocator, 10, try createSet(allocator, &.{ 5, 3 }));
+
+        try std.testing.expectEqual(
+            @as(?Slot, null),
+            greatestCommonAncestor(&ancestors, 10, 99), // 99 doesn't exist
+        );
+    }
+
+    // Test case: Multiple common ancestors (should pick greatest)
+    {
+        var ancestors = AutoHashMapUnmanaged(Slot, SortedSet(Slot)){};
+        defer {
+            var it = ancestors.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            ancestors.deinit(allocator);
+        }
+
+        try ancestors.put(allocator, 10, try createSet(allocator, &.{7, 5, 3}));
+        try ancestors.put(allocator, 20, try createSet(allocator, &.{7, 5, 4}));
+
+        // Should pick 7 (greater than 5)
+        try std.testing.expectEqual(
+            @as(?Slot, 7),
+            greatestCommonAncestor(&ancestors, 10, 20),
+        );
+    }
+
+
 }
 
 test "tower: selectVoteAndResetForks stake not found" {
@@ -3663,4 +3770,15 @@ fn voteAndCheckRecent(num_votes: usize) !void {
         expected.lockouts.items,
         tower.last_vote.tower_sync.lockouts.items,
     );
+}
+
+fn createSet(allocator: std.mem.Allocator, slots: []const Slot) !SortedSet(Slot) {
+    if (!builtin.is_test) {
+        @compileError("createSet should only be used in test");
+    }
+    var set = SortedSet(Slot).init(allocator);
+    for (slots) |slot| {
+        try set.put(slot);
+    }
+    return set;
 }
