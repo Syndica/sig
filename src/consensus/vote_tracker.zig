@@ -125,13 +125,13 @@ pub const VoteTracker = struct {
         defer self.map_rwlock.unlock();
         const map = &self.map;
 
-        var start_idx: usize = 0;
-        outer: while (start_idx != map.count()) {
-            for (map.keys()[start_idx..], start_idx..) |slot, i| {
-                if (slot >= new_root_bank_slot) continue;
-                map.fetchSwapRemove(slot).?.value.deinit(allocator);
-                start_idx = i;
-                continue :outer;
+        var index: usize = 0;
+        while (index != map.count()) {
+            const keys = map.keys();
+            if (keys[index] < new_root_bank_slot) {
+                map.fetchSwapRemove(keys[index]).?.value.deinit(allocator);
+            } else {
+                index += 1;
             }
         }
     }
