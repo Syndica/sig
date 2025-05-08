@@ -70,7 +70,7 @@ const ComputeBudgetInstructionDetails = struct {
 
     fn sanitizeAndConvertToComputeBudgetLimits(
         self: ComputeBudgetInstructionDetails,
-    ) !ComputeBudgetLimits {
+    ) error{ InvalidLoadedAccountsDataSizeLimit, InvalidInstructionData }!ComputeBudgetLimits {
         const updated_heap_bytes = @min(
             MAX_HEAP_FRAME_BYTES,
             if (self.requested_heap_size) |requested_heap_size| blk: {
