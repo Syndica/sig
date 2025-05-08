@@ -514,16 +514,19 @@ pub fn altBn128Compression(
     const input_size = registers.get(.r3);
     const result_addr = registers.get(.r4);
 
-    const group_id = AltBn128CompressionOp.wrap(attribute_id) orelse {
+    const group_op = AltBn128CompressionOp.wrap(attribute_id) orelse {
         return error.InvalidAttribute;
     };
 
     const cb = tc.compute_budget;
-    const cost, const output_length: u32 = switch (group_id) {
-        .g1_compress => .{ cb.alt_bn128_g1_compress, 32 },
-        .g1_decompress => .{ cb.alt_bn128_g1_decompress, 64 },
-        .g2_compress => .{ cb.alt_bn128_g2_compress, 64 },
-        .g2_decompress => .{ cb.alt_bn128_g2_decompress, 128 },
+    const base_cost = cb.syscall_base_cost;
+    const cost, const output_length: u32 = switch (group_op) {
+        // zig fmt: off
+        .g1_compress   => .{ base_cost +| cb.alt_bn128_g1_compress,   32 },
+        .g1_decompress => .{ base_cost +| cb.alt_bn128_g1_decompress, 64 },
+        .g2_compress   => .{ base_cost +| cb.alt_bn128_g2_compress,   64 },
+        .g2_decompress => .{ base_cost +| cb.alt_bn128_g2_decompress, 128 },
+        // zig fmt: on
     };
 
     try tc.consumeCompute(cost);
@@ -543,13 +546,31 @@ pub fn altBn128Compression(
         tc.getCheckAligned(),
     );
 
+    const needed_input_size: u32 = switch (group_op) {
+        .g1_compress => 64,
+        .g1_decompress => 32,
+        .g2_compress => 128,
+        .g2_decompress => 64,
+    };
+    // Must be exactly the correct length.
+    if (input_size != needed_input_size) {
+        if (tc.feature_set.active.contains(
+            features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
+        )) {
+            registers.set(.r0, 1);
+            return;
+        } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
+    }
+
     // Largest result is 128-bytes from g2_decompress.
     var result: [128]u8 = undefined;
-    if (switch (group_id) {
-        .g1_compress => ff.bn254_compress_g1_syscall(input.ptr, &result),
-        .g1_decompress => ff.bn254_decompress_g1_syscall(input.ptr, &result),
-        .g2_compress => ff.bn254_compress_g2_syscall(input.ptr, &result),
-        .g2_decompress => ff.bn254_decompress_g2_syscall(input.ptr, &result),
+    if (switch (group_op) {
+        // zig fmt: off
+        .g1_compress   => ff.bn254_compress_g1_syscall(  input[0..64],  result[0..32]),
+        .g1_decompress => ff.bn254_decompress_g1_syscall(input[0..32],  result[0..64]),
+        .g2_compress   => ff.bn254_compress_g2_syscall(  input[0..128], result[0..64]),
+        .g2_decompress => ff.bn254_decompress_g2_syscall(input[0..64],  result[0..128]),
+        // zig fmt: on
     } != 0) {
         if (tc.feature_set.active.contains(
             features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
@@ -558,6 +579,7 @@ pub fn altBn128Compression(
             return;
         } else @panic("SIMPLIFY_ALT_BN_128_SYSCALL_ERROR_CODES not active");
     }
+
     @memcpy(call_result, result[0..output_length]);
 }
 
