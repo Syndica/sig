@@ -10,12 +10,23 @@ pub fn RingBuffer(T: type) type {
         tail: std.atomic.Value(usize),
 
         const Slot = struct { item: T, next_action: std.atomic.Value(Action) };
-        const Action = usize;
+
+        const Action = enum(usize) {
+            _,
+
+            fn write(tail: usize) Action {
+                return @enumFromInt(tail);
+            }
+
+            fn read(head: usize) Action {
+                return @enumFromInt((1 << 63) | head);
+            }
+        };
 
         pub fn init(allocator: Allocator, len: usize) Allocator.Error!RingBuffer(T) {
             const slots = try allocator.alloc(Slot, len);
             for (slots, 0..) |*slot, i|
-                slot.next_action = std.atomic.Value(usize).init(writeAction(i));
+                slot.next_action = std.atomic.Value(Action).init(Action.write(i));
             return .{
                 .slots = slots,
                 .head = std.atomic.Value(usize).init(0),
@@ -28,16 +39,16 @@ pub fn RingBuffer(T: type) type {
         }
 
         pub fn push(self: *RingBuffer(T), item: T) error{Full}!void {
-            const index, const slot = self.acquireSlot(&self.tail, writeAction) orelse
+            const index, const slot = self.acquireSlot(&self.tail, Action.write) orelse
                 return error.Full;
             slot.item = item;
-            slot.next_action.store(readAction(index), .release);
+            slot.next_action.store(Action.read(index), .release);
         }
 
         pub fn pop(self: *RingBuffer(T)) ?T {
-            const index, const slot = self.acquireSlot(&self.head, readAction) orelse
+            const index, const slot = self.acquireSlot(&self.head, Action.read) orelse
                 return null;
-            defer slot.next_action.store(writeAction(index + self.slots.len), .release);
+            defer slot.next_action.store(Action.write(index + self.slots.len), .release);
             return slot.item;
         }
 
@@ -59,14 +70,6 @@ pub fn RingBuffer(T: type) type {
                 }
                 std.atomic.spinLoopHint();
             }
-        }
-
-        fn writeAction(tail: usize) Action {
-            return tail;
-        }
-
-        fn readAction(head: usize) Action {
-            return (1 << 63) | head;
         }
     };
 }
