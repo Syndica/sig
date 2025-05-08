@@ -15,7 +15,7 @@ pub const sysvar = @import("sysvar/lib.zig");
 pub const sysvar_cache = @import("sysvar_cache.zig");
 pub const testing = @import("testing.zig");
 pub const transaction_context = @import("transaction_context.zig");
-pub const batch_execution = @import("batch_execution.zig");
+pub const transaction_execution = @import("transaction_execution.zig");
 
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;

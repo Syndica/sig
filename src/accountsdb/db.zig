@@ -1374,8 +1374,15 @@ pub const AccountsDB = struct {
         return .{ file, file_id };
     }
 
+    const GetFileFromRefError = GetAccountInFileError ||
+        std.mem.Allocator.Error ||
+        error{SlotNotFound};
+
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
-    pub fn getAccountFromRef(self: *AccountsDB, account_ref: *const AccountRef) !Account {
+    pub fn getAccountFromRef(
+        self: *AccountsDB,
+        account_ref: *const AccountRef,
+    ) GetFileFromRefError!Account {
         switch (account_ref.location) {
             .File => |ref_info| {
                 const account = try self.getAccountInFile(
@@ -1540,9 +1547,14 @@ pub const AccountsDB = struct {
         }
     }
 
+    pub const GetAccountError = GetFileFromRefError || error{PubkeyNotInIndex};
     /// gets an account given an associated pubkey. mut ref is required for locks.
-    pub fn getAccount(self: *AccountsDB, pubkey: *const Pubkey) !Account {
-        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
+    pub fn getAccount(
+        self: *AccountsDB,
+        pubkey: *const Pubkey,
+    ) GetAccountError!Account {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
         defer lock.unlock();
 
         // NOTE: this will always be a safe unwrap since both bounds are null
@@ -1563,11 +1575,11 @@ pub const AccountsDB = struct {
         return .{ account, max_ref.* };
     }
 
-    pub const GetAccountError = GetAccountFromRefError || error{PubkeyNotInIndex};
+    pub const GetAccountWithReadLockError = GetAccountFromRefError || error{PubkeyNotInIndex};
     pub fn getAccountWithReadLock(
         self: *AccountsDB,
         pubkey: *const Pubkey,
-    ) GetAccountError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
+    ) GetAccountWithReadLockError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer lock.unlock();
 
@@ -1581,7 +1593,7 @@ pub const AccountsDB = struct {
         pubkey: *const Pubkey,
         min_slot: ?Slot,
         max_slot: ?Slot,
-    ) GetAccountError!?struct { AccountInCacheOrFile, Slot, AccountInCacheOrFileLock } {
+    ) GetAccountWithReadLockError!?struct { AccountInCacheOrFile, Slot, AccountInCacheOrFileLock } {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
             return error.PubkeyNotInIndex;
         defer lock.unlock();
@@ -1592,7 +1604,7 @@ pub const AccountsDB = struct {
         return .{ account, max_ref.slot, account_lg };
     }
 
-    pub const GetTypeFromAccountError = GetAccountError || error{DeserializationError};
+    pub const GetTypeFromAccountError = GetAccountWithReadLockError || error{DeserializationError};
     pub fn getTypeFromAccount(
         self: *AccountsDB,
         allocator: std.mem.Allocator,
