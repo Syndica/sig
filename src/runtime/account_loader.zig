@@ -3,36 +3,42 @@ const sig = @import("../sig.zig");
 const runtime = sig.runtime;
 
 const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
 const AccountSharedData = runtime.AccountSharedData;
 const Hash = sig.core.Hash;
-const RentCollector = sig.core.rent_collector.RentCollector;
 
 // [firedancer] https://github.com/firedancer-io/firedancer/blob/ddde57c40c4d4334c25bb32de17f833d4d79a889/src/ballet/txn/fd_txn.h#L116
 const MAX_TX_ACCOUNT_LOCKS = 128;
 
-// [firedancer] https://github.com/firedancer-io/firedancer/blob/49056135a4c7ba024cb75a45925439239904238b/src/flamenco/runtime/fd_executor.c#L377
-// firedancer actually already has the accounts data ready at this point, but Agave calls into the
-// bank's callbacks into accountsdb (with the exception of [0] - the fee payer). I like the idea of
-// loading them up first, but going with the bank for now.
-pub fn loadTransactionAccounts(
-    allocator: std.mem.Allocator,
-    tx: *const sig.core.Transaction,
-    requested_max_total_data_size: u32, // should be inside the tx?
-    account_loader: *AccountLoader(.AccountsDb),
-    features: *const runtime.FeatureSet,
-    rent_collector: *const RentCollector,
-) !LoadedAccounts {
-    return try loadTransactionAccountsInner(
-        .AccountsDb,
-        allocator,
-        tx,
-        requested_max_total_data_size,
-        account_loader,
-        features,
-        rent_collector,
-    );
-}
+pub const LoadFailure = struct {
+    pub const Location = union(enum) {
+        account_idx_load: u8,
+        instr_idx_program_check: u16,
+    };
+    failure_location: Location,
+    err: error{
+        ProgramAccountNotFound,
+        MaxLoadedAccountsDataSizeExceeded,
+        InvalidProgramForExecution,
+    },
+
+    pub fn format(
+        self: @This(),
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        switch (self.failure_location) {
+            .account_idx_load => |idx| try writer.print(
+                "Failed to load account[{}] with {}",
+                .{ idx, self.err },
+            ),
+            .instr_idx_program_check => |idx| try writer.print(
+                "Failed to check instruction[{}]'s program with {}",
+                .{ idx, self.err },
+            ),
+        }
+    }
+};
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L417
 /// agave's LoadedTransactionAccounts contains a field "program indices". This has been omitted as
@@ -42,11 +48,11 @@ pub const LoadedAccounts = struct {
     collected_rent: u64 = 0,
     loaded_account_data_size: u32 = 0,
 
-    /// equal in length to accounts
-    account_is_instruction_account: std.BoundedArray(bool, MAX_TX_ACCOUNT_LOCKS) = .{},
+    load_failure: ?LoadFailure = null,
 
-    /// equal in length to rent_debits
     accounts: std.BoundedArray(AccountSharedData, MAX_TX_ACCOUNT_LOCKS) = .{},
+    /// equal in length to accounts
+    is_instruction_account: std.BoundedArray(bool, MAX_TX_ACCOUNT_LOCKS) = .{},
     /// equal in length to accounts
     rent_debits: std.BoundedArray(RentDebit, MAX_TX_ACCOUNT_LOCKS) = .{},
 };
@@ -80,7 +86,10 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
                 .Mocked => self.inner.allocator,
             };
         }
-        fn getAccount(self: Self, pubkey: *const sig.core.Pubkey) !sig.core.Account {
+        fn getAccount(
+            self: Self,
+            pubkey: *const sig.core.Pubkey,
+        ) sig.accounts_db.AccountsDB.GetAccountError!sig.core.Account {
             return switch (kind) {
                 .AccountsDb => try self.inner.accounts_db.getAccount(pubkey),
                 .Mocked => self.inner.accounts.get(pubkey.*) orelse return error.PubkeyNotInIndex,
@@ -90,10 +99,14 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
             self: Self,
             data_allocator: std.mem.Allocator,
             pubkey: *const sig.core.Pubkey,
-        ) !?AccountSharedData {
+        ) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?AccountSharedData {
             const account: sig.core.Account = self.getAccount(pubkey) catch |err| switch (err) {
                 error.PubkeyNotInIndex => return null,
-                else => return err,
+                error.OutOfMemory => return error.OutOfMemory,
+                error.FileIdNotFound,
+                error.InvalidOffset,
+                error.SlotNotFound,
+                => return error.GetAccountFailedUnexpectedly,
             };
             defer account.deinit(self.allocator());
 
@@ -135,7 +148,7 @@ const LoadedTransactionAccount = struct {
 };
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
-pub fn AccountLoader(comptime bank_kind: AccountsDbKind) type {
+pub fn AccountLoader(comptime accountsdb_kind: AccountsDbKind) type {
     return struct {
         const Self = @This();
         const Cache = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData);
@@ -144,19 +157,13 @@ pub fn AccountLoader(comptime bank_kind: AccountsDbKind) type {
         cache_allocator: std.mem.Allocator, // allocates the account_cache
 
         account_cache: Cache = .{}, // never evicted from, exists for whole transaction
-        bank: AccountsDb(bank_kind),
-        features: *const runtime.FeatureSet,
-        rent_collector: RentCollector,
-        slot: Slot,
+        accountsdb: AccountsDb(accountsdb_kind),
 
         // note: no account overrides implemented here
         pub fn newWithCacheCapacity(
             account_allocator: std.mem.Allocator,
             cache_allocator: std.mem.Allocator,
-            bank: bank_kind.T(),
-            features: *const runtime.FeatureSet,
-            rent_collector: RentCollector,
-            slot: Slot,
+            accountsdb: accountsdb_kind.T(),
             capacity: usize,
         ) !Self {
             var account_cache: Cache = .{};
@@ -165,10 +172,7 @@ pub fn AccountLoader(comptime bank_kind: AccountsDbKind) type {
                 .account_allocator = account_allocator,
                 .cache_allocator = cache_allocator,
                 .account_cache = account_cache,
-                .bank = .{ .inner = bank },
-                .features = features,
-                .rent_collector = rent_collector,
-                .slot = slot,
+                .accountsdb = .{ .inner = accountsdb },
             };
         }
 
@@ -176,14 +180,17 @@ pub fn AccountLoader(comptime bank_kind: AccountsDbKind) type {
             self: *@This(),
             key: *const Pubkey,
             is_writable: bool,
-        ) !?LoadedTransactionAccount {
+        ) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?LoadedTransactionAccount {
             const account = blk: {
                 if (self.account_cache.get(key.*)) |account| {
                     // a previous transaction deallocated this account.
                     break :blk if (account.lamports == 0) null else account;
                 }
 
-                if (try self.bank.getAccountSharedData(self.account_allocator, key)) |account| {
+                if (try self.accountsdb.getAccountSharedData(
+                    self.account_allocator,
+                    key,
+                )) |account| {
                     try self.account_cache.put(self.cache_allocator, key.*, account);
                     break :blk account;
                 }
@@ -209,27 +216,19 @@ pub fn AccountLoader(comptime bank_kind: AccountsDbKind) type {
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L568
 fn loadTransactionAccount(
-    comptime bank_kind: AccountsDbKind,
+    comptime accountsdb_kind: AccountsDbKind,
     allocator: std.mem.Allocator,
-    account_loader: *AccountLoader(bank_kind),
+    account_loader: *AccountLoader(accountsdb_kind),
     tx: *const sig.core.Transaction,
     account_key: *const sig.core.Pubkey,
     account_idx: usize,
     rent_collector: *const sig.core.rent_collector.RentCollector,
     feature_set: *const runtime.FeatureSet,
-) !LoadedTransactionAccount {
+) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?LoadedTransactionAccount {
     if (account_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
         @setCold(true);
-        var account = try constructInstructionsAccount(allocator, tx);
-        const tmp_data = account.data;
-        defer allocator.free(tmp_data);
-
-        const duplicated_data = try account_loader.account_allocator.dupe(u8, account.data);
-
-        account.data = duplicated_data;
-
         return .{
-            .account = account,
+            .account = try constructInstructionsAccount(allocator, tx),
             .loaded_size = 0,
             .rent_collected = 0,
             .is_instruction_account = true,
@@ -238,21 +237,19 @@ fn loadTransactionAccount(
 
     const is_writable = tx.msg.isWritable(account_idx);
 
-    var maybe_loaded_account: ?LoadedTransactionAccount = try account_loader.loadAccount(
+    var loaded_account: LoadedTransactionAccount = try account_loader.loadAccount(
         account_key,
         is_writable,
-    );
+    ) orelse return null;
 
-    return if (maybe_loaded_account) |*loaded_account| blk: {
-        if (is_writable) loaded_account.rent_collected = collectRentFromAccount(
-            &loaded_account.account,
-            account_key,
-            feature_set,
-            rent_collector,
-        ).rent_amount;
+    if (is_writable) loaded_account.rent_collected = collectRentFromAccount(
+        &loaded_account.account,
+        account_key,
+        feature_set,
+        rent_collector,
+    ).rent_amount;
 
-        break :blk loaded_account.*;
-    } else LoadedTransactionAccount.DEFAULT;
+    return loaded_account;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L293
@@ -263,6 +260,7 @@ fn collectRentFromAccount(
     rent_collector: *const sig.core.rent_collector.RentCollector,
 ) sig.core.rent_collector.CollectedInfo {
     if (!feature_set.active.contains(runtime.features.DISABLE_RENT_FEES_COLLECTION)) {
+        @setCold(true); // this feature should always be enabled?
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
 
@@ -278,103 +276,123 @@ fn collectRentFromAccount(
     return sig.core.rent_collector.CollectedInfo.NoneCollected;
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L425
-pub fn loadTransactionAccountsInner(
+/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L425
+pub fn loadTransactionAccounts(
     comptime accountsdb_kind: AccountsDbKind,
-    tmp_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     tx: *const sig.core.Transaction,
-    requested_max_total_data_size: u32, // should be inside the tx?
+    requested_max_total_data_size: u32,
+    /// reusable for a whole batch (i.e. no lock violations)
     account_loader: *AccountLoader(accountsdb_kind),
     features: *const runtime.FeatureSet,
     rent_collector: *const sig.core.rent_collector.RentCollector,
-) !LoadedAccounts {
-    std.debug.assert(tx.msg.account_keys.len <= 128); // TODO: this should be sanitised earlier
+) error{ OutOfMemory, GetAccountFailedUnexpectedly }!LoadedAccounts {
+    std.debug.assert(requested_max_total_data_size != 0); // must be non-zero
 
-    var retval: LoadedAccounts = .{};
-    // attempt to load and collect accounts
+    var loaded_accounts: LoadedAccounts = .{};
     for (tx.msg.account_keys, 0..) |account_key, account_idx| {
-        const loaded_account = try loadTransactionAccount(
+        const loaded_account: LoadedTransactionAccount = try loadTransactionAccount(
             accountsdb_kind,
-            tmp_allocator,
+            allocator,
             account_loader,
             tx,
             &account_key,
             account_idx,
             rent_collector,
             features,
-        );
+        ) orelse {
+            // didn't find tx account, let's stop trying to load accounts from this tx
+            loaded_accounts.load_failure = .{
+                .failure_location = .{ .account_idx_load = @intCast(account_idx) },
+                .err = error.ProgramAccountNotFound,
+            };
+            return loaded_accounts;
+        };
 
-        retval.accounts.appendAssumeCapacity(loaded_account.account);
-        retval.rent_debits.appendAssumeCapacity(.{
+        loaded_accounts.accounts.appendAssumeCapacity(loaded_account.account);
+        loaded_accounts.is_instruction_account.appendAssumeCapacity(
+            loaded_account.is_instruction_account,
+        );
+        loaded_accounts.rent_debits.appendAssumeCapacity(.{
             .rent_collected = loaded_account.rent_collected,
             .rent_balance = loaded_account.account.lamports,
         });
-        retval.account_is_instruction_account.appendAssumeCapacity(
-            loaded_account.is_instruction_account,
-        );
 
-        retval.collected_rent += loaded_account.rent_collected;
+        loaded_accounts.collected_rent += loaded_account.rent_collected;
 
-        try accumulateAndCheckLoadedAccountDataSize(
-            &retval.loaded_account_data_size,
+        accumulateAndCheckLoadedAccountDataSize(
+            &loaded_accounts.loaded_account_data_size,
             loaded_account.loaded_size,
             requested_max_total_data_size,
-        );
+        ) catch |err| {
+            // total accounts data size too large, let's stop here
+            loaded_accounts.load_failure = .{
+                .failure_location = .{ .account_idx_load = @intCast(account_idx) },
+                .err = err,
+            };
+            return loaded_accounts;
+        };
     }
 
-    var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(tmp_allocator);
+    var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
     defer validated_loaders.deinit();
 
-    // load and check the program of each instruction, and the owner of each program
-
-    // I'm not sure why we load the programs as their keys would have been in .account_keys, which
-    // means they could have been loaded already in the previous loop. This matches agave.
-    for (tx.msg.instructions) |instruction| {
+    for (tx.msg.instructions, 0..) |instruction, instr_idx| {
         const program_id = &tx.msg.account_keys[instruction.program_index];
+        if (program_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+        const program_account = loaded_accounts.accounts.buffer[instruction.program_index];
 
-        if (program_id.equals(&runtime.ids.NATIVE_LOADER_ID)) {
-            continue;
-        }
-
-        const program_account = (try account_loader.loadAccount(program_id, false)) orelse
-            return error.ProgramAccountNotFound;
-
-        if (!program_account.account.executable and
+        if (!program_account.executable and
             !features.active.contains(runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS))
         {
-            return error.InvalidProgramForExecution;
+            @setCold(true); // likely dead code (feature should be active)
+            loaded_accounts.load_failure = .{
+                .err = error.InvalidProgramForExecution,
+                .failure_location = .{ .instr_idx_program_check = @intCast(instr_idx) },
+            };
+            return loaded_accounts;
         }
 
-        const owner_id = &program_account.account.owner;
-        if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) {
-            continue;
+        const owner_id = &program_account.owner;
+        const owner_account = account: {
+            if (owner_id.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
+            if (validated_loaders.contains(owner_id.*)) continue; // only load + count owners once
+
+            break :account (try account_loader.loadAccount(owner_id, false)) orelse {
+                // failed to load instruction program's owner
+                loaded_accounts.load_failure = .{
+                    .err = error.InvalidProgramForExecution,
+                    .failure_location = .{ .instr_idx_program_check = @intCast(instr_idx) },
+                };
+                return loaded_accounts;
+            };
+        };
+
+        if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID)) {
+            // instruction program's owner's owner is not the native loader
+            loaded_accounts.load_failure = .{
+                .err = error.InvalidProgramForExecution,
+                .failure_location = .{ .instr_idx_program_check = @intCast(instr_idx) },
+            };
+            return loaded_accounts;
         }
 
-        // only load + count owners once
-        if (validated_loaders.contains(owner_id.*)) {
-            continue;
-        }
-
-        const owner_account = (try account_loader.loadAccount(owner_id, false)) orelse
-            return error.ProgramAccountNotFound;
-
-        if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID) or
-            (!program_account.account.executable and
-            !features.active.contains(runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS)))
-        {
-            return error.InvalidProgramForExecution;
-        }
-
-        try accumulateAndCheckLoadedAccountDataSize(
-            &retval.loaded_account_data_size,
+        accumulateAndCheckLoadedAccountDataSize(
+            &loaded_accounts.loaded_account_data_size,
             owner_account.loaded_size,
             requested_max_total_data_size,
-        );
+        ) catch |err| {
+            loaded_accounts.load_failure = .{
+                .err = err,
+                .failure_location = .{ .instr_idx_program_check = @intCast(instr_idx) },
+            };
+            return loaded_accounts;
+        };
 
         try validated_loaders.put(owner_id.*, {});
     }
 
-    return retval;
+    return loaded_accounts;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L618
@@ -457,15 +475,12 @@ fn newAccountLoader(allocator: std.mem.Allocator) AccountLoader(.Mocked) {
     return .{
         .cache_allocator = allocator,
         .account_allocator = allocator,
-        .features = &runtime.FeatureSet.EMPTY,
-        .bank = .{
+        .accountsdb = .{
             .inner = .{
                 .allocator = allocator,
                 .accounts = .{},
             },
         },
-        .rent_collector = sig.core.rent_collector.defaultCollector(0),
-        .slot = 1,
     };
 }
 
@@ -474,7 +489,7 @@ test "loadTransactionAccounts empty transaction" {
     const tx = sig.core.Transaction.EMPTY;
 
     var account_loader = newAccountLoader(allocator);
-    _ = try loadTransactionAccountsInner(
+    _ = try loadTransactionAccounts(
         .Mocked,
         allocator,
         &tx,
@@ -504,7 +519,7 @@ test "loadTransactionAccounts sysvar instruction" {
 
     var account_loader = newAccountLoader(allocator);
 
-    const loaded = try loadTransactionAccountsInner(
+    const loaded = try loadTransactionAccounts(
         .Mocked,
         allocator,
         &tx,
@@ -584,14 +599,14 @@ test "load accounts rent paid" {
     fee_payer_account.lamports = fee_payer_balance;
 
     var account_loader = newAccountLoader(allocator);
-    defer account_loader.bank.inner.deinit();
+    defer account_loader.accountsdb.inner.deinit();
 
     var data: [1024]u8 = undefined;
     prng.fill(&data);
 
     const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
 
-    try account_loader.bank.inner.accounts.put(allocator, fee_payer_address, sig.core.Account{
+    try account_loader.accountsdb.inner.accounts.put(allocator, fee_payer_address, .{
         .data = .{ .unowned_allocation = &data },
         .lamports = fee_payer_balance,
         .executable = false,
@@ -599,21 +614,21 @@ test "load accounts rent paid" {
         .rent_epoch = 0,
     });
 
-    try account_loader.bank.inner.accounts.put(allocator, instruction_address, sig.core.Account{
+    try account_loader.accountsdb.inner.accounts.put(allocator, instruction_address, .{
         .data = .{ .unowned_allocation = instruction_data },
         .lamports = 1,
         .executable = true,
         .owner = NATIVE_LOADER_ID,
         .rent_epoch = 0,
     });
-    try account_loader.bank.inner.accounts.put(allocator, NATIVE_LOADER_ID, sig.core.Account{
+    try account_loader.accountsdb.inner.accounts.put(allocator, NATIVE_LOADER_ID, .{
         .data = .{ .empty = .{ .len = 0 } },
         .lamports = 1,
         .executable = true,
         .owner = Pubkey.ZEROES,
         .rent_epoch = 0,
     });
-    try account_loader.bank.inner.accounts.put(allocator, Pubkey.ZEROES, sig.core.Account{
+    try account_loader.accountsdb.inner.accounts.put(allocator, Pubkey.ZEROES, .{
         .data = .{ .empty = .{ .len = 0 } },
         .lamports = 0,
         .executable = true,
@@ -621,7 +636,7 @@ test "load accounts rent paid" {
         .rent_epoch = 0,
     });
 
-    const loaded = try loadTransactionAccountsInner(
+    const loaded = try loadTransactionAccounts(
         .Mocked,
         allocator,
         &tx,
