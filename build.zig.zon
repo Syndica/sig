@@ -52,8 +52,8 @@
             .hash = "12206816af8efb7a3c133f5d27f0b7c3cd2a9b38bdb957f8b74c855a2bd38072a5b6",
         },
         .ff = .{
-            .url = "git+https://github.com/Syndica/zig-ff#a5722b6b16f5cf9036b7edb36bfbebab845f3fa7",
-            .hash = "12208804530caf8b03ebed290e244968787f9611213c27a69ffc5778d07b7c6f812b",
+            .url = "git+https://github.com/Syndica/zig-ff#ad8e4d798ae5db70cfdf7796b8d4598808fc4a67",
+            .hash = "12207cfd498eb9465eb823aefb5301ab7dce437ad500dec04e8da857cf78bfda49b9",
         },
     },
 }
