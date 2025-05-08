@@ -2244,8 +2244,8 @@ test "greatestCommonAncestor" {
             ancestors.deinit(allocator);
         }
 
-        try ancestors.put(allocator, 10, try createSet(allocator, &.{7, 5, 3}));
-        try ancestors.put(allocator, 20, try createSet(allocator, &.{7, 5, 4}));
+        try ancestors.put(allocator, 10, try createSet(allocator, &.{ 7, 5, 3 }));
+        try ancestors.put(allocator, 20, try createSet(allocator, &.{ 7, 5, 4 }));
 
         // Should pick 7 (greater than 5)
         try std.testing.expectEqual(
@@ -2253,8 +2253,6 @@ test "greatestCommonAncestor" {
             greatestCommonAncestor(&ancestors, 10, 20),
         );
     }
-
-
 }
 
 test "tower: selectVoteAndResetForks stake not found" {
