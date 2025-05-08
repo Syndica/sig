@@ -75,6 +75,15 @@ pub const VoteTracker = struct {
         map.deinit(allocator);
     }
 
+    pub fn getSlotVoteTracker(self: *VoteTracker, slot: Slot) ?*RcRwSlotVoteTracker {
+        // self.slot_vote_trackers.read().unwrap().get(&slot).cloned()
+        self.map_rwlock.lockShared();
+        defer self.map_rwlock.unlockShared();
+        const rc_rw_svt = self.map.get(slot) orelse return null;
+        std.debug.assert(rc_rw_svt.rc.acquire());
+        return rc_rw_svt;
+    }
+
     /// The caller is responsible for calling `.deinit(allocator)` on the result.
     pub fn getOrInsertSlotTracker(
         self: *VoteTracker,
