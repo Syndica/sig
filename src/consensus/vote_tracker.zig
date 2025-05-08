@@ -136,8 +136,7 @@ pub const VoteTracker = struct {
         }
     }
 
-    /// NOTE: intended for tests
-    pub fn insertVote(
+    pub fn insertVoteForTests(
         self: *VoteTracker,
         allocator: std.mem.Allocator,
         slot: Slot,
