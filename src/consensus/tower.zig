@@ -888,7 +888,7 @@ pub const ReplayTower = struct {
             const vote_threshold = checkVoteStakeThreshold(
                 self.logger.unscoped(),
                 vote_state.nthRecentLockout(threshold.depth),
-                self.tower.vote_state.votes,
+                self.tower.vote_state.votes.constSlice(),
                 threshold.depth,
                 threshold.size,
                 slot,
@@ -2007,11 +2007,10 @@ fn greatestCommonAncestor(
 // could have helped us pass the threshold check. Worst case, we'll just
 // recheck later without having increased lockouts.
 fn optimisticallyBypassVoteStakeThresholdCheck(
-    // Needs to be an iterator that produces Lockout
-    tower_before_applying_vote: anytype,
+    tower_before_applying_vote: []const Lockout,
     threshold_vote: Lockout,
 ) bool {
-    for (tower_before_applying_vote.constSlice()) |old_vote| {
+    for (tower_before_applying_vote) |old_vote| {
         if (old_vote.slot == threshold_vote.slot and
             old_vote.confirmation_count == threshold_vote.confirmation_count)
         {
@@ -2024,7 +2023,7 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
 fn checkVoteStakeThreshold(
     logger: sig.trace.Logger,
     maybe_threshold_vote: ?Lockout,
-    tower_before_applying_vote: anytype,
+    tower_before_applying_vote: []const Lockout,
     threshold_depth: usize,
     threshold_size: f64,
     slot: Slot,
@@ -2033,12 +2032,12 @@ fn checkVoteStakeThreshold(
 ) ThresholdDecision {
     const threshold_vote = maybe_threshold_vote orelse {
         // Tower isn't that deep.
-        return ThresholdDecision{ .passed_threshold = {} };
+        return .passed_threshold;
     };
 
     const fork_stake = voted_stakes.get(threshold_vote.slot) orelse {
         // We haven't seen any votes on this fork yet, so no stake
-        return ThresholdDecision{
+        return .{
             .failed_threshold = .{ threshold_depth, 0 },
         };
     };
@@ -2065,10 +2064,10 @@ fn checkVoteStakeThreshold(
         tower_before_applying_vote,
         threshold_vote,
     ) or lockout > threshold_size) {
-        return ThresholdDecision{ .passed_threshold = {} };
+        return .{ .passed_threshold = {} };
     }
 
-    return ThresholdDecision{
+    return .{
         .failed_threshold = .{ threshold_depth, 0 },
     };
 }
@@ -2082,10 +2081,9 @@ pub fn populateAncestorVotedStakes(
     // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
     // this slot
     for (vote_slots) |vote_slot| {
-        if (ancestors.get(vote_slot)) |maybe_slot_ancestors| {
-            var slot_ancestors = maybe_slot_ancestors;
+        if (ancestors.getPtr(vote_slot)) |maybe_slot_ancestors| {
             try voted_stakes.put(vote_slot);
-            for (slot_ancestors.items()) |slot| {
+            for (maybe_slot_ancestors.items()) |slot| {
                 _ = try voted_stakes.put(slot);
             }
         }
