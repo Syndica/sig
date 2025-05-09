@@ -7,6 +7,7 @@ const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
+const EpochStakes = sig.core.stake.EpochStakes;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -33,7 +34,7 @@ pub const EpochContext = struct {
     feature_set: FeatureSet,
 
     // Exposes epoch stake variables to the VM
-    epoch_stakes: sig.core.stake.EpochStakes,
+    epoch_stakes: EpochStakes,
 
     pub fn deinit(self: EpochContext) void {
         self.feature_set.deinit(self.allocator);

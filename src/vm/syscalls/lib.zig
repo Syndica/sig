@@ -433,11 +433,15 @@ pub fn allocFree(
     // https://doc.rust-lang.org/beta/std/alloc/struct.Layout.html#method.from_size_align
     const bump_to_align = (alignment - (size % alignment)) % alignment;
     if ((size +| bump_to_align) > std.math.maxInt(isize)) {
-        return registers.set(.r0, 0);
+        registers.set(.r0, 0);
+        return;
     }
 
     // Freeing allocated memory is not implemented.
-    if (free_addr != 0) return registers.set(.r0, 0);
+    if (free_addr != 0) {
+        registers.set(.r0, 0);
+        return;
+    }
 
     // Find the heap region to know how much can be bump allocated.
     var bump_max: u64 = 0;
@@ -449,12 +453,13 @@ pub fn allocFree(
     const bytes_to_align = (alignment - (tc.bpf_alloc_pos % alignment)) % alignment;
     const addr_offset = tc.bpf_alloc_pos +| bytes_to_align;
     if (addr_offset +| size > bump_max) {
-        return registers.set(.r0, 0);
+        registers.set(.r0, 0);
+        return;
     }
 
     // Return bump allocated offset
     tc.bpf_alloc_pos = addr_offset +| size;
-    return registers.set(.r0, memory.HEAP_START +| addr_offset);
+    registers.set(.r0, memory.HEAP_START +| addr_offset);
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/4d9d57c433b491689ba7793aa9339eae22c218d3/programs/bpf_loader/src/syscalls/mod.rs#L2144
@@ -474,7 +479,7 @@ pub fn getEpochStake(
 
     try tc.consumeCompute(
         tc.compute_budget.syscall_base_cost +|
-            (32 / tc.compute_budget.cpi_bytes_per_unit) +|
+            (Pubkey.SIZE / tc.compute_budget.cpi_bytes_per_unit) +|
             tc.compute_budget.mem_op_base_cost,
     );
 
@@ -524,7 +529,8 @@ pub fn getProcessedSiblingInstruction(
     } else null;
 
     const info = maybe_info orelse {
-        return registers.set(.r0, 0);
+        registers.set(.r0, 0);
+        return;
     };
 
     const check_aligned = tc.getCheckAligned();
@@ -605,7 +611,7 @@ pub fn getProcessedSiblingInstruction(
 
         header.data_len = info.instruction_data.len;
         header.accounts_len = info.account_metas.len;
-        return registers.set(.r0, 1);
+        registers.set(.r0, 1);
     }
 }
 
@@ -1507,7 +1513,7 @@ test getEpochStake {
     // Test invalid read-only memory region.
     {
         tc.compute_meter = tc.compute_budget.syscall_base_cost +|
-            (32 / tc.compute_budget.cpi_bytes_per_unit) +|
+            (Pubkey.SIZE / tc.compute_budget.cpi_bytes_per_unit) +|
             tc.compute_budget.mem_op_base_cost;
 
         const vote_addr = 0x100000000;
@@ -1530,7 +1536,7 @@ test getEpochStake {
     // Test valid vote address stake read
     {
         tc.compute_meter = tc.compute_budget.syscall_base_cost +|
-            (32 / tc.compute_budget.cpi_bytes_per_unit) +|
+            (Pubkey.SIZE / tc.compute_budget.cpi_bytes_per_unit) +|
             tc.compute_budget.mem_op_base_cost;
 
         const vote_addr = 0x100000000;
@@ -1554,7 +1560,7 @@ test getEpochStake {
     // Test readable address (but not a registered voter).
     {
         tc.compute_meter = tc.compute_budget.syscall_base_cost +|
-            (32 / tc.compute_budget.cpi_bytes_per_unit) +|
+            (Pubkey.SIZE / tc.compute_budget.cpi_bytes_per_unit) +|
             tc.compute_budget.mem_op_base_cost;
 
         const invalid_vote_address = Pubkey.initRandom(prng.random());
