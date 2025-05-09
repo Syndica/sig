@@ -10,6 +10,8 @@ const Instruction = sbpf.Instruction;
 const Executable = sig.vm.Executable;
 const BuiltinProgram = sig.vm.BuiltinProgram;
 const TransactionContext = sig.runtime.TransactionContext;
+const ExecutionError = sig.vm.ExecutionError;
+const EbpfError = sig.vm.EbpfError;
 
 pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
 
@@ -90,7 +92,7 @@ pub const Vm = struct {
         return .{ self.result, instruction_count };
     }
 
-    fn step(self: *Vm) SbpfError!bool {
+    fn step(self: *Vm) ExecutionError!bool {
         const config = self.executable.config;
         if (config.enable_instruction_meter and
             self.instruction_count >= self.transaction_context.compute_meter)
@@ -743,23 +745,12 @@ pub const Vm = struct {
     }
 };
 
-pub const SbpfError = error{
-    ExceededMaxInstructions,
-    UnsupportedInstruction,
-    Overflow,
-    InvalidVirtualAddress,
-    AccessViolation,
-    CallDepthExceeded,
-    DivisionByZero,
-    CallOutsideTextSegment,
-} || syscalls.Error;
-
 /// Contains either an error encountered while executing the program, or the
 /// result, which is the value of the `r0` register at the time of exit.
 ///
 /// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/error.rs#L170-L171
 pub const Result = union(enum) {
-    err: SbpfError,
+    err: ExecutionError,
     ok: u64,
 
     /// Helper function for creating the `Result` from an inline value.

@@ -166,11 +166,24 @@ fn processNextInstruction(
         program_id,
         ic.tc.instruction_stack.len,
     );
-    native_program_fn(allocator, ic) catch |execute_error| {
-        try stable_log.programFailure(ic.tc, program_id, @errorName(execute_error));
-        return execute_error;
+
+    native_program_fn(allocator, ic) catch |err| {
+        // This approach to failure logging is used to prevent requiring all native programs to return
+        // an ExecutionError. Instead, native programs return an InstructionError, and more granular
+        // failure logging for bpf programs is handled in the BPF executor.
+        if (err != InstructionError.ProgramFailedToComplete)
+            try stable_log.programFailure(
+                ic.tc,
+                program_id,
+                sig.vm.getExecutionErrorMessage(err),
+            );
+        return err;
     };
-    try stable_log.programSuccess(ic.tc, program_id);
+
+    try stable_log.programSuccess(
+        ic.tc,
+        program_id,
+    );
 }
 
 /// Pop an instruction from the instruction stack\
