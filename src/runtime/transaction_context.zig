@@ -7,6 +7,7 @@ const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
+const EpochStakes = sig.core.stake.EpochStakes;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
@@ -33,8 +34,12 @@ pub const EpochContext = struct {
     /// Feature Set
     feature_set: FeatureSet,
 
+    // Exposes epoch stake variables to the VM
+    epoch_stakes: EpochStakes,
+
     pub fn deinit(self: EpochContext) void {
         self.feature_set.deinit(self.allocator);
+        self.epoch_stakes.deinit(self.allocator);
     }
 };
 
@@ -70,6 +75,9 @@ pub const TransactionContext = struct {
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
     ),
+
+    /// Used by syscall.allocFree to implement sbrk bump allocation
+    bpf_alloc_pos: u64 = 0,
 
     /// Instruction stack
     instruction_stack: InstructionStack,

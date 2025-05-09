@@ -46,6 +46,22 @@ pub fn main() !void {
     const ec = EpochContext{
         .allocator = gpa,
         .feature_set = FeatureSet.EMPTY,
+        // TODO: hookup with bank
+        .epoch_stakes = .{
+            .stakes = .{
+                .vote_accounts = .{
+                    .accounts = .{},
+                    .staked_nodes = null,
+                },
+                .delegations = .{},
+                .unused = 0,
+                .epoch = 0,
+                .history = &.{},
+            },
+            .total_stake = 0,
+            .node_id_to_vote_accounts = .{},
+            .epoch_authorized_voters = .{},
+        },
     };
     defer ec.deinit();
 

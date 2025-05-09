@@ -63,7 +63,7 @@ pub fn getSysvar(
     const offset = registers.get(.r3);
     const length = registers.get(.r4);
 
-    const id_cost = 32 / tc.compute_budget.cpi_bytes_per_unit;
+    const id_cost = Pubkey.SIZE / tc.compute_budget.cpi_bytes_per_unit;
     const buf_cost = length / tc.compute_budget.cpi_bytes_per_unit;
     const mem_cost = @max(tc.compute_budget.mem_op_base_cost, buf_cost);
     try tc.consumeCompute(tc.compute_budget.sysvar_base_cost +| id_cost +| mem_cost);
@@ -78,10 +78,13 @@ pub fn getSysvar(
         return InstructionError.ProgramArithmeticOverflow;
 
     const buf = tc.sc.sysvar_cache.getSlice(id) orelse {
-        return registers.set(.r0, SYSVAR_NOT_FOUND);
+        registers.set(.r0, SYSVAR_NOT_FOUND);
+        return;
     };
+
     if (buf.len < offset_plus_len) {
-        return registers.set(.r0, OFFSET_LENGTH_EXCEEDS_SYSVAR);
+        registers.set(.r0, OFFSET_LENGTH_EXCEEDS_SYSVAR);
+        return;
     }
 
     @memcpy(value, buf[offset..][0..length]);

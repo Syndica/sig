@@ -58,7 +58,7 @@ const StableInstructionC = extern struct {
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/f7a6475ae883e0216eaeab42f525833f667965a0/instruction/src/account_meta.rs#L25
-const AccountMetaRust = extern struct {
+pub const AccountMetaRust = extern struct {
     /// An account's public key.
     pubkey: Pubkey,
     /// True if an `Instruction` requires a `Transaction` signature matching `pubkey`.
