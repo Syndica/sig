@@ -1075,6 +1075,7 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/9dbfe93720019942a3d70e0d609b654a57c42555/core/src/consensus/heaviest_subtree_fork_choice.rs#L1133
     fn heaviestSlotOnSameVotedFork(
         self: *const ForkChoice,
         replay_tower: *const ReplayTower,
