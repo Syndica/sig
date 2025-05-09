@@ -146,11 +146,26 @@ pub const ReplayTower = struct {
 
     const Self = @This();
 
-    pub fn default(allocator: std.mem.Allocator) !ReplayTower {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        logger: Logger,
+        node_pubkey: Pubkey,
+        vote_account_pubkey: Pubkey,
+        fork_root: Slot,
+        accounts_db: *AccountsDB,
+    ) !ReplayTower {
+        var tower = Tower.init(logger.unscoped());
+        try tower.initializeLockoutsFromBank(
+            allocator,
+            &vote_account_pubkey,
+            fork_root,
+            accounts_db,
+        );
+
         return .{
-            .logger = .noop,
-            .tower = Tower.default(),
-            .node_pubkey = Pubkey.ZEROES,
+            .logger = logger.withScope(@typeName(Self)),
+            .tower = tower,
+            .node_pubkey = node_pubkey,
             .threshold_depth = 0,
             .threshold_size = 0,
             .last_vote = try VoteTransaction.default(allocator),
@@ -159,30 +174,6 @@ pub const ReplayTower = struct {
             .stray_restored_slot = null,
             .last_switch_threshold_check = null,
         };
-    }
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        logger: Logger,
-        node_pubkey: *const Pubkey,
-        vote_account_pubkey: *const Pubkey,
-        fork_root: Slot,
-        accounts_db: *AccountsDB,
-    ) !ReplayTower {
-        var replay_tower = try ReplayTower.default(allocator);
-        replay_tower.logger = logger.withScope(@typeName(ReplayTower));
-        replay_tower.node_pubkey = node_pubkey.*;
-
-        var tower = Tower.default();
-        tower.logger = logger.withScope(@typeName(Tower));
-        try tower.initializeLockoutsFromBank(
-            allocator,
-            vote_account_pubkey,
-            fork_root,
-            accounts_db,
-        );
-        replay_tower.tower = tower;
-        return replay_tower;
     }
 
     pub fn deinit(self: *ReplayTower, allocator: std.mem.Allocator) void {
@@ -1112,9 +1103,9 @@ pub const Tower = struct {
 
     const Self = @This();
 
-    pub fn default() Tower {
+    pub fn init(logger: Logger) Tower {
         var tower = Tower{
-            .logger = .noop,
+            .logger = logger.withScope(@typeName(Self)),
             .vote_state = .{},
         };
         // VoteState::root_slot is ensured to be Some in Tower
@@ -2333,7 +2324,7 @@ test "tower: recent votes exact" {
 }
 
 test "tower: maybe timestamp" {
-    var replay_tower = try ReplayTower.default(std.testing.allocator);
+    var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0);
     try std.testing.expect(replay_tower.maybeTimestamp(0) != null);
     try std.testing.expect(replay_tower.maybeTimestamp(1) != null);
     // Refuse to timestamp an older slot
@@ -2353,7 +2344,7 @@ test "tower: maybe timestamp" {
 }
 
 test "tower: refresh last vote timestamp" {
-    var replay_tower = try ReplayTower.default(std.testing.allocator);
+    var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0);
 
     // Tower has no vote or timestamp
     replay_tower.last_vote.setTimestamp(null);
@@ -3156,7 +3147,20 @@ fn createTestReplayTower(
     if (!builtin.is_test) {
         @compileError("createTestTower should only be used in test");
     }
-    var replay_tower = try ReplayTower.default(allocator);
+
+    var replay_tower: ReplayTower = .{
+        .logger = .noop,
+        .tower = Tower.init(.noop),
+        .node_pubkey = Pubkey.ZEROES,
+        .threshold_depth = 0,
+        .threshold_size = 0,
+        .last_vote = try VoteTransaction.default(allocator),
+        .last_vote_tx_blockhash = .uninitialized,
+        .last_timestamp = BlockTimestamp.ZEROES,
+        .stray_restored_slot = null,
+        .last_switch_threshold_check = null,
+    };
+
     replay_tower.threshold_depth = threshold_depth;
     replay_tower.threshold_size = threshold_size;
     return replay_tower;
