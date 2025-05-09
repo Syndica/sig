@@ -3287,7 +3287,7 @@ test "tower: default tower has no stray last vote" {
 
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
-fn createTestReplayTower(
+pub fn createTestReplayTower(
     allocator: std.mem.Allocator,
     threshold_depth: usize,
     threshold_size: f64,
@@ -3301,7 +3301,7 @@ fn createTestReplayTower(
     return replay_tower;
 }
 
-fn createTestSlotHistory(
+pub fn createTestSlotHistory(
     allocator: std.mem.Allocator,
 ) !SlotHistory {
     if (!builtin.is_test) {
