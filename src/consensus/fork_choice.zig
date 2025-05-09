@@ -2112,6 +2112,19 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_stray_restored_slot"
     );
 }
 
+test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_last_voted_not_found" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    defer replay_tower.deinit(test_allocator);
+
+    try std.testing.expectEqualDeep(
+        null,
+        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)),
+    );
+}
+
 pub fn forkChoiceForTest(
     allocator: std.mem.Allocator,
     forks: []const TreeNode,
