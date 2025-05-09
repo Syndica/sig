@@ -564,11 +564,7 @@ test "accumulated size" {
 }
 
 test "load accounts rent paid" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-
+    const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
     const fee_payer_address = Pubkey.initRandom(prng.random());
@@ -599,7 +595,13 @@ test "load accounts rent paid" {
     fee_payer_account.lamports = fee_payer_balance;
 
     var account_loader = newAccountLoader(allocator);
-    defer account_loader.accountsdb.inner.deinit();
+    defer {
+        var iter = account_loader.account_cache.iterator();
+        while (iter.next()) |account_entry| allocator.free(account_entry.value_ptr.data);
+
+        account_loader.accountsdb.inner.deinit();
+        account_loader.deinit();
+    }
 
     var data: [1024]u8 = undefined;
     prng.fill(&data);
@@ -647,10 +649,7 @@ test "load accounts rent paid" {
     );
 
     var found: usize = 0;
-    for (loaded.accounts.slice()) |account| {
-        found += 1;
-        allocator.free(account.data);
-    }
+    for (loaded.accounts.slice()) |_| found += 1;
 
     // slots elapsed   slots per year    lamports per year
     //  |               |                 |      data len
@@ -704,4 +703,157 @@ test "constructInstructionsAccount" {
     defer allocator.free(account.data);
     try std.testing.expectEqual(0, account.lamports);
     try std.testing.expect(account.data.len > 8);
+}
+
+test "loadAccount allocations" {
+    const allocator = std.testing.allocator;
+    const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
+
+    const checkFn = struct {
+        fn f(alloc: std.mem.Allocator) !void {
+            var account_loader = newAccountLoader(alloc);
+            defer account_loader.deinit();
+            defer account_loader.accountsdb.inner.deinit();
+
+            try account_loader.accountsdb.inner.accounts.put(alloc, NATIVE_LOADER_ID, .{
+                .data = .{ .empty = .{ .len = 0 } },
+                .lamports = 1,
+                .executable = true,
+                .owner = Pubkey.ZEROES,
+                .rent_epoch = 0,
+            });
+
+            const account = (try account_loader.loadAccount(&NATIVE_LOADER_ID, false)) orelse
+                @panic("account not found");
+            try std.testing.expectEqual(1, account.account.lamports);
+            try std.testing.expectEqual(true, account.account.executable);
+        }
+    }.f;
+
+    try std.testing.checkAllAllocationFailures(allocator, checkFn, .{});
+}
+
+test "load tx too large" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(5083);
+
+    const address = Pubkey.initRandom(prng.random());
+
+    // large account
+    const account_data = try allocator.alloc(u8, 10 * 1024 * 1024);
+    defer allocator.free(account_data);
+
+    var account_loader = newAccountLoader(allocator);
+    defer {
+        var iter = account_loader.account_cache.iterator();
+        while (iter.next()) |account_entry| allocator.free(account_entry.value_ptr.data);
+
+        account_loader.accountsdb.inner.deinit();
+        account_loader.deinit();
+    }
+
+    try account_loader.accountsdb.inner.accounts.put(allocator, address, .{
+        .data = .{ .unowned_allocation = account_data },
+        .lamports = 1_000_000,
+        .executable = false,
+        .owner = sig.runtime.program.system_program.ID,
+        .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+    });
+
+    const tx = sig.core.Transaction{
+        .version = .legacy,
+        .signatures = &.{},
+        .msg = .{
+            .account_keys = &.{address},
+            .instructions = &.{},
+            .readonly_signed_count = 0,
+            .signature_count = 0,
+            .recent_blockhash = sig.core.Hash.ZEROES,
+            .readonly_unsigned_count = 1,
+        },
+    };
+
+    const loaded_accounts = try loadTransactionAccounts(
+        .Mocked,
+        allocator,
+        &tx,
+        1_000_000, // 1M < 10MiB
+        &account_loader,
+        &sig.runtime.FeatureSet.EMPTY,
+        &sig.core.rent_collector.defaultCollector(0),
+    );
+
+    const load_err = (loaded_accounts.load_failure orelse
+        return error.TestFailed).err;
+
+    try std.testing.expectEqual(error.MaxLoadedAccountsDataSizeExceeded, load_err);
+}
+
+test "dont double count program owner account data size" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    const data1 = "data1";
+    const data2 = "data2";
+    const data_owner = "data_owner";
+    const pk1 = Pubkey.initRandom(random);
+    const pk2 = Pubkey.initRandom(random);
+    const pk_owner = Pubkey.initRandom(random);
+
+    const tx = blk: {
+        var tx = sig.core.Transaction.EMPTY;
+        tx.msg.account_keys = &.{ pk1, pk2 };
+        tx.msg.instructions = &.{
+            .{ .program_index = 1, .account_indexes = &.{0}, .data = "instr1" },
+            .{ .program_index = 0, .account_indexes = &.{1}, .data = "instr2" },
+        };
+        break :blk tx;
+    };
+
+    var account_loader = newAccountLoader(allocator);
+    defer {
+        var iter = account_loader.account_cache.iterator();
+        while (iter.next()) |account_entry| allocator.free(account_entry.value_ptr.data);
+
+        account_loader.accountsdb.inner.deinit();
+        account_loader.deinit();
+    }
+
+    try account_loader.accountsdb.inner.accounts.put(allocator, pk1, .{
+        .data = .{ .unowned_allocation = data1 },
+        .lamports = 0,
+        .executable = true,
+        .owner = pk_owner,
+        .rent_epoch = 0,
+    });
+    try account_loader.accountsdb.inner.accounts.put(allocator, pk2, .{
+        .data = .{ .unowned_allocation = data2 },
+        .lamports = 0,
+        .executable = true,
+        .owner = pk_owner,
+        .rent_epoch = 0,
+    });
+    try account_loader.accountsdb.inner.accounts.put(allocator, pk_owner, .{
+        .data = .{ .unowned_allocation = data_owner },
+        .lamports = 0,
+        .executable = true,
+        .owner = runtime.ids.NATIVE_LOADER_ID,
+        .rent_epoch = 0,
+    });
+
+    const loaded_accounts = try loadTransactionAccounts(
+        .Mocked,
+        allocator,
+        &tx,
+        1_000_000, // 1M < 10MiB
+        &account_loader,
+        &sig.runtime.FeatureSet.EMPTY,
+        &sig.core.rent_collector.defaultCollector(0),
+    );
+
+    try std.testing.expectEqual(
+        data1.len + data2.len + data_owner.len, // owner counted once, not twice
+        loaded_accounts.loaded_account_data_size,
+    );
 }
