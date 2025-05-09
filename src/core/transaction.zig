@@ -84,6 +84,7 @@ pub const Transaction = struct {
 
     pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: sig.bincode.Params) !Transaction {
         const signatures = try allocator.alloc(Signature, try leb.readULEB128(u16, reader));
+        errdefer allocator.free(signatures);
         for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
         var peekable = sig.utils.io.peekableReader(reader);
         const version = try TransactionVersion.deserialize(&peekable);

@@ -279,87 +279,6 @@ fn executeLoadedTransaction(
     }
 }
 
-// example of usage
-fn loadAndExecuteBatchExample(
-    allocator: std.mem.Allocator,
-    bank: account_loader.MockedAccountsDb,
-    env: ProcessingEnv,
-    transactions: []const sig.core.Transaction,
-    features: *const sig.runtime.FeatureSet,
-) !void {
-    if (!builtin.is_test) @compileError("example/testing usage only");
-
-    const per_tx_budget_limit = try allocator.alloc(
-        compute_budget.Error!compute_budget.ComputeBudgetLimits,
-        transactions.len,
-    );
-    defer allocator.free(per_tx_budget_limit);
-
-    for (transactions, per_tx_budget_limit) |*tx, *tx_budgetlimits| {
-        tx_budgetlimits.* = compute_budget.execute(tx);
-    }
-
-    var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, max: {
-        // capacity over-estimate
-        var n_accounts: usize = 0;
-        for (transactions) |tx| n_accounts += tx.account_keys.len;
-        break :max n_accounts;
-    });
-    defer loader.deinit();
-
-    const per_ex_loaded_accounts = try allocator.alloc(LoadedAccounts, transactions.len);
-    defer allocator.free(per_ex_loaded_accounts);
-
-    // load single-threaded (writing to account loader)
-    for (
-        transactions,
-        per_ex_loaded_accounts,
-        per_tx_budget_limit,
-    ) |*tx, *tx_loaded_accounts, tx_budget_limit| {
-        const max_account_bytes = (tx_budget_limit catch continue).loaded_accounts_bytes;
-
-        const loaded = try account_loader.loadTransactionAccounts(
-            .Mocked,
-            allocator,
-            tx,
-            max_account_bytes,
-            &loader,
-            features,
-            &env.rent_collector,
-        );
-
-        tx_loaded_accounts.* = loaded;
-    }
-
-    for (
-        transactions,
-        per_ex_loaded_accounts,
-        per_tx_budget_limit,
-        0..,
-    ) |*tx, *tx_loaded_accounts, tx_budget_limit, tx_idx| {
-        const budget = tx_budget_limit catch |err| {
-            std.debug.print("tx{}, bad budget program: {}\n", .{ tx_idx, err });
-            continue;
-        };
-        if (tx_loaded_accounts.load_failure) |failure| {
-            std.debug.print("tx{}, failed to load: {}\n", .{ tx_idx, failure });
-            continue;
-        }
-
-        const output = try executeTransaction(allocator, tx, env, budget, tx_loaded_accounts);
-        defer output.deinit(allocator);
-
-        if (output.err) |err| {
-            std.debug.print("tx{}, failed to load: {}\n", .{ tx_idx, err });
-            if (output.logs.len > 0) {
-                std.debug.print("logs: {{\n", .{});
-                for (output.logs) |log_entry| std.debug.print("{}:\t{s}", .{ tx_idx, log_entry });
-                std.debug.print("logs: }}\n", .{});
-            }
-        }
-    }
-}
-
 test {
     std.testing.refAllDecls(@This());
 
@@ -497,7 +416,6 @@ test {
 
     const env = ProcessingEnv.testingDefault();
 
-    // This loop could be trivially parallelised (assuming no lock violations!)
     for (transactions, batch_budgetlimits, 0..) |*tx, tx_budgetlimit, tx_idx| {
         const loaded = &batch_loadedaccounts[tx_idx];
 
@@ -519,4 +437,104 @@ test {
 
         try std.testing.expectEqual(expected_err, err);
     }
+}
+
+// example of usage
+fn loadAndExecuteBatchExample(
+    allocator: std.mem.Allocator,
+    bank: account_loader.MockedAccountsDb,
+    env: ProcessingEnv,
+    transactions: []const sig.core.Transaction,
+    features: *const sig.runtime.FeatureSet,
+) !void {
+    if (!builtin.is_test) @compileError("example/testing usage only");
+
+    const per_tx_budget_limit = try allocator.alloc(
+        compute_budget.Error!compute_budget.ComputeBudgetLimits,
+        transactions.len,
+    );
+    defer allocator.free(per_tx_budget_limit);
+
+    for (transactions, per_tx_budget_limit) |*tx, *tx_budgetlimits| {
+        tx_budgetlimits.* = compute_budget.execute(tx);
+    }
+
+    var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, max: {
+        // capacity over-estimate
+        var n_accounts: usize = 0;
+        for (transactions) |tx| n_accounts += tx.msg.account_keys.len;
+        break :max n_accounts;
+    });
+    defer loader.deinit();
+
+    const per_ex_loaded_accounts = try allocator.alloc(LoadedAccounts, transactions.len);
+    defer allocator.free(per_ex_loaded_accounts);
+
+    // load single-threaded (writing to account loader)
+    for (
+        transactions,
+        per_ex_loaded_accounts,
+        per_tx_budget_limit,
+    ) |*tx, *tx_loaded_accounts, tx_budget_limit| {
+        const max_account_bytes = (tx_budget_limit catch continue).loaded_accounts_bytes;
+
+        const loaded = try account_loader.loadTransactionAccounts(
+            .Mocked,
+            allocator,
+            tx,
+            max_account_bytes,
+            &loader,
+            features,
+            &env.rent_collector,
+        );
+
+        tx_loaded_accounts.* = loaded;
+    }
+
+    // easy to parallelize (assuming no lock violations)
+    for (
+        transactions,
+        per_ex_loaded_accounts,
+        per_tx_budget_limit,
+        0..,
+    ) |tx, tx_loaded_accounts, tx_budget_limit, tx_idx| {
+        const budget = tx_budget_limit catch |err| {
+            std.debug.print("tx{}, bad budget program: {}\n", .{ tx_idx, err });
+            continue;
+        };
+        if (tx_loaded_accounts.load_failure) |failure| {
+            std.debug.print("tx{}, failed to load: {}\n", .{ tx_idx, failure });
+            continue;
+        }
+
+        const output = try executeTransaction(allocator, &tx, env, budget, &tx_loaded_accounts);
+        defer output.deinit(allocator);
+
+        if (output.err) |err| {
+            std.debug.print("tx{}, failed to execute: {}\n", .{ tx_idx, err });
+            if (output.logs.len > 0) {
+                std.debug.print("logs: {{\n", .{});
+                for (output.logs) |log_entry| std.debug.print("{}:\t{s}", .{ tx_idx, log_entry });
+                std.debug.print("logs: }}\n", .{});
+            }
+        }
+    }
+}
+
+test "example batch" {
+    const allocator = std.testing.allocator;
+
+    var bank = account_loader.MockedAccountsDb{ .allocator = allocator };
+    defer bank.accounts.deinit(allocator);
+
+    const transactions = &.{sig.core.Transaction.EMPTY};
+    const env = ProcessingEnv.testingDefault();
+
+    try loadAndExecuteBatchExample(
+        allocator,
+        bank,
+        env,
+        transactions,
+        &sig.runtime.FeatureSet.EMPTY,
+    );
 }
