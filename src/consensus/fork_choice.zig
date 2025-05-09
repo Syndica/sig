@@ -2171,6 +2171,33 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_use_deepest_slot" {
     );
 }
 
+test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
+    const tree = [_]TreeNode{
+        //
+        // (0)
+        // └── (1)
+        //
+        .{
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+    };
+    var fork_choice = try forkChoiceForTest(test_allocator, &tree);
+    defer fork_choice.deinit();
+
+    // Create a tower that voted on slot 2 which doesn't exist in the fork choice.
+    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    defer replay_tower.deinit(test_allocator);
+    _ = try replay_tower.recordBankVote(test_allocator, 2, Hash.ZEROES);
+
+    try std.testing.expect(!replay_tower.isStrayLastVote());
+
+    try std.testing.expectError(
+        error.MissingCandidate,
+        fork_choice.heaviestSlotOnSameVotedFork(&replay_tower),
+    );
+}
+
 pub fn forkChoiceForTest(
     allocator: std.mem.Allocator,
     forks: []const TreeNode,
