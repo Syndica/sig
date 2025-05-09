@@ -1461,7 +1461,7 @@ test "alt_bn128 g1 compress/decompress" {
         .{ .accounts = &.{.{
             .pubkey = sig.core.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-        }}, .compute_meter = 428 * 2 },
+        }}, .compute_meter = 628 * 2 },
     );
     defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
@@ -1521,7 +1521,7 @@ test "alt_bn128 g2 compress/decompress" {
         .{ .accounts = &.{.{
             .pubkey = sig.core.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-        }}, .compute_meter = 13_696 * 2 },
+        }}, .compute_meter = 13_896 * 2 },
     );
     defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
