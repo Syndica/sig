@@ -87,7 +87,7 @@ pub const VoteTracker = struct {
             self.map_rwlock.lockShared();
             defer self.map_rwlock.unlockShared();
             const rc_rw_svt = self.map.get(slot) orelse break :blk;
-            // we acquired a lock on the map, this shouldn't be possible
+            // we acquired a lock on the map, this should never trigger unless rc is mismanaged.
             std.debug.assert(rc_rw_svt.rc.acquire());
             return rc_rw_svt;
         }
