@@ -2125,6 +2125,52 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_last_voted_not_found
     );
 }
 
+test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_use_deepest_slot" {
+    const tree = [_]TreeNode{
+        //
+        // (0)
+        // └── (1)
+        //     ├── (2)
+        //
+        .{
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+    };
+    var fork_choice = try forkChoiceForTest(test_allocator, &tree);
+    defer fork_choice.deinit();
+
+    // Create a tower that voted on slot 1.
+    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    defer replay_tower.deinit(test_allocator);
+    _ = try replay_tower.recordBankVote(test_allocator, 1, Hash.ZEROES);
+
+    // Initially, slot 1 is valid so we get the heaviest slot (which would be 2)
+    try std.testing.expectEqualDeep(
+        SlotAndHash{ .slot = @as(Slot, 2), .hash = Hash.ZEROES },
+        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
+    );
+
+    // Now mark slot 1 as invalid
+    try fork_choice.markForkInvalidCandidate(
+        &SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+    );
+    try std.testing.expect(
+        !fork_choice.isCandidate(&SlotAndHash{ .slot = 1, .hash = Hash.ZEROES }).?,
+    );
+
+    // Now heaviestSlotOnSameVotedFork should return the deepest slot (2)
+    // even though the fork is invalid
+    try std.testing.expectEqualDeep(
+        SlotAndHash{ .slot = @as(Slot, 2), .hash = Hash.ZEROES },
+        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
+    );
+}
+
 pub fn forkChoiceForTest(
     allocator: std.mem.Allocator,
     forks: []const TreeNode,
