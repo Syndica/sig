@@ -92,6 +92,13 @@ pub const VoteTransaction = union(enum) {
         return self.getSlot(slot_count - 1);
     }
 
+    pub fn isFullTowerVote(self: *const VoteTransaction) bool {
+        return switch (self.*) {
+            .vote_state_update, .tower_sync => true,
+            else => false,
+        };
+    }
+
     /// Asserts `slots.len == self.slotCount()`.
     /// Copies all slots from `self` to `slots`.
     pub fn copyAllSlotsTo(
