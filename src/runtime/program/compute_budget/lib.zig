@@ -2,7 +2,9 @@ const sig = @import("../../../sig.zig");
 
 pub const ID = sig.runtime.ids.COMPUTE_BUDGET_PROGRAM_ID;
 
-pub fn execute(tx: *const sig.core.Transaction) !ComputeBudgetLimits {
+pub const Error = error{ InvalidLoadedAccountsDataSizeLimit, InvalidInstructionData };
+
+pub fn execute(tx: *const sig.core.Transaction) Error!ComputeBudgetLimits {
     const instr_details = try ComputeBudgetInstructionDetails.fromInstructions(tx);
     const budget_limits = try instr_details.sanitizeAndConvertToComputeBudgetLimits();
     return budget_limits;

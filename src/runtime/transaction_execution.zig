@@ -3,11 +3,13 @@ const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
 const account_loader = sig.runtime.account_loader;
+const compute_budget = sig.runtime.program.compute_budget;
+
 const AccountLoader = account_loader.AccountLoader;
-const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const LoadedAccounts = account_loader.LoadedAccounts;
+const Pubkey = sig.core.Pubkey;
+const Slot = sig.core.Slot;
 
 /// Various constants needed for the block and slot, a reference into accountsdb, and a slice of
 /// transactions.
@@ -125,16 +127,19 @@ pub fn executeTransaction(
     tx: *const sig.core.Transaction,
     /// reusable for a whole slot
     env: ProcessingEnv,
+    budget_limits: compute_budget.ComputeBudgetLimits,
     loaded_accounts: *const LoadedAccounts,
 ) error{OutOfMemory}!ExecutedTransaction {
     std.debug.assert(loaded_accounts.load_failure == null); // don't execute an improperly loaded tx
-
-    const budget_limits = sig.runtime.program.compute_budget.execute(tx) catch |err|
-        return .{ .err = err };
-    const compute_budget = budget_limits.intoComputeBudget();
     const accounts = loaded_accounts.accounts.constSlice();
 
-    var tc = try makeTransactionContext(allocator, &env, accounts, tx, compute_budget);
+    var tc = try makeTransactionContext(
+        allocator,
+        &env,
+        accounts,
+        tx,
+        budget_limits.intoComputeBudget(),
+    );
     defer tc.deinit();
 
     executeLoadedTransaction(allocator, &tc, accounts, tx) catch |err| {
@@ -172,7 +177,7 @@ fn makeTransactionContext(
     env: *const ProcessingEnv,
     accounts: []const AccountSharedData,
     raw_transaction: *const sig.core.Transaction,
-    compute_budget: sig.runtime.ComputeBudget,
+    tx_compute_budget: sig.runtime.ComputeBudget,
 ) error{OutOfMemory}!sig.runtime.TransactionContext {
     const context_accounts = try allocator.alloc(
         sig.runtime.TransactionContextAccount,
@@ -194,14 +199,14 @@ fn makeTransactionContext(
         .accounts = context_accounts,
         .return_data = .{},
         .accounts_resize_delta = 0,
-        .compute_meter = compute_budget.compute_unit_limit,
+        .compute_meter = tx_compute_budget.compute_unit_limit,
         .custom_error = null,
         // 100KiB max log (we need *a* limit, but this is arbitrary)
         .log_collector = sig.runtime.LogCollector.init(100 * 1024),
         .prev_blockhash = env.prev_blockhash,
         .serialized_accounts = .{},
         .prev_lamports_per_signature = env.prev_blockhash_lamports_per_signature,
-        .compute_budget = compute_budget,
+        .compute_budget = tx_compute_budget,
         .rent = env.rent_collector.rent,
     };
 }
@@ -274,12 +279,93 @@ fn executeLoadedTransaction(
     }
 }
 
+// example of usage
+fn loadAndExecuteBatchExample(
+    allocator: std.mem.Allocator,
+    bank: account_loader.MockedAccountsDb,
+    env: ProcessingEnv,
+    transactions: []const sig.core.Transaction,
+    features: *const sig.runtime.FeatureSet,
+) !void {
+    if (!builtin.is_test) @compileError("example/testing usage only");
+
+    const per_tx_budget_limit = try allocator.alloc(
+        compute_budget.Error!compute_budget.ComputeBudgetLimits,
+        transactions.len,
+    );
+    defer allocator.free(per_tx_budget_limit);
+
+    for (transactions, per_tx_budget_limit) |*tx, *tx_budgetlimits| {
+        tx_budgetlimits.* = compute_budget.execute(tx);
+    }
+
+    var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, max: {
+        // capacity over-estimate
+        var n_accounts: usize = 0;
+        for (transactions) |tx| n_accounts += tx.account_keys.len;
+        break :max n_accounts;
+    });
+    defer loader.deinit();
+
+    const per_ex_loaded_accounts = try allocator.alloc(LoadedAccounts, transactions.len);
+    defer allocator.free(per_ex_loaded_accounts);
+
+    // load single-threaded (writing to account loader)
+    for (
+        transactions,
+        per_ex_loaded_accounts,
+        per_tx_budget_limit,
+    ) |*tx, *tx_loaded_accounts, tx_budget_limit| {
+        const max_account_bytes = (tx_budget_limit catch continue).loaded_accounts_bytes;
+
+        const loaded = try account_loader.loadTransactionAccounts(
+            .Mocked,
+            allocator,
+            tx,
+            max_account_bytes,
+            &loader,
+            features,
+            &env.rent_collector,
+        );
+
+        tx_loaded_accounts.* = loaded;
+    }
+
+    for (
+        transactions,
+        per_ex_loaded_accounts,
+        per_tx_budget_limit,
+        0..,
+    ) |*tx, *tx_loaded_accounts, tx_budget_limit, tx_idx| {
+        const budget = tx_budget_limit catch |err| {
+            std.debug.print("tx{}, bad budget program: {}\n", .{ tx_idx, err });
+            continue;
+        };
+        if (tx_loaded_accounts.load_failure) |failure| {
+            std.debug.print("tx{}, failed to load: {}\n", .{ tx_idx, failure });
+            continue;
+        }
+
+        const output = try executeTransaction(allocator, tx, env, budget, tx_loaded_accounts);
+        defer output.deinit(allocator);
+
+        if (output.err) |err| {
+            std.debug.print("tx{}, failed to load: {}\n", .{ tx_idx, err });
+            if (output.logs.len > 0) {
+                std.debug.print("logs: {{\n", .{});
+                for (output.logs) |log_entry| std.debug.print("{}:\t{s}", .{ tx_idx, log_entry });
+                std.debug.print("logs: }}\n", .{});
+            }
+        }
+    }
+}
+
 test {
     std.testing.refAllDecls(@This());
 
     const allocator = std.testing.allocator;
 
-    var bank = sig.runtime.account_loader.MockedAccountsDb{ .allocator = allocator };
+    var bank = account_loader.MockedAccountsDb{ .allocator = allocator };
     defer bank.accounts.deinit(allocator);
     try bank.accounts.put(allocator, sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID, .{
         .owner = sig.runtime.ids.NATIVE_LOADER_ID,
@@ -379,30 +465,46 @@ test {
     const batch_loadedaccounts = try allocator.alloc(LoadedAccounts, transactions.len);
     defer allocator.free(batch_loadedaccounts);
 
-    for (transactions, 0..) |*tx, tx_idx| {
+    const batch_budgetlimits = try allocator.alloc(
+        compute_budget.Error!compute_budget.ComputeBudgetLimits,
+        transactions.len,
+    );
+    defer allocator.free(batch_budgetlimits);
+
+    for (transactions, batch_budgetlimits) |*tx, *tx_budgetlimits| {
+        tx_budgetlimits.* = compute_budget.execute(tx);
+    }
+
+    for (
+        transactions,
+        batch_loadedaccounts,
+        batch_budgetlimits,
+    ) |*tx, *tx_loaded_account, tx_budgetlimit| {
+        const max_account_bytes = (try tx_budgetlimit).loaded_accounts_bytes;
+
         const loaded = try account_loader.loadTransactionAccounts(
             .Mocked,
             allocator,
             tx,
-            1000,
+            max_account_bytes,
             &loader,
             &sig.runtime.FeatureSet.EMPTY,
             &sig.core.rent_collector.defaultCollector(0),
         );
 
-        batch_loadedaccounts[tx_idx] = loaded;
+        tx_loaded_account.* = loaded;
     }
 
     const env = ProcessingEnv.testingDefault();
 
-    // This loop could be trivially parallelised parallelised (assuming no lock violations!)
-    for (transactions, 0..) |*tx, tx_idx| {
+    // This loop could be trivially parallelised (assuming no lock violations!)
+    for (transactions, batch_budgetlimits, 0..) |*tx, tx_budgetlimit, tx_idx| {
         const loaded = &batch_loadedaccounts[tx_idx];
 
         const err: ?anyerror = if (loaded.load_failure) |failure|
             failure.err
         else exec_err: {
-            const output = try executeTransaction(allocator, tx, env, loaded);
+            const output = try executeTransaction(allocator, tx, env, try tx_budgetlimit, loaded);
             defer output.deinit(allocator);
 
             break :exec_err output.err;
