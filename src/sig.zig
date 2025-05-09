@@ -24,6 +24,7 @@ pub const transaction_sender = @import("transaction_sender/lib.zig");
 pub const testing = @import("testing.zig");
 pub const utils = @import("utils/lib.zig");
 pub const version = @import("version/version.zig");
+pub const zksdk = @import("zksdk/lib.zig");
 pub const build_options = @import("build-options");
 
 pub const VALIDATOR_DIR = "validator/";
