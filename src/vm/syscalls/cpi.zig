@@ -150,14 +150,14 @@ fn VmValue(comptime T: type) type {
             memory_map: *const MemoryMap,
             check_aligned: bool,
         },
-        translated: *T,
+        translated_ptr: usize,
 
         pub fn get(self: Self, comptime state: memory.MemoryState) !(switch (state) {
             .constant => *align(1) const T,
             .mutable => *align(1) T,
         }) {
             switch (self) {
-                .translated => |ptr| return ptr,
+                .translated_ptr => |ptr| return @ptrFromInt(ptr),
                 .vm_address => |vma| {
                     return vma.memory_map.translateType(T, state, vma.vm_addr, vma.check_aligned);
                 },
@@ -323,12 +323,11 @@ const CallerAccount = struct {
                     .check_aligned = ic.getCheckAligned(),
                 } };
             } else r2l: {
-                const translated: *u64 = @ptrFromInt(try memory_map.translate(
+                break :r2l VmValue(u64){ .translated_ptr = try memory_map.translate(
                     .constant,
                     data_ptr +| @sizeOf(u64),
-                    8,
-                ));
-                break :r2l VmValue(u64){ .translated = translated };
+                    @sizeOf(u64),
+                ) };
             };
 
             const vm_data_addr = data.ptr;
@@ -453,11 +452,11 @@ const CallerAccount = struct {
                 .check_aligned = ic.getCheckAligned(),
             } }
         else
-            VmValue(u64){ .translated = @ptrFromInt(try memory_map.translate(
+            VmValue(u64){ .translated_ptr = try memory_map.translate(
                 .mutable,
                 data_len_vm_addr,
                 @sizeOf(u64),
-            )) };
+            ) };
 
         return .{
             .lamports = lamports,
@@ -590,7 +589,7 @@ fn translateAccounts(
     // this pointer to a specific address but we don't want it to be inside accounts, or
     // callees might be able to write to the pointed memory.
     if (direct_mapping and
-        (account_infos_addr +| (account_infos_len *| @sizeOf(u64))) >= MM_INPUT_START)
+        (account_infos_addr +| (account_infos_len *| @sizeOf(AccountInfoType))) >= MM_INPUT_START)
     {
         return SyscallError.InvalidPointer;
     }
@@ -623,6 +622,18 @@ fn translateAccounts(
         }
     }
 
+    var account_info_keys = std.ArrayList(*const Pubkey).init(allocator);
+    defer account_info_keys.deinit();
+
+    for (account_infos) |account_info| {
+        try account_info_keys.append(try memory_map.translateType(
+            Pubkey,
+            .constant,
+            account_info.key_addr,
+            ic.getCheckAligned(),
+        ));
+    }
+
     // translate_and_update_accounts():
 
     var accounts: TranslatedAccounts = .{};
@@ -636,6 +647,13 @@ fn translateAccounts(
 
         var callee_account = try ic.borrowInstructionAccount(meta.index_in_caller);
         defer callee_account.release();
+
+        const account_key = blk: {
+            const account_meta = ic.ixn_info.getAccountMetaAtIndex(
+                meta.index_in_transaction,
+            ) orelse return InstructionError.NotEnoughAccountKeys;
+            break :blk account_meta.pubkey;
+        };
 
         if (callee_account.account.executable) {
             // Use the known account
@@ -652,22 +670,16 @@ fn translateAccounts(
             continue;
         }
 
-        const account_key = ic.getAccountKeyByIndexUnchecked(meta.index_in_caller);
-        const caller_account_index = for (account_infos, 0..) |info, idx| {
-            const info_key = try memory_map.translateType(
-                Pubkey,
-                .constant,
-                info.key_addr,
-                ic.getCheckAligned(),
-            );
-            if (info_key.equals(&account_key)) break idx;
+        const caller_account_index = for (account_info_keys.items, 0..) |key, idx| {
+            if (key.equals(&account_key)) break idx;
         } else {
             try ic.tc.log("Instruction references an unknown account {}", .{account_key});
             return InstructionError.MissingAccount;
         };
 
-        const serialized_metadata = if (meta.index_in_caller < ic.ixn_info.account_metas.len) blk: {
-            break :blk &ic.tc.serialized_accounts.slice()[meta.index_in_caller];
+        const serialized_account_metas = ic.tc.serialized_accounts.slice();
+        const serialized_metadata = if (meta.index_in_caller < serialized_account_metas.len) blk: {
+            break :blk &serialized_account_metas[meta.index_in_caller];
         } else {
             try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
             return InstructionError.MissingAccount;
@@ -1964,7 +1976,7 @@ const TestCallerAccount = struct {
             .original_data_len = self.len,
             .serialized_data = if (self.direct_mapping) &.{} else data,
             .vm_data_addr = self.vm_addr + @sizeOf(u64),
-            .ref_to_len_in_vm = .{ .translated = &self.len },
+            .ref_to_len_in_vm = .{ .translated_ptr = @intFromPtr(&self.len) },
         };
     }
 };
