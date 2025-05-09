@@ -1575,19 +1575,17 @@ pub fn collectVoteLockouts(
     // Therefore, we use the voted_stake for the parent of bank_slot as the
     // `fork_stake` instead.
     const fork_stake = blk: {
-        if (ancestors.get(bank_slot)) |bank_ancestors| {
-            var max_parent: ?Slot = null;
-            var iter = bank_ancestors.iterator();
-            while (iter.next()) |slot| {
-                if (max_parent == null or slot.* > max_parent.?) {
-                    max_parent = slot.*;
-                }
-            }
-            if (max_parent) |parent| {
-                break :blk voted_stakes.get(parent) orelse 0;
+        const bank_ancestors = ancestors.get(bank_slot) orelse break :blk 0;
+        var max_parent: ?Slot = null;
+        var iter = bank_ancestors.iterator();
+        while (iter.next()) |slot| {
+            if (max_parent == null or slot.* > max_parent.?) {
+                max_parent = slot.*;
             }
         }
-        break :blk 0;
+        if (max_parent) |parent| {
+            break :blk voted_stakes.get(parent) orelse 0;
+        }
     };
 
     return ComputedBankState{
