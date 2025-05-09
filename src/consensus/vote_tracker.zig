@@ -390,7 +390,7 @@ test "VoteStakeTracker.addVotePubkey" {
             .vote_pubkey = pubkey,
             .stake = 1,
             .total_stake = total_epoch_stake,
-            .thresholds_to_check = &.{ sig.consensus.tower.VOTE_THRESHOLD_SIZE, 0.0 },
+            .thresholds_to_check = &.{ sig.consensus.replay_tower.VOTE_THRESHOLD_SIZE, 0.0 },
         });
         defer is_confirmed_thresholds.deinit(allocator);
 
@@ -402,7 +402,7 @@ test "VoteStakeTracker.addVotePubkey" {
             .vote_pubkey = pubkey,
             .stake = 1,
             .total_stake = total_epoch_stake,
-            .thresholds_to_check = &.{ sig.consensus.tower.VOTE_THRESHOLD_SIZE, 0.0 },
+            .thresholds_to_check = &.{ sig.consensus.replay_tower.VOTE_THRESHOLD_SIZE, 0.0 },
         });
         defer is_confirmed_thresholds2.deinit(allocator);
 
