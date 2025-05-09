@@ -6,6 +6,7 @@ pub const bpf_loader_program = @import("bpf_loader/lib.zig");
 pub const precompile_programs = @import("precompiles/lib.zig");
 pub const system_program = @import("system/lib.zig");
 pub const testing = @import("testing.zig");
+pub const zk_elgamal_program = @import("zk_elgamal/lib.zig");
 pub const vote_program = @import("vote/lib.zig");
 
 pub const bpf = @import("bpf/lib.zig");
