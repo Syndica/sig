@@ -256,7 +256,7 @@ pub fn prepareCpiInstructionInfo(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
     for (callee.accounts, 0..) |account, index| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
-            try tc.log("Instruction references unknown account {}", .{account.pubkey});
+            try tc.log("Instruction references an unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
@@ -276,7 +276,7 @@ pub fn prepareCpiInstructionInfo(
             deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
         } else {
             const index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse {
-                try tc.log("Instruction references unknown account {}", .{account.pubkey});
+                try tc.log("Instruction references an unknown account {}", .{account.pubkey});
                 return InstructionError.MissingAccount;
             };
 

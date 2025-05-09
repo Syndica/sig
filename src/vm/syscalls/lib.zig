@@ -753,6 +753,11 @@ fn invokeSigned(
     memory_map: *MemoryMap,
     registers: *RegisterMap,
 ) Error!void {
+    errdefer |e| {
+        std.debug.print("invokeSigned = {any}\n", .{e});
+        if (@errorReturnTrace()) |t| std.debug.dumpStackTrace(t.*);
+    }
+
     const instruction_addr = registers.get(.r1);
     const account_infos_addr = registers.get(.r2);
     const account_infos_len = registers.get(.r3);
