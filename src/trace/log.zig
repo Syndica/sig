@@ -25,6 +25,10 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
         pub const TEST_DEFAULT_LEVEL: Level = .warn;
 
         pub fn unscoped(self: Self) Logger {
+            return self.withScope(null);
+        }
+
+        pub fn withScope(self: Self, comptime new_scope: ?[]const u8) ScopedLogger(new_scope) {
             return switch (self) {
                 .channel_print => |logger| .{ .channel_print = logger },
                 .direct_print => |logger| .{ .direct_print = logger },
@@ -32,12 +36,8 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
             };
         }
 
-        pub fn withScope(self: Self, comptime new_scope: []const u8) ScopedLogger(new_scope) {
-            return switch (self) {
-                .channel_print => |logger| .{ .channel_print = logger },
-                .direct_print => |logger| .{ .direct_print = logger },
-                .noop => .noop,
-            };
+        pub fn from(logger: anytype) ScopedLogger(scope) {
+            return logger.withScope(scope);
         }
 
         pub fn deinit(self: *const Self) void {

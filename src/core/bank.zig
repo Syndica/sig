@@ -111,8 +111,8 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(LtHash),
 
-    pub fn isFrozen(self: *const SlotState) bool {
-        return self.hash.read().get() != null;
+    pub fn isFrozen(self: *SlotState) bool {
+        return self.hash.read().get().* != null;
     }
 
     pub fn tickHeight(self: *const SlotState) u64 {
