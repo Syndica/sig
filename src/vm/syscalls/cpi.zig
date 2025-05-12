@@ -174,7 +174,8 @@ fn checkAccountInfoPtr(
     field: []const u8,
 ) !void {
     if (vm_addr != expected_vm_addr) {
-        try ic.tc.log("Invalid account info pointer `{s}`: {x} != {x}", .{
+        // Intentional ' instead of ` to match logs.
+        try ic.tc.log("Invalid account info pointer `{s}': 0x{x} != 0x{x}", .{
             field,
             vm_addr,
             expected_vm_addr,
@@ -884,7 +885,7 @@ fn translateSigners(
         );
 
         if (untranslated_seeds.len > MAX_SIGNERS) {
-            return SyscallError.TooManySigners;
+            return SyscallError.MaxSeedLengthExceeded;
         }
 
         var seeds: std.BoundedArray([]const u8, MAX_SIGNERS) = .{};
@@ -898,11 +899,12 @@ fn translateSigners(
             ));
         }
 
-        signers.appendAssumeCapacity(pubkey_utils.createProgramAddress(
+        const key = pubkey_utils.createProgramAddress(
             seeds.slice(),
             &.{}, // no bump seeds AFAIK
             program_id,
-        ) catch return SyscallError.BadSeeds);
+        ) catch return SyscallError.BadSeeds;
+        signers.appendAssumeCapacity(key);
     }
 
     return signers;
