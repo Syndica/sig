@@ -471,99 +471,278 @@ test "transaction_execution" {
 // example of usage
 fn loadAndExecuteBatchExample(
     allocator: std.mem.Allocator,
-    bank: account_loader.MockedAccountsDb,
-    env: ProcessingEnv,
-    transactions: []const sig.core.Transaction,
-    features: *const sig.runtime.FeatureSet,
-) !void {
-    if (!builtin.is_test) @compileError("example/testing usage only");
-
-    const per_tx_budget_limit = try allocator.alloc(
-        compute_budget.Error!compute_budget.ComputeBudgetLimits,
-        transactions.len,
-    );
-    defer allocator.free(per_tx_budget_limit);
-
-    for (transactions, per_tx_budget_limit) |*tx, *tx_budgetlimits| {
-        tx_budgetlimits.* = compute_budget.execute(tx);
-    }
-
-    var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, max: {
-        // capacity over-estimate
-        var n_accounts: usize = 0;
-        for (transactions) |tx| n_accounts += tx.msg.account_keys.len;
-        break :max n_accounts;
-    });
-    defer loader.deinit();
-
-    const per_ex_loaded_accounts = try allocator.alloc(LoadedAccounts, transactions.len);
-    defer allocator.free(per_ex_loaded_accounts);
-
-    // load single-threaded (writing to account loader)
-    for (
-        transactions,
-        per_ex_loaded_accounts,
-        per_tx_budget_limit,
-    ) |*tx, *tx_loaded_accounts, tx_budget_limit| {
-        const max_account_bytes = (tx_budget_limit catch continue).loaded_accounts_bytes;
-
-        const loaded = try account_loader.loadTransactionAccounts(
-            .Mocked,
-            allocator,
-            tx,
-            max_account_bytes,
-            &loader,
-            features,
-            &env.rent_collector,
-        );
-
-        tx_loaded_accounts.* = loaded;
-    }
-
-    // easy to parallelize (assuming no lock violations)
-    for (
-        transactions,
-        per_ex_loaded_accounts,
-        per_tx_budget_limit,
-        0..,
-    ) |tx, tx_loaded_accounts, tx_budget_limit, tx_idx| {
-        const budget = tx_budget_limit catch |err| {
-            std.debug.print("tx{}, bad budget program: {}\n", .{ tx_idx, err });
-            continue;
-        };
-        if (tx_loaded_accounts.load_failure) |failure| {
-            std.debug.print("tx{}, failed to load: {}\n", .{ tx_idx, failure });
-            continue;
-        }
-
-        const output = try executeTransaction(allocator, &tx, env, budget, &tx_loaded_accounts);
-        defer output.deinit(allocator);
-
-        if (output.err) |err| {
-            std.debug.print("tx{}, failed to execute: {}\n", .{ tx_idx, err });
-            if (output.logs.len > 0) {
-                std.debug.print("logs: {{\n", .{});
-                for (output.logs) |log_entry| std.debug.print("{}:\t{s}", .{ tx_idx, log_entry });
-                std.debug.print("logs: }}\n", .{});
-            }
-        }
-    }
+    transaction: *const RuntimeTransaction,
+    batch_account_cache: *const std.AutoArrayHashMap(Pubkey, AccountSharedData),
+    loaded_fee_payer_account: *const LoadedTransactionAccount,
+    compute_budget_limits: *const ComputeBudgetLimits,
+    rent_collector: *const RentCollector,
+) TransactionError!LoadedAccounts {
+    _ = allocator;
+    _ = transaction;
+    _ = batch_account_cache;
+    _ = loaded_fee_payer_account;
+    _ = compute_budget_limits;
+    _ = rent_collector;
+    @panic("not implemented");
 }
 
-test "example batch" {
-    const allocator = std.testing.allocator;
+// TODO: Test cases to reimplement once validation components are integrated
+// test {
+//     std.testing.refAllDecls(@This());
 
-    var bank = account_loader.MockedAccountsDb{ .allocator = allocator };
-    defer bank.accounts.deinit(allocator);
+//     const allocator = std.testing.allocator;
 
-    const transactions = &.{sig.core.Transaction.EMPTY};
-    const env = ProcessingEnv.testingDefault();
+//     var bank = account_loader.MockedAccountsDb{ .allocator = allocator };
+//     defer bank.accounts.deinit(allocator);
+//     try bank.accounts.put(allocator, sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID, .{
+//         .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+//         .executable = true,
+//         .data = .{ .empty = .{ .len = 0 } },
+//         .lamports = 1,
+//         .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+//     });
+//     try bank.accounts.put(allocator, sig.runtime.program.vote_program.ID, .{
+//         .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+//         .executable = true,
+//         .data = .{ .empty = .{ .len = 0 } },
+//         .lamports = 1,
+//         .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+//     });
 
-    try loadAndExecuteBatchExample(
-        allocator,
-        bank,
-        env,
-        transactions,
-        &sig.runtime.FeatureSet.EMPTY,
-    );
-}
+//     // empty
+//     const tx1 = sig.core.Transaction.EMPTY;
+
+//     // zero instructions
+//     const tx2: sig.core.Transaction = .{
+//         .signatures = &.{},
+//         .version = .legacy,
+//         .msg = .{
+//             .signature_count = 0,
+//             .readonly_signed_count = 0,
+//             .readonly_unsigned_count = 0,
+//             .account_keys = &.{sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID},
+//             .recent_blockhash = .{ .data = [_]u8{0x00} ** sig.core.Hash.SIZE },
+//             .instructions = &.{},
+//             .address_lookups = &.{},
+//         },
+//     };
+//     const Ed25519 = std.crypto.sign.Ed25519;
+
+//     const keypair = try Ed25519.KeyPair.create(null);
+//     const ed25519_instruction = try sig.runtime.program.precompile_programs.ed25519.newInstruction(
+//         std.testing.allocator,
+//         keypair,
+//         "hello!",
+//     );
+//     defer std.testing.allocator.free(ed25519_instruction.data);
+
+//     // a precompile instruction (slightly different codepath) - impl
+//     // const tx3: sig.core.Transaction = .{
+//     //     .msg = .{
+//     //         .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
+//     //         .instructions = &.{
+//     //             .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
+//     //         },
+//     //         .signature_count = 1,
+//     //         .readonly_signed_count = 1,
+//     //         .readonly_unsigned_count = 0,
+//     //         .recent_blockhash = sig.core.Hash.ZEROES,
+//     //     },
+//     //     .version = .legacy,
+//     //     .signatures = &.{},
+//     // };
+
+//     // program not found
+//     const tx4 = sig.core.Transaction{
+//         .msg = .{
+//             .account_keys = &.{Pubkey.ZEROES},
+//             .instructions = &.{
+//                 .{ .program_index = 0, .account_indexes = &.{0}, .data = "" },
+//             },
+//             .signature_count = 1,
+//             .readonly_signed_count = 1,
+//             .readonly_unsigned_count = 0,
+//             .recent_blockhash = sig.core.Hash.ZEROES,
+//         },
+//         .version = .legacy,
+//         .signatures = &.{},
+//     };
+
+//     // program that should fail
+//     const tx5 = sig.core.Transaction{
+//         .msg = .{
+//             .account_keys = &.{sig.runtime.program.vote_program.ID},
+//             .instructions = &.{
+//                 .{ .program_index = 0, .account_indexes = &.{0}, .data = "" },
+//             },
+//             .signature_count = 1,
+//             .readonly_signed_count = 1,
+//             .readonly_unsigned_count = 0,
+//             .recent_blockhash = sig.core.Hash.ZEROES,
+//         },
+//         .version = .legacy,
+//         .signatures = &.{},
+//     };
+
+//     const transactions: []const sig.core.Transaction = &.{ tx1, tx2, tx4, tx5 };
+
+//     var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, 100);
+//     defer loader.deinit();
+
+//     const batch_loadedaccounts = try allocator.alloc(LoadedAccounts, transactions.len);
+//     defer allocator.free(batch_loadedaccounts);
+
+//     const batch_budgetlimits = try allocator.alloc(
+//         compute_budget.Error!compute_budget.ComputeBudgetLimits,
+//         transactions.len,
+//     );
+//     defer allocator.free(batch_budgetlimits);
+
+//     for (transactions, batch_budgetlimits) |*tx, *tx_budgetlimits| {
+//         tx_budgetlimits.* = compute_budget.execute(tx);
+//     }
+
+//     for (
+//         transactions,
+//         batch_loadedaccounts,
+//         batch_budgetlimits,
+//     ) |*tx, *tx_loaded_account, tx_budgetlimit| {
+//         const max_account_bytes = (try tx_budgetlimit).loaded_accounts_bytes;
+
+//         const loaded = try account_loader.loadTransactionAccounts(
+//             .Mocked,
+//             allocator,
+//             tx,
+//             max_account_bytes,
+//             &loader,
+//             &sig.runtime.FeatureSet.EMPTY,
+//             &sig.core.rent_collector.defaultCollector(0),
+//         );
+
+//         tx_loaded_account.* = loaded;
+//     }
+
+//     const env = ProcessingEnv.testingDefault();
+
+//     for (transactions, batch_budgetlimits, 0..) |*tx, tx_budgetlimit, tx_idx| {
+//         const loaded = &batch_loadedaccounts[tx_idx];
+
+//         const err: ?anyerror = if (loaded.load_failure) |failure|
+//             failure.err
+//         else exec_err: {
+//             const output = try executeTransaction(allocator, tx, env, try tx_budgetlimit, loaded);
+//             defer output.deinit(allocator);
+
+//             break :exec_err output.err;
+//         };
+
+//         const expected_err: ?anyerror = switch (tx_idx) {
+//             0, 1 => null,
+//             2 => error.ProgramAccountNotFound,
+//             3 => error.InvalidAccountOwner,
+//             else => unreachable,
+//         };
+
+//         try std.testing.expectEqual(expected_err, err);
+//     }
+// }
+
+// // example of usage
+// fn loadAndExecuteBatchExample(
+//     allocator: std.mem.Allocator,
+//     bank: account_loader.MockedAccountsDb,
+//     env: ProcessingEnv,
+//     transactions: []const sig.core.Transaction,
+//     features: *const sig.runtime.FeatureSet,
+// ) !void {
+//     if (!builtin.is_test) @compileError("example/testing usage only");
+
+//     const per_tx_budget_limit = try allocator.alloc(
+//         compute_budget.Error!compute_budget.ComputeBudgetLimits,
+//         transactions.len,
+//     );
+//     defer allocator.free(per_tx_budget_limit);
+
+//     for (transactions, per_tx_budget_limit) |*tx, *tx_budgetlimits| {
+//         tx_budgetlimits.* = compute_budget.execute(tx);
+//     }
+
+//     var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, max: {
+//         // capacity over-estimate
+//         var n_accounts: usize = 0;
+//         for (transactions) |tx| n_accounts += tx.msg.account_keys.len;
+//         break :max n_accounts;
+//     });
+//     defer loader.deinit();
+
+//     const per_ex_loaded_accounts = try allocator.alloc(LoadedAccounts, transactions.len);
+//     defer allocator.free(per_ex_loaded_accounts);
+
+//     // load single-threaded (writing to account loader)
+//     for (
+//         transactions,
+//         per_ex_loaded_accounts,
+//         per_tx_budget_limit,
+//     ) |*tx, *tx_loaded_accounts, tx_budget_limit| {
+//         const max_account_bytes = (tx_budget_limit catch continue).loaded_accounts_bytes;
+
+//         const loaded = try account_loader.loadTransactionAccounts(
+//             .Mocked,
+//             allocator,
+//             tx,
+//             max_account_bytes,
+//             &loader,
+//             features,
+//             &env.rent_collector,
+//         );
+
+//         tx_loaded_accounts.* = loaded;
+//     }
+
+//     // easy to parallelize (assuming no lock violations)
+//     for (
+//         transactions,
+//         per_ex_loaded_accounts,
+//         per_tx_budget_limit,
+//         0..,
+//     ) |tx, tx_loaded_accounts, tx_budget_limit, tx_idx| {
+//         const budget = tx_budget_limit catch |err| {
+//             std.debug.print("tx{}, bad budget program: {}\n", .{ tx_idx, err });
+//             continue;
+//         };
+//         if (tx_loaded_accounts.load_failure) |failure| {
+//             std.debug.print("tx{}, failed to load: {}\n", .{ tx_idx, failure });
+//             continue;
+//         }
+
+//         const output = try executeTransaction(allocator, &tx, env, budget, &tx_loaded_accounts);
+//         defer output.deinit(allocator);
+
+//         if (output.err) |err| {
+//             std.debug.print("tx{}, failed to execute: {}\n", .{ tx_idx, err });
+//             if (output.logs.len > 0) {
+//                 std.debug.print("logs: {{\n", .{});
+//                 for (output.logs) |log_entry| std.debug.print("{}:\t{s}", .{ tx_idx, log_entry });
+//                 std.debug.print("logs: }}\n", .{});
+//             }
+//         }
+//     }
+// }
+
+// test "example batch" {
+//     const allocator = std.testing.allocator;
+
+//     var bank = account_loader.MockedAccountsDb{ .allocator = allocator };
+//     defer bank.accounts.deinit(allocator);
+
+//     const transactions = &.{sig.core.Transaction.EMPTY};
+//     const env = ProcessingEnv.testingDefault();
+
+//     try loadAndExecuteBatchExample(
+//         allocator,
+//         bank,
+//         env,
+//         transactions,
+//         &sig.runtime.FeatureSet.EMPTY,
+//     );
+// }
