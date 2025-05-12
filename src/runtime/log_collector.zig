@@ -37,22 +37,6 @@ pub const LogCollector = struct {
         return self.messages.items;
     }
 
-    pub fn collectCloned(self: LogCollector, allocator: std.mem.Allocator) ![]const []const u8 {
-        const buf = try allocator.alloc([]const u8, self.messages.items.len);
-        errdefer allocator.free(buf);
-
-        for (buf, self.messages.items, 0..) |*out_msg, in_msg, i| {
-            errdefer {
-                if (i > 0) {
-                    for (buf[0 .. i - 1]) |prev_msg| allocator.free(prev_msg);
-                }
-            }
-            out_msg.* = try allocator.dupe(u8, in_msg);
-        }
-
-        return buf;
-    }
-
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L25
     pub fn log(
         self: *LogCollector,
