@@ -10,13 +10,13 @@ const Vm = sig.vm.Vm;
 const sbpf = sig.vm.sbpf;
 const Config = sig.vm.Config;
 const MemoryMap = memory.MemoryMap;
-const EpochContext = sig.runtime.transaction_context.EpochContext;
-const SlotContext = sig.runtime.transaction_context.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const FeatureSet = sig.runtime.FeatureSet;
 const Hash = sig.core.Hash;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
+const EpochStakes = sig.core.stake.EpochStakes;
+const SysvarCache = sig.runtime.SysvarCache;
 
 pub fn main() !void {
     var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
@@ -43,39 +43,20 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(gpa, sbpf.MAX_FILE_SIZE);
     defer gpa.free(bytes);
 
-    const ec = EpochContext{
-        .allocator = gpa,
-        .feature_set = FeatureSet.EMPTY,
-        // TODO: hookup with bank
-        .epoch_stakes = .{
-            .stakes = .{
-                .vote_accounts = .{
-                    .accounts = .{},
-                    .staked_nodes = null,
-                },
-                .delegations = .{},
-                .unused = 0,
-                .epoch = 0,
-                .history = &.{},
-            },
-            .total_stake = 0,
-            .node_id_to_vote_accounts = .{},
-            .epoch_authorized_voters = .{},
-        },
-    };
-    defer ec.deinit();
+    const feature_set = FeatureSet.EMPTY;
+    defer feature_set.deinit(gpa);
 
-    const sc = SlotContext{
-        .allocator = gpa,
-        .ec = &ec,
-        .sysvar_cache = .{},
-    };
-    defer sc.deinit();
+    const epoch_stakes = EpochStakes.EMPTY;
+    defer epoch_stakes.deinit(gpa);
+
+    const sysvar_cache = SysvarCache{};
+    defer sysvar_cache.deinit(gpa);
 
     var tc: TransactionContext = .{
         .allocator = gpa,
-        .ec = &ec,
-        .sc = &sc,
+        .feature_set = &feature_set,
+        .epoch_stakes = &epoch_stakes,
+        .sysvar_cache = &sysvar_cache,
         .accounts = &.{},
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -92,7 +73,7 @@ pub fn main() !void {
     };
     defer tc.deinit();
 
-    var loader = try sig.vm.syscalls.register(gpa, &ec.feature_set, 0, true);
+    var loader = try sig.vm.syscalls.register(gpa, &feature_set, 0, true);
     defer loader.deinit(gpa);
 
     const config: Config = .{

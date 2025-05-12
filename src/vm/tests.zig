@@ -18,7 +18,8 @@ const VmResult = sig.vm.interpreter.Result;
 const OpCode = sbpf.Instruction.OpCode;
 
 const expectEqual = std.testing.expectEqual;
-const createExecutionContexts = sig.runtime.testing.createExecutionContexts;
+const createTransactionContext = sig.runtime.testing.createTransactionContext;
+const deinitTranactionContext = sig.runtime.testing.deinitTransactionContext;
 
 // Execution tests
 
@@ -68,24 +69,19 @@ fn testAsmWithMemory(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    const ec, const sc, var context = try createExecutionContexts(
+    var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{ .compute_meter = expected[1] },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-    }
+    defer deinitTranactionContext(allocator, tc);
     var vm = try Vm.init(
         allocator,
         &executable,
         m,
         &loader,
         stack_memory.len,
-        &context,
+        &tc,
     );
     defer vm.deinit();
 
@@ -1902,17 +1898,12 @@ test "pqr" {
     program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
     var prng = std.Random.DefaultPrng.init(10);
-    const ec, const sc, var context = try createExecutionContexts(
+    var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{ .compute_meter = 6 },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-    }
+    defer deinitTranactionContext(allocator, tc);
     const max_int = std.math.maxInt(u64);
     inline for (
         // zig fmt: off
@@ -2000,17 +1991,17 @@ test "pqr" {
 
         const map = try MemoryMap.init(allocator, &.{}, .v2, .{});
 
-        // TODO: I would have defined the `context` struct inside of the loop,
+        // TODO: I would have defined the `tc` struct inside of the loop,
         // but an LLVM 18 miscompilation on ARM64 doesn't let me.
         // TODO(0.14): Move it back
-        context.compute_meter = 6;
+        tc.compute_meter = 6;
         var vm = try Vm.init(
             allocator,
             &executable,
             map,
             &loader,
             0,
-            &context,
+            &tc,
         );
         defer vm.deinit();
 
@@ -2054,17 +2045,12 @@ test "pqr divide by zero" {
         const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
         var prng = std.Random.DefaultPrng.init(10);
 
-        const ec, const sc, var context = try createExecutionContexts(
+        var tc = try createTransactionContext(
             allocator,
             prng.random(),
             .{ .compute_meter = 2 },
         );
-        defer {
-            ec.deinit();
-            allocator.destroy(ec);
-            sc.deinit();
-            allocator.destroy(sc);
-        }
+        defer deinitTranactionContext(allocator, tc);
 
         var vm = try Vm.init(
             allocator,
@@ -2072,7 +2058,7 @@ test "pqr divide by zero" {
             map,
             &loader,
             0,
-            &context,
+            &tc,
         );
         defer vm.deinit();
 
@@ -2337,7 +2323,7 @@ pub fn testElfWithSyscalls(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    const ec, const sc, var tc = try createExecutionContexts(
+    var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -2347,13 +2333,7 @@ pub fn testElfWithSyscalls(
             .compute_meter = expected[1],
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     const instr_info = InstructionInfo{
         .program_meta = .{
@@ -2954,20 +2934,14 @@ pub fn testSyscall(
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{.{
             .pubkey = sig.core.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }},
         .compute_meter = config.compute_meter,
     });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(

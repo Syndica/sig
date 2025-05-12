@@ -93,7 +93,7 @@ pub fn poseidon(
         }
 
         hasher.append(&buffer) catch {
-            if (tc.ec.feature_set.active.contains(
+            if (tc.feature_set.active.contains(
                 features.SIMPLIFY_ALT_BN128_SYSCALL_ERROR_CODES,
             )) {
                 registers.set(.r0, 1);

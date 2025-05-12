@@ -784,7 +784,7 @@ pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.ec.feature_set.active.contains(
+    if (!ic.tc.feature_set.active.contains(
         features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -944,7 +944,7 @@ pub fn executeV3Close(
                 return InstructionError.IncorrectProgramId;
             }
 
-            var clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+            var clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
             if (clock.slot == data.slot) {
                 try ic.tc.log("Program was deployed in this block already", .{});
                 return InstructionError.InvalidArgument;
@@ -967,7 +967,7 @@ pub fn executeV3Close(
                     program_account_released = true;
                     try commonCloseAccount(ic, authority_address);
 
-                    clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+                    clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
                     // TODO: This depends on program cache which isn't implemented yet.
                     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1114-L1123
                 },
@@ -1100,7 +1100,7 @@ pub fn executeV3ExtendProgram(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
@@ -1129,7 +1129,7 @@ pub fn executeV3ExtendProgram(
     const required_payment = blk: {
         const balance = programdata.account.lamports;
         // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-        const rent = try ic.sc.sysvar_cache.get(sysvar.Rent);
+        const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
     };
@@ -1197,7 +1197,7 @@ pub fn executeV3Migrate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!ic.ec.feature_set.active.contains(
+    if (!ic.tc.feature_set.active.contains(
         features.ENABLE_LOADER_V4,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -1214,7 +1214,7 @@ pub fn executeV3Migrate(
         ic.getAccountKeyByIndexUnchecked(@intFromEnum(AccountIndex.authority));
 
     // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.sc.sysvar_cache.get(sysvar.Clock);
+    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
 
     // Verify ProgramData account.
     const progdata_info = info: {
@@ -1425,7 +1425,7 @@ pub fn deployProgram(
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var syscalls = vm.syscalls.register(
         allocator,
-        &tc.sc.ec.feature_set,
+        tc.feature_set,
         0,
         false,
     ) catch |err| {

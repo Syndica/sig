@@ -569,8 +569,8 @@ fn executeUpdateCommission(
         ic,
         vote_account,
         commission,
-        try ic.sc.sysvar_cache.get(EpochSchedule),
-        try ic.sc.sysvar_cache.get(Clock),
+        try ic.tc.sysvar_cache.get(EpochSchedule),
+        try ic.tc.sysvar_cache.get(Clock),
     );
 }
 
@@ -589,7 +589,7 @@ fn updateCommission(
     var maybe_vote_state: ?VoteState = null;
 
     const enforce_commission_update_rule = blk: {
-        if (ic.ec.feature_set.active.contains(
+        if (ic.tc.feature_set.active.contains(
             features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
         )) {
             const versioned_state = vote_account.deserializeFromAccountData(
@@ -610,7 +610,7 @@ fn updateCommission(
     };
 
     if (enforce_commission_update_rule and
-        ic.ec.feature_set.active.contains(
+        ic.tc.feature_set.active.contains(
         features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
     )) {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
@@ -682,8 +682,8 @@ fn executeWithdraw(
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(2);
-    const rent = try ic.sc.sysvar_cache.get(Rent);
-    const clock = try ic.sc.sysvar_cache.get(Clock);
+    const rent = try ic.tc.sysvar_cache.get(Rent);
+    const clock = try ic.tc.sysvar_cache.get(Clock);
 
     vote_account.release();
 
@@ -779,10 +779,10 @@ fn executeProcessVoteWithAccount(
     vote_account: *BorrowedAccount,
     vote: Vote,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (ic.ec.feature_set.active.contains(
+    if (ic.tc.feature_set.active.contains(
         features.DEPRECATE_LEGACY_VOTE_IXS,
     ) and
-        ic.ec.feature_set.active.contains(
+        ic.tc.feature_set.active.contains(
         features.ENABLE_TOWER_SYNC_IX,
     )) {
         return InstructionError.InvalidInstructionData;
@@ -871,14 +871,14 @@ fn executeUpdateVoteState(
     vote_state_update: VoteStateUpdate,
 ) (error{OutOfMemory} || InstructionError)!void {
     var vote_state_update_mut = vote_state_update;
-    if (ic.ec.feature_set.active.contains(features.DEPRECATE_LEGACY_VOTE_IXS) and
-        ic.ec.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX))
+    if (ic.tc.feature_set.active.contains(features.DEPRECATE_LEGACY_VOTE_IXS) and
+        ic.tc.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX))
     {
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try ic.sc.sysvar_cache.get(SlotHashes);
-    const clock = try ic.sc.sysvar_cache.get(Clock);
+    const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
+    const clock = try ic.tc.sysvar_cache.get(Clock);
 
     try voteStateUpdate(
         allocator,
@@ -937,12 +937,12 @@ fn executeTowerSync(
     tower_sync: TowerSync,
 ) (error{OutOfMemory} || InstructionError)!void {
     var tower_sync_mut = tower_sync;
-    if (!ic.ec.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX)) {
+    if (!ic.tc.feature_set.active.contains(features.ENABLE_TOWER_SYNC_IX)) {
         return InstructionError.InvalidInstructionData;
     }
 
-    const slot_hashes = try ic.sc.sysvar_cache.get(SlotHashes);
-    const clock = try ic.sc.sysvar_cache.get(Clock);
+    const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
+    const clock = try ic.tc.sysvar_cache.get(Clock);
 
     try towerSync(
         allocator,
