@@ -2614,7 +2614,7 @@ test "greatestCommonAncestor" {
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
-fn createTestReplayTower(
+pub fn createTestReplayTower(
     allocator: std.mem.Allocator,
     threshold_depth: usize,
     threshold_size: f64,
@@ -2709,7 +2709,7 @@ fn voteAndCheckRecent(num_votes: usize) !void {
     );
 }
 
-fn createTestSlotHistory(
+pub fn createTestSlotHistory(
     allocator: std.mem.Allocator,
 ) !SlotHistory {
     if (!builtin.is_test) {

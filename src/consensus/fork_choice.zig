@@ -11,7 +11,7 @@ const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
-const ReplayTower = sig.consensus.tower.ReplayTower;
+const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 
 const UpdateLabel = enum {
     Aggregate,
@@ -1242,8 +1242,8 @@ fn doInsertAggregateOperation(
     return true;
 }
 const test_allocator = std.testing.allocator;
-const createTestReplayTower = sig.consensus.tower.createTestReplayTower;
-const createTestSlotHistory = sig.consensus.tower.createTestSlotHistory;
+const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
+const createTestSlotHistory = sig.consensus.replay_tower.createTestSlotHistory;
 
 // [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L3281
 test "HeaviestSubtreeForkChoice.subtreeDiff" {
