@@ -1,10 +1,12 @@
 const sig = @import("../../../sig.zig");
 
+const InstructionInfo = sig.runtime.InstructionInfo;
+
 pub const ID = sig.runtime.ids.COMPUTE_BUDGET_PROGRAM_ID;
 
 pub const Error = error{ InvalidLoadedAccountsDataSizeLimit, InvalidInstructionData };
 
-pub fn execute(tx: *const sig.core.Transaction) Error!ComputeBudgetLimits {
+pub fn execute(tx: []const InstructionInfo) Error!ComputeBudgetLimits {
     const instr_details = try ComputeBudgetInstructionDetails.fromInstructions(tx);
     const budget_limits = try instr_details.sanitizeAndConvertToComputeBudgetLimits();
     return budget_limits;
@@ -46,12 +48,12 @@ const ComputeBudgetInstructionDetails = struct {
     // This impl is a bit of a stub
     // [agave] https://github.com/anza-xyz/agave/blob/b70cac38827e499d34c3a521eac17c68fb1b5b1f/compute-budget-instruction/src/compute_budget_instruction_details.rs#L54
     fn fromInstructions(
-        tx: *const sig.core.Transaction,
+        instructions: []const InstructionInfo,
     ) !ComputeBudgetInstructionDetails {
         const details = DEFAULT;
 
-        for (tx.msg.instructions) |instr| {
-            if (tx.msg.account_keys[instr.program_index].equals(&ID)) {
+        for (instructions) |instr| {
+            if (instr.program_meta.pubkey.equals(&ID)) {
                 @panic("TODO: compute budget program unsupported");
             }
         }
