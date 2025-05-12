@@ -65,6 +65,7 @@ pub const TransactionContext = struct {
 
     /// Transaction accounts
     accounts: []TransactionContextAccount,
+
     /// Used by CPI to access serialized account metadata.
     serialized_accounts: std.BoundedArray(
         SerializedAccountMetadata,
@@ -197,6 +198,25 @@ pub const TransactionContext = struct {
         args: anytype,
     ) (error{OutOfMemory} || InstructionError)!void {
         if (self.log_collector) |*lc| try lc.log(self.allocator, fmt, args);
+    }
+
+    pub fn takeLogCollector(
+        self: *TransactionContext,
+    ) ?LogCollector {
+        if (self.log_collector) |lc| {
+            self.log_collector = null;
+            return lc;
+        }
+        return null;
+    }
+
+    pub fn takeReturnData(
+        self: *TransactionContext,
+    ) ?TransactionReturnData {
+        if (self.return_data.data.len == 0) return null;
+        const data = self.return_data;
+        self.return_data.data.len = 0;
+        return data;
     }
 };
 
