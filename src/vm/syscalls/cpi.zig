@@ -21,8 +21,11 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
-const SyscallError = sig.vm.syscalls.Error;
 const PRECOMPILES = sig.runtime.program.precompile_programs.PRECOMPILES;
+
+const SyscallError = sig.vm.syscalls.Error;
+const RegisterMap = sig.vm.interpreter.RegisterMap;
+const Error = sig.vm.ExecutionError;
 
 const VmSlice = memory.VmSlice;
 const MemoryMap = memory.MemoryMap;
@@ -626,7 +629,7 @@ fn translateAccounts(
     var account_info_keys = std.ArrayList(*const Pubkey).init(allocator);
     defer account_info_keys.deinit();
 
-    for (account_infos) |account_info| {
+    for (account_infos) |account_info| { // translate keys upfront before inner loop below.
         try account_info_keys.append(try memory_map.translateType(
             Pubkey,
             .constant,
@@ -1193,7 +1196,7 @@ fn updateCallerAccount(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1054
-pub fn cpiCommon(
+fn cpiCommon(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     memory_map: *MemoryMap,
@@ -1203,7 +1206,7 @@ pub fn cpiCommon(
     account_infos_len: u64,
     signers_seeds_addr: u64,
     signers_seeds_len: u64,
-) !void {
+) Error!void {
     try ic.tc.consumeCompute(ic.tc.compute_budget.invoke_units);
 
     // TODO: timings
@@ -1344,6 +1347,53 @@ pub fn cpiCommon(
         );
     }
 }
+
+fn invokeSigned(
+    comptime AccountInfoType: type,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const instruction_addr = registers.get(.r1);
+    const account_infos_addr = registers.get(.r2);
+    const account_infos_len = registers.get(.r3);
+    const signers_seeds_addr = registers.get(.r4);
+    const signers_seeds_len = registers.get(.r5);
+
+    const caller_ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+
+    return cpiCommon(
+        tc.allocator,
+        caller_ic,
+        memory_map,
+        AccountInfoType,
+        instruction_addr,
+        account_infos_addr,
+        account_infos_len,
+        signers_seeds_addr,
+        signers_seeds_len,
+    );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
+pub fn invokeSignedC(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    return invokeSigned(AccountInfoC, tc, memory_map, registers);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
+pub fn invokeSignedRust(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    return invokeSigned(AccountInfoRust, tc, memory_map, registers);
+}
+
+// CPI Tests
 
 const testing = sig.runtime.testing;
 

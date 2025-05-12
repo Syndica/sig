@@ -250,12 +250,12 @@ pub fn register(
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_invoke_signed_c",
-        invokeSignedC,
+        cpi.invokeSignedC,
     );
     _ = try syscalls.functions.registerHashed(
         allocator,
         "sol_invoke_signed_rust",
-        invokeSignedRust,
+        cpi.invokeSignedRust,
     );
 
     // Memory Allocator
@@ -727,56 +727,6 @@ pub fn remainingComputeUnits(
 ) Error!void {
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
     registers.set(.r0, tc.compute_meter);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
-pub fn invokeSignedC(
-    tc: *TransactionContext,
-    memory_map: *MemoryMap,
-    registers: *RegisterMap,
-) Error!void {
-    return invokeSigned(cpi.AccountInfoC, tc, memory_map, registers);
-}
-
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
-pub fn invokeSignedRust(
-    tc: *TransactionContext,
-    memory_map: *MemoryMap,
-    registers: *RegisterMap,
-) Error!void {
-    return invokeSigned(cpi.AccountInfoRust, tc, memory_map, registers);
-}
-
-fn invokeSigned(
-    comptime AccountInfoType: type,
-    tc: *TransactionContext,
-    memory_map: *MemoryMap,
-    registers: *RegisterMap,
-) Error!void {
-    errdefer |e| {
-        std.debug.print("invokeSigned = {any}\n", .{e});
-        if (@errorReturnTrace()) |t| std.debug.dumpStackTrace(t.*);
-    }
-
-    const instruction_addr = registers.get(.r1);
-    const account_infos_addr = registers.get(.r2);
-    const account_infos_len = registers.get(.r3);
-    const signers_seeds_addr = registers.get(.r4);
-    const signers_seeds_len = registers.get(.r5);
-
-    const caller_ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
-
-    return cpi.cpiCommon(
-        tc.allocator,
-        caller_ic,
-        memory_map,
-        AccountInfoType,
-        instruction_addr,
-        account_infos_addr,
-        account_infos_len,
-        signers_seeds_addr,
-        signers_seeds_len,
-    );
 }
 
 // special
