@@ -1304,6 +1304,56 @@ test createProgramAddress {
     );
 }
 
+test allocFree {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+        allocator,
+        prng.random(),
+        .{},
+    );
+    defer {
+        ec.deinit();
+        allocator.destroy(ec);
+        sc.deinit();
+        allocator.destroy(sc);
+        tc.deinit();
+    }
+
+    const heap = try allocator.alloc(u8, 4096);
+    defer allocator.free(heap);
+
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, heap, memory.HEAP_START),
+        },
+        .v3,
+        .{},
+    );
+    defer memory_map.deinit(allocator);
+
+    for ([_]struct { u64, u64, u64 }{
+        // first alloc 1021 bytes
+        .{ 1021, 0, memory.HEAP_START },
+        // then alloc 512 bytes (make sure its aligned)
+        .{ 512, 0, std.mem.alignForward(u64, memory.HEAP_START + 1024, 16) },
+        // try freeing the first allocation (freeing isnt supported atm)
+        .{ 1021, memory.HEAP_START, 0 },
+        // try alloc over heap size
+        .{ heap.len + 1, 0, 0 },
+    }) |case| {
+        var registers = RegisterMap.initFill(0);
+        registers.set(.r1, case[0]);
+        registers.set(.r2, case[1]);
+        try allocFree(&tc, &memory_map, &registers);
+        try std.testing.expectEqual(case[2], registers.get(.r0));
+    }
+}
+
 test getProcessedSiblingInstruction {
     const testing = sig.runtime.testing;
     const allocator = std.testing.allocator;
