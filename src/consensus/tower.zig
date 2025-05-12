@@ -282,46 +282,6 @@ pub const Tower = struct {
     ) !Tower {
         return try tower_storage.load(node_pubkey);
     }
-
-    /// [Audit] The implementations below are found in consensus::fork_choice in Agave
-///
-/// Returns whether the last vote is able to land, which determines if we should
-/// super refresh to vote at the tip.
-    pub fn lastVoteAbleToLand(
-        self: *const Tower,
-        reset_bank: ?*const Bank,
-        progress: *const ProgressMap,
-    ) bool {
-        const heaviest_bank_on_same_voted_fork = reset_bank orelse {
-            // No reset bank means we are in the middle of dump & repair. Last vote
-            // landing is irrelevant.
-            return true;
-        };
-
-        const last_voted_slot = self.lastVotedSlot() orelse {
-            // No previous vote.
-            return true;
-        };
-
-        const my_latest_landed_vote_slot = progress.myLatestLandedVote(
-            heaviest_bank_on_same_voted_fork.bank_fields.slot,
-        ) orelse {
-            // We've either never landed a vote or fork has been pruned or is in the
-            // middle of dump & repair. Either way, no need to super refresh.
-            return true;
-        };
-
-        // Check if our last vote is able to land in order to determine if we should
-        // super refresh to vote at the tip. If any of the following are true, we
-        // don't need to super refresh:
-        return
-        // 1. Last vote has landed
-        (my_latest_landed_vote_slot >= last_voted_slot) or
-            // 2. Already voting at the tip
-            (last_voted_slot >= my_latest_landed_vote_slot) or
-            // 3. Last vote is within slot hashes, regular refresh is enough
-            heaviest_bank_on_same_voted_fork.isInSlotHashesHistory(&last_voted_slot);
-    }
 };
 
 pub fn collectVoteLockouts(
