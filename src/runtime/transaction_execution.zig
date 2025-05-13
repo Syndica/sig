@@ -17,7 +17,6 @@ const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionError = sig.accounts_db.snapshots.TransactionError;
-const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionTrace = TransactionContext.InstructionTrace;
 const LogCollector = sig.runtime.LogCollector;
