@@ -209,9 +209,9 @@ pub const GossipPullFilter = struct {
     const Self = @This();
 
     /// only used in tests
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
-            .filter = Bloom.init(allocator, 0, null),
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        return .{
+            .filter = try Bloom.init(allocator, 0, null),
             .mask = 18_446_744_073_709_551_615,
             .mask_bits = 0,
         };
@@ -263,9 +263,9 @@ test "building pull filters" {
     defer gossip_table.deinit();
 
     // insert a some value
-    const kp = try KeyPair.create([_]u8{1} ** 32);
+    const kp = try KeyPair.generateDeterministic([_]u8{1} ** 32);
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
     for (0..64) |_| {
@@ -356,7 +356,7 @@ test "helper functions are correct" {
 
 test "filter matches rust bytes" {
     const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
-    var filter = GossipPullFilter.init(std.testing.allocator);
+    var filter = try GossipPullFilter.init(std.testing.allocator);
     defer filter.deinit();
 
     var buf = [_]u8{0} ** 1024;

@@ -22,7 +22,7 @@ pub fn handleAcceptResult(
     rc: std.posix.E,
 ) HandleAcceptError!HandleAcceptResult {
     comptime std.debug.assert( //
-        builtin.target.isDarwin() or builtin.target.os.tag == .linux //
+        builtin.target.os.tag.isDarwin() or builtin.target.os.tag == .linux //
     );
     return switch (rc) {
         .SUCCESS => .success,
@@ -66,7 +66,7 @@ pub fn handleRecvResult(
     rc: std.posix.E,
 ) HandleRecvError!HandleRecvResult {
     comptime std.debug.assert( //
-        builtin.target.isDarwin() or builtin.target.os.tag == .linux //
+        builtin.target.os.tag.isDarwin() or builtin.target.os.tag == .linux //
     );
     return switch (rc) {
         .SUCCESS => .success,
@@ -109,7 +109,7 @@ pub fn handleSendResult(
     rc: std.posix.E,
 ) HandleSendError!HandleSendResult {
     comptime std.debug.assert( //
-        builtin.target.isDarwin() or builtin.target.os.tag == .linux //
+        builtin.target.os.tag.isDarwin() or builtin.target.os.tag == .linux //
     );
     return switch (rc) {
         .SUCCESS => .success,

@@ -19,7 +19,7 @@ pub const TrackedAccount = struct {
     slot: u64,
     data: [32]u8,
 
-    pub fn initRandom(random: std.rand.Random, slot: Slot) TrackedAccount {
+    pub fn initRandom(random: std.Random, slot: Slot) TrackedAccount {
         var data: [32]u8 = undefined;
         random.bytes(&data);
         return .{
@@ -56,9 +56,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{
+    var gpa_state: std.heap.DebugAllocator(.{
         .safety = true,
-    }){};
+    }) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
@@ -391,10 +391,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             const index_type: AccountsDB.InitParams.Index =
                 switch (accounts_db.account_index.reference_allocator) {
-                .disk => .disk,
-                .ram => .ram,
-                .parent => @panic("invalid argument"),
-            };
+                    .disk => .disk,
+                    .ram => .ram,
+                    .parent => @panic("invalid argument"),
+                };
 
             var alt_accounts_db = try AccountsDB.init(.{
                 .allocator = allocator,

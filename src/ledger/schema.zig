@@ -160,7 +160,7 @@ pub const schema = struct {
     };
 };
 
-const decls = @typeInfo(schema).Struct.decls;
+const decls = @typeInfo(schema).@"struct".decls;
 
 pub const list: [decls.len]ColumnFamily = l: {
     var ret: [decls.len]ColumnFamily = undefined;

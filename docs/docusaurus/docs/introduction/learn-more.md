@@ -15,7 +15,7 @@ Below are some resources to help you learn more about Sig, Zig, and Solana:
 ## Zig
 
 - [Official Website](https://ziglang.org/)
-- [Official Documentation](https://ziglang.org/documentation/0.13.0/)
+- [Official Documentation](https://ziglang.org/documentation/0.14.1/)
 - [Ziglearn Book](https://ziglearn.org/)
 - [Ziglings Exercises](https://github.com/ratfactor/ziglings)
 

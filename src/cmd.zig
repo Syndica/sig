@@ -43,9 +43,9 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-fn GpaOrCAllocator(comptime gpa_config: std.heap.GeneralPurposeAllocatorConfig) type {
+fn GpaOrCAllocator(comptime gpa_config: std.heap.DebugAllocatorConfig) type {
     if (builtin.mode == .Debug) {
-        return std.heap.GeneralPurposeAllocator(gpa_config);
+        return std.heap.DebugAllocator(gpa_config);
     }
 
     return struct {
@@ -1598,9 +1598,7 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     defer server_ctx.joinDeinit();
 
     var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
-    // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
-    // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
-    defer if (maybe_liou != null) maybe_liou.?.deinit();
+    defer if (maybe_liou) |*liou| liou.deinit();
 
     var exit = std.atomic.Value(bool).init(false);
     try sig.rpc.server.serve(

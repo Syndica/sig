@@ -203,9 +203,7 @@ test "serveSpawn snapshots" {
     defer server_ctx.joinDeinit();
 
     var maybe_liou = try LinuxIoUring.init(&server_ctx);
-    // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
-    // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
-    defer if (maybe_liou != null) maybe_liou.?.deinit();
+    defer if (maybe_liou) |*liou| liou.deinit();
 
     for ([_]?WorkPool{
         .basic,
@@ -300,9 +298,7 @@ test "serveSpawn getAccountInfo" {
     defer server_ctx.joinDeinit();
 
     var maybe_liou = try LinuxIoUring.init(&server_ctx);
-    // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
-    // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
-    defer if (maybe_liou != null) maybe_liou.?.deinit();
+    defer if (maybe_liou) |*liou| liou.deinit();
 
     for ([_]?WorkPool{
         .basic,
@@ -393,7 +389,7 @@ fn testExpectSnapshotResponse(
     const expected_file = try snap_dir.openFile(snap_name, .{});
     defer expected_file.close();
 
-    const expected_data: []align(std.mem.page_size) const u8 = try std.posix.mmap(
+    const expected_data: []align(std.heap.page_size_min) const u8 = try std.posix.mmap(
         null,
         try expected_file.getEndPos(),
         std.posix.PROT.READ,

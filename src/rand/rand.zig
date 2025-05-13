@@ -161,7 +161,7 @@ pub fn fillHashmapWithRng(
 /// This means the shuffle will be concentrated within the specified range, which is
 /// useful for randomly rotating values in and out of an active range.
 pub fn shuffleFocusedRange(
-    random: std.rand.Random,
+    random: std.Random,
     comptime T: type,
     buf: []T,
     start_inclusive: usize,
@@ -177,8 +177,8 @@ pub fn shuffleFocusedRange(
 /// This implementationc is based on the implementation in the rust rand crate
 /// and ensures the same sequence is generated.
 pub fn uintLessThanRust(comptime T: type, random: Random, less_than: T) T {
-    comptime std.debug.assert(@typeInfo(T).Int.signedness == .unsigned);
-    const bits = @typeInfo(T).Int.bits;
+    comptime std.debug.assert(@typeInfo(T).int.signedness == .unsigned);
+    const bits = @typeInfo(T).int.bits;
     const max = std.math.maxInt(T);
     std.debug.assert(0 < less_than);
 
@@ -448,7 +448,7 @@ const rust_expected_weights: [1000]u64 = .{
 };
 
 /// Implementation of Alastair J. Walker's "Alias method".
-/// Once constructed, this allows for efficiently getting pseudorandom indeces
+/// Once constructed, this allows for efficiently getting pseudorandom indicies
 /// that fit the given probabilities.
 pub const WeightedAliasSampler = struct {
     probability: []const f32,
@@ -484,8 +484,8 @@ pub const WeightedAliasSampler = struct {
         }
 
         while (small.items.len > 0 and large.items.len > 0) {
-            const less = small.pop();
-            const more = large.pop();
+            const less = small.pop().?;
+            const more = large.pop().?;
 
             probability[less] = weights[less] * @as(f32, @floatFromInt(n));
             alias[less] = more;
@@ -497,8 +497,8 @@ pub const WeightedAliasSampler = struct {
             }
         }
 
-        while (small.popOrNull()) |less| probability[less] = 1.0;
-        while (large.popOrNull()) |more| probability[more] = 1.0;
+        while (small.pop()) |less| probability[less] = 1.0;
+        while (large.pop()) |more| probability[more] = 1.0;
         small.deinit();
         large.deinit();
 

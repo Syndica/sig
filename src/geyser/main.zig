@@ -118,7 +118,7 @@ const Cmd = struct {
 };
 
 pub fn main() !void {
-    var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const gpa = if (builtin.mode == .Debug) gpa_state.allocator() else std.heap.c_allocator;
 

@@ -284,7 +284,7 @@ test "RcSlice reference counting" {
     const TestAllocator = struct {
         arena: std.heap.ArenaAllocator,
         was_freed: bool = false,
-        fn free(ctx: *anyopaque, _: []u8, _: u8, _: usize) void {
+        fn free(ctx: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
             const self: *@This() = @ptrCast(@alignCast(ctx));
             self.was_freed = true;
         }
@@ -296,6 +296,7 @@ test "RcSlice reference counting" {
     const allocator: std.mem.Allocator = .{ .ptr = @ptrCast(&test_allocator), .vtable = &.{
         .alloc = test_allocator.arena.allocator().vtable.alloc,
         .resize = test_allocator.arena.allocator().vtable.resize,
+        .remap = std.mem.Allocator.noRemap,
         .free = TestAllocator.free,
     } };
 

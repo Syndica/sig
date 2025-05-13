@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const Random = std.rand.Random;
+const Random = std.Random;
 const Socket = zig_network.Socket;
 
 const ContactInfo = sig.gossip.ContactInfo;
@@ -570,12 +570,12 @@ test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
-    var prng = std.rand.DefaultPrng.init(4328095);
+    var prng = std.Random.DefaultPrng.init(4328095);
     const random = prng.random();
     const TestLogger = sig.trace.DirectPrintLogger;
 
     // my details
-    const keypair = try KeyPair.create(null);
+    const keypair = KeyPair.generate();
     const my_shred_version = Atomic(u16).init(random.int(u16));
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, allocator);
@@ -594,9 +594,9 @@ test "RepairService sends repair request to gossip peer" {
 
     // peer
     const peer_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
-    const peer_keypair = try KeyPair.create(null);
+    const peer_keypair = KeyPair.generate();
     var peer_socket = try Socket.create(.ipv4, .udp);
-    const peer_endpoint = .{
+    const peer_endpoint: zig_network.EndPoint = .{
         .address = .{ .ipv4 = .{ .value = .{ 127, 0, 0, 1 } } },
         .port = peer_port,
     };
@@ -652,11 +652,11 @@ test "RepairService sends repair request to gossip peer" {
 
 test "RepairPeerProvider selects correct peers" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(4328095);
+    var prng = std.Random.DefaultPrng.init(4328095);
     const random = prng.random();
 
     // my details
-    const keypair = KeyPair.create(null) catch unreachable;
+    const keypair = KeyPair.generate();
     const my_shred_version = Atomic(u16).init(random.int(u16));
     var gossip = try GossipTable.init(allocator, allocator);
     defer gossip.deinit();
@@ -743,7 +743,7 @@ const TestPeerGenerator = struct {
 
     fn addPeerToGossip(self: *const @This(), peer_type: PeerType) !struct { PeerType, RepairPeer } {
         const wallclock = 1;
-        const keypair = KeyPair.create(null) catch unreachable;
+        const keypair = KeyPair.generate();
         const serve_repair_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003);
         const shred_version = if (peer_type == .WrongShredVersion) self.shred_version + 1 else self.shred_version;
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);

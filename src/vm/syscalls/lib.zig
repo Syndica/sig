@@ -1406,11 +1406,11 @@ test getProcessedSiblingInstruction {
                 .sc = tc.sc,
                 .tc = &tc,
                 .ixn_info = info,
-                .depth = tc.instruction_stack.len,
+                .depth = @intCast(tc.instruction_stack.len),
             });
             tc.instruction_trace.appendAssumeCapacity(.{
                 .ixn_info = info,
-                .depth = tc.instruction_stack.len,
+                .depth = @intCast(tc.instruction_stack.len),
             });
         }
     }

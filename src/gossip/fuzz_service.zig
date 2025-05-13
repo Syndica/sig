@@ -35,12 +35,9 @@ const SLEEP_TIME = Duration.zero();
 // const SLEEP_TIME = Duration.fromSecs(10);
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .safety = true,
-    }){};
-    const allocator = gpa.allocator();
-    // detect leaks
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
     // logs
     var std_logger = try sig.trace.ChannelPrintLogger.init(.{
@@ -51,7 +48,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer std_logger.deinit();
 
     // setup randomness
-    var prng = std.rand.DefaultPrng.init(seed);
+    var prng = std.Random.DefaultPrng.init(seed);
 
     // parse cli args to define where to send packets
     const maybe_max_messages_string = args.next();
@@ -283,7 +280,7 @@ pub fn newGossipClient(
     logger: sig.trace.Logger,
 ) !*GossipService {
     const address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, port);
-    var keypair = try KeyPair.create(null);
+    var keypair = KeyPair.generate();
 
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const now = getWallclockMs();
@@ -306,12 +303,12 @@ pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     return Packet.init(to_addr, packet_buf, msg_slice.len);
 }
 
-pub fn randomPing(random: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
+pub fn randomPing(random: std.Random, keypair: *const KeyPair) !GossipMessage {
     return .{ .PingMessage = try Ping.initRandom(random, keypair) };
 }
 
 pub fn randomPingPacket(
-    random: std.rand.Random,
+    random: std.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !Packet {
@@ -319,12 +316,12 @@ pub fn randomPingPacket(
     return try serializeToPacket(ping, to_addr);
 }
 
-pub fn randomPong(random: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
+pub fn randomPong(random: std.Random, keypair: *const KeyPair) !GossipMessage {
     return .{ .PongMessage = try Pong.initRandom(random, keypair) };
 }
 
 pub fn randomPongPacket(
-    random: std.rand.Random,
+    random: std.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !Packet {
@@ -334,10 +331,10 @@ pub fn randomPongPacket(
 
 pub fn randomSignedGossipData(
     allocator: std.mem.Allocator,
-    random: std.rand.Random,
+    random: std.Random,
     should_pass_sig_verification: bool,
 ) !SignedGossipData {
-    const keypair = try KeyPair.create(null);
+    const keypair = KeyPair.generate();
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const now = getWallclockMs();
     const info_pubkey = if (should_pass_sig_verification) pubkey else Pubkey.initRandom(random);
@@ -349,7 +346,7 @@ pub fn randomSignedGossipData(
 
 pub fn randomPushMessage(
     allocator: std.mem.Allocator,
-    random: std.rand.Random,
+    random: std.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !std.ArrayList(Packet) {
@@ -376,7 +373,7 @@ pub fn randomPushMessage(
 
 pub fn randomPullResponse(
     allocator: std.mem.Allocator,
-    random: std.rand.Random,
+    random: std.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !std.ArrayList(Packet) {
@@ -406,7 +403,7 @@ pub fn randomPullResponse(
 pub fn randomPullRequest(
     allocator: std.mem.Allocator,
     contact_info: ContactInfo,
-    random: std.rand.Random,
+    random: std.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !Packet {
@@ -424,7 +421,7 @@ pub fn randomPullRequest(
 
 pub fn randomPullRequestWithContactInfo(
     allocator: std.mem.Allocator,
-    random: std.rand.Random,
+    random: std.Random,
     to_addr: EndPoint,
     contact_info: SignedGossipData,
 ) !Packet {

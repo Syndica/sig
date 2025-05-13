@@ -38,7 +38,7 @@ pub const EpochSchedule = extern struct {
 
     pub const ID =
         core.Pubkey.parseBase58String("SysvarEpochSchedu1e111111111111111111111111") catch
-        unreachable;
+            unreachable;
 
     pub const DEFAULT = EpochSchedule.custom(
         DEFAULT_SLOTS_PER_EPOCH,

@@ -111,7 +111,7 @@ pub const Request = struct {
             const method_and_params = switch (method) {
                 inline else => |tag| @unionInit(MethodAndParams, @tagName(tag), blk: {
                     // NOTE: using `std.meta.FieldType` here hits eval branch quota, hack until `@FieldType`
-                    const Params = @typeInfo(MethodAndParams).Union.fields[@intFromEnum(tag)].type;
+                    const Params = @typeInfo(MethodAndParams).@"union".fields[@intFromEnum(tag)].type;
                     if (Params == noreturn) {
                         std.debug.panic("TODO: implement {s}", .{@tagName(method)});
                     }
@@ -216,9 +216,9 @@ pub fn jsonParseValuesAsParamsArray(
 ) (std.json.ParseFromValueError || error{ParamsLengthMismatch})!Params {
     var params: Params = undefined;
 
-    inline for (@typeInfo(Params).Struct.fields, 0..) |field, i| {
+    inline for (@typeInfo(Params).@"struct".fields, 0..) |field, i| {
         if (i >= values.len) {
-            if (@typeInfo(field.type) != .Optional) {
+            if (@typeInfo(field.type) != .optional) {
                 return error.ParamsLengthMismatch;
             }
             @field(params, field.name) = null;
@@ -321,7 +321,7 @@ test "Request commitment minContextSlot" {
 }
 
 test "Request duplicate & ignored fields (non-standard)" {
-    const test_pubkey = comptime sig.core.Pubkey.ZEROES;
+    const test_pubkey: sig.core.Pubkey = .ZEROES;
     try testParseCall(
         .{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true },
         \\{

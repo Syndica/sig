@@ -1901,18 +1901,6 @@ test "pqr" {
     program[33] = 16; // src = r1
     program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
-    var prng = std.Random.DefaultPrng.init(10);
-    const ec, const sc, var context = try createExecutionContexts(
-        allocator,
-        prng.random(),
-        .{ .compute_meter = 6 },
-    );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-    }
     const max_int = std.math.maxInt(u64);
     inline for (
         // zig fmt: off
@@ -2000,10 +1988,18 @@ test "pqr" {
 
         const map = try MemoryMap.init(allocator, &.{}, .v2, .{});
 
-        // TODO: I would have defined the `context` struct inside of the loop,
-        // but an LLVM 18 miscompilation on ARM64 doesn't let me.
-        // TODO(0.14): Move it back
-        context.compute_meter = 6;
+        var prng = std.Random.DefaultPrng.init(10);
+        const ec, const sc, var context = try createExecutionContexts(
+            allocator,
+            prng.random(),
+            .{ .compute_meter = 6 },
+        );
+        defer {
+            ec.deinit();
+            allocator.destroy(ec);
+            sc.deinit();
+            allocator.destroy(sc);
+        }
         var vm = try Vm.init(
             allocator,
             &executable,

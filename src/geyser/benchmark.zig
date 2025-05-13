@@ -18,7 +18,7 @@ pub fn streamWriter(allocator: std.mem.Allocator, exit: *std.atomic.Value(bool))
 
     try geyser_writer.spawnIOLoop();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
 
     // PERF: one allocation slice

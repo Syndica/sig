@@ -14,7 +14,7 @@ pub fn getVariant(
 
 pub fn UnionFieldType(TaggedUnion: type, variant_tag: anytype) type {
     const tag_name = @tagName(variant_tag);
-    for (@typeInfo(TaggedUnion).Union.fields) |field| {
+    for (@typeInfo(TaggedUnion).@"union".fields) |field| {
         if (std.mem.eql(u8, field.name, tag_name)) {
             return field.type;
         }
@@ -49,18 +49,18 @@ test getVariant {
 /// const out: u64 = try @call(.auto, doThing, args);
 /// ```
 pub fn ParamsTuple(comptime function: anytype) type {
-    const params = @typeInfo(@TypeOf(function)).Fn.params;
+    const params = @typeInfo(@TypeOf(function)).@"fn".params;
     var fields: [params.len]std.builtin.Type.StructField = undefined;
     for (params, 0..) |param, i| {
         fields[i] = .{
             .name = std.fmt.comptimePrint("{}", .{i}),
             .type = param.type.?,
-            .default_value = null,
+            .default_value_ptr = null,
             .is_comptime = false,
             .alignment = 0,
         };
     }
-    return @Type(.{ .Struct = std.builtin.Type.Struct{
+    return @Type(.{ .@"struct" = .{
         .layout = .auto,
         .fields = &fields,
         .is_tuple = true,
@@ -71,15 +71,15 @@ pub fn ParamsTuple(comptime function: anytype) type {
 /// Gets the return type of a function or function pointer
 pub fn ReturnType(comptime FnPtr: type) type {
     return switch (@typeInfo(FnPtr)) {
-        .Fn => |fun| fun.return_type.?,
-        .Pointer => |ptr| @typeInfo(ptr.child).Fn.return_type.?,
+        .@"fn" => |fun| fun.return_type.?,
+        .pointer => |ptr| @typeInfo(ptr.child).@"fn".return_type.?,
         else => @compileError("not a function or function pointer"),
     };
 }
 
 /// Gets the error set from the return type of a function
 pub fn ErrorReturn(function: anytype) type {
-    return @typeInfo(ReturnType(@TypeOf(function))).ErrorUnion.error_set;
+    return @typeInfo(ReturnType(@TypeOf(function))).error_union.error_set;
 }
 
 /// Casts the item's type into an optional if it is not optional. Otherwise the
@@ -90,7 +90,7 @@ pub fn ErrorReturn(function: anytype) type {
 ///
 /// The value itself remains unchanged. This is only for type casting.
 pub fn toOptional(x: anytype) switch (@typeInfo(@TypeOf(x))) {
-    .Optional, .Null => @TypeOf(x),
+    .optional, .null => @TypeOf(x),
     else => ?@TypeOf(x),
 } {
     return x;
@@ -98,19 +98,19 @@ pub fn toOptional(x: anytype) switch (@typeInfo(@TypeOf(x))) {
 
 /// Same as std.EnumFieldStruct, except every field may be a different type
 pub fn EnumStruct(comptime E: type, comptime Data: fn (E) type) type {
-    @setEvalBranchQuota(@typeInfo(E).Enum.fields.len);
-    var struct_fields: [@typeInfo(E).Enum.fields.len]std.builtin.Type.StructField = undefined;
-    for (&struct_fields, @typeInfo(E).Enum.fields) |*struct_field, enum_field| {
+    @setEvalBranchQuota(@typeInfo(E).@"enum".fields.len);
+    var struct_fields: [@typeInfo(E).@"enum".fields.len]std.builtin.Type.StructField = undefined;
+    for (&struct_fields, @typeInfo(E).@"enum".fields) |*struct_field, enum_field| {
         const T = Data(@field(E, enum_field.name));
         struct_field.* = .{
             .name = enum_field.name,
             .type = T,
-            .default_value = null,
+            .default_value_ptr = null,
             .is_comptime = false,
             .alignment = @alignOf(T),
         };
     }
-    return @Type(.{ .Struct = .{
+    return @Type(.{ .@"struct" = .{
         .layout = .auto,
         .fields = &struct_fields,
         .decls = &.{},
@@ -134,14 +134,14 @@ pub const ArrayListInfo = struct {
 /// * `std.ArrayListAlignedUnmanaged(Elem, alignment)`
 /// and null otherwise.
 pub fn arrayListInfo(comptime T: type) ?ArrayListInfo {
-    if (@typeInfo(T) != .Struct) return null;
+    if (@typeInfo(T) != .@"struct") return null;
     if (!@hasDecl(T, "Slice")) return null;
     if (@TypeOf(T.Slice) != type) return null;
     const ptr_info = switch (@typeInfo(T.Slice)) {
-        .Pointer => |info| info,
+        .pointer => |info| info,
         else => return null,
     };
-    if (ptr_info.size != .Slice) return null;
+    if (ptr_info.size != .slice) return null;
     if (ptr_info.alignment > std.math.maxInt(usize)) return null;
     const alignment = if (@sizeOf(ptr_info.child) != 0) ptr_info.alignment else null;
     const management: AllocManagement = switch (T) {
@@ -200,7 +200,7 @@ pub const HashMapInfo = struct {
 };
 
 pub fn hashMapInfo(comptime T: type) ?HashMapInfo {
-    if (@typeInfo(T) != .Struct) return null;
+    if (@typeInfo(T) != .@"struct") return null;
 
     if (!@hasDecl(T, "KV")) return null;
     if (@TypeOf(T.KV) != type) return null;
@@ -228,7 +228,7 @@ pub fn hashMapInfo(comptime T: type) ?HashMapInfo {
         .managed => T,
         .unmanaged => T.Managed,
     };
-    if (@typeInfo(Managed) != .Struct) return null;
+    if (@typeInfo(Managed) != .@"struct") return null;
     if (!@hasField(Managed, "ctx")) return null;
     const Context = @TypeOf(@as(Managed, undefined).ctx);
 
@@ -290,14 +290,14 @@ pub const BoundedArrayInfo = struct {
 };
 pub fn boundedArrayInfo(comptime T: type) ?BoundedArrayInfo {
     const structure = switch (@typeInfo(T)) {
-        .Struct => |info| info,
+        .@"struct" => |info| info,
         else => return null,
     };
     if (!@hasField(T, "buffer")) return null;
     const buffer_field = structure.fields[std.meta.fieldIndex(T, "buffer").?];
     const alignment = buffer_field.alignment;
     const Elem, const capacity = switch (@typeInfo(buffer_field.type)) {
-        .Array => |array| .{ array.child, array.len },
+        .array => |array| .{ array.child, array.len },
         else => return null,
     };
 
@@ -309,36 +309,6 @@ pub fn boundedArrayInfo(comptime T: type) ?BoundedArrayInfo {
         .capacity = capacity,
         .alignment = alignment,
     };
-}
-
-pub inline fn defaultValue(comptime field: std.builtin.Type.StructField) ?field.type {
-    comptime {
-        const ptr = field.default_value orelse return null;
-        return comptimeZeroSizePtrCast(field.type, ptr);
-    }
-}
-
-/// This facilitates casts from a comptime type-erased pointer to zero-sized types,
-/// such as `type`, `comptime_int`, `comptime_float`, `@TypeOf(.enum_literal)`, and
-/// composites thereof.
-pub inline fn comptimeZeroSizePtrCast(comptime T: type, comptime ptr: *const anyopaque) T {
-    comptime {
-        const Dummy = @Type(.{ .Struct = .{
-            .layout = .auto,
-            .backing_integer = null,
-            .decls = &.{},
-            .is_tuple = false,
-            .fields = &.{.{
-                .name = "value",
-                .type = T,
-                .default_value = ptr,
-                .is_comptime = true,
-                .alignment = 0,
-            }},
-        } });
-        const dummy: Dummy = .{};
-        return dummy.value;
-    }
 }
 
 pub const EqlConfig = struct {
@@ -380,23 +350,23 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
     // use the type's eql method if it exists
     if (config.use_eql_method == .yes) {
         switch (@typeInfo(T)) {
-            inline .Struct, .Enum, .Union, .Opaque => {
+            inline .@"struct", .@"enum", .@"union", .@"opaque" => {
                 if (@hasDecl(T, "eql") and
-                    @typeInfo(@TypeOf(T.eql)) == .Fn and
-                    @typeInfo(ParamsTuple(T.eql)).Struct.fields.len == 2 and
+                    @typeInfo(@TypeOf(T.eql)) == .@"fn" and
+                    @typeInfo(ParamsTuple(T.eql)).@"struct".fields.len == 2 and
                     ReturnType(@TypeOf(T.eql)) == bool)
                 {
-                    const param1 = @typeInfo(@typeInfo(ParamsTuple(T.eql)).Struct.fields[0].type);
-                    const param2 = @typeInfo(@typeInfo(ParamsTuple(T.eql)).Struct.fields[1].type);
+                    const param1 = @typeInfo(@typeInfo(ParamsTuple(T.eql)).@"struct".fields[0].type);
+                    const param2 = @typeInfo(@typeInfo(ParamsTuple(T.eql)).@"struct".fields[1].type);
 
-                    if (param1 == .Pointer and param2 == .Pointer) {
+                    if (param1 == .pointer and param2 == .pointer) {
                         var a_copy = a;
                         var b_copy = b;
                         return T.eql(&a_copy, &b_copy);
-                    } else if (param1 != .Pointer and param2 == .Pointer) {
+                    } else if (param1 != .pointer and param2 == .pointer) {
                         var b_copy = b;
                         return T.eql(a, &b_copy);
-                    } else if (param1 == .Pointer and param2 != .Pointer) {
+                    } else if (param1 == .pointer and param2 != .pointer) {
                         var a_copy = a;
                         return T.eql(&a_copy, b);
                     } else {
@@ -413,22 +383,22 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
 
     // basic equality comparison
     switch (@typeInfo(T)) {
-        .Struct => {
-            inline for (@typeInfo((T)).Struct.fields) |field| {
+        .@"struct" => {
+            inline for (@typeInfo((T)).@"struct".fields) |field| {
                 if (!eqlCustom(@field(a, field.name), @field(b, field.name), config)) {
                     return false;
                 }
             }
             return true;
         },
-        .ErrorUnion => {
+        .error_union => {
             if (a) |a_p| {
                 if (b) |b_p| return eqlCustom(a_p, b_p, config) else |_| return false;
             } else |a_e| {
                 if (b) |_| return false else |b_e| return a_e == b_e;
             }
         },
-        .Union => |info| {
+        .@"union" => |info| {
             if (info.tag_type) |UnionTag| {
                 if (@intFromEnum(a) != @intFromEnum(b)) return false;
                 inline for (info.fields) |field_info| {
@@ -444,14 +414,14 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
             }
             @compileError("cannot compare untagged union type " ++ @typeName(T));
         },
-        .Array => |array| return sliceEql(array.child, &a, &b, config),
-        .Pointer => |pointer| return switch (pointer.size) {
-            .Slice => if (config.follow_pointers != .no) {
+        .array => |array| return sliceEql(array.child, &a, &b, config),
+        .pointer => |pointer| return switch (pointer.size) {
+            .slice => if (config.follow_pointers != .no) {
                 return sliceEql(pointer.child, a, b, config);
             } else {
                 return a.len == b.len and a.ptr == b.ptr;
             },
-            .Many => if (config.follow_pointers == .yes) {
+            .many => if (config.follow_pointers == .yes) {
                 @compileError("cannot compare data behind many item pointers: " ++ @typeName(T));
             } else {
                 return a == b;
@@ -462,7 +432,7 @@ pub fn eqlCustom(a: anytype, b: @TypeOf(a), comptime config_: EqlConfig) bool {
                 return a == b;
             },
         },
-        .Optional => return a == null and b == null or
+        .optional => return a == null and b == null or
             a != null and b != null and eqlCustom(a.?, b.?, config),
 
         else => return a == b,
@@ -504,23 +474,23 @@ const backend_can_use_eql_bytes = switch (@import("builtin").zig_backend) {
 /// Returns null if the answer cannot be determined.
 pub fn containsPointer(comptime T: type) ?bool {
     return switch (@typeInfo(T)) {
-        .Pointer => true,
+        .pointer => true,
 
-        inline .Array, .Optional => |info| containsPointer(info.child),
+        inline .array, .optional => |info| containsPointer(info.child),
 
-        .ErrorUnion => |info| containsPointer(info.payload),
+        .error_union => |info| containsPointer(info.payload),
 
-        inline .Struct, .Union => |info| inline for (info.fields) |field| {
+        inline .@"struct", .@"union" => |info| inline for (info.fields) |field| {
             const field_has_pointer = containsPointer(field.type);
             if (field_has_pointer != false) break field_has_pointer;
         } else false,
 
-        .Opaque, .Frame => null,
+        .@"opaque", .frame => null,
 
-        .AnyFrame => |info| if (info.child) |c| containsPointer(c) else null,
+        .@"anyframe" => |info| if (info.child) |c| containsPointer(c) else null,
 
-        .Type, .Void, .Bool, .NoReturn, .Int, .Float, .ComptimeFloat, .ComptimeInt => false,
-        .Undefined, .Null, .ErrorSet, .Enum, .Fn, .Vector, .EnumLiteral => false,
+        .type, .void, .bool, .noreturn, .int, .float, .comptime_float, .comptime_int => false,
+        .undefined, .null, .error_set, .@"enum", .@"fn", .vector, .enum_literal => false,
     };
 }
 

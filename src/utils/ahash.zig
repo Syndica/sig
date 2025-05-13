@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const AtomicU64 = std.atomic.Value(u64);
-const Random = std.rand.Random;
+const Random = std.Random;
 
 /// AHasher is a minimal impelementation of the AHash, a fast, DOS-resistant hash algorithm (https://github.com/tkaitchuck/aHash).
 /// Currently, only the functionality required to replicate the agave Deduper is implemented.
@@ -24,10 +24,10 @@ pub const AHasher = struct {
 
     pub fn hash(self: *AHasher, comptime T: type, data: *const T) void {
         switch (@typeInfo(T)) {
-            .Int => {
+            .int => {
                 self.update(@intCast(data.*));
             },
-            .Array => |array_info| {
+            .array => |array_info| {
                 if (array_info.child != u8) {
                     @compileError(std.fmt.comptimePrint(
                         "Unsupported array type: type={} array_info.child={}\n",
@@ -37,9 +37,9 @@ pub const AHasher = struct {
                 self.update(data.len);
                 self.write(@as([]const u8, data));
             },
-            .Pointer => |pointer| {
+            .pointer => |pointer| {
                 switch (pointer.size) {
-                    .Slice => {
+                    .slice => {
                         if (pointer.child != u8) {
                             @compileError(std.fmt.comptimePrint(
                                 "Unsupported pointer type: type={} pointer.child={}\n",
@@ -57,12 +57,12 @@ pub const AHasher = struct {
                     },
                 }
             },
-            .Struct => |struct_info| {
+            .@"struct" => |struct_info| {
                 inline for (struct_info.fields) |field| {
                     self.hash(field.type, &@field(data, field.name));
                 }
             },
-            .Enum => |_| {
+            .@"enum" => |_| {
                 self.hash(u32, &@as(u32, @intFromEnum(data.*)));
             },
             else => {

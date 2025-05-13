@@ -12,7 +12,7 @@ const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
 const Ping = sig.gossip.ping_pong.Ping;
 const Pong = sig.gossip.ping_pong.Pong;
-const DefaultPrng = std.rand.DefaultPrng;
+const DefaultPrng = std.Random.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const PruneData = sig.gossip.prune.PruneData;
 
@@ -110,7 +110,7 @@ test "push message serialization is predictable" {
     const msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
     const empty_size = bincode.sizeOf(msg, .{});
 
-    const keypair = try KeyPair.create(null);
+    const keypair = KeyPair.generate();
     const value = SignedGossipData.initRandom(prng.random(), &keypair);
     const value_size = bincode.sizeOf(value, .{});
     try values.append(value);
@@ -122,9 +122,9 @@ test "push message serialization is predictable" {
 }
 
 test "ping message serializes and deserializes correctly" {
-    var keypair = KeyPair.create(null) catch unreachable;
+    var keypair = KeyPair.generate();
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var original = GossipMessage{ .PingMessage = try Ping.initRandom(prng.random(), &keypair) };
     var buf = [_]u8{0} ** 1232;
@@ -139,9 +139,9 @@ test "ping message serializes and deserializes correctly" {
 }
 
 test "test ping pong sig verify" {
-    var keypair = KeyPair.create(null) catch unreachable;
+    var keypair = KeyPair.generate();
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     var ping = try Ping.initRandom(prng.random(), &keypair);
     var msg = GossipMessage{ .PingMessage = ping };
     try msg.verifySignature();
@@ -182,7 +182,7 @@ test "pull request serializes and deserializes" {
         .LegacyContactInfo = legacy_contact_info,
     });
 
-    var filter = GossipPullFilter.init(testing.allocator);
+    var filter = try GossipPullFilter.init(testing.allocator);
     defer filter.deinit();
 
     const pull: GossipMessage = .{ .PullRequest = .{ filter, value } };
@@ -197,7 +197,7 @@ test "pull request serializes and deserializes" {
 
 test "push message serializes and deserializes correctly" {
     const kp_bytes = [_]u8{1} ** 32;
-    const kp = try KeyPair.create(kp_bytes);
+    const kp = try KeyPair.generateDeterministic(kp_bytes);
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk);
 

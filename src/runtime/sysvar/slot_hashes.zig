@@ -24,8 +24,7 @@ pub const SlotHashes = struct {
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/9148b5cc95b43319f3451391ec66d0086deb5cfa/slot-hashes/src/lib.rs#L21
     pub const MAX_ENTRIES: usize = 512;
 
-    fn compareFn(context: void, key: Slot, mid_item: Entry) std.math.Order {
-        _ = context;
+    fn compareFn(key: Slot, mid_item: Entry) std.math.Order {
         return std.math.order(key, mid_item[0]);
     }
 
@@ -34,7 +33,7 @@ pub const SlotHashes = struct {
     }
 
     pub fn getIndex(self: *const SlotHashes, slot: u64) ?usize {
-        return std.sort.binarySearch(Entry, slot, self.entries, {}, compareFn);
+        return std.sort.binarySearch(Entry, self.entries, slot, compareFn);
     }
 
     pub fn get(self: *const SlotHashes, slot: u64) ?Hash {

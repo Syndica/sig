@@ -6,14 +6,14 @@ const Level = @import("level.zig").Level;
 fn fieldFmtString(comptime Value: type) []const u8 {
     return switch (@typeInfo(Value)) {
         // Assume arrays of u8 are strings.
-        .Pointer => |ptr| if (ptr.size == .One)
+        .pointer => |ptr| if (ptr.size == .one)
             fieldFmtString(ptr.child)
         else if (ptr.child == u8)
             "{s}={s} "
         else
             "{s}={any} ",
-        .Array => |arr| if (arr.child == u8) "{s}={s} " else "{s}={any} ",
-        .Int, .ComptimeInt, .Float, .ComptimeFloat => "{s}={} ",
+        .array => |arr| if (arr.child == u8) "{s}={s} " else "{s}={any} ",
+        .int, .comptime_int, .float, .comptime_float => "{s}={} ",
         else => "{s}={any} ",
     };
 }
@@ -70,7 +70,7 @@ fn writeLogWithoutTime(
 
     try std.fmt.format(writer, " message=\"" ++ fmt ++ "\"", args);
 
-    inline for (@typeInfo(@TypeOf(fields)).Struct.fields) |field| {
+    inline for (@typeInfo(@TypeOf(fields)).@"struct".fields) |field| {
         try writer.writeByte(' ');
         try std.fmt.format(writer, fieldFmtString(field.type), .{
             field.name,

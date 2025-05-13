@@ -64,10 +64,10 @@ pub const Hash = extern struct {
     fn update(hasher: *Sha256, data: anytype) void {
         const T = @TypeOf(data);
 
-        if (@typeInfo(T) == .Struct) {
+        if (@typeInfo(T) == .@"struct") {
             inline for (data) |val| update(hasher, val);
         } else if (std.meta.Elem(T) == u8) switch (@typeInfo(T)) {
-            .Array => hasher.update(&data),
+            .array => hasher.update(&data),
             else => hasher.update(data),
         } else {
             for (data) |val| update(hasher, val);

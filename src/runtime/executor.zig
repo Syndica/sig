@@ -384,7 +384,7 @@ test "pushInstruction" {
     const system_program = sig.runtime.program.system_program;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
@@ -474,7 +474,7 @@ test "processNextInstruction" {
     const system_program = sig.runtime.program.system_program;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
@@ -544,7 +544,7 @@ test "popInstruction" {
     const system_program = sig.runtime.program.system_program;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
@@ -630,7 +630,7 @@ test "prepareCpiInstructionInfo" {
     const system_program = sig.runtime.program.system_program;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,
@@ -786,7 +786,7 @@ test "sumAccountLamports" {
     const testing = sig.runtime.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const ec, const sc, var tc = try testing.createExecutionContexts(
         allocator,

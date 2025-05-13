@@ -72,6 +72,6 @@ pub const ExecutionError = SyscallError ||
     EbpfError ||
     InstructionError ||
     error{
-    OutOfMemory,
-    Overflow,
-};
+        OutOfMemory,
+        Overflow,
+    };

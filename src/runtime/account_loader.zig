@@ -215,7 +215,7 @@ fn loadTransactionAccount(
     feature_set: *const runtime.FeatureSet,
 ) !LoadedTransactionAccount {
     if (account_key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
-        @setCold(true);
+        @branchHint(.unlikely);
         return .{
             .account = try constructInstructionsAccount(account_loader.allocator, tx),
             .loaded_size = 0,
@@ -255,10 +255,11 @@ fn collectRentFromAccount(
 
     if (account.rent_epoch != sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH and
         rent_collector.getRentDue(
-        account.lamports,
-        account.data.len,
-        account.rent_epoch,
-    ) != .Exempt) {
+            account.lamports,
+            account.data.len,
+            account.rent_epoch,
+        ) != .Exempt)
+    {
         account.rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
     }
 
@@ -344,7 +345,7 @@ fn loadTransactionAccountsInner(
 
         if (!owner_account.account.owner.equals(&runtime.ids.NATIVE_LOADER_ID) or
             (!program_account.account.executable and
-            !features.active.contains(runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS)))
+                !features.active.contains(runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS)))
         {
             return error.InvalidProgramForExecution;
         }
@@ -537,7 +538,7 @@ test "load accounts rent paid" {
 
     const allocator = arena.allocator();
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const fee_payer_address = Pubkey.initRandom(prng.random());
     const instruction_address = Pubkey.initRandom(prng.random());
@@ -633,7 +634,7 @@ test "load accounts rent paid" {
 
 test "constructInstructionsAccount" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var data: [1024]u8 = undefined;
     prng.fill(&data);

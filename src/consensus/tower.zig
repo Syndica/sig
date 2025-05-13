@@ -259,8 +259,8 @@ pub const Tower = struct {
 
         if (vote_state.root_slot) |root_slot| {
             if (slot != root_slot
-            // This case should never happen because bank forks purges all
-            // non-descendants of the root every time root is set
+                // This case should never happen because bank forks purges all
+                // non-descendants of the root every time root is set
             and !ancestors.contains(root_slot)) {
                 return error.InvalidRootSlot;
             }

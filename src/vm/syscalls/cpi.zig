@@ -1230,22 +1230,22 @@ pub fn cpiCommon(
         bpf_loader_program.v1.ID.equals(&instruction.program_id) or
         bpf_loader_program.v2.ID.equals(&instruction.program_id) or
         (bpf_loader_program.v3.ID.equals(&instruction.program_id) and !(blk: {
-        // Check valid upgradable instruction
-        const v3_instruction = try info.deserializeInstruction(
-            allocator,
-            bpf_loader_program.v3.Instruction,
-        );
-        defer sig.bincode.free(allocator, v3_instruction);
-        break :blk switch (v3_instruction) {
-            .close => true,
-            .upgrade => true,
-            .set_authority => true,
-            .set_authority_checked => ic.ec.feature_set.active.contains(
-                features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
-            ),
-            else => false,
-        };
-    })) or (blk: {
+            // Check valid upgradable instruction
+            const v3_instruction = try info.deserializeInstruction(
+                allocator,
+                bpf_loader_program.v3.Instruction,
+            );
+            defer sig.bincode.free(allocator, v3_instruction);
+            break :blk switch (v3_instruction) {
+                .close => true,
+                .upgrade => true,
+                .set_authority => true,
+                .set_authority_checked => ic.ec.feature_set.active.contains(
+                    features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
+                ),
+                else => false,
+            };
+        })) or (blk: {
         for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
         break :blk false;
     })) {
@@ -1467,7 +1467,7 @@ const TestAccount = struct {
                 @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
             ),
             .data = Rc(RefCell([]u8)).fromRaw(
-                @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
+                @ptrFromInt(data_cell_addr + @sizeOf(usize) * 2), // VALUE_OFFSET
             ),
             .owner_addr = owner_addr,
             .executable = @intFromBool(self.executable),

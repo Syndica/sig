@@ -75,8 +75,7 @@ fn expectEqualDeepWithOverridesImpl(
     if (try compare_ctx.compare(expected, actual)) return;
     switch (@typeInfo(T)) {
         else => try std.testing.expectEqual(expected, actual),
-
-        .Vector => |info| {
+        .vector => |info| {
             const expected_array: [info.len]info.child = expected;
             const actual_array: [info.len]info.child = actual;
             return expectEqualDeepWithOverridesImpl(
@@ -86,8 +85,7 @@ fn expectEqualDeepWithOverridesImpl(
                 compare_ctx,
             );
         },
-
-        .Array => |info| {
+        .array => |info| {
             const expected_slice: []const info.child = &expected;
             const actual_slice: []const info.child = &actual;
             return expectEqualDeepWithOverridesImpl(
@@ -97,12 +95,9 @@ fn expectEqualDeepWithOverridesImpl(
                 compare_ctx,
             );
         },
-
-        .Pointer => |pointer| switch (pointer.size) {
-            .C => try std.testing.expectEqual(expected, actual),
-            .Many => if (pointer.sentinel) |sentinel_ptr_erased| {
-                const sentinel_ptr: *align(1) const pointer.child = @ptrCast(sentinel_ptr_erased);
-                const sentinel = sentinel_ptr.*;
+        .pointer => |pointer| switch (pointer.size) {
+            .c => try std.testing.expectEqual(expected, actual),
+            .many => if (pointer.sentinel()) |sentinel| {
                 const expected_slice = std.mem.sliceTo(expected, sentinel);
                 const actual_slice = std.mem.sliceTo(actual, sentinel);
                 return expectEqualDeepWithOverridesImpl(
@@ -111,11 +106,9 @@ fn expectEqualDeepWithOverridesImpl(
                     sub_accesses,
                     compare_ctx,
                 );
-            } else {
-                return std.testing.expectEqual(expected, actual);
-            },
-            .One => switch (@typeInfo(pointer.child)) {
-                .Fn, .Opaque => try std.testing.expectEqual(expected, actual),
+            } else return std.testing.expectEqual(expected, actual),
+            .one => switch (@typeInfo(pointer.child)) {
+                .@"fn", .@"opaque" => try std.testing.expectEqual(expected, actual),
                 else => return expectEqualDeepWithOverridesImpl(
                     expected.*,
                     actual.*,
@@ -123,7 +116,7 @@ fn expectEqualDeepWithOverridesImpl(
                     compare_ctx,
                 ),
             },
-            .Slice => {
+            .slice => {
                 if (expected.len != actual.len) {
                     testPrint("Slice len not the same, expected {d}, found {d}\n", .{
                         expected.len,
@@ -147,7 +140,7 @@ fn expectEqualDeepWithOverridesImpl(
             },
         },
 
-        .Struct => |info| {
+        .@"struct" => |info| {
             try sub_accesses.ensureUnusedCapacity(std.testing.allocator, 1);
             inline for (info.fields) |field| {
                 sub_accesses.appendAssumeCapacity(.{ .field = field.name });
@@ -160,8 +153,7 @@ fn expectEqualDeepWithOverridesImpl(
                 _ = sub_accesses.pop();
             }
         },
-
-        .Union => |info| {
+        .@"union" => |info| {
             const Tag = info.tag_type orelse
                 @compileError("Unable to compare untagged union values");
 
@@ -188,8 +180,7 @@ fn expectEqualDeepWithOverridesImpl(
                 },
             }
         },
-
-        .Optional => if (expected) |expected_payload| {
+        .optional => if (expected) |expected_payload| {
             if (actual) |actual_payload| {
                 try expectEqualDeepWithOverridesImpl(
                     expected_payload,
@@ -207,8 +198,7 @@ fn expectEqualDeepWithOverridesImpl(
                 return error.TestExpectedEqual;
             }
         },
-
-        .ErrorUnion => if (expected) |expected_payload| {
+        .error_union => if (expected) |expected_payload| {
             if (actual) |actual_payload| {
                 try expectEqualDeepWithOverridesImpl(
                     expected_payload,

@@ -89,7 +89,7 @@ pub fn initDurableNonceFromHash(blockhash: Hash) Hash {
 }
 
 test "verify_durable_nonce" {
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const blockhash = Hash{ .data = [_]u8{171} ** 32 };
 
@@ -133,7 +133,7 @@ test "verify_durable_nonce" {
 }
 
 test "upgrade_nonce_version" {
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     {
         const versions = Versions{ .legacy = .unintialized };

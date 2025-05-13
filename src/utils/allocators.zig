@@ -6,8 +6,6 @@ const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
-const log2 = std.math.log2;
-const alignForward = std.mem.alignForward;
 const bytesAsValue = std.mem.bytesAsValue;
 
 /// very similar to RecycleFBA but with a few differences:
@@ -374,13 +372,14 @@ pub fn RecycleFBA(config: struct {
                 .vtable = &.{
                     .alloc = alloc,
                     .resize = resize,
+                    .remap = remap,
                     .free = free,
                 },
             };
         }
 
         /// creates a new file with size aligned to page_size and returns a pointer to it
-        pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
+        pub fn alloc(ctx: *anyopaque, n: usize, alignment: std.mem.Alignment, return_address: usize) ?[*]u8 {
             const self: *Self = @ptrCast(@alignCast(ctx));
 
             if (config.thread_safe) self.mux.lock();
@@ -394,7 +393,7 @@ pub fn RecycleFBA(config: struct {
             var is_possible_to_recycle = false;
             for (self.records.items) |*item| {
                 if (item.len >= n and
-                    std.mem.isAlignedLog2(@intFromPtr(item.buf), log2_align))
+                    alignment.check(@intFromPtr(item.buf)))
                 {
                     if (item.is_free) {
                         item.is_free = false;
@@ -408,19 +407,19 @@ pub fn RecycleFBA(config: struct {
 
             // TODO(PERF, x19): allocate len+1 and store is_free at index 0, `free` could then be O(1)
             // otherwise, allocate a new one
-            const buf = self.fba_allocator.allocator().rawAlloc(n, log2_align, return_address) orelse {
+            const buf = self.fba_allocator.allocator().rawAlloc(n, alignment, return_address) orelse {
                 if (!is_possible_to_recycle) {
                     // not enough memory to allocate and no possible recycles will be perma stuck
                     // TODO(x19): loop this and have a comptime limit?
                     self.tryCollapse();
-                    if (!self.isPossibleToAllocate(n, log2_align)) {
+                    if (!self.isPossibleToAllocate(n, alignment)) {
                         @panic("RecycleFBA.alloc: no possible recycles and not enough memory to allocate");
                     }
 
                     // try again : TODO(x19): remove the extra lock/unlock
                     if (config.thread_safe) self.mux.unlock(); // no deadlock
                     defer if (config.thread_safe) self.mux.lock();
-                    return alloc(ctx, n, log2_align, return_address);
+                    return alloc(ctx, n, alignment, return_address);
                 }
                 return null;
             };
@@ -433,8 +432,8 @@ pub fn RecycleFBA(config: struct {
             return buf;
         }
 
-        pub fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
-            _ = log2_align;
+        pub fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, return_address: usize) void {
+            _ = alignment;
             _ = return_address;
             const self: *Self = @ptrCast(@alignCast(ctx));
 
@@ -453,7 +452,7 @@ pub fn RecycleFBA(config: struct {
         fn resize(
             ctx: *anyopaque,
             buf: []u8,
-            log2_align: u8,
+            alignment: std.mem.Alignment,
             new_size: usize,
             return_address: usize,
         ) bool {
@@ -469,7 +468,7 @@ pub fn RecycleFBA(config: struct {
                     } else {
                         return self.fba_allocator.allocator().rawResize(
                             buf,
-                            log2_align,
+                            alignment,
                             new_size,
                             return_address,
                         );
@@ -481,7 +480,17 @@ pub fn RecycleFBA(config: struct {
             return false;
         }
 
-        pub fn isPossibleToAllocate(self: *Self, n: u64, log2_align: u8) bool {
+        fn remap(
+            context: *anyopaque,
+            memory: []u8,
+            alignment: std.mem.Alignment,
+            new_len: usize,
+            return_address: usize,
+        ) ?[*]u8 {
+            return if (resize(context, memory, alignment, new_len, return_address)) memory.ptr else null;
+        }
+
+        pub fn isPossibleToAllocate(self: *Self, n: u64, alignment: std.mem.Alignment) bool {
             // direct alloc check
             const fba_size_left = self.fba_allocator.buffer.len - self.fba_allocator.end_index;
             if (fba_size_left >= n) {
@@ -491,7 +500,7 @@ pub fn RecycleFBA(config: struct {
             // check for a buf to recycle
             for (self.records.items) |*item| {
                 if (item.len >= n and
-                    std.mem.isAlignedLog2(@intFromPtr(item.buf), log2_align))
+                    alignment.check(@intFromPtr(item.buf)))
                 {
                     return true;
                 }
@@ -549,17 +558,17 @@ pub const BatchAllocator = struct {
         fn deinit(self: *Batch, backing_allocator: Allocator) void {
             backing_allocator.rawFree(
                 (self.fba.buffer.ptr - @sizeOf(Batch))[0 .. self.fba.buffer.len + @sizeOf(Batch)],
-                log2(@alignOf(Batch)),
+                .fromByteUnits(@alignOf(Batch)),
                 @returnAddress(),
             );
         }
 
         /// allocates the full size, which includes extra space at the end for the batch,
         /// and writes the batch pointer in the extra space.
-        fn alloc(batch: *Batch, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+        fn alloc(batch: *Batch, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
             // allocate the full slice including space for the *Batch
             const full_ptr = batch.fba.threadSafeAllocator()
-                .rawAlloc(len + @sizeOf(*Batch), log2_ptr_align, ret_addr) orelse
+                .rawAlloc(len + @sizeOf(*Batch), alignment, ret_addr) orelse
                 return null;
 
             // write the *Batch into the end of the slice
@@ -570,7 +579,7 @@ pub const BatchAllocator = struct {
 
         /// identifies the batch by extending the buf,
         /// then frees the buf using the batch's fba.
-        fn free(buf: []u8, log2_buf_align: u8, return_address: usize) *Batch {
+        fn free(buf: []u8, log2_buf_align: std.mem.Alignment, return_address: usize) *Batch {
             // extract the batch pointer from after the end of the buffer
             const batch_bytes = buf.ptr[buf.len..][0..@sizeOf(*Batch)];
             const batch = bytesAsValue(*Batch, batch_bytes).*;
@@ -599,12 +608,13 @@ pub const BatchAllocator = struct {
             .vtable = &.{
                 .alloc = alloc,
                 .resize = Allocator.noResize,
+                .remap = std.mem.Allocator.noRemap,
                 .free = free,
             },
         };
     }
 
-    fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+    fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
 
         while (true) {
@@ -620,7 +630,7 @@ pub const BatchAllocator = struct {
         }
     }
 
-    fn tryAllocOldBatch(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+    fn tryAllocOldBatch(self: *Self, len: usize, log2_ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         self.new_batch_lock.lockShared();
         defer self.new_batch_lock.unlockShared();
 
@@ -635,7 +645,12 @@ pub const BatchAllocator = struct {
         return null;
     }
 
-    fn tryAllocNewBatch(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+    fn tryAllocNewBatch(
+        self: *Self,
+        len: usize,
+        alignment: std.mem.Alignment,
+        ret_addr: usize,
+    ) ?[*]u8 {
         // only one thread should do this at a time.
         // other threads should wait until the first one finishes.
         if (self.new_batch_waiters.fetchAdd(1, .monotonic) > 0) {
@@ -647,12 +662,12 @@ pub const BatchAllocator = struct {
         self.new_batch_lock.lock();
         defer self.new_batch_lock.unlock();
 
-        const padding = alignForward(usize, @sizeOf(Batch), alignment(log2_ptr_align));
+        const padding = alignment.forward(@sizeOf(Batch));
         const batch_size = @max(self.batch_size, padding + len + @sizeOf(*Batch));
 
         // create new batch
         const batch_bytes = self.backing_allocator
-            .rawAlloc(batch_size, log2(@alignOf(Batch)), ret_addr) orelse return null;
+            .rawAlloc(batch_size, .fromByteUnits(@alignOf(Batch)), ret_addr) orelse return null;
         const new_batch: *Batch = @alignCast(@ptrCast(batch_bytes));
         new_batch.* = Batch{
             .fba = FixedBufferAllocator.init(batch_bytes[@sizeOf(Batch)..batch_size]),
@@ -660,7 +675,7 @@ pub const BatchAllocator = struct {
         };
 
         // use new batch for allocation
-        const ptr = new_batch.alloc(len, log2_ptr_align, ret_addr) orelse unreachable;
+        const ptr = new_batch.alloc(len, alignment, ret_addr) orelse unreachable;
 
         if (batch_size > self.batch_size) {
             // this batch won't be useful for any other allocations
@@ -678,7 +693,7 @@ pub const BatchAllocator = struct {
         return ptr;
     }
 
-    fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, return_address: usize) void {
+    fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: std.mem.Alignment, return_address: usize) void {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
 
         const batch = Batch.free(buf, log2_buf_align, return_address);
@@ -711,7 +726,7 @@ pub const DiskMemoryAllocator = struct {
 
     /// Returns the aligned size with enough space for `size` and `Metadata` at the end.
     inline fn alignedFileSize(size: usize) usize {
-        return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.mem.page_size);
+        return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.heap.pageSize());
     }
 
     inline fn alignedMmapSize(
@@ -728,6 +743,7 @@ pub const DiskMemoryAllocator = struct {
             .vtable = &.{
                 .alloc = alloc,
                 .resize = resize,
+                .remap = remap,
                 .free = free,
             },
         };
@@ -738,13 +754,18 @@ pub const DiskMemoryAllocator = struct {
     /// mmaps at least enough memory to the file for `size`, the metadata, and optionally
     /// more based on the `mmap_ratio` field, in order to accommodate potential growth
     /// from `resize` calls.
-    fn alloc(ctx: *anyopaque, requested_size: usize, log2_align: u8, return_address: usize) ?[*]u8 {
+    fn alloc(
+        ctx: *anyopaque,
+        requested_size: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
         std.debug.assert(self.mmap_ratio != 0);
 
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment(log2_align) <= std.mem.page_size);
+        std.debug.assert(alignment.toByteUnits() <= std.heap.pageSize());
 
         const file_aligned_size = alignedFileSize(requested_size);
         const aligned_mmap_size = alignedMmapSize(file_aligned_size, self.mmap_ratio);
@@ -790,7 +811,7 @@ pub const DiskMemoryAllocator = struct {
     fn resize(
         ctx: *anyopaque,
         buf: []u8,
-        log2_align: u8,
+        alignment: std.mem.Alignment,
         requested_size: usize,
         return_address: usize,
     ) bool {
@@ -799,7 +820,7 @@ pub const DiskMemoryAllocator = struct {
         std.debug.assert(self.mmap_ratio != 0);
 
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment(log2_align) <= std.mem.page_size);
+        std.debug.assert(alignment.toByteUnits() <= std.heap.pageSize());
 
         const old_file_aligned_size = alignedFileSize(buf.len);
         const new_file_aligned_size = alignedFileSize(requested_size);
@@ -808,7 +829,7 @@ pub const DiskMemoryAllocator = struct {
             return true;
         }
 
-        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
+        const buf_ptr: [*]align(std.heap.pageSize()) u8 = @alignCast(buf.ptr);
         const old_metadata_start = old_file_aligned_size - @sizeOf(Metadata);
         const metadata: Metadata = @bitCast(blk: {
             // you might think this block can be replaced with:
@@ -844,19 +865,34 @@ pub const DiskMemoryAllocator = struct {
         return true;
     }
 
+    fn remap(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) ?[*]u8 {
+        return if (resize(context, memory, alignment, new_len, return_address)) memory.ptr else null;
+    }
+
     /// unmaps the memory and deletes the associated file.
-    fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
+    fn free(
+        ctx: *anyopaque,
+        buf: []u8,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) void {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
         std.debug.assert(self.mmap_ratio != 0);
         std.debug.assert(buf.len != 0); // should be ensured by the allocator interface
 
         // the allocator interface shouldn't allow this (aside from the *Raw methods).
-        std.debug.assert(alignment(log2_align) <= std.mem.page_size);
+        std.debug.assert(alignment.toByteUnits() <= std.heap.pageSize());
 
         const file_aligned_size = alignedFileSize(buf.len);
 
-        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
+        const buf_ptr: [*]align(std.heap.pageSize()) u8 = @alignCast(buf.ptr);
         const metadata_start = file_aligned_size - @sizeOf(Metadata);
         const metadata: Metadata = @bitCast(buf_ptr[metadata_start..][0..@sizeOf(Metadata)].*);
 
@@ -885,7 +921,7 @@ pub fn createAndMmapFile(
     dir: std.fs.Dir,
     file_name: []const u8,
     n: u64,
-) ![]align(std.mem.page_size) u8 {
+) ![]align(std.heap.pageSize()) u8 {
     const file = try dir.createFile(file_name, .{ .read = true, .truncate = true });
     defer file.close();
 
@@ -901,11 +937,6 @@ pub fn createAndMmapFile(
     );
 
     return memory;
-}
-
-/// converts from a log2 alignment to the actual alignment
-pub fn alignment(log2_align: u8) usize {
-    return @as(usize, 1) << @intCast(log2_align);
 }
 
 /// Namespace housing the different components for the stateless failing allocator.
@@ -937,21 +968,28 @@ pub const failing = struct {
     /// enabled in safe and unsafe modes, or to an assertion which triggers checked illegal behaviour.
     pub inline fn allocator(config: Config) std.mem.Allocator {
         const S = struct {
-            fn alloc(_: *anyopaque, _: usize, _: u8, _: usize) ?[*]u8 {
+            fn alloc(_: *anyopaque, _: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
                 return switch (config.alloc) {
                     .noop_or_fail => null,
                     .panics => @panic("Unexpected call to alloc"),
                     .assert => unreachable,
                 };
             }
-            fn resize(_: *anyopaque, _: []u8, _: u8, _: usize, _: usize) bool {
+            fn resize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
                 return switch (config.resize) {
                     .noop_or_fail => false,
                     .panics => @panic("Unexpected call to resize"),
                     .assert => unreachable,
                 };
             }
-            fn free(_: *anyopaque, _: []u8, _: u8, _: usize) void {
+            fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+                return switch (config.resize) {
+                    .noop_or_fail => null,
+                    .panics => @panic("Unexpected call to resize"),
+                    .assert => unreachable,
+                };
+            }
+            fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
                 return switch (config.free) {
                     .noop_or_fail => {},
                     .panics => @panic("Unexpected call to free"),
@@ -964,6 +1002,7 @@ pub const failing = struct {
             .vtable = &.{
                 .alloc = S.alloc,
                 .resize = S.resize,
+                .remap = S.remap,
                 .free = S.free,
             },
         };
@@ -974,7 +1013,7 @@ test "recycle buffer: save and load" {
     const backing_allocator = std.testing.allocator;
     const X = struct {
         a: u8,
-        pub const DEFAULT = .{ .a = 0 };
+        pub const DEFAULT: @This() = .{ .a = 0 };
     };
 
     var allocator = RecycleBuffer(X, X.DEFAULT, .{
@@ -1022,7 +1061,7 @@ test "recycle buffer: freeUnused" {
     const backing_allocator = std.testing.allocator;
     const X = struct {
         a: u8,
-        pub const DEFAULT = .{ .a = 0 };
+        pub const DEFAULT: @This() = .{ .a = 0 };
     };
 
     var allocator = RecycleBuffer(X, X.DEFAULT, .{
@@ -1208,10 +1247,10 @@ test "disk allocator large realloc" {
     };
     const dma = dma_state.allocator();
 
-    var page1 = try dma.alloc(u8, std.mem.page_size);
+    var page1 = try dma.alloc(u8, std.heap.pageSize());
     defer dma.free(page1);
 
-    page1 = try dma.realloc(page1, std.mem.page_size * 15);
+    page1 = try dma.realloc(page1, std.heap.pageSize() * 15);
 
     page1[page1.len - 1] = 10;
 }
@@ -1275,7 +1314,7 @@ test "fuzzBatchAllocator - past failures" {
 
 /// args "[allocator] [max_actions]"
 pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
 
     // parse args
     const Fuzzable = enum { all, disk, batch };
@@ -1297,7 +1336,7 @@ pub fn runFuzzer(seed: u64, args: *std.process.ArgIterator) !void {
     for (0..max_actions / iterations) |i| {
         var rng = std.Random.DefaultPrng.init(seed +% i);
         const random = rng.random();
-        const config = .{
+        const config: AllocatorFuzzParams = .{
             .allocator = gpa.allocator(),
             .random = random,
             .iterations = iterations,
@@ -1337,7 +1376,7 @@ fn fuzzDiskMemoryAllocator(config: AllocatorFuzzParams, mmap_ratio: u16) !void {
 }
 
 fn fuzzBatchAllocator(config: AllocatorFuzzParams, batch_size: usize) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     {
         var batch_allocator = BatchAllocator{
             .backing_allocator = gpa.allocator(),

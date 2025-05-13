@@ -96,7 +96,7 @@ pub const VoteTracker = struct {
         defer self.map_rwlock.unlock();
 
         const gop = try self.map.getOrPut(allocator, slot);
-        errdefer std.debug.assert(self.map.pop().key == slot);
+        errdefer std.debug.assert(self.map.pop().?.key == slot);
 
         if (!gop.found_existing) {
             gop.value_ptr.* = try RcRwSlotVoteTracker.create(allocator);
@@ -148,7 +148,7 @@ pub const VoteTracker = struct {
         const map = &self.map;
 
         const gop = try map.getOrPut(allocator, slot);
-        errdefer if (!gop.found_existing) std.debug.assert(map.pop().key == slot);
+        errdefer if (!gop.found_existing) std.debug.assert(map.pop().?.key == slot);
         if (!gop.found_existing) gop.value_ptr.* = try RcRwSlotVoteTracker.create(allocator);
         errdefer if (!gop.found_existing) gop.value_ptr.*.deinit(allocator);
 
@@ -345,7 +345,7 @@ pub const VoteStakeTracker = struct {
         if (!@inComptime()) comptime unreachable;
         if (ReachedThresholds == std.DynamicBitSetUnmanaged) return .dynamic;
 
-        if (@typeInfo(ReachedThresholds) != .Struct) return null;
+        if (@typeInfo(ReachedThresholds) != .@"struct") return null;
 
         if (!@hasDecl(ReachedThresholds, "bit_length")) return null;
         if (!@typeInfo(@TypeOf(&ReachedThresholds.bit_length)).Pointer.is_const) {
@@ -375,7 +375,7 @@ pub const VoteStakeTracker = struct {
 test "VoteStakeTracker.addVotePubkey" {
     const allocator = std.testing.allocator;
 
-    var prng = std.rand.DefaultPrng.init(21410);
+    var prng = std.Random.DefaultPrng.init(21410);
     const random = prng.random();
 
     const total_epoch_stake = 10;
