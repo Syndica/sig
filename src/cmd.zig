@@ -1166,6 +1166,20 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    const replay_thread = try app_base.spawnService(
+        "replay",
+        sig.replay.service.run,
+        .{.{
+            .allocator = allocator,
+            .logger = app_base.logger.unscoped(),
+            .exit = app_base.exit,
+            .blockstore_reader = blockstore_reader,
+            .accounts_db = &loaded_snapshot.accounts_db,
+            .epoch_schedule = bank_fields.epoch_schedule,
+        }},
+    );
+
+    replay_thread.join();
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
@@ -1682,6 +1696,16 @@ const AppBase = struct {
             .exit = exit,
             .closed = false,
         };
+    }
+
+    pub fn spawnService(
+        self: *const AppBase,
+        name: []const u8,
+        function: anytype,
+        args: anytype,
+    ) std.Thread.SpawnError!std.Thread {
+        return try sig.utils.service_manager
+            .spawnService(self.logger, self.exit, name, .{}, function, args);
     }
 
     /// Signals the shutdown, however it does not block.
