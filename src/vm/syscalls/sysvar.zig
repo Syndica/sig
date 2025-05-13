@@ -36,7 +36,7 @@ fn getter(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMap) E
                 tc.getCheckAligned(),
             );
 
-            const v = try tc.sc.sysvar_cache.get(T);
+            const v = try tc.sysvar_cache.get(T);
 
             // Avoid value.* = v as it sets padding bytes to undefined instead of 0.
             value.* = std.mem.zeroes(T);
@@ -77,7 +77,7 @@ pub fn getSysvar(
     _ = std.math.add(u64, value_addr, length) catch
         return InstructionError.ProgramArithmeticOverflow;
 
-    const buf = tc.sc.sysvar_cache.getSlice(id) orelse {
+    const buf = tc.sysvar_cache.getSlice(id) orelse {
         registers.set(.r0, SYSVAR_NOT_FOUND);
         return;
     };
@@ -163,7 +163,7 @@ test getSysvar {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{},
         .compute_meter = std.math.maxInt(u64),
         .sysvar_cache = .{
@@ -175,13 +175,7 @@ test getSysvar {
             .last_restart_slot = src.restart,
         },
     });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     // // Test clock sysvar
     {
@@ -507,18 +501,12 @@ fn testGetStakeHistory(filled: bool) !void {
 
     const testing = sig.runtime.testing;
     var prng = std.Random.DefaultPrng.init(0);
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{},
         .compute_meter = std.math.maxInt(u64),
         .sysvar_cache = .{ .stake_history = src_history },
     });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     var buffer = std.mem.zeroes([sysvar.StakeHistory.SIZE_OF]u8);
     const buffer_addr = 0x100000000;
@@ -586,18 +574,12 @@ fn testGetSlotHashes(filled: bool) !void {
 
     const testing = sig.runtime.testing;
     var prng = std.Random.DefaultPrng.init(0);
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{},
         .compute_meter = std.math.maxInt(u64),
         .sysvar_cache = .{ .slot_hashes = src_hashes },
     });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     var buffer = std.mem.zeroes([sysvar.SlotHashes.SIZE_OF]u8);
     const buffer_addr = 0x100000000;

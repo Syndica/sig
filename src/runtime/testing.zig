@@ -14,8 +14,6 @@ const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
-const EpochContext = sig.runtime.transaction_context.EpochContext;
-const SlotContext = sig.runtime.transaction_context.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
@@ -23,7 +21,10 @@ const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 
 pub const ExecuteContextsParams = struct {
-    // Epoch context
+    // If a user requires a mutable reference to the created feature set, they should
+    // allocate it themselves and pass it in the params. Deinitialization is handled
+    // by deinitTransactionContext.
+    feature_set_ptr: ?*FeatureSet = null,
     feature_set: []const FeatureParams = &.{},
     epoch_stakes: []const EpochStakeParam = &.{},
 
@@ -78,31 +79,30 @@ pub const ExecuteContextsParams = struct {
     };
 };
 
-pub fn createExecutionContexts(
+pub fn createTransactionContext(
     allocator: std.mem.Allocator,
     random: std.Random,
     params: ExecuteContextsParams,
-) !struct { *EpochContext, *SlotContext, TransactionContext } {
+) !TransactionContext {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
-    // Create Epoch Context
-    const ec = try allocator.create(EpochContext);
-    ec.* = .{
-        .allocator = allocator,
-        .epoch_stakes = try createEpochStakes(allocator, params.epoch_stakes),
-        .feature_set = try createFeatureSet(allocator, params.feature_set),
-    };
-    errdefer ec.deinit();
+    // Create FeatureSet
+    const feature_set = if (params.feature_set_ptr) |ptr|
+        ptr
+    else
+        try allocator.create(FeatureSet);
+    feature_set.* = try createFeatureSet(allocator, params.feature_set);
+    errdefer feature_set.deinit(allocator);
 
-    // Create Slot Context
-    const sc = try allocator.create(SlotContext);
-    sc.* = .{
-        .allocator = allocator,
-        .ec = ec,
-        .sysvar_cache = try createSysvarCache(allocator, params.sysvar_cache),
-    };
-    errdefer sc.deinit();
+    // Create EpochStakes
+    const epoch_stakes = try allocator.create(EpochStakes);
+    epoch_stakes.* = try createEpochStakes(allocator, params.epoch_stakes);
+
+    // Create SysvarCache
+    const sysvar_cache = try allocator.create(SysvarCache);
+    sysvar_cache.* = try createSysvarCache(allocator, params.sysvar_cache);
+    errdefer sysvar_cache.deinit(allocator);
 
     // Create Accounts
     var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
@@ -131,8 +131,9 @@ pub fn createExecutionContexts(
     // Create Transaction Context
     const tc = TransactionContext{
         .allocator = allocator,
-        .ec = ec,
-        .sc = sc,
+        .feature_set = feature_set,
+        .sysvar_cache = sysvar_cache,
+        .epoch_stakes = epoch_stakes,
         .accounts = try accounts.toOwnedSlice(),
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -148,7 +149,26 @@ pub fn createExecutionContexts(
         .prev_lamports_per_signature = params.prev_lamports_per_signature,
     };
 
-    return .{ ec, sc, tc };
+    return tc;
+}
+
+pub fn deinitTransactionContext(
+    allocator: std.mem.Allocator,
+    tc: TransactionContext,
+) void {
+    if (!builtin.is_test)
+        @compileError("deinitTransactionContext should only be called in test mode");
+
+    tc.feature_set.deinit(allocator);
+    allocator.destroy(tc.feature_set);
+
+    tc.sysvar_cache.deinit(allocator);
+    allocator.destroy(tc.sysvar_cache);
+
+    tc.epoch_stakes.deinit(allocator);
+    allocator.destroy(tc.epoch_stakes);
+
+    tc.deinit();
 }
 
 pub fn createEpochStakes(
@@ -264,7 +284,7 @@ pub fn createSysvarCache(
 }
 
 pub fn createInstructionInfo(
-    tc: *TransactionContext,
+    tc: *const TransactionContext,
     program_id: Pubkey,
     instruction: anytype,
     accounts_params: []const InstructionInfoAccountMetaParams,

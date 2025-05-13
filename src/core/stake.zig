@@ -73,6 +73,29 @@ pub const EpochStakes = struct {
     node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
     epoch_authorized_voters: EpochAuthorizedVoters,
 
+    pub const EMPTY: EpochStakes = .{
+        .total_stake = 0,
+        .stakes = .{
+            .epoch = 0,
+            .history = &.{.{
+                .epoch = 0,
+                .history_entry = .{
+                    .effective = 0,
+                    .activating = 0,
+                    .deactivating = 0,
+                },
+            }},
+            .vote_accounts = .{
+                .accounts = .{},
+                .staked_nodes = null,
+            },
+            .delegations = .{},
+            .unused = 0,
+        },
+        .node_id_to_vote_accounts = .{},
+        .epoch_authorized_voters = .{},
+    };
+
     pub fn deinit(epoch_stakes: EpochStakes, allocator: Allocator) void {
         epoch_stakes.stakes.deinit(allocator);
         deinitMapAndValues(allocator, epoch_stakes.node_id_to_vote_accounts);

@@ -473,7 +473,7 @@ pub fn getEpochStake(
     // On null voter vm address, return total active cluster stake (as defined by EpochContext).
     if (vote_pubkey_addr == 0) {
         try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
-        registers.set(.r0, tc.ec.epoch_stakes.total_stake);
+        registers.set(.r0, tc.epoch_stakes.total_stake);
         return;
     }
 
@@ -490,7 +490,7 @@ pub fn getEpochStake(
         tc.getCheckAligned(),
     );
 
-    if (tc.ec.epoch_stakes.stakes.delegations.getPtr(vote_address.*)) |delegation| {
+    if (tc.epoch_stakes.stakes.delegations.getPtr(vote_address.*)) |delegation| {
         registers.set(.r0, delegation.stake);
     } else {
         registers.set(.r0, 0);
@@ -1019,7 +1019,7 @@ test findProgramAddress {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = Pubkey.initRandom(prng.random()),
@@ -1027,13 +1027,7 @@ test findProgramAddress {
             },
         },
     });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     const cost = tc.compute_budget.create_program_address_units;
     const address = sig.runtime.program.bpf_loader_program.v3.ID;
@@ -1140,7 +1134,7 @@ test createProgramAddress {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = Pubkey.initRandom(prng.random()),
@@ -1148,13 +1142,7 @@ test createProgramAddress {
             },
         },
     });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     const cost = tc.compute_budget.create_program_address_units;
     const address = sig.runtime.program.bpf_loader_program.v3.ID;
@@ -1308,18 +1296,12 @@ test allocFree {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+    var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{},
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     const heap = try allocator.alloc(u8, 4096);
     defer allocator.free(heap);
@@ -1365,16 +1347,10 @@ test getProcessedSiblingInstruction {
         .owner = sig.runtime.program.bpf_loader_program.v2.ID,
     };
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(allocator, prng.random(), .{
+    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &account_params,
     });
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     const trace_indexes: [8]u8 = std.simd.iota(u8, 8);
     for ([_]u8{ 1, 2, 3, 2, 2, 3, 4, 3 }, 0..) |stack_height, index_in_trace| {
@@ -1402,8 +1378,6 @@ test getProcessedSiblingInstruction {
             });
 
             tc.instruction_stack.appendAssumeCapacity(.{
-                .ec = tc.ec,
-                .sc = tc.sc,
                 .tc = &tc,
                 .ixn_info = info,
                 .depth = tc.instruction_stack.len,
@@ -1519,7 +1493,7 @@ test getEpochStake {
     const target_vote_address = Pubkey.initRandom(prng.random());
     const total_epoch_stake = 200_000_000_000_000;
 
-    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+    var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -1536,13 +1510,7 @@ test getEpochStake {
             },
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     // Test get total stake
     {
@@ -1645,7 +1613,7 @@ test "set and get return data" {
     var id_buffer: [32]u8 = .{0} ** 32;
 
     var prng = std.Random.DefaultPrng.init(0);
-    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+    var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -1656,13 +1624,7 @@ test "set and get return data" {
             .compute_meter = 10_000,
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     const program_id = sig.runtime.program.bpf_loader_program.v2.ID;
     const instr_info = sig.runtime.InstructionInfo{

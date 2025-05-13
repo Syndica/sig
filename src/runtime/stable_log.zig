@@ -149,25 +149,19 @@ pub fn programFailure(
 }
 
 test "stable_log" {
-    const createExecutionContexts = sig.runtime.testing.createExecutionContexts;
+    const createTransactionContext = sig.runtime.testing.createTransactionContext;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try createExecutionContexts(
+    var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{
             .log_collector = LogCollector.default(),
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     const program_id =
         Pubkey.parseBase58String("SigDefau1tPubkey111111111111111111111111111") catch unreachable;

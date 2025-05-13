@@ -19,8 +19,6 @@ const InstructionError = sig.core.instruction.InstructionError;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
-const EpochContext = sig.runtime.EpochContext;
-const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 const SyscallError = sig.vm.syscalls.Error;
@@ -221,7 +219,7 @@ const CallerAccount = struct {
     ) !CallerAccount {
         _ = _vm_addr; // unused, but have same signature as fromAccountInfoC().
 
-        const direct_mapping = ic.ec.feature_set.active.contains(
+        const direct_mapping = ic.tc.feature_set.active.contains(
             features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
         );
 
@@ -377,7 +375,7 @@ const CallerAccount = struct {
         account_info: *align(1) const AccountInfoC,
         account_metadata: *const SerializedAccountMetadata,
     ) !CallerAccount {
-        const direct_mapping = ic.ec.feature_set.active.contains(
+        const direct_mapping = ic.tc.feature_set.active.contains(
             features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
         );
 
@@ -584,7 +582,7 @@ fn translateAccounts(
 ) !TranslatedAccounts {
     // translate_account_infos():
 
-    const direct_mapping = ic.ec.feature_set.active.contains(
+    const direct_mapping = ic.tc.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
@@ -606,8 +604,8 @@ fn translateAccounts(
     );
 
     // check_account_infos():
-    if (ic.ec.feature_set.active.contains(features.LOOSEN_CPI_SIZE_RESTRICTION)) {
-        const max_cpi_account_infos: u64 = if (ic.ec.feature_set.active.contains(
+    if (ic.tc.feature_set.active.contains(features.LOOSEN_CPI_SIZE_RESTRICTION)) {
+        const max_cpi_account_infos: u64 = if (ic.tc.feature_set.active.contains(
             features.INCREASE_TX_ACCOUNT_LOCK_LIMIT,
         )) 128 else 64;
 
@@ -767,7 +765,7 @@ fn translateInstruction(
         else => unreachable,
     };
 
-    const loosen_cpi_size_restriction = ic.ec.feature_set.active.contains(
+    const loosen_cpi_size_restriction = ic.tc.feature_set.active.contains(
         features.LOOSEN_CPI_SIZE_RESTRICTION,
     );
 
@@ -1240,7 +1238,7 @@ pub fn cpiCommon(
             .close => true,
             .upgrade => true,
             .set_authority => true,
-            .set_authority_checked => ic.ec.feature_set.active.contains(
+            .set_authority_checked => ic.tc.feature_set.active.contains(
                 features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
             ),
             else => false,
@@ -1271,7 +1269,7 @@ pub fn cpiCommon(
 
     // CPI Exit.
     // Synchronize the callee's account changes so the caller can see them.
-    const direct_mapping = ic.ec.feature_set.active.contains(
+    const direct_mapping = ic.tc.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
@@ -1333,9 +1331,9 @@ pub fn cpiCommon(
     }
 }
 
+const testing = sig.runtime.testing;
+
 const TestContext = struct {
-    ec: *EpochContext,
-    sc: *SlotContext,
     tc: *TransactionContext,
     ic: InstructionContext,
 
@@ -1347,9 +1345,8 @@ const TestContext = struct {
 
         const program_id = Pubkey.initRandom(prng);
         const account_key = Pubkey.initRandom(prng);
-        const testing = sig.runtime.testing;
 
-        const ec, const sc, tc.* = try testing.createExecutionContexts(allocator, prng, .{
+        tc.* = try testing.createTransactionContext(allocator, prng, .{
             .accounts = &.{
                 .{
                     .pubkey = account_key,
@@ -1363,18 +1360,10 @@ const TestContext = struct {
                 },
             },
         });
-        errdefer {
-            ec.deinit();
-            allocator.destroy(ec);
-            sc.deinit();
-            allocator.destroy(sc);
-            tc.deinit();
-        }
+        errdefer testing.deinitTransactionContext(allocator, tc.*);
 
         const ic = InstructionContext{
             .depth = 0,
-            .ec = ec,
-            .sc = sc,
             .tc = tc,
             .ixn_info = try testing.createInstructionInfo(
                 tc,
@@ -1389,18 +1378,13 @@ const TestContext = struct {
         errdefer ic.deinit(allocator);
 
         return .{
-            .ec = ec,
-            .sc = sc,
             .tc = tc,
             .ic = ic,
         };
     }
 
     fn deinit(self: *TestContext, allocator: std.mem.Allocator) void {
-        self.ec.deinit();
-        allocator.destroy(self.ec);
-        allocator.destroy(self.sc);
-        self.tc.deinit();
+        testing.deinitTransactionContext(allocator, self.tc.*);
         allocator.destroy(self.tc);
         self.ic.deinit(allocator);
     }
