@@ -12,6 +12,8 @@ pub fn execute(tx: []const InstructionInfo) Error!ComputeBudgetLimits {
     return budget_limits;
 }
 
+pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
+
 // TODO: do we really need this type? I think we could just make a ComputeBudget type directly.
 // This code is a bit hairy in Agave. Same goes for ComputeBudgetLimits.
 // [agave] https://github.com/anza-xyz/agave/blob/b70cac38827e499d34c3a521eac17c68fb1b5b1f/compute-budget-instruction/src/compute_budget_instruction_details.rs#L39
@@ -65,7 +67,6 @@ const ComputeBudgetInstructionDetails = struct {
     const MIN_HEAP_FRAME_BYTES = HEAP_LENGTH;
     const MAX_HEAP_FRAME_BYTES = 256 * 1024;
     const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT = 200_000;
-    const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
 
     fn sanitizeRequestedHeapSize(bytes: u32) bool {
         return bytes % 1024 == 0 and

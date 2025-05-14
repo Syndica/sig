@@ -5,6 +5,7 @@ const executor = sig.runtime.executor;
 const features = sig.runtime.features;
 const compute_budget_program = sig.runtime.program.compute_budget;
 
+const AccountLoader = sig.runtime.account_loader.BatchAccountCache;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
@@ -51,6 +52,11 @@ pub const RuntimeTransaction = struct {
     msg_hash: Hash,
     recent_blockhash: Hash,
     instruction_infos: []const InstructionInfo,
+    accounts: std.MultiArrayList(struct {
+        pubkey: Pubkey,
+        is_writable: bool,
+        is_signer: bool,
+    }) = .{},
 };
 
 pub const TransactionExecutionEnvironment = struct {
