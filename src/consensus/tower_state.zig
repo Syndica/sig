@@ -2,8 +2,8 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Slot = sig.core.Slot;
-const Lockout = sig.runtime.program.vote_program.state.Lockout;
-const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
+const Lockout = sig.runtime.program.vote.state.Lockout;
+const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
 pub const TowerVoteState = struct {
     votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},

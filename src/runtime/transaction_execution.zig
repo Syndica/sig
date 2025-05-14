@@ -439,7 +439,7 @@ pub fn loadAccounts(
 //         .lamports = 1,
 //         .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
 //     });
-//     try bank.accounts.put(allocator, sig.runtime.program.vote_program.ID, .{
+//     try bank.accounts.put(allocator, sig.runtime.program.vote.ID, .{
 //         .owner = sig.runtime.ids.NATIVE_LOADER_ID,
 //         .executable = true,
 //         .data = .{ .empty = .{ .len = 0 } },
@@ -509,7 +509,7 @@ pub fn loadAccounts(
 //     // program that should fail
 //     const tx5 = sig.core.Transaction{
 //         .msg = .{
-//             .account_keys = &.{sig.runtime.program.vote_program.ID},
+//             .account_keys = &.{sig.runtime.program.vote.ID},
 //             .instructions = &.{
 //                 .{ .program_index = 0, .account_indexes = &.{0}, .data = "" },
 //             },

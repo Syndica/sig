@@ -1,11 +1,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
-const precompile_programs = sig.runtime.program.precompile_programs;
+const Pubkey = sig.core.Pubkey;
+
+const precompile_programs = sig.runtime.program.precompiles;
 
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
-
 const Ed25519 = std.crypto.sign.Ed25519;
+
+pub const ID =
+    Pubkey.parseBase58String("Ed25519SigVerify111111111111111111111111111") catch unreachable;
 
 pub const ED25519_DATA_START = ED25519_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
     ED25519_SIGNATURE_OFFSETS_START;
@@ -166,7 +170,7 @@ pub fn newInstruction(
     instruction_data.appendSliceAssumeCapacity(message);
 
     return .{
-        .program_id = sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID,
+        .program_id = ID,
         .accounts = &.{},
         .data = try instruction_data.toOwnedSlice(),
     };

@@ -3,9 +3,9 @@ const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
-const Vote = sig.runtime.program.vote_program.state.Vote;
-const VoteStateUpdate = sig.runtime.program.vote_program.state.VoteStateUpdate;
-const TowerSync = sig.runtime.program.vote_program.state.TowerSync;
+const Vote = sig.runtime.program.vote.state.Vote;
+const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
+const TowerSync = sig.runtime.program.vote.state.TowerSync;
 
 const UnixTimestamp = i64;
 
@@ -144,7 +144,7 @@ pub const VoteTransaction = union(enum) {
     }
 };
 
-const Lockout = sig.runtime.program.vote_program.state.Lockout;
+const Lockout = sig.runtime.program.vote.state.Lockout;
 test "vote_transaction.VoteTransaction - default initialization" {
     var vote_transaction = try VoteTransaction.default(std.testing.allocator);
     defer vote_transaction.deinit(std.testing.allocator);

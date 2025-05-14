@@ -36,7 +36,7 @@ test "hello_world" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -94,7 +94,7 @@ test "print_account" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -150,7 +150,7 @@ test "fast_copy" {
     const program_account = .{
         .pubkey = program_id,
         .lamports = 1_000_000_000,
-        .owner = program.bpf_loader_program.v3.ID,
+        .owner = program.bpf_loader.v3.ID,
         .executable = true,
         .rent_epoch = 0,
         .data = program_bytes,
@@ -231,7 +231,7 @@ test "set_return_data" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -277,7 +277,7 @@ test "program_is_not_executable" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = false,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -318,7 +318,7 @@ test "program_invalid_account_data" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -362,7 +362,7 @@ test "program_init_vm_not_enough_compute" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -409,7 +409,7 @@ test "basic direct mapping" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -429,7 +429,7 @@ test "basic direct mapping" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,

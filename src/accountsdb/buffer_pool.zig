@@ -8,7 +8,7 @@ const Atomic = std.atomic.Value;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 const bincode = sig.bincode;
-const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITTED_DATA_LENGTH;
+const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
 
 /// arbitrarily chosen, I believe >95% of accounts will be <= 512 bytes
 pub const FRAME_SIZE = 512;
