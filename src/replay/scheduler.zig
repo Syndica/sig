@@ -34,7 +34,7 @@ const assert = std.debug.assert;
 /// propagate up when polling.
 ///
 /// This should only be used in a single thread.
-pub const ReplayBatcher = struct {
+pub const TransactionScheduler = struct {
     batches: ResizeableRingBuffer(ResolvedBatch),
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
     results: Channel(?TransactionError),
@@ -50,7 +50,7 @@ pub const ReplayBatcher = struct {
         allocator: Allocator,
         batch_capacity: usize,
         thread_pool: *ThreadPool,
-    ) ReplayBatcher {
+    ) TransactionScheduler {
         return .{
             .batches = ResizeableRingBuffer(ResolvedBatch).initCapacity(allocator, batch_capacity),
             .thread_pool = try HomogeneousThreadPool(ProcessBatchTask)
@@ -63,20 +63,20 @@ pub const ReplayBatcher = struct {
         };
     }
 
-    pub fn deinit(self: *ReplayBatcher) void {
+    pub fn deinit(self: *TransactionScheduler) void {
         _ = self; // autofix
         unreachable; // TODO
     }
 
-    pub fn addBatch(self: *ReplayBatcher, batch: ResolvedBatch) Allocator.Error!void {
+    pub fn addBatch(self: *TransactionScheduler, batch: ResolvedBatch) Allocator.Error!void {
         try self.batches.put(batch);
     }
 
-    pub fn addBatchAssumeCapacity(self: *ReplayBatcher, batch: ResolvedBatch) !void {
+    pub fn addBatchAssumeCapacity(self: *TransactionScheduler, batch: ResolvedBatch) !void {
         self.batches.putAssumeCapacity(batch);
     }
 
-    pub fn poll(self: *ReplayBatcher) !ConfirmSlotStatus {
+    pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
         assert(self.batches_scheduled <= self.batches.len);
         assert(self.batches_finished <= self.batches.len);
 
@@ -98,7 +98,7 @@ pub const ReplayBatcher = struct {
         return .pending;
     }
 
-    fn tryScheduleSome(self: *ReplayBatcher) !?TransactionError {
+    fn tryScheduleSome(self: *TransactionScheduler) !?TransactionError {
         while (self.batches.peek()) |peeked_batch| {
             self.locks.lockStrict(self.allocator, peeked_batch.accounts_to_lock) catch |e| switch (e) {
                 error.LockError => if (self.batches_scheduled - self.batches_finished == 0) {

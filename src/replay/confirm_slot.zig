@@ -18,7 +18,7 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const ConfirmationProgress = sig.consensus.progress_map.blockstore_processor.ConfirmationProgress;
 
-const ReplayBatcher = replay.batcher.ReplayBatcher;
+const TransactionScheduler = replay.scheduler.TransactionScheduler;
 const ResolvedTransaction = replay.resolve.ResolvedTransaction;
 const resolveBatch = replay.resolve.resolveBatch;
 
@@ -28,7 +28,7 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
 
 /// Asynchronously validate and execute entries from a slot.
 ///
-/// Returns: a ConfirmSlotFuture which you can poll periodically to await a result.
+/// Return: ConfirmSlotFuture which you can poll periodically to await a result.
 ///
 /// Analogous to:
 /// - agave: confirm_slot and confirm_slot_entries
@@ -50,11 +50,9 @@ pub fn confirmSlot(
     }
 
     try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
-    const initial_tx_result = try startExecuteBatches(future, entries);
+    try scheduleBatches(future, entries);
 
-    if (.err == initial_tx_result) {
-        future.status_when_done = initial_tx_result;
-    }
+    _ = future.poll(); // starts batch execution. poll result is cached inside future
 
     return future;
 }
@@ -82,12 +80,12 @@ fn startPohVerify(
 }
 
 /// schedule transaction verification/execution asynchronously
-fn startExecuteBatches(
+fn scheduleBatches(
     allocator: Allocator,
     accounts_db: *AccountsDB,
-    batcher: *ReplayBatcher,
+    batcher: *TransactionScheduler,
     entries: []const Entry,
-) !ConfirmSlotStatus {
+) !void {
     var total_transactions: usize = 0;
     for (entries) |entry| {
         total_transactions += entry.transactions.items.len;
@@ -96,13 +94,7 @@ fn startExecuteBatches(
         errdefer batch.deinit(allocator);
 
         batcher.addBatchAssumeCapacity(batch);
-
-        switch (try batcher.poll()) {
-            .done, .pending => {},
-            .err => |err| return .{ .failure = .{ .InvalidTransaction = err } },
-        }
     }
-    return .pending;
 }
 
 pub const ConfirmSlotStatus = union(enum) {
@@ -119,7 +111,7 @@ pub const ConfirmSlotStatus = union(enum) {
 /// fd: runtime_process_txns_in_microblock_stream
 pub const ConfirmSlotFuture = struct {
     allocator: Allocator,
-    batcher: ReplayBatcher,
+    batcher: TransactionScheduler,
     poh_verifier: HomogeneousThreadPool(PohTask),
 
     /// The current status to return on poll, unless something has changed.
@@ -133,7 +125,7 @@ pub const ConfirmSlotFuture = struct {
         thread_pool: *ThreadPool,
         num_entries: usize,
     ) !*ConfirmSlotFuture {
-        const batcher = ReplayBatcher.initCapacity(allocator, num_entries, thread_pool);
+        const batcher = TransactionScheduler.initCapacity(allocator, num_entries, thread_pool);
         errdefer batcher.deinit(allocator);
 
         const poh_verifier = try HomogeneousThreadPool(PohTask)
@@ -193,18 +185,11 @@ pub const ConfirmSlotFuture = struct {
 
 const PohTask = struct {
     allocator: Allocator,
-    // preallocated_nodes: *std.ArrayListUnmanaged(Hash),
     initial_hash: Hash,
     entries: []const Entry,
 
     pub fn run(self: *PohTask) Allocator.Error!bool {
-        return try core.entry.verifyPoh(
-            self.entries,
-            self.allocator,
-            // self.preallocated_nodes,
-            null,
-            self.initial_hash,
-        );
+        return try core.entry.verifyPoh(self.entries, self.allocator, null, self.initial_hash);
     }
 };
 

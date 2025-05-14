@@ -61,7 +61,7 @@ pub fn resolveBatch(
     allocator: Allocator,
     accounts_db: *AccountsDB,
     batch: []const Transaction,
-) void {
+) !ResolvedBatch {
     var accounts_to_lock = try std.ArrayListUnmanaged(struct { Pubkey, bool })
         .initCapacity(allocator, Transaction.numAccounts(batch));
     errdefer accounts_to_lock.deinit(allocator);

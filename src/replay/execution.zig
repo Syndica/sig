@@ -106,15 +106,6 @@ fn replaySlot(state: *ReplayExecutionState, bank_slot: Slot) !ConfirmSlotFuture 
         try state.blockstore_reader.getSlotEntriesWithShredInfo(bank_slot, start_shred, false);
     _ = num_shreds; // autofix
 
-    const verify_ticks_config = VerifyTicksConfig{
-        .tick_height = slot_info.state.tickHeight(),
-        .max_tick_height = slot_info.constants.max_tick_height,
-        .hashes_per_tick = epoch_info.hashes_per_tick,
-        .slot = slot,
-        .slot_is_full = slot_is_full,
-    };
-    _ = verify_ticks_config; // autofix
-
     const replay_progress = &fork_progress.value_ptr.replay_progress.arc_ed.rwlock_ed;
 
     return try confirmSlot(
@@ -128,6 +119,7 @@ fn replaySlot(state: *ReplayExecutionState, bank_slot: Slot) !ConfirmSlotFuture 
             .hashes_per_tick = epoch_info.hashes_per_tick,
             .slot = slot,
             .slot_is_full = slot_is_full,
+            .tick_hash_count = &replay_progress.tick_hash_count,
         },
     );
 }
