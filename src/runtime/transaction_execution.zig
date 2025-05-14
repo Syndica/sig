@@ -27,6 +27,7 @@ const RentCollector = sig.core.rent_collector.RentCollector;
 const RentDebit = sig.runtime.account_loader.RentDebit;
 const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
+const CachedAccount = sig.runtime.account_loader.CachedAccount;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -99,11 +100,6 @@ pub const TransactionRollbacks = union(enum(u8)) {
     fee_payer_only: CopiedAccount,
     same_nonce_and_fee_payer: CopiedAccount,
     separate_nonce_and_fee_payer: struct { CopiedAccount, CopiedAccount },
-};
-
-pub const CachedAccount = struct {
-    pubkey: Pubkey,
-    account: *AccountSharedData,
 };
 
 pub const CopiedAccount = struct {
