@@ -9,8 +9,8 @@ const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
 const vm = sig.vm;
 const bpf_program = sig.runtime.program.bpf;
-const system_program = sig.runtime.program.system_program;
-const bpf_loader_program = sig.runtime.program.bpf_loader_program;
+const system_program = sig.runtime.program.system;
+const bpf_loader_program = sig.runtime.program.bpf_loader;
 const features = sig.runtime.features;
 
 const Pubkey = sig.core.Pubkey;
@@ -18,7 +18,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
-const V3State = sig.runtime.program.bpf_loader_program.v3.State;
+const V3State = sig.runtime.program.bpf_loader.v3.State;
 
 // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
 const migration_authority =
@@ -1755,7 +1755,7 @@ test "executeDeployWithMaxDataLen" {
                 .{ .pubkey = sysvar.Rent.ID },
                 .{ .pubkey = sysvar.Clock.ID },
                 .{
-                    .pubkey = program.system_program.ID,
+                    .pubkey = program.system.ID,
                     .owner = ids.NATIVE_LOADER_ID,
                     .executable = true,
                 },
@@ -1800,7 +1800,7 @@ test "executeDeployWithMaxDataLen" {
                 .{ .pubkey = sysvar.Rent.ID },
                 .{ .pubkey = sysvar.Clock.ID },
                 .{
-                    .pubkey = program.system_program.ID,
+                    .pubkey = program.system.ID,
                     .owner = ids.NATIVE_LOADER_ID,
                     .executable = true,
                 },

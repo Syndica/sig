@@ -392,7 +392,7 @@ fn sumAccountLamports(
 
 test "pushInstruction" {
     const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system_program;
+    const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
@@ -476,7 +476,7 @@ test "pushInstruction" {
 
 test "processNextInstruction" {
     const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system_program;
+    const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
@@ -540,7 +540,7 @@ test "processNextInstruction" {
 
 test "popInstruction" {
     const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system_program;
+    const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
@@ -620,7 +620,7 @@ test "popInstruction" {
 
 test "prepareCpiInstructionInfo" {
     const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system_program;
+    const system_program = sig.runtime.program.system;
     const FeatureSet = sig.runtime.features.FeatureSet;
 
     const allocator = std.testing.allocator;

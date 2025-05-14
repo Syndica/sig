@@ -8,10 +8,6 @@ pub const secp256r1 = @import("secp256r1.zig");
 const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
 
-pub const ed25519Verify = ed25519.verify;
-pub const secp256k1Verify = secp256k1.verify;
-pub const secp256r1Verify = secp256r1.verify;
-
 /// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
 /// Cluster averaged compute unit to micro-sec conversion rate
 pub const COMPUTE_UNIT_TO_US_RATIO: u64 = 30;
@@ -28,18 +24,18 @@ pub const SECP256R1_FEATURE_ID =
 
 pub const PRECOMPILES = [_]Precompile{
     .{
-        .program_id = sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID,
-        .function = ed25519Verify,
+        .program_id = ed25519.ID,
+        .function = ed25519.verify,
         .required_feature = null,
     },
     .{
-        .program_id = sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID,
-        .function = secp256k1Verify,
+        .program_id = secp256k1.ID,
+        .function = secp256k1.verify,
         .required_feature = null,
     },
     .{
-        .program_id = sig.runtime.ids.PRECOMPILE_SECP256R1_PROGRAM_ID,
-        .function = secp256r1Verify,
+        .program_id = secp256r1.ID,
+        .function = secp256r1.verify,
         .required_feature = SECP256R1_FEATURE_ID,
     },
 };
@@ -61,10 +57,10 @@ pub fn verifyPrecompilesComputeCost(
         if (instruction.data.len == 0) continue;
 
         const program_id = transaction.msg.account_keys[instruction.program_index];
-        if (program_id.equals(&sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID)) {
+        if (program_id.equals(&secp256k1.ID)) {
             n_secp256k1_instruction_signatures +|= instruction.data[0];
         }
-        if (program_id.equals(&sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID)) {
+        if (program_id.equals(&ed25519.ID)) {
             n_ed25519_instruction_signatures +|= instruction.data[0];
         }
     }
@@ -134,7 +130,7 @@ test "verify ed25519" {
 
     const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
         .msg = .{
-            .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
+            .account_keys = &.{ed25519.ID},
             .instructions = &.{
                 .{
                     .program_index = 0,
@@ -161,7 +157,7 @@ test "verify ed25519" {
 
     const ed25519_tx: sig.core.Transaction = .{
         .msg = .{
-            .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
+            .account_keys = &.{ed25519.ID},
             .instructions = &.{
                 .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
             },
@@ -188,7 +184,7 @@ test "verify cost" {
 
     const ed25519_tx: sig.core.Transaction = .{
         .msg = .{
-            .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
+            .account_keys = &.{ed25519.ID},
             .instructions = &.{
                 .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
             },
@@ -212,7 +208,7 @@ test "verify cost" {
 test "verify secp256k1" {
     const bad_secp256k1_tx = std.mem.zeroInit(sig.core.Transaction, .{
         .msg = .{
-            .account_keys = &.{sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID},
+            .account_keys = &.{secp256k1.ID},
             .instructions = &.{
                 .{
                     .program_index = 0,

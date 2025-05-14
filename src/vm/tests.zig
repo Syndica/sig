@@ -2328,7 +2328,7 @@ pub fn testElfWithSyscalls(
         prng.random(),
         .{
             .accounts = &.{
-                .{ .pubkey = sig.runtime.program.system_program.ID },
+                .{ .pubkey = sig.runtime.program.system.ID },
             },
             .compute_meter = expected[1],
         },
@@ -2338,7 +2338,7 @@ pub fn testElfWithSyscalls(
     const instr_info = InstructionInfo{
         .program_meta = .{
             .index_in_transaction = 0,
-            .pubkey = sig.runtime.program.system_program.ID,
+            .pubkey = sig.runtime.program.system.ID,
         },
         .account_metas = .{},
         .instruction_data = &.{},
