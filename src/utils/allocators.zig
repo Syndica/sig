@@ -10,6 +10,31 @@ const log2 = std.math.log2;
 const alignForward = std.mem.alignForward;
 const bytesAsValue = std.mem.bytesAsValue;
 
+/// An allocator that can only allocate 0 bytes.
+pub const NoAlloc = struct {
+    pub const allocator = std.mem.Allocator{
+        .ptr = undefined,
+        .vtable = &.{
+            .alloc = NoAlloc.alloc,
+            .resize = NoAlloc.resize,
+            .free = NoAlloc.free,
+        },
+    };
+
+    fn alloc(_: *anyopaque, n: usize, _: u8, _: usize) ?[*]u8 {
+        return if (n == 0) @constCast(@ptrCast(&.{})) else null;
+    }
+
+    fn free(_: *anyopaque, buf: []u8, _: u8, _: usize) void {
+        std.debug.assert(buf.len == 0);
+    }
+
+    fn resize(_: *anyopaque, buf: []u8, _: u8, new_size: usize, _: usize) bool {
+        std.debug.assert(buf.len == 0);
+        return new_size == 0;
+    }
+};
+
 /// very similar to RecycleFBA but with a few differences:
 /// - this uses an explicit T type and only returns slices of that type (instead of a generic u8)
 /// - additional memory blocks are supported (instead of using a fixed-buffer-allocator approach)

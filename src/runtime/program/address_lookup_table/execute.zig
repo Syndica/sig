@@ -1,10 +1,10 @@
 const std = @import("std");
-const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
-
+const sig = @import("../../../sig.zig");
 const program = @import("lib.zig");
-const state = @import("state.zig");
-const instruction = @import("instruction.zig");
+
+const state = program.state;
+const instruction = program.instruction;
 
 const Instruction = program.Instruction;
 const InstructionContext = runtime.InstructionContext;
@@ -225,6 +225,7 @@ fn freezeLookupTable(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
+    _ = allocator; // autofix
     const AccountIndex = instruction.FreezeLookupTable.AccountIndex;
 
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L177-L182
@@ -260,10 +261,8 @@ fn freezeLookupTable(
     defer lookup_table_account.release();
 
     const lookup_table = try AddressLookupTable.deserialize(
-        allocator,
         lookup_table_account.account.data,
     );
-    defer sig.bincode.free(allocator, lookup_table.meta);
 
     if (lookup_table.meta.authority) |authority| {
         if (!authority.equals(&authority_key)) {
@@ -329,10 +328,8 @@ fn extendLookupTable(
         defer lookup_table_account.release();
 
         var lookup_table = try AddressLookupTable.deserialize(
-            allocator,
             lookup_table_account.account.data,
         );
-        defer sig.bincode.free(allocator, lookup_table.meta);
 
         if (lookup_table.meta.authority) |authority| {
             if (!authority.equals(&authority_key)) {
@@ -450,6 +447,7 @@ fn deactivateLookupTable(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) !void {
+    _ = allocator; // autofix
     const AccountIndex = instruction.DeactivateLookupTable.AccountIndex;
 
     {
@@ -483,10 +481,8 @@ fn deactivateLookupTable(
     defer lookup_table_account.release();
 
     const lookup_table = try AddressLookupTable.deserialize(
-        allocator,
         lookup_table_account.account.data,
     );
-    defer sig.bincode.free(allocator, lookup_table.meta);
 
     if (lookup_table.meta.authority) |authority| {
         if (!authority.equals(&authority_key)) {
@@ -564,10 +560,8 @@ fn closeLookupTable(
         defer lookup_table_account.release();
 
         const lookup_table = try AddressLookupTable.deserialize(
-            allocator,
             lookup_table_account.account.data,
         );
-        defer sig.bincode.free(allocator, lookup_table.meta);
 
         if (lookup_table.meta.authority) |authority| {
             if (!authority.equals(&authority_key)) {

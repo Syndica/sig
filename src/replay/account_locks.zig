@@ -27,27 +27,26 @@ pub const AccountLocks = struct {
     pub fn lockStrict(
         self: *AccountLocks,
         allocator: Allocator,
-        /// { account to lock, write access needed }
-        accounts: []const struct { Pubkey, bool },
+        /// []const struct { pubkey: Pubkey, writable: bool }
+        accounts: anytype,
     ) LockError!void {
         for (accounts, 0..) |account, i| {
             errdefer std.debug.assert(0 == self.unlock(accounts[0..i]));
-            const address, const write = account;
-            if (write) {
-                if (self.readonly_locks.contains(address)) {
+            if (account.writable) {
+                if (self.readonly_locks.contains(account.pubkey)) {
                     return error.LockFailed;
                 }
-                const entry = try self.write_locks.getOrPut(allocator, address);
+                const entry = try self.write_locks.getOrPut(allocator, account.pubkey);
                 if (entry.found_existing) {
                     return error.LockFailed;
                 } else {
                     entry.value_ptr.* = 1;
                 }
             } else {
-                if (self.write_locks.contains(address)) {
+                if (self.write_locks.contains(account.pubkey)) {
                     return error.LockFailed;
                 }
-                const entry = try self.readonly_locks.getOrPut(allocator, address);
+                const entry = try self.readonly_locks.getOrPut(allocator, account.pubkey);
                 if (entry.found_existing) {
                     entry.value_ptr.* += 1;
                 } else {
@@ -67,25 +66,24 @@ pub const AccountLocks = struct {
     pub fn lockPermissive(
         self: *AccountLocks,
         allocator: Allocator,
-        /// { account to lock, write access needed }
-        accounts: []const struct { Pubkey, bool },
+        /// []const struct { pubkey: Pubkey, writable: bool }
+        accounts: anytype,
     ) LockError!void {
         for (accounts) |account| {
-            const address, const write = account;
-            if (write) {
-                if (self.readonly_locks.contains(address) or self.write_locks.contains(address)) {
+            if (account.writable) {
+                if (self.readonly_locks.contains(account.pubkey) or
+                    self.write_locks.contains(account.pubkey))
+                {
                     return error.LockFailed;
                 }
-            } else if (self.write_locks.contains(address)) {
+            } else if (self.write_locks.contains(account.pubkey)) {
                 return error.LockFailed;
             }
         }
         for (accounts, 0..) |account, i| {
             errdefer std.debug.assert(0 == self.unlock(accounts[0..i]));
-            const address, const write = account;
-            const locks = if (write) &self.write_locks else &self.readonly_locks;
-
-            const entry = try locks.getOrPut(allocator, address);
+            const locks = if (account.writable) &self.write_locks else &self.readonly_locks;
+            const entry = try locks.getOrPut(allocator, account.pubkey);
             if (entry.found_existing) {
                 entry.value_ptr.* += 1;
             } else {
@@ -100,12 +98,11 @@ pub const AccountLocks = struct {
     /// Returns the number of items that were already unlocked and thus did not
     /// need to be unlocked. You can use this in a calling scope to assert that
     /// this struct is not being misused.
-    pub fn unlock(self: *AccountLocks, accounts: []const struct { Pubkey, bool }) u64 {
+    pub fn unlock(self: *AccountLocks, accounts: anytype) u64 {
         var already_unlocked: u64 = 0;
         for (accounts) |account| {
-            const address, const write = account;
-            const locks = if (write) &self.write_locks else &self.readonly_locks;
-            already_unlocked += unlockOneGeneric(locks, address);
+            const locks = if (account.writable) &self.write_locks else &self.readonly_locks;
+            already_unlocked += unlockOneGeneric(locks, account.address);
         }
         return already_unlocked;
     }
