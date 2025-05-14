@@ -7,7 +7,6 @@ const AccountSharedData = runtime.AccountSharedData;
 const Hash = sig.core.Hash;
 const TransactionError = sig.accounts_db.snapshots.TransactionError;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
-const CachedAccount = sig.runtime.transaction_execution.CachedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const Slot = sig.core.Slot;
 
