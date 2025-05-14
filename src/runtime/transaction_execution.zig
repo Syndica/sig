@@ -473,18 +473,18 @@ test "transaction_execution" {
 fn loadAndExecuteBatchExample(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *const std.AutoArrayHashMap(Pubkey, AccountSharedData),
-    loaded_fee_payer_account: *const LoadedTransactionAccount,
+    batch_account_cache: *const BatchAccountCache,
     compute_budget_limits: *const ComputeBudgetLimits,
+    feature_set: *const FeatureSet,
     rent_collector: *const RentCollector,
-) TransactionResult(LoadedAccounts) {
-    _ = allocator;
-    _ = transaction;
-    _ = batch_account_cache;
-    _ = loaded_fee_payer_account;
-    _ = compute_budget_limits;
-    _ = rent_collector;
-    @panic("not implemented");
+) TransactionResult(LoadedTransactionAccounts) {
+    return batch_account_cache.loadTransactionAccounts(
+        allocator,
+        transaction,
+        rent_collector,
+        feature_set,
+        compute_budget_limits,
+    );
 }
 
 // TODO: Test cases to reimplement once validation components are integrated
@@ -590,7 +590,7 @@ fn loadAndExecuteBatchExample(
 //     var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, 100);
 //     defer loader.deinit();
 
-//     const batch_loadedaccounts = try allocator.alloc(LoadedAccounts, transactions.len);
+//     const batch_loadedaccounts = try allocator.alloc(LoadedTransactionAccounts, transactions.len);
 //     defer allocator.free(batch_loadedaccounts);
 
 //     const batch_budgetlimits = try allocator.alloc(
@@ -676,7 +676,7 @@ fn loadAndExecuteBatchExample(
 //     });
 //     defer loader.deinit();
 
-//     const per_ex_loaded_accounts = try allocator.alloc(LoadedAccounts, transactions.len);
+//     const per_ex_loaded_accounts = try allocator.alloc(LoadedTransactionAccounts, transactions.len);
 //     defer allocator.free(per_ex_loaded_accounts);
 
 //     // load single-threaded (writing to account loader)
