@@ -7,7 +7,6 @@ const AccountSharedData = runtime.AccountSharedData;
 const Hash = sig.core.Hash;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
-const Slot = sig.core.Slot;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
 // [firedancer] https://github.com/firedancer-io/firedancer/blob/ddde57c40c4d4334c25bb32de17f833d4d79a889/src/ballet/txn/fd_txn.h#L116
@@ -241,9 +240,11 @@ pub const BatchAccountCache = struct {
     }
 
     pub fn deinit(self: *BatchAccountCache, allocator: std.mem.Allocator) void {
-        for (self.account_cache.values()) |account| allocator.free(account.data);
+        for (self.account_cache.values()) |account|
+            allocator.free(account.data);
         self.account_cache.deinit(allocator);
-        for (self.sysvar_instruction_account_datas.items) |account_data| allocator.free(account_data);
+        for (self.sysvar_instruction_account_datas.items) |account_data|
+            allocator.free(account_data);
         self.sysvar_instruction_account_datas.deinit(allocator);
     }
 
@@ -276,7 +277,9 @@ pub const BatchAccountCache = struct {
             error.OutOfMemory => error.OutOfMemory,
             error.ProgramAccountNotFound => .{ .err = .ProgramAccountNotFound },
             error.InvalidProgramForExecution => .{ .err = .InvalidProgramForExecution },
-            error.MaxLoadedAccountsDataSizeExceeded => .{ .err = .MaxLoadedAccountsDataSizeExceeded },
+            error.MaxLoadedAccountsDataSizeExceeded => .{
+                .err = .MaxLoadedAccountsDataSizeExceeded,
+            },
         };
 
         return .{ .ok = result };
