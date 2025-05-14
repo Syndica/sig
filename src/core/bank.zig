@@ -36,7 +36,6 @@ const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
 const Stakes = core.stake.Stakes;
-const Delegation = core.stake.Delegation;
 const EpochStakeMap = core.stake.EpochStakeMap;
 const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
@@ -148,7 +147,7 @@ pub const EpochConstants = struct {
     schedule: EpochSchedule,
 
     /// The pre-determined stakes assigned to this epoch.
-    stakes: Stakes(Delegation),
+    stakes: Stakes(.delegation),
 
     pub fn deinit(self: EpochConstants, allocator: Allocator) void {
         self.stakes.deinit(allocator);
@@ -188,7 +187,7 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes(Delegation),
+    stakes: Stakes(.delegation),
     unused_accounts: UnusedAccounts,
     epoch_stakes: EpochStakeMap,
     is_delta: bool,
@@ -338,7 +337,7 @@ pub const BankFields = struct {
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries);
+        const stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
         errdefer stakes.deinit(allocator);
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
