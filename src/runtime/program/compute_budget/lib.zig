@@ -9,7 +9,6 @@ const Pubkey = sig.core.Pubkey;
 const Packet = sig.net.Packet;
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
-const InstructionError = sig.core.instruction.InstructionError;
 const TransactionError = sig.runtime.transaction_error.TransactionError;
 const TransactionResult = sig.runtime.transaction_error.TransactionResult;
 
@@ -110,20 +109,40 @@ pub fn execute(
             switch (instruction) {
                 .unused => return invalid_instruction_data_error,
                 .request_heap_frame => |heap_size| {
-                    if (requested_heap_size) |_| return duplicate_instruction_error;
-                    requested_heap_size = .{ @intCast(index), heap_size };
+                    if (requested_heap_size) |_|
+                        return duplicate_instruction_error;
+
+                    requested_heap_size = .{
+                        @intCast(index),
+                        heap_size,
+                    };
                 },
                 .set_compute_unit_limit => |compute_unit_limit| {
-                    if (requested_compute_unit_limit) |_| return duplicate_instruction_error;
-                    requested_compute_unit_limit = .{ @intCast(index), compute_unit_limit };
+                    if (requested_compute_unit_limit) |_|
+                        return duplicate_instruction_error;
+
+                    requested_compute_unit_limit = .{
+                        @intCast(index),
+                        compute_unit_limit,
+                    };
                 },
                 .set_compute_unit_price => |compute_unit_price| {
-                    if (requested_compute_unit_price) |_| return duplicate_instruction_error;
-                    requested_compute_unit_price = .{ @intCast(index), compute_unit_price };
+                    if (requested_compute_unit_price) |_|
+                        return duplicate_instruction_error;
+
+                    requested_compute_unit_price = .{
+                        @intCast(index),
+                        compute_unit_price,
+                    };
                 },
                 .set_loaded_accounts_data_size_limit => |loaded_accounts_data_size_limit| {
-                    if (requested_loaded_accounts_data_size_limit) |_| return duplicate_instruction_error;
-                    requested_loaded_accounts_data_size_limit = .{ @intCast(index), loaded_accounts_data_size_limit };
+                    if (requested_loaded_accounts_data_size_limit) |_|
+                        return duplicate_instruction_error;
+
+                    requested_loaded_accounts_data_size_limit = .{
+                        @intCast(index),
+                        loaded_accounts_data_size_limit,
+                    };
                 },
             }
         } else num_non_compute_budget_instructions +|= 1;
@@ -212,7 +231,9 @@ fn defaultComputeUnitLimit(
         var num_migrated: u32 = 0;
         var num_not_migrated: u32 = 0;
         for (migrating_builtin_counts, 0..) |count, index| {
-            if (count > 0 and feature_set.active.contains(builtin_costs.getMigrationFeatureId(index)))
+            if (count > 0 and feature_set.active.contains(
+                builtin_costs.getMigrationFeatureId(index),
+            ))
                 num_migrated += count
             else
                 num_not_migrated += count;
