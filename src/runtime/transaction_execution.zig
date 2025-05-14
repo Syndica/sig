@@ -81,28 +81,12 @@ pub const TransactionExecutionConfig = struct {
     log_messages_byte_limit: ?u64,
 };
 
-pub const TransactionResult = union(enum(u8)) {
-    err: TransactionError,
-    fees_only: struct {
+fn TransactionResult(comptime T: type) type {
+    return union(enum(u8)) {
+        ok: T,
         err: TransactionError,
-        fees: TransactionFees,
-        rollbacks: TransactionRollbacks,
-    },
-    executed: struct {
-        loaded_accounts: LoadedAccounts,
-        executed_transaction: ExecutedTransaction,
-    },
-
-    pub fn deinit(self: TransactionResult, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .executed => |executed| {
-                executed.loaded_accounts.deinit(allocator);
-                executed.executed_transaction.deinit(allocator);
-            },
-            else => {},
-        }
-    }
-};
+    };
+}
 
 pub const TransactionFees = struct {
     transaction_fee: u64,
@@ -150,6 +134,28 @@ pub const ExecutedTransaction = struct {
     }
 };
 
+pub const ProcessedTransaction = union(enum(u8)) {
+    fees_only: struct {
+        err: TransactionError,
+        fees: TransactionFees,
+        rollbacks: TransactionRollbacks,
+    },
+    executed: struct {
+        loaded_accounts: LoadedAccounts,
+        executed_transaction: ExecutedTransaction,
+    },
+
+    pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .executed => |executed| {
+                executed.loaded_accounts.deinit(allocator);
+                executed.executed_transaction.deinit(allocator);
+            },
+            else => {},
+        }
+    }
+};
+
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransactions(
     allocator: std.mem.Allocator,
@@ -157,8 +163,8 @@ pub fn loadAndExecuteTransactions(
     batch_account_cache: *std.AutoArrayHashMap(Pubkey, AccountSharedData),
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
-) error{OutOfMemory}![]TransactionResult {
-    const transaction_results = try allocator.alloc(TransactionResult, transactions.len);
+) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
+    const transaction_results = try allocator.alloc(TransactionResult(ProcessedTransaction), transactions.len);
     for (transaction_results, transactions) |result, *transaction| {
         result.* = try loadAndExecuteTransaction(
             allocator,
@@ -178,8 +184,8 @@ pub fn loadAndExecuteTransaction(
     batch_account_cache: *std.AutoArrayHashMap(Pubkey, AccountSharedData),
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
-) error{OutOfMemory}!TransactionResult {
-    const maybe_nonce_info = checkAge(
+) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
+    const check_age_result = checkAge(
         transaction,
         batch_account_cache,
         environment.ancestors,
@@ -188,14 +194,18 @@ pub fn loadAndExecuteTransaction(
         environment.last_blockhash,
         environment.next_durable_nonce,
         environment.next_lamports_per_signature,
-    ) catch |err| return .{ .err = err };
+    );
+    const maybe_nonce_info = switch (check_age_result) {
+        .ok => |cached_account| cached_account,
+        .err => |err| return .{ .err = err },
+    };
 
-    checkStatusCache(
+    if (checkStatusCache(
         transaction.msg_hash,
         transaction.recent_blockhash,
         environment.ancestors,
         environment.status_cache,
-    ) catch |err| return .{ .err = err };
+    )) |err| return .{ .err = err };
 
     // NOTE: in agave nonce validation occurs during check_transactions and validate_nonce_and_fee_payer.
     // Since we do not perform check transactions at the batch level, the secondary checks may not be necessary.
@@ -207,7 +217,7 @@ pub fn loadAndExecuteTransaction(
         transaction.instruction_infos,
     ) catch |err| return .{ .err = err };
 
-    const fees, const rollbacks, const loaded_fee_payer = checkFeePayer(
+    const check_fee_payer_result = checkFeePayer(
         transaction.fee_payer,
         transaction.signature_count,
         batch_account_cache,
@@ -216,23 +226,29 @@ pub fn loadAndExecuteTransaction(
         environment.rent_collector,
         environment.feature_set,
         environment.lamports_per_signature,
-    ) catch |err| return .{ .err = err };
+    );
+    const fees, const rollbacks, const loaded_fee_payer = switch (check_fee_payer_result) {
+        .ok => |result| result,
+        .err => |err| return .{ .err = err },
+    };
 
-    const loaded_accounts = loadAccounts(
+    const loaded_accounts_result = loadAccounts(
         allocator,
         transaction,
         batch_account_cache,
         &loaded_fee_payer,
         &compute_budget_limits,
         environment.rent_collector,
-    ) catch |err| {
-        return .{
+    );
+    const loaded_accounts = switch (loaded_accounts_result) {
+        .ok => |loaded_accounts| loaded_accounts,
+        .err => |err| return .{ .ok = .{
             .fees_only = .{
                 .err = err,
                 .fees = fees,
                 .rollbacks = rollbacks,
             },
-        };
+        } },
     };
 
     const executed_transaction = try executeTransaction(
@@ -244,12 +260,12 @@ pub fn loadAndExecuteTransaction(
         config,
     );
 
-    return .{
+    return .{ .ok = .{
         .executed = .{
             .loaded_accounts = loaded_accounts,
             .executed_transaction = executed_transaction,
         },
-    };
+    } };
 }
 
 /// TODO: Follow up PR will remove EpochContext and SlotContext from the TransactionContext
@@ -348,7 +364,7 @@ pub fn checkAge(
     last_blockhash: *const Hash,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-) TransactionError!?CachedAccount {
+) TransactionResult(CachedAccount) {
     _ = transaction;
     _ = ancestors;
     _ = batch_account_cache;
@@ -366,7 +382,7 @@ pub fn checkStatusCache(
     recent_blockhash: *const Hash,
     ancestors: *const Ancestors,
     status_cache: *const StatusCache,
-) TransactionError!void {
+) ?TransactionError {
     _ = msg_hash;
     _ = recent_blockhash;
     _ = status_cache;
@@ -384,11 +400,11 @@ pub fn checkFeePayer(
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
     lamports_per_signature: u64,
-) TransactionError!struct {
+) TransactionResult(struct {
     TransactionFees,
     TransactionRollbacks,
     LoadedTransactionAccount,
-} {
+}) {
     _ = fee_payer;
     _ = signature_count;
     _ = batch_account_cache;
@@ -408,7 +424,7 @@ pub fn loadAccounts(
     loaded_fee_payer_account: *const LoadedTransactionAccount,
     compute_budget_limits: *const ComputeBudgetLimits,
     rent_collector: *const RentCollector,
-) TransactionError!LoadedAccounts {
+) TransactionResult(LoadedAccounts) {
     _ = allocator;
     _ = transaction;
     _ = batch_account_cache;
