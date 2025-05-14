@@ -5,6 +5,7 @@ const account_loader = sig.runtime.account_loader;
 const executor = sig.runtime.executor;
 const compute_budget_program = sig.runtime.program.compute_budget;
 
+const AccountLoader = sig.runtime.account_loader.BatchAccountCache;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;

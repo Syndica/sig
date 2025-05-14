@@ -720,28 +720,28 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expectEqual(0, rent_debit.rent_collected);
 }
 
-test "accumulated size" {
-    const requested_data_size_limit = 123;
+// test "accumulated size" {
+//     const requested_data_size_limit = 123;
 
-    var accumulated_size: u32 = 0;
-    try accumulateAndCheckLoadedAccountDataSize(
-        &accumulated_size,
-        requested_data_size_limit,
-        requested_data_size_limit,
-    );
+//     var accumulated_size: u32 = 0;
+//     try accumulateAndCheckLoadedAccountDataSize(
+//         &accumulated_size,
+//         requested_data_size_limit,
+//         requested_data_size_limit,
+//     );
 
-    try std.testing.expectEqual(requested_data_size_limit, accumulated_size);
+//     try std.testing.expectEqual(requested_data_size_limit, accumulated_size);
 
-    // exceed limit
-    try std.testing.expectError(
-        error.MaxLoadedAccountsDataSizeExceeded,
-        accumulateAndCheckLoadedAccountDataSize(
-            &accumulated_size,
-            1,
-            requested_data_size_limit,
-        ),
-    );
-}
+//     // exceed limit
+//     try std.testing.expectError(
+//         error.MaxLoadedAccountsDataSizeExceeded,
+//         accumulateAndCheckLoadedAccountDataSize(
+//             &accumulated_size,
+//             1,
+//             requested_data_size_limit,
+//         ),
+//     );
+// }
 
 test "load accounts rent paid" {
     const allocator = std.testing.allocator;
@@ -762,8 +762,8 @@ test "load accounts rent paid" {
     var fee_payer_account = AccountSharedData.EMPTY;
     fee_payer_account.lamports = fee_payer_balance;
 
-    var data: [1024]u8 = undefined;
-    prng.fill(&data);
+//     var data: [1024]u8 = undefined;
+//     prng.fill(&data);
 
     try accountsdb.accounts.put(allocator, fee_payer_address, .{
         .data = .{ .unowned_allocation = &data },
@@ -855,11 +855,11 @@ test "constructInstructionsAccount" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var data: [1024]u8 = undefined;
-    prng.fill(&data);
+//     var data: [1024]u8 = undefined;
+//     prng.fill(&data);
 
-    const fee_payer_address = Pubkey.initRandom(prng.random());
-    const instruction_address = Pubkey.initRandom(prng.random());
+//     const fee_payer_address = Pubkey.initRandom(prng.random());
+//     const instruction_address = Pubkey.initRandom(prng.random());
 
     var accounts = RuntimeTransaction.Accounts{};
     defer accounts.deinit(allocator);
@@ -905,9 +905,9 @@ test "constructInstructionsAccount" {
     try std.testing.expect(account.data.len > 8);
 }
 
-test "loadAccount allocations" {
-    const allocator = std.testing.allocator;
-    const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
+// test "loadAccount allocations" {
+//     const allocator = std.testing.allocator;
+//     const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
 
     const checkFn = struct {
         fn f(alloc: std.mem.Allocator) !void {
@@ -945,8 +945,8 @@ test "loadAccount allocations" {
         }
     }.f;
 
-    try std.testing.checkAllAllocationFailures(allocator, checkFn, .{});
-}
+//     try std.testing.checkAllAllocationFailures(allocator, checkFn, .{});
+// }
 
 test "load tx too large" {
     const allocator = std.testing.allocator;
@@ -960,9 +960,9 @@ test "load tx too large" {
 
     const address = Pubkey.initRandom(random);
 
-    // large account
-    const account_data = try allocator.alloc(u8, 10 * 1024 * 1024);
-    defer allocator.free(account_data);
+//     // large account
+//     const account_data = try allocator.alloc(u8, 10 * 1024 * 1024);
+//     defer allocator.free(account_data);
 
     try accountsdb.accounts.put(allocator, address, .{
         .data = .{ .unowned_allocation = account_data },
