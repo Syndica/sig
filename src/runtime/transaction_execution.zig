@@ -195,7 +195,7 @@ pub fn loadAndExecuteTransaction(
     // [agave] hhttps://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L632-L688
 
     // TODO: Should the compute budget program require the feature set?
-    const compute_budget_limits = compute_budget_program.execute(
+    const compute_budget_result = compute_budget_program.execute(
         transaction.instruction_infos,
     ) catch |err| return .{ .err = TransactionError.fromError(err, null, null) };
 
