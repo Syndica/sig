@@ -13,7 +13,7 @@ const TransactionError = sig.runtime.transaction_error.TransactionError;
 const TransactionResult = sig.runtime.transaction_error.TransactionResult;
 
 const MIGRATING_BUILTIN_COSTS = builtin_costs.MIGRATING_BUILTIN_COSTS;
-const MAX_PUBKEYS_PER_PACKET = Packet.DATA_SIZE / Pubkey.SIZE;
+const MAX_TRANSACTION_ACCOUNTS = sig.core.Transaction.MAX_ACCOUNTS;
 const DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT: u32 = 200_000;
 const MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT: u32 = 3_000;
 const HEAP_LENGTH: usize = 32 * 1024;
@@ -83,7 +83,7 @@ pub fn execute(
     var num_non_builtin_instructions: u16 = 0;
     var migrating_builtin_counts = [_]u16{0} ** MIGRATING_BUILTIN_COSTS.len;
 
-    var is_compute_budget_cache = [_]?bool{null} ** MAX_PUBKEYS_PER_PACKET;
+    var is_compute_budget_cache = [_]?bool{null} ** MAX_TRANSACTION_ACCOUNTS;
 
     for (instructions, 0..) |instr, index| {
         const program_id = instr.program_meta.pubkey;
@@ -149,7 +149,7 @@ pub fn execute(
     }
 
     if (requested_compute_unit_limit == null) {
-        var kind_cache = [_]?ProgramKind{null} ** MAX_PUBKEYS_PER_PACKET;
+        var kind_cache = [_]?ProgramKind{null} ** MAX_TRANSACTION_ACCOUNTS;
         for (instructions, 0..) |instr, index| {
             switch (getProgramKind(&kind_cache, index, instr.program_meta.pubkey)) {
                 .not_builtin => num_non_builtin_instructions +|= 1,
