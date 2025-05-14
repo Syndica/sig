@@ -46,7 +46,7 @@ pub fn main() !void {
     const feature_set = FeatureSet.EMPTY;
     defer feature_set.deinit(gpa);
 
-    const epoch_stakes = EpochStakes.EMPTY;
+    const epoch_stakes = try EpochStakes.initEmpty(gpa);
     defer epoch_stakes.deinit(gpa);
 
     const sysvar_cache = SysvarCache{};
