@@ -10,7 +10,8 @@ const Packet = sig.net.Packet;
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionError = sig.core.instruction.InstructionError;
-const TransactionError = sig.core.transaction.TransactionError;
+const TransactionError = sig.runtime.transaction_error.TransactionError;
+const TransactionResult = sig.runtime.transaction_error.TransactionResult;
 
 const MIGRATING_BUILTIN_COSTS = builtin_costs.MIGRATING_BUILTIN_COSTS;
 const MAX_PUBKEYS_PER_PACKET = Packet.DATA_SIZE / Pubkey.SIZE;
@@ -20,7 +21,7 @@ const HEAP_LENGTH: usize = 32 * 1024;
 const MAX_HEAP_FRAME_BYTES: u32 = 256 * 1024;
 const MIN_HEAP_FRAME_BYTES: u32 = HEAP_LENGTH;
 const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
-const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
+pub const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
 
 pub const ID =
     Pubkey.parseBase58String("ComputeBudget111111111111111111111111111111") catch unreachable;
@@ -29,14 +30,14 @@ pub const COMPUTE_UNITS = 150;
 
 // [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L28
 pub const ComputeBudgetLimits = struct {
-    heap_bytes: u32,
+    heap_size: u32,
     compute_unit_limit: u32,
     compute_unit_price: u64,
     /// non-zero
     loaded_accounts_bytes: u32,
 
     pub const DEFAULT: ComputeBudgetLimits = .{
-        .heap_bytes = MIN_HEAP_FRAME_BYTES,
+        .heap_size = MIN_HEAP_FRAME_BYTES,
         .compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT,
         .compute_unit_price = 0,
         .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
@@ -44,7 +45,7 @@ pub const ComputeBudgetLimits = struct {
 
     pub fn intoComputeBudget(self: ComputeBudgetLimits) sig.runtime.ComputeBudget {
         var default = sig.runtime.ComputeBudget.default(self.compute_unit_limit);
-        default.heap_size = self.updated_heap_bytes;
+        default.heap_size = self.heap_size;
         return default;
     }
 };
@@ -70,7 +71,10 @@ const ComputeBudgetInstruction = union(enum(u32)) {
     set_loaded_accounts_data_size_limit: u32,
 };
 
-pub fn execute(instructions: []const InstructionInfo, feature_set: *const FeatureSet) TransactionError!ComputeBudgetLimits {
+pub fn execute(
+    instructions: []const InstructionInfo,
+    feature_set: *const FeatureSet,
+) TransactionResult(ComputeBudgetLimits) {
     var requested_compute_unit_limit: ?struct { u8, u32 } = null;
     var requested_compute_unit_price: ?struct { u8, u64 } = null;
     var requested_heap_size: ?struct { u8, u32 } = null;
@@ -87,29 +91,40 @@ pub fn execute(instructions: []const InstructionInfo, feature_set: *const Featur
         const program_index = instr.program_meta.index_in_transaction;
 
         if (isComputeBudgetProgram(&is_compute_budget_cache, program_index, program_id)) {
+            const invalid_instruction_data_error: TransactionResult(ComputeBudgetLimits) = .{
+                .err = .{
+                    .InstructionError = .{ @intCast(index), error.InvalidInstructionData },
+                },
+            };
+            const duplicate_instruction_error: TransactionResult(ComputeBudgetLimits) = .{
+                .err = .{
+                    .DuplicateInstruction = @intCast(index),
+                },
+            };
+
             const instruction = instr.deserializeInstruction(
                 std.testing.failing_allocator,
                 ComputeBudgetInstruction,
-            ) catch return TransactionError.InstructionError;
+            ) catch return invalid_instruction_data_error;
 
             switch (instruction) {
+                .unused => return invalid_instruction_data_error,
                 .request_heap_frame => |heap_size| {
-                    if (requested_heap_size) |_| return TransactionError.DuplicateInstruction;
+                    if (requested_heap_size) |_| return duplicate_instruction_error;
                     requested_heap_size = .{ @intCast(index), heap_size };
                 },
                 .set_compute_unit_limit => |compute_unit_limit| {
-                    if (requested_compute_unit_limit) |_| return TransactionError.DuplicateInstruction;
+                    if (requested_compute_unit_limit) |_| return duplicate_instruction_error;
                     requested_compute_unit_limit = .{ @intCast(index), compute_unit_limit };
                 },
                 .set_compute_unit_price => |compute_unit_price| {
-                    if (requested_compute_unit_price) |_| return TransactionError.DuplicateInstruction;
+                    if (requested_compute_unit_price) |_| return duplicate_instruction_error;
                     requested_compute_unit_price = .{ @intCast(index), compute_unit_price };
                 },
                 .set_loaded_accounts_data_size_limit => |loaded_accounts_data_size_limit| {
-                    if (requested_loaded_accounts_data_size_limit) |_| return TransactionError.DuplicateInstruction;
+                    if (requested_loaded_accounts_data_size_limit) |_| return duplicate_instruction_error;
                     requested_loaded_accounts_data_size_limit = .{ @intCast(index), loaded_accounts_data_size_limit };
                 },
-                else => return TransactionError.InstructionError,
             }
         } else num_non_compute_budget_instructions +|= 1;
     }
@@ -129,13 +144,17 @@ pub fn execute(instructions: []const InstructionInfo, feature_set: *const Featur
     // Requested heap size is not a multiple of 1024 is an instruction error
     const heap_bytes = blk: {
         if (requested_heap_size) |heap_size| {
-            const size = heap_size[1];
+            const index, const size = heap_size;
             if (size >= MIN_HEAP_FRAME_BYTES and
                 size <= MAX_HEAP_FRAME_BYTES and
                 size % 1024 == 0)
                 break :blk size
             else
-                return TransactionError.InstructionError;
+                return .{
+                    .err = .{
+                        .InstructionError = .{ index, error.InvalidInstructionData },
+                    },
+                };
         }
         break :blk MIN_HEAP_FRAME_BYTES;
     };
@@ -161,18 +180,18 @@ pub fn execute(instructions: []const InstructionInfo, feature_set: *const Featur
     // Requested loaded accounts data size limit greater than max results in max loaded accounts data size limit
     const loaded_accounts_bytes = blk: {
         if (requested_loaded_accounts_data_size_limit) |max_size| {
-            if (max_size[1] == 0) return TransactionError.InvalidLoadedAccountsDataSizeLimit;
+            if (max_size[1] == 0) return .{ .err = .InvalidLoadedAccountsDataSizeLimit };
             break :blk max_size[1];
         }
         break :blk MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES;
     };
 
-    return .{
-        .heap_bytes = heap_bytes,
+    return .{ .ok = .{
+        .heap_size = heap_bytes,
         .compute_unit_limit = @min(compute_unit_limit, MAX_COMPUTE_UNIT_LIMIT),
         .compute_unit_price = compute_unit_price,
         .loaded_accounts_bytes = @min(loaded_accounts_bytes, MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES),
-    };
+    } };
 }
 
 fn isComputeBudgetProgram(cache: []?bool, index: usize, program_id: Pubkey) bool {
@@ -239,7 +258,7 @@ fn testComputeBudgetLimits(
     instructions: []const InstructionInfo,
     expected: struct {
         err: ?TransactionError = null,
-        heap_bytes: u32 = MIN_HEAP_FRAME_BYTES,
+        heap_size: u32 = MIN_HEAP_FRAME_BYTES,
         compute_unit_limit: u32 = MAX_COMPUTE_UNIT_LIMIT,
         compute_unit_price: u64 = 0,
         loaded_accounts_bytes: u32 = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
@@ -266,33 +285,37 @@ fn testComputeBudgetLimits(
         indexed_instructions[index].program_meta.index_in_transaction = @intCast(index);
     }
 
-    const actual = execute(indexed_instructions, &feature_set) catch |actual_err| {
-        try std.testing.expect(expected.err != null);
-        try std.testing.expectEqual(
-            expected.err.?,
-            actual_err,
-        );
-        return;
-    };
+    const result = execute(indexed_instructions, &feature_set);
 
-    try std.testing.expect(expected.err == null);
+    switch (result) {
+        .ok => |actual| {
+            try std.testing.expect(expected.err == null);
 
-    try std.testing.expectEqual(
-        expected.heap_bytes,
-        actual.heap_bytes,
-    );
-    try std.testing.expectEqual(
-        expected.compute_unit_limit,
-        actual.compute_unit_limit,
-    );
-    try std.testing.expectEqual(
-        expected.compute_unit_price,
-        actual.compute_unit_price,
-    );
-    try std.testing.expectEqual(
-        expected.loaded_accounts_bytes,
-        actual.loaded_accounts_bytes,
-    );
+            try std.testing.expectEqual(
+                expected.heap_size,
+                actual.heap_size,
+            );
+            try std.testing.expectEqual(
+                expected.compute_unit_limit,
+                actual.compute_unit_limit,
+            );
+            try std.testing.expectEqual(
+                expected.compute_unit_price,
+                actual.compute_unit_price,
+            );
+            try std.testing.expectEqual(
+                expected.loaded_accounts_bytes,
+                actual.loaded_accounts_bytes,
+            );
+        },
+        .err => |actual_err| {
+            try std.testing.expect(expected.err != null);
+            try std.testing.expectEqual(
+                expected.err.?,
+                actual_err,
+            );
+        },
+    }
 }
 
 fn computeBudgetInstructionInfo(
@@ -421,7 +444,7 @@ test execute {
             emptyInstructionInfo(prng.random()),
         },
         .{
-            .heap_bytes = 40 * 1024,
+            .heap_size = 40 * 1024,
             .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
         },
     );
@@ -437,7 +460,7 @@ test execute {
             emptyInstructionInfo(prng.random()),
         },
         .{
-            .heap_bytes = 40 * 1024,
+            .heap_size = 40 * 1024,
             .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
                 MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT,
         },
@@ -453,7 +476,9 @@ test execute {
             ),
             emptyInstructionInfo(prng.random()),
         },
-        .{ .err = TransactionError.InstructionError },
+        .{ .err = .{
+            .InstructionError = .{ 0, error.InvalidInstructionData },
+        } },
     );
 
     try testComputeBudgetLimits(
@@ -466,7 +491,9 @@ test execute {
             ),
             emptyInstructionInfo(prng.random()),
         },
-        .{ .err = TransactionError.InstructionError },
+        .{ .err = .{
+            .InstructionError = .{ 0, error.InvalidInstructionData },
+        } },
     );
 
     try testComputeBudgetLimits(
@@ -479,7 +506,9 @@ test execute {
             ),
             emptyInstructionInfo(prng.random()),
         },
-        .{ .err = TransactionError.InstructionError },
+        .{ .err = .{
+            .InstructionError = .{ 0, error.InvalidInstructionData },
+        } },
     );
 
     try testComputeBudgetLimits(
@@ -493,7 +522,7 @@ test execute {
             ),
         },
         .{
-            .heap_bytes = MAX_HEAP_FRAME_BYTES,
+            .heap_size = MAX_HEAP_FRAME_BYTES,
             .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
             .compute_unit_price = 0,
             .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
@@ -511,7 +540,7 @@ test execute {
             ),
         },
         .{
-            .heap_bytes = MAX_HEAP_FRAME_BYTES,
+            .heap_size = MAX_HEAP_FRAME_BYTES,
             .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
                 MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT,
             .compute_unit_price = 0,
@@ -531,7 +560,9 @@ test execute {
                 .{ .request_heap_frame = 1 },
             ),
         },
-        .{ .err = TransactionError.InstructionError },
+        .{ .err = .{
+            .InstructionError = .{ 3, error.InvalidInstructionData },
+        } },
     );
 
     try testComputeBudgetLimits(
@@ -569,7 +600,7 @@ test execute {
             ),
         },
         .{
-            .heap_bytes = MAX_HEAP_FRAME_BYTES,
+            .heap_size = MAX_HEAP_FRAME_BYTES,
             .compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT,
             .compute_unit_price = std.math.maxInt(u64),
         },
@@ -594,7 +625,7 @@ test execute {
             ),
         },
         .{
-            .heap_bytes = MAX_HEAP_FRAME_BYTES,
+            .heap_size = MAX_HEAP_FRAME_BYTES,
             .compute_unit_limit = 1,
             .compute_unit_price = std.math.maxInt(u64),
         },
@@ -614,7 +645,9 @@ test execute {
                 .{ .set_compute_unit_limit = MAX_COMPUTE_UNIT_LIMIT - 1 },
             ),
         },
-        .{ .err = TransactionError.DuplicateInstruction },
+        .{ .err = .{
+            .DuplicateInstruction = 2,
+        } },
     );
 
     try testComputeBudgetLimits(
@@ -631,7 +664,9 @@ test execute {
                 .{ .request_heap_frame = MAX_HEAP_FRAME_BYTES },
             ),
         },
-        .{ .err = TransactionError.DuplicateInstruction },
+        .{ .err = .{
+            .DuplicateInstruction = 2,
+        } },
     );
 
     try testComputeBudgetLimits(
@@ -648,7 +683,9 @@ test execute {
                 .{ .set_compute_unit_price = std.math.maxInt(u64) },
             ),
         },
-        .{ .err = TransactionError.DuplicateInstruction },
+        .{ .err = .{
+            .DuplicateInstruction = 2,
+        } },
     );
 
     // Loaded Accounts Data Size Limit
@@ -725,15 +762,22 @@ test execute {
         },
     );
 
-    try testComputeBudgetLimits(allocator, FeatureSet.EMPTY, &.{
-        emptyInstructionInfo(prng.random()),
-        try computeBudgetInstructionInfo(
-            allocator,
-            .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES },
-        ),
-        try computeBudgetInstructionInfo(
-            allocator,
-            .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES },
-        ),
-    }, .{ .err = TransactionError.DuplicateInstruction });
+    try testComputeBudgetLimits(
+        allocator,
+        FeatureSet.EMPTY,
+        &.{
+            emptyInstructionInfo(prng.random()),
+            try computeBudgetInstructionInfo(
+                allocator,
+                .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES },
+            ),
+            try computeBudgetInstructionInfo(
+                allocator,
+                .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES },
+            ),
+        },
+        .{ .err = .{
+            .DuplicateInstruction = 2,
+        } },
+    );
 }

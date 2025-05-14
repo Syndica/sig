@@ -17,6 +17,7 @@ const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionError = sig.runtime.transaction_error.TransactionError;
+const TransactionResult = sig.runtime.transaction_error.TransactionResult;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionTrace = TransactionContext.InstructionTrace;
 const LogCollector = sig.runtime.LogCollector;
@@ -79,13 +80,6 @@ pub const TransactionExecutionConfig = struct {
     log: bool,
     log_messages_byte_limit: ?u64,
 };
-
-pub fn TransactionResult(comptime T: type) type {
-    return union(enum(u8)) {
-        ok: T,
-        err: TransactionError,
-    };
-}
 
 pub const TransactionFees = struct {
     transaction_fee: u64,
