@@ -472,7 +472,7 @@ fn loadAndExecuteBatchExample(
     loaded_fee_payer_account: *const LoadedTransactionAccount,
     compute_budget_limits: *const ComputeBudgetLimits,
     rent_collector: *const RentCollector,
-) TransactionError!LoadedAccounts {
+) TransactionResult(LoadedAccounts) {
     _ = allocator;
     _ = transaction;
     _ = batch_account_cache;
