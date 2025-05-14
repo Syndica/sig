@@ -88,7 +88,7 @@ pub const RentDebit = struct { rent_collected: u64, rent_balance: u64 };
 /// loader), which seems pointless.
 pub const LoadedTransactionAccounts = struct {
     /// data owned by BatchAccountCache
-    accounts: std.BoundedArray(runtime.transaction_execution.CachedAccount, MAX_TX_ACCOUNT_LOCKS),
+    accounts: std.BoundedArray(CachedAccount, MAX_TX_ACCOUNT_LOCKS),
     /// equal len to .accounts
     rent_debits: std.BoundedArray(RentDebit, MAX_TX_ACCOUNT_LOCKS),
 
@@ -103,6 +103,11 @@ pub const LoadedTransactionAccounts = struct {
     };
 };
 
+pub const CachedAccount = struct {
+    pubkey: Pubkey,
+    account: *AccountSharedData,
+};
+
 /// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
 pub const BatchAccountCache = struct {
@@ -110,8 +115,9 @@ pub const BatchAccountCache = struct {
     /// special case (constructed on a per-transaction basis)
     account_cache: AccountMap = .{},
 
-    // holds SYSVAR_INSTRUCTIONS_ID accounts, purely so we can deallocate them later.
-    sysvar_instruction_accounts: std.AutoArrayHashMapUnmanaged(AccountSharedData, void) = .{},
+    // holds SYSVAR_INSTRUCTIONS_ID accounts, purely so we can deallocate them later. Index of each
+    // one isn't intended to be meaningful.
+    sysvar_instruction_account_datas: std.ArrayListUnmanaged([]const u8) = .{},
 
     // NOTE: we might want to later add another field that keeps a copy of all writable accounts.
 
@@ -237,8 +243,8 @@ pub const BatchAccountCache = struct {
     pub fn deinit(self: *BatchAccountCache, allocator: std.mem.Allocator) void {
         for (self.account_cache.values()) |account| allocator.free(account.data);
         self.account_cache.deinit(allocator);
-        for (self.sysvar_instruction_accounts.keys()) |account| allocator.free(account.data);
-        self.sysvar_instruction_accounts.deinit(allocator);
+        for (self.sysvar_instruction_account_datas.items) |account_data| allocator.free(account_data);
+        self.sysvar_instruction_account_datas.deinit(allocator);
     }
 
     const LoadedTransactionAccountsError = error{
@@ -380,7 +386,7 @@ pub const BatchAccountCache = struct {
         if (key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
             @setCold(true);
             const account = try constructInstructionsAccount(allocator, transaction);
-            try self.sysvar_instruction_accounts.putNoClobber(allocator, account, {});
+            try self.sysvar_instruction_account_datas.append(allocator, account.data);
             return .{
                 .account = account,
                 .loaded_size = 0,
@@ -426,7 +432,7 @@ pub const BatchAccountCache = struct {
         const maybe_account = if (key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) account: {
             @setCold(true);
             const account = try constructInstructionsAccount(allocator, transaction);
-            try self.sysvar_instruction_accounts.putNoClobber(allocator, account, {});
+            try self.sysvar_instruction_account_datas.append(allocator, account.data);
             break :account account;
         } else self.account_cache.getPtr(key);
 
@@ -583,9 +589,6 @@ test "loadTransactionAccounts empty transaction" {
         accountsdb,
         &.{},
     );
-
-    _ = BatchAccountCache.loadTransactionAccounts;
-
     defer batch_account_cache.deinit(allocator);
 
     // _ = try loadTransactionAccounts(
