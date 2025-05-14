@@ -6,7 +6,6 @@ const features = sig.runtime.features;
 const builtin_costs = sig.runtime.program.builtin_costs;
 
 const Pubkey = sig.core.Pubkey;
-const Packet = sig.net.Packet;
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionError = sig.runtime.transaction_error.TransactionError;
