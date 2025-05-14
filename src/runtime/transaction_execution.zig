@@ -24,7 +24,6 @@ const LogCollector = sig.runtime.LogCollector;
 const LoadedTransactionAccount = sig.runtime.account_loader.LoadedTransactionAccount;
 const Ancestors = sig.core.bank.Ancestors;
 const RentCollector = sig.core.rent_collector.RentCollector;
-const RentDebit = sig.runtime.account_loader.RentDebit;
 const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
@@ -151,7 +150,10 @@ pub fn loadAndExecuteTransactions(
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
-    const transaction_results = try allocator.alloc(TransactionResult(ProcessedTransaction), transactions.len);
+    const transaction_results = try allocator.alloc(
+        TransactionResult(ProcessedTransaction),
+        transactions.len,
+    );
     for (transaction_results, transactions) |result, *transaction| {
         result.* = try loadAndExecuteTransaction(
             allocator,
