@@ -25,6 +25,8 @@ const LoadedTransactionAccount = sig.runtime.account_loader.LoadedTransactionAcc
 const Ancestors = sig.core.bank.Ancestors;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const RentDebit = sig.runtime.account_loader.RentDebit;
+const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
+const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -81,7 +83,7 @@ pub const TransactionExecutionConfig = struct {
     log_messages_byte_limit: ?u64,
 };
 
-fn TransactionResult(comptime T: type) type {
+pub fn TransactionResult(comptime T: type) type {
     return union(enum(u8)) {
         ok: T,
         err: TransactionError,
@@ -109,17 +111,6 @@ pub const CopiedAccount = struct {
     account: AccountSharedData,
 };
 
-pub const LoadedAccounts = struct {
-    accounts: []const CachedAccount,
-    rent: u64,
-    rent_debit: RentDebit,
-    loaded_accounts_data_size: u32,
-
-    pub fn deinit(self: LoadedAccounts, allocator: std.mem.Allocator) void {
-        allocator.free(self.accounts);
-    }
-};
-
 pub const ExecutedTransaction = struct {
     err: ?TransactionError,
     log_collector: ?LogCollector,
@@ -141,7 +132,7 @@ pub const ProcessedTransaction = union(enum(u8)) {
         rollbacks: TransactionRollbacks,
     },
     executed: struct {
-        loaded_accounts: LoadedAccounts,
+        loaded_accounts: LoadedTransactionAccounts,
         executed_transaction: ExecutedTransaction,
     },
 
@@ -232,12 +223,16 @@ pub fn loadAndExecuteTransaction(
         .err => |err| return .{ .err = err },
     };
 
+    // NOTE: should we use this value, to prevent double-loading of the fee payer? Seems it doesn't
+    // matter.
+    _ = loaded_fee_payer;
+
     const loaded_accounts_result = loadAccounts(
         allocator,
         transaction,
         batch_account_cache,
-        &loaded_fee_payer,
         &compute_budget_limits,
+        environment.feature_set,
         environment.rent_collector,
     );
     const loaded_accounts = switch (loaded_accounts_result) {
@@ -273,7 +268,7 @@ pub fn loadAndExecuteTransaction(
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    loaded_accounts: *const LoadedAccounts,
+    loaded_accounts: *const LoadedTransactionAccounts,
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
@@ -420,18 +415,18 @@ pub fn checkFeePayer(
 pub fn loadAccounts(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *const std.AutoArrayHashMap(Pubkey, AccountSharedData),
-    loaded_fee_payer_account: *const LoadedTransactionAccount,
+    batch_account_cache: *const BatchAccountCache,
     compute_budget_limits: *const ComputeBudgetLimits,
+    feature_set: *const FeatureSet,
     rent_collector: *const RentCollector,
-) TransactionResult(LoadedAccounts) {
-    _ = allocator;
-    _ = transaction;
-    _ = batch_account_cache;
-    _ = loaded_fee_payer_account;
-    _ = compute_budget_limits;
-    _ = rent_collector;
-    @panic("not implemented");
+) TransactionResult(LoadedTransactionAccounts) {
+    return batch_account_cache.loadTransactionAccounts(
+        allocator,
+        transaction,
+        rent_collector,
+        feature_set,
+        compute_budget_limits,
+    );
 }
 
 // TODO: Test cases to reimplement once validation components are integrated
@@ -537,7 +532,7 @@ pub fn loadAccounts(
 //     var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, 100);
 //     defer loader.deinit();
 
-//     const batch_loadedaccounts = try allocator.alloc(LoadedAccounts, transactions.len);
+//     const batch_loadedaccounts = try allocator.alloc(LoadedTransactionAccounts, transactions.len);
 //     defer allocator.free(batch_loadedaccounts);
 
 //     const batch_budgetlimits = try allocator.alloc(
@@ -623,7 +618,7 @@ pub fn loadAccounts(
 //     });
 //     defer loader.deinit();
 
-//     const per_ex_loaded_accounts = try allocator.alloc(LoadedAccounts, transactions.len);
+//     const per_ex_loaded_accounts = try allocator.alloc(LoadedTransactionAccounts, transactions.len);
 //     defer allocator.free(per_ex_loaded_accounts);
 
 //     // load single-threaded (writing to account loader)

@@ -5,61 +5,13 @@ const runtime = sig.runtime;
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = runtime.AccountSharedData;
 const Hash = sig.core.Hash;
-const TransactionError = sig.accounts_db.snapshots.TransactionError;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const Slot = sig.core.Slot;
+const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
 // [firedancer] https://github.com/firedancer-io/firedancer/blob/ddde57c40c4d4334c25bb32de17f833d4d79a889/src/ballet/txn/fd_txn.h#L116
 const MAX_TX_ACCOUNT_LOCKS = 128;
-
-pub const LoadFailure = struct {
-    pub const Location = union(enum) {
-        account_idx_load: u8,
-        instr_idx_program_check: u16,
-    };
-    failure_location: Location,
-    err: error{
-        ProgramAccountNotFound,
-        MaxLoadedAccountsDataSizeExceeded,
-        InvalidProgramForExecution,
-    },
-
-    pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        switch (self.failure_location) {
-            .account_idx_load => |idx| try writer.print(
-                "Failed to load account[{}] with {}",
-                .{ idx, self.err },
-            ),
-            .instr_idx_program_check => |idx| try writer.print(
-                "Failed to check instruction[{}]'s program with {}",
-                .{ idx, self.err },
-            ),
-        }
-    }
-};
-
-// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L417
-/// agave's LoadedTransactionAccounts contains a field "program indices". This has been omitted as
-/// it's a Vec<Vec<u8>> whose elements are either [program_id] or [] (when program_id is the native
-/// loader), which seems pointless.
-pub const LoadedAccounts = struct {
-    collected_rent: u64 = 0,
-    loaded_account_data_size: u32 = 0,
-
-    load_failure: ?LoadFailure = null,
-
-    accounts: std.BoundedArray(AccountSharedData, MAX_TX_ACCOUNT_LOCKS) = .{},
-    /// equal in length to accounts
-    is_instruction_account: std.BoundedArray(bool, MAX_TX_ACCOUNT_LOCKS) = .{},
-    /// equal in length to accounts
-    rent_debits: std.BoundedArray(RentDebit, MAX_TX_ACCOUNT_LOCKS) = .{},
-};
 
 pub const AccountsDbKind = enum {
     AccountsDb,
@@ -80,6 +32,7 @@ pub const MockedAccountsDb = struct {
     }
 };
 
+/// Wraps over real & mocked accountsdb implementations
 fn AccountsDb(comptime kind: AccountsDbKind) type {
     return struct {
         inner: kind.T(),
@@ -129,39 +82,10 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
 
 pub const RentDebit = struct { rent_collected: u64, rent_balance: u64 };
 
-const LoadedTransactionAccount = struct {
-    account: *AccountSharedData,
-    loaded_size: usize,
-    rent_collected: u64,
-
-    const DEFAULT: LoadedTransactionAccount = .{
-        .account = .{
-            .lamports = 0,
-            .data = &.{},
-            .owner = Pubkey.ZEROES,
-            .executable = false,
-            .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
-        },
-        .loaded_size = 0,
-        .rent_collected = 0,
-    };
-};
-
-pub const TransactionLoadResult = union(enum) {
-    /// loaded all accounts successfully
-    Loaded: LoadedTransactionAccounts,
-    /// Not all accounts loaded successfully. Fee payer (& any required nonce account) loaded.
-    FeesOnly: FeesOnlyTransaction,
-    /// Some or all loads failed.
-    NotLoaded: TransactionError,
-};
-
-pub const FeesOnlyTransaction = struct {
-    // TODO: rollback?
-    load_error: TransactionError,
-    // note: agave has a field called fee_details, TODO: put it in RuntimeTransaction?
-};
-
+// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L417
+/// agave's LoadedTransactionAccounts contains a field "program indices". This has been omitted as
+/// it's a Vec<Vec<u8>> whose elements are either [program_id] or [] (when program_id is the native
+/// loader), which seems pointless.
 pub const LoadedTransactionAccounts = struct {
     /// data owned by BatchAccountCache
     accounts: std.BoundedArray(runtime.transaction_execution.CachedAccount, MAX_TX_ACCOUNT_LOCKS),
@@ -182,21 +106,17 @@ pub const LoadedTransactionAccounts = struct {
 /// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
 pub const BatchAccountCache = struct {
-    allocator: std.mem.Allocator,
-
+    /// pubkey -> AccountSharedData for all pubkeys *except* SYSVAR_INSTRUCTIONS_ID, which is a
+    /// special case (constructed on a per-transaction basis)
     account_cache: AccountMap = .{},
 
-    /// tx -> ?instructionAccount. Pubkey is always effectively SYSVAR_INSTRUCTIONS_ID.
-    instruction_accounts: InstructionAccounts = .{},
+    // holds SYSVAR_INSTRUCTIONS_ID accounts, purely so we can deallocate them later.
+    sysvar_instruction_accounts: std.AutoArrayHashMapUnmanaged(AccountSharedData, void) = .{},
 
     // NOTE: we might want to later add another field that keeps a copy of all writable accounts.
 
     pub const AccountMap = std.AutoArrayHashMapUnmanaged(
         Pubkey,
-        AccountSharedData,
-    );
-    pub const InstructionAccounts = std.AutoArrayHashMapUnmanaged(
-        *const RuntimeTransaction,
         AccountSharedData,
     );
 
@@ -226,10 +146,6 @@ pub const BatchAccountCache = struct {
         errdefer map.deinit(allocator);
         try map.ensureUnusedCapacity(allocator, max_map_entries);
 
-        var instr_account_map: InstructionAccounts = .{};
-        errdefer instr_account_map.deinit(allocator);
-        try instr_account_map.ensureUnusedCapacity(allocator, transactions.len);
-
         const transactions_data_loaded = try allocator.alloc(u32, transactions.len);
         defer allocator.free(transactions_data_loaded);
         @memset(transactions_data_loaded, 0);
@@ -238,11 +154,9 @@ pub const BatchAccountCache = struct {
         next_tx: for (transactions, transactions_data_loaded) |*tx, *tx_data_loaded| {
             for (tx.accounts.items(.pubkey)) |account_key| {
                 if (account_key.equals(&sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
-                    // note: this case doesn't require data len checks
+                    // this code is special, and requires constructing per-transaction accounts,
+                    // which we will not perform in advance.
                     @setCold(true);
-                    if (instr_account_map.contains(tx)) continue;
-                    const account = try constructInstructionsAccount(allocator, tx);
-                    instr_account_map.putAssumeCapacityNoClobber(tx, account);
                     continue;
                 }
 
@@ -317,21 +231,17 @@ pub const BatchAccountCache = struct {
             }
         }
 
-        return .{
-            .allocator = allocator,
-            .account_cache = map,
-            .instruction_accounts = instr_account_map,
-        };
+        return .{ .account_cache = map };
     }
 
-    pub fn deinit(self: *BatchAccountCache) void {
-        for (self.account_cache.values()) |account| self.allocator.free(account.data);
-        self.account_cache.deinit(self.allocator);
-        for (self.instruction_accounts.values()) |account| self.allocator.free(account.data);
-        self.instruction_accounts.deinit(self.allocator);
+    pub fn deinit(self: *BatchAccountCache, allocator: std.mem.Allocator) void {
+        for (self.account_cache.values()) |account| allocator.free(account.data);
+        self.account_cache.deinit(allocator);
+        for (self.sysvar_instruction_accounts.keys()) |account| allocator.free(account.data);
+        self.sysvar_instruction_accounts.deinit(allocator);
     }
 
-    pub const LoadedTransactionAccountsError = error{
+    const LoadedTransactionAccountsError = error{
         OutOfMemory,
         ProgramAccountNotFound,
         InvalidProgramForExecution,
@@ -343,36 +253,32 @@ pub const BatchAccountCache = struct {
     /// By the time this is called, we have no dependency on accountsdb.
     pub fn loadTransactionAccounts(
         self: *const BatchAccountCache,
-        slot: Slot,
+        allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const sig.core.rent_collector.RentCollector,
         feature_set: *const runtime.FeatureSet,
         compute_budget_limits: *const ComputeBudgetLimits,
-    ) error{OutOfMemory}!TransactionLoadResult {
+    ) error{OutOfMemory}!TransactionResult(LoadedTransactionAccounts) {
         const result = loadTransactionAccountsInner(
             self,
-            slot,
+            allocator,
             transaction,
             rent_collector,
             feature_set,
             compute_budget_limits,
-        );
-
-        const err = if (result) |loaded| {
-            return .{ .Loaded = loaded };
-        } else |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.ProgramAccountNotFound => .{.ProgramAccountNotFound},
-            error.InvalidProgramForExecution => .{.InvalidProgramForExecution},
-            error.MaxLoadedAccountsDataSizeExceeded => .{.MaxLoadedAccountsDataSizeExceeded},
+        ) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.ProgramAccountNotFound => .{ .err = .ProgramAccountNotFound },
+            error.InvalidProgramForExecution => .{ .err = .InvalidProgramForExecution },
+            error.MaxLoadedAccountsDataSizeExceeded => .{ .err = .MaxLoadedAccountsDataSizeExceeded },
         };
 
-        return TransactionLoadResult{ .FeesOnly = .{ .load_error = err } };
+        return .{ .ok = result };
     }
 
     fn loadTransactionAccountsInner(
         self: *const BatchAccountCache,
-        slot: Slot,
+        allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const sig.core.rent_collector.RentCollector,
         feature_set: *const runtime.FeatureSet,
@@ -408,7 +314,7 @@ pub const BatchAccountCache = struct {
             loaded.accounts.appendAssumeCapacity(loaded_account.account);
         }
 
-        var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
+        var validated_loaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
         defer validated_loaders.deinit();
 
         for (transaction.instruction_infos) |instr| {
@@ -417,9 +323,8 @@ pub const BatchAccountCache = struct {
             const program_account = loadAccount(self, transaction, program_id, false) orelse
                 return error.ProgramAccountNotFound;
 
-            if (!feature_set.isActive(
+            if (!feature_set.active.contains(
                 sig.runtime.features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
-                slot,
             ) and !program_account.account.executable) return error.InvalidProgramForExecution;
 
             const owner_id = &program_account.account.owner;
@@ -445,8 +350,27 @@ pub const BatchAccountCache = struct {
         }
     }
 
+    const LoadedTransactionAccount = struct {
+        account: *AccountSharedData,
+        loaded_size: usize,
+        rent_collected: u64,
+
+        const DEFAULT: LoadedTransactionAccount = .{
+            .account = .{
+                .lamports = 0,
+                .data = &.{},
+                .owner = Pubkey.ZEROES,
+                .executable = false,
+                .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+            },
+            .loaded_size = 0,
+            .rent_collected = 0,
+        };
+    };
+
     fn loadTransactionAccount(
         self: *const BatchAccountCache,
+        allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         rent_collector: *const sig.core.rent_collector.RentCollector,
         feature_set: *const runtime.FeatureSet,
@@ -455,10 +379,8 @@ pub const BatchAccountCache = struct {
     ) error{OutOfMemory}!LoadedTransactionAccount {
         if (key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
             @setCold(true);
-
-            const account = self.instruction_accounts.get(transaction) orelse
-                unreachable; // invalid call / this is set in initFromAccountsDb
-
+            const account = try constructInstructionsAccount(allocator, transaction);
+            try self.sysvar_instruction_accounts.putNoClobber(allocator, account, {});
             return .{
                 .account = account,
                 .loaded_size = 0,
@@ -466,7 +388,7 @@ pub const BatchAccountCache = struct {
             };
         }
 
-        const account = self.loadAccount(transaction, key, is_writable) orelse {
+        const account = self.loadAccount(allocator, transaction, key, is_writable) orelse {
             // a previous instruction deallocated this account, we will make a new one in its place.
 
             var account = AccountSharedData.EMPTY;
@@ -496,19 +418,22 @@ pub const BatchAccountCache = struct {
     /// null return => account is now dead
     fn loadAccount(
         self: *const BatchAccountCache,
+        allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
         key: *const Pubkey,
         is_writable: bool,
     ) ?LoadedTransactionAccount {
-        const maybe_account = if (key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID))
-            self.instruction_accounts.getPtr(transaction)
-        else
-            self.account_cache.getPtr(key);
+        const maybe_account = if (key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) account: {
+            @setCold(true);
+            const account = try constructInstructionsAccount(allocator, transaction);
+            try self.sysvar_instruction_accounts.putNoClobber(allocator, account, {});
+            break :account account;
+        } else self.account_cache.getPtr(key);
 
         const account = maybe_account orelse unreachable; // all keys should be already there
         if (account.lamports == 0) {
             // a previous instr deallocated this account
-            self.allocator.free(account.data);
+            allocator.free(account.data);
             account.* = undefined; // fail loudly if we try to use it
             return null;
         }
@@ -590,8 +515,6 @@ fn constructInstructionsAccount(
         );
         errdefer allocator.free(accounts_meta);
 
-        errdefer comptime unreachable;
-
         for (instruction.account_metas.slice(), accounts_meta) |account_meta, *new_account_meta| {
             new_account_meta.* = .{
                 .pubkey = tx.accounts.items(.pubkey)[account_meta.index_in_transaction],
@@ -638,6 +561,18 @@ fn constructInstructionsAccount(
 //     };
 // }
 
+comptime {
+    // making sure we get compile errors, TODO: remove when tests are enabled
+    _ = BatchAccountCache;
+    _ = BatchAccountCache.deinit;
+    _ = BatchAccountCache.initFromAccountsDb;
+    _ = BatchAccountCache.loadAccount;
+    _ = BatchAccountCache.loadTransactionAccount;
+    _ = BatchAccountCache.loadTransactionAccounts;
+    _ = BatchAccountCache.loadTransactionAccountsInner;
+    _ = BatchAccountCache.LoadedTransactionAccountsError;
+}
+
 test "loadTransactionAccounts empty transaction" {
     const allocator = std.testing.allocator;
     const accountsdb = MockedAccountsDb{ .allocator = allocator };
@@ -648,7 +583,10 @@ test "loadTransactionAccounts empty transaction" {
         accountsdb,
         &.{},
     );
-    defer batch_account_cache.deinit();
+
+    _ = BatchAccountCache.loadTransactionAccounts;
+
+    defer batch_account_cache.deinit(allocator);
 
     // _ = try loadTransactionAccounts(
     //     .Mocked,

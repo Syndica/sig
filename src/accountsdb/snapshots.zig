@@ -583,7 +583,7 @@ pub const Manifest = struct {
 };
 
 /// Analogous to [TransactionError](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/transaction/error.rs#L14)
-const TransactionError = union(enum) {
+pub const TransactionError = union(enum) {
     /// An account is already being processed in another transaction in a way
     /// that does not support parallelism
     AccountInUse,
