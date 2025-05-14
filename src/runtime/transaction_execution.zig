@@ -81,13 +81,6 @@ pub const TransactionExecutionConfig = struct {
     log_messages_byte_limit: ?u64,
 };
 
-pub fn TransactionResult(comptime T: type) type {
-    return union(enum(u8)) {
-        ok: T,
-        err: TransactionError,
-    };
-}
-
 pub const TransactionFees = struct {
     transaction_fee: u64,
     prioritization_fee: u64,
