@@ -7,18 +7,15 @@ const features = sig.runtime.features;
 const programs = sig.runtime.program;
 
 const Pubkey = sig.core.Pubkey;
-const Packet = sig.net.Packet;
 const FeatureSet = sig.runtime.FeatureSet;
-const InstructionInfo = sig.runtime.InstructionInfo;
-const InstructionError = sig.core.instruction.InstructionError;
-const TransactionError = sig.core.transaction.TransactionError;
 
 pub const TOTAL_COUNT_BUILTINS: usize = 12;
 pub const BUILTIN_COSTS = initBuiltinCosts();
 pub const MAYBE_BUILTIN_KEY = initMaybeBuiltinKey();
 
 pub fn getMigrationFeatureId(index: usize) Pubkey {
-    return MIGRATING_BUILTIN_COSTS[index][1].coreBpfMigrationFeature() orelse @panic("not a migrating builtin");
+    return MIGRATING_BUILTIN_COSTS[index][1].coreBpfMigrationFeature() orelse
+        @panic("not a migrating builtin");
 }
 
 fn initBuiltinCosts() std.StaticStringMap(BuiltinCost) {
@@ -59,7 +56,8 @@ pub const MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
         .{
             .migrating = .{
                 .native_cost = programs.address_lookup_table.COMPUTE_UNITS,
-                .core_bf_migration_feature = features.MIGRATE_ADDRESS_LOOKUP_TABLE_PROGRAM_TO_CORE_BPF,
+                .core_bf_migration_feature = features
+                    .MIGRATE_ADDRESS_LOOKUP_TABLE_PROGRAM_TO_CORE_BPF,
                 .position = 2,
             },
         },
