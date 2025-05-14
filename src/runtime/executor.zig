@@ -103,8 +103,6 @@ pub fn pushInstruction(
     }
 
     tc.instruction_stack.appendAssumeCapacity(.{
-        .ec = tc.ec,
-        .sc = tc.sc,
         .tc = tc,
         .ixn_info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
@@ -312,7 +310,7 @@ pub fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const program_index_in_transaction = if (tc.ec.feature_set.active.contains(
+    const program_index_in_transaction = if (tc.feature_set.active.contains(
         features.LIFT_CPI_CALLER_RESTRICTION,
     )) blk: {
         break :blk tc.getAccountIndex(callee.program_id) orelse {
@@ -330,7 +328,7 @@ pub fn prepareCpiInstructionInfo(
             try caller.borrowInstructionAccount(index_in_caller);
         defer borrowed_account.release();
 
-        if (!tc.ec.feature_set.active.contains(
+        if (!tc.feature_set.active.contains(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         ) and
             !borrowed_account.account.executable)
@@ -386,7 +384,7 @@ test "pushInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(
+    var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -397,13 +395,7 @@ test "pushInstruction" {
             },
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -476,7 +468,7 @@ test "processNextInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(
+    var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -488,13 +480,7 @@ test "processNextInstruction" {
             .compute_meter = system_program.COMPUTE_UNITS,
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -546,7 +532,7 @@ test "popInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(
+    var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -557,13 +543,7 @@ test "popInstruction" {
             },
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -628,14 +608,17 @@ test "popInstruction" {
 test "prepareCpiInstructionInfo" {
     const testing = sig.runtime.testing;
     const system_program = sig.runtime.program.system_program;
+    const FeatureSet = sig.runtime.features.FeatureSet;
 
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
-    var ec, const sc, var tc = try testing.createExecutionContexts(
+    var feature_set = try allocator.create(FeatureSet);
+    var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
+            .feature_set_ptr = feature_set,
             .accounts = &.{
                 .{ .pubkey = Pubkey.initRandom(prng.random()), .lamports = 2_000 },
                 .{ .pubkey = Pubkey.initRandom(prng.random()), .lamports = 0 },
@@ -644,13 +627,7 @@ test "prepareCpiInstructionInfo" {
             },
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     const caller = try testing.createInstructionInfo(
         &tc,
@@ -769,12 +746,12 @@ test "prepareCpiInstructionInfo" {
         tc.accounts[2].account.executable = false;
         defer tc.accounts[2].account.executable = true;
 
-        try ec.feature_set.active.put(
+        try feature_set.active.put(
             allocator,
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
             0,
         );
-        defer _ = ec.feature_set.active.swapRemove(
+        defer _ = feature_set.active.swapRemove(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
         );
 
@@ -788,7 +765,7 @@ test "sumAccountLamports" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(0);
 
-    const ec, const sc, var tc = try testing.createExecutionContexts(
+    var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -800,13 +777,7 @@ test "sumAccountLamports" {
             },
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer testing.deinitTransactionContext(allocator, tc);
 
     {
         // Success: 0 + 1 + 2 + 3 = 6

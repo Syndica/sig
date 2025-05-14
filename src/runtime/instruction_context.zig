@@ -12,8 +12,6 @@ const InstructionError = sig.core.instruction.InstructionError;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 
 const InstructionInfo = sig.runtime.InstructionInfo;
-const EpochContext = sig.runtime.EpochContext;
-const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 
@@ -26,9 +24,7 @@ const BorrowedAccount = sig.runtime.BorrowedAccount;
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L502
 pub const InstructionContext = struct {
-    /// Contexts
-    ec: *const EpochContext,
-    sc: *const SlotContext,
+    /// Transaction context
     tc: *TransactionContext,
 
     /// The instruction information which is constant accross execution
@@ -77,7 +73,7 @@ pub const InstructionContext = struct {
         if (!T.ID.equals(&account_meta.pubkey))
             return InstructionError.InvalidArgument;
 
-        return self.tc.sc.sysvar_cache.get(T);
+        return self.tc.sysvar_cache.get(T);
     }
 
     pub fn getAccountKeyByIndexUnchecked(self: *const InstructionContext, index: u16) Pubkey {

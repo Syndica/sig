@@ -36,22 +36,22 @@ const ReplayState = struct {
     thread_pool: *ThreadPool,
     execution: ReplayExecutionState,
 
-    fn init(dependencies: ReplayDependencies) Allocator.Error!ReplayState {
-        const thread_pool = try dependencies.allocator.create(ThreadPool);
-        errdefer dependencies.allocator.destroy(thread_pool);
+    fn init(deps: ReplayDependencies) Allocator.Error!ReplayState {
+        const thread_pool = try deps.allocator.create(ThreadPool);
+        errdefer deps.allocator.destroy(thread_pool);
         thread_pool.* = ThreadPool.init(.{ .max_threads = NUM_THREADS });
 
         return .{
-            .allocator = dependencies.allocator,
-            .logger = ScopedLogger.from(dependencies.logger),
+            .allocator = deps.allocator,
+            .logger = ScopedLogger.from(deps.logger),
             .thread_pool = thread_pool,
             .execution = try ReplayExecutionState.init(
-                dependencies.allocator,
-                dependencies.logger,
+                deps.allocator,
+                deps.logger,
                 thread_pool,
-                dependencies.epoch_schedule,
-                dependencies.accounts_db,
-                dependencies.blockstore_reader,
+                deps.epoch_schedule,
+                deps.accounts_db,
+                deps.blockstore_reader,
             ),
         };
     }
@@ -65,11 +65,11 @@ const ReplayState = struct {
 };
 
 /// Run the replay service indefinitely.
-pub fn run(dependencies: ReplayDependencies) !void {
-    var state = try ReplayState.init(dependencies);
+pub fn run(deps: ReplayDependencies) !void {
+    var state = try ReplayState.init(deps);
     defer state.deinit();
 
-    while (!dependencies.exit.load(.monotonic)) try advanceReplay(&state);
+    while (!deps.exit.load(.monotonic)) try advanceReplay(&state);
 }
 
 /// Run a single iteration of the entire replay process. Includes:

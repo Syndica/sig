@@ -333,7 +333,7 @@ pub fn memset(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L142
     try consumeMemoryCompute(tc, len);
 
-    const feature_set = tc.sc.ec.feature_set;
+    const feature_set = tc.feature_set;
     const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
         try memsetNonContigious(
@@ -370,7 +370,7 @@ pub fn memcpy(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
         return SyscallError.CopyOverlapping;
     }
 
-    const feature_set = tc.sc.ec.feature_set;
+    const feature_set = tc.feature_set;
     const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
         try memmoveNonContigious(
@@ -396,7 +396,7 @@ pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, reg_map: *Regist
 
     try consumeMemoryCompute(tc, len);
 
-    const feature_set = tc.sc.ec.feature_set;
+    const feature_set = tc.feature_set;
     const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
         try memmoveNonContigious(
@@ -424,7 +424,7 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mem_ops.rs#L84
     try consumeMemoryCompute(tc, len);
 
-    const feature_set = tc.sc.ec.feature_set;
+    const feature_set = tc.feature_set;
     const check_aligned = tc.getCheckAligned();
     if (feature_set.active.contains(features.BPF_ACCOUNT_DATA_DIRECT_MAPPING)) {
         const cmp_result = try memory_map.translateType(

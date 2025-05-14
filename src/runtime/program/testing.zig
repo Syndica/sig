@@ -11,7 +11,8 @@ const LogCollector = sig.runtime.LogCollector;
 pub const InstructionContextAccountMetaParams = runtime_testing.InstructionInfoAccountMetaParams;
 pub const TransactionContextParams = runtime_testing.ExecuteContextsParams;
 
-const createExecutionContexts = runtime_testing.createExecutionContexts;
+const createTransactionContext = runtime_testing.createTransactionContext;
+const deinitTransactionContext = runtime_testing.deinitTransactionContext;
 const createInstructionInfo = runtime_testing.createInstructionInfo;
 const expectTransactionContextEqual = runtime_testing.expectTransactionContextEqual;
 
@@ -62,7 +63,7 @@ pub fn expectProgramExecuteResult(
     // Create the initial transaction context
     var initial_prng = std.rand.DefaultPrng.init(0);
 
-    const initial_ec, const initial_sc, var initial_tc = try createExecutionContexts(
+    var initial_tc = try createTransactionContext(
         allocator,
         initial_prng.random(),
         context_params,
@@ -75,28 +76,18 @@ pub fn expectProgramExecuteResult(
                 std.debug.print("    {}: {s}\n", .{ index, log });
             }
         }
-        initial_ec.deinit();
-        allocator.destroy(initial_ec);
-        initial_sc.deinit();
-        allocator.destroy(initial_sc);
-        initial_tc.deinit();
+        deinitTransactionContext(allocator, initial_tc);
     }
 
     // Create the expected transaction context
     var expected_prng = std.rand.DefaultPrng.init(0);
 
-    const expected_ec, const expected_sc, var expected_tc = try createExecutionContexts(
+    const expected_tc = try createTransactionContext(
         allocator,
         expected_prng.random(),
         expected_context_params,
     );
-    defer {
-        expected_ec.deinit();
-        allocator.destroy(expected_ec);
-        expected_sc.deinit();
-        allocator.destroy(expected_sc);
-        expected_tc.deinit();
-    }
+    defer deinitTransactionContext(allocator, expected_tc);
 
     // Create the instruction info
     var instruction_info = try createInstructionInfo(

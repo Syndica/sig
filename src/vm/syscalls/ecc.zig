@@ -43,7 +43,7 @@ pub fn curvePointValidation(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.ec.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -80,7 +80,7 @@ pub fn curveGroupOp(
     registers: *RegisterMap,
 ) Error!void {
     const curve_id = CurveId.wrap(registers.get(.r1)) orelse {
-        if (tc.ec.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -88,7 +88,7 @@ pub fn curveGroupOp(
         }
     };
     const group_op = GroupOp.wrap(registers.get(.r2)) orelse {
-        if (tc.ec.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -304,7 +304,7 @@ pub fn curveMultiscalarMul(
     if (points_len > 512) return SyscallError.InvalidLength;
 
     const curve_id = CurveId.wrap(attribute_id) orelse {
-        if (tc.ec.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
+        if (tc.feature_set.active.contains(features.ABORT_ON_INVALID_CURVE)) {
             return SyscallError.InvalidAttribute;
         } else {
             registers.set(.r0, 1);
@@ -544,7 +544,7 @@ test "edwards curve group operations" {
     );
 
     var prng = std.Random.DefaultPrng.init(0);
-    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+    var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -555,13 +555,7 @@ test "edwards curve group operations" {
             .compute_meter = total_compute,
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
@@ -681,7 +675,7 @@ test "ristretto curve group operations" {
     );
 
     var prng = std.Random.DefaultPrng.init(0);
-    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+    var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -692,13 +686,7 @@ test "ristretto curve group operations" {
             .compute_meter = 10_000,
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
@@ -821,7 +809,7 @@ test "multiscalar multiplication" {
         compute_budget.curve25519_ristretto_msm_incremental_cost;
 
     var prng = std.Random.DefaultPrng.init(0);
-    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+    var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -832,13 +820,7 @@ test "multiscalar multiplication" {
             .compute_meter = total_compute,
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     {
         registers.set(.r1, 0); // CURVE25519_EDWARDS
@@ -919,7 +901,7 @@ test "multiscalar multiplication large" {
     defer memory_map.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(0);
-    const ec, const sc, var tc = try sig.runtime.testing.createExecutionContexts(
+    var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -930,13 +912,7 @@ test "multiscalar multiplication large" {
             .compute_meter = 500_000,
         },
     );
-    defer {
-        ec.deinit();
-        allocator.destroy(ec);
-        sc.deinit();
-        allocator.destroy(sc);
-        tc.deinit();
-    }
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
 
     {
         tc.compute_meter = 500_000;
