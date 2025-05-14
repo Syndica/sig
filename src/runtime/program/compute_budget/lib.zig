@@ -125,6 +125,8 @@ pub fn execute(instructions: []const InstructionInfo, feature_set: *const Featur
         }
     }
 
+    // Requested heap size outsize of range is a transaction error
+    // Requested heap size is not a multiple of 1024 is an instruction error
     const heap_bytes = blk: {
         if (requested_heap_size) |heap_size| {
             const size = heap_size[1];
@@ -138,8 +140,9 @@ pub fn execute(instructions: []const InstructionInfo, feature_set: *const Featur
         break :blk MIN_HEAP_FRAME_BYTES;
     };
 
+    // Requested compute unit limit greater than max results in max compute unit limit
     const compute_unit_limit = if (requested_compute_unit_limit) |limit|
-        @min(limit[1], MAX_COMPUTE_UNIT_LIMIT)
+        limit[1]
     else
         defaultComputeUnitLimit(
             feature_set,
@@ -149,11 +152,13 @@ pub fn execute(instructions: []const InstructionInfo, feature_set: *const Featur
             &migrating_builtin_counts,
         );
 
+    // Compute unit price is not bounded
     const compute_unit_price = if (requested_compute_unit_price) |price|
         price[1]
     else
         0;
 
+    // Requested loaded accounts data size limit greater than max results in max loaded accounts data size limit
     const loaded_accounts_bytes = blk: {
         if (requested_loaded_accounts_data_size_limit) |max_size| {
             if (max_size[1] == 0) return TransactionError.InvalidLoadedAccountsDataSizeLimit;
@@ -164,9 +169,9 @@ pub fn execute(instructions: []const InstructionInfo, feature_set: *const Featur
 
     return .{
         .heap_bytes = heap_bytes,
-        .compute_unit_limit = compute_unit_limit,
+        .compute_unit_limit = @min(compute_unit_limit, MAX_COMPUTE_UNIT_LIMIT),
         .compute_unit_price = compute_unit_price,
-        .loaded_accounts_bytes = loaded_accounts_bytes,
+        .loaded_accounts_bytes = @min(loaded_accounts_bytes, MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES),
     };
 }
 
@@ -529,22 +534,21 @@ test execute {
         .{ .err = TransactionError.InstructionError },
     );
 
-    // TODO: Is this testcase an error in agave?
-    // try testComputeBudgetLimits(
-    //     allocator,
-    //     FeatureSet.EMPTY,
-    //     &.{
-    //         emptyInstructionInfo(prng.random()),
-    //         emptyInstructionInfo(prng.random()),
-    //         emptyInstructionInfo(prng.random()),
-    //         emptyInstructionInfo(prng.random()),
-    //         emptyInstructionInfo(prng.random()),
-    //         emptyInstructionInfo(prng.random()),
-    //         emptyInstructionInfo(prng.random()),
-    //         emptyInstructionInfo(prng.random()),
-    //     },
-    //     .{ .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT * 7 },
-    // );
+    try testComputeBudgetLimits(
+        allocator,
+        FeatureSet.EMPTY,
+        &.{
+            emptyInstructionInfo(prng.random()),
+            emptyInstructionInfo(prng.random()),
+            emptyInstructionInfo(prng.random()),
+            emptyInstructionInfo(prng.random()),
+            emptyInstructionInfo(prng.random()),
+            emptyInstructionInfo(prng.random()),
+            emptyInstructionInfo(prng.random()),
+            emptyInstructionInfo(prng.random()),
+        },
+        .{ .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT * 7 },
+    );
 
     try testComputeBudgetLimits(
         allocator,
@@ -646,4 +650,90 @@ test execute {
         },
         .{ .err = TransactionError.DuplicateInstruction },
     );
+
+    // Loaded Accounts Data Size Limit
+    try testComputeBudgetLimits(
+        allocator,
+        FeatureSet.EMPTY,
+        &.{
+            try computeBudgetInstructionInfo(
+                allocator,
+                .{ .set_loaded_accounts_data_size_limit = 1 },
+            ),
+            emptyInstructionInfo(prng.random()),
+        },
+        .{
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
+            .loaded_accounts_bytes = 1,
+        },
+    );
+
+    try testComputeBudgetLimits(
+        allocator,
+        try FeatureSet.allEnabled(allocator),
+        &.{
+            try computeBudgetInstructionInfo(
+                allocator,
+                .{ .set_loaded_accounts_data_size_limit = 1 },
+            ),
+            emptyInstructionInfo(prng.random()),
+        },
+        .{
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
+                MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT,
+            .loaded_accounts_bytes = 1,
+        },
+    );
+
+    try testComputeBudgetLimits(allocator, FeatureSet.EMPTY, &.{
+        try computeBudgetInstructionInfo(
+            allocator,
+            .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES + 1 },
+        ),
+        emptyInstructionInfo(prng.random()),
+    }, .{
+        .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
+        .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
+    });
+
+    try testComputeBudgetLimits(
+        allocator,
+        try FeatureSet.allEnabled(allocator),
+        &.{
+            try computeBudgetInstructionInfo(
+                allocator,
+                .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES + 1 },
+            ),
+            emptyInstructionInfo(prng.random()),
+        },
+        .{
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT +
+                MAX_BUILTIN_ALLOCATION_COMPUTE_UNIT_LIMIT,
+            .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
+        },
+    );
+
+    try testComputeBudgetLimits(
+        allocator,
+        FeatureSet.EMPTY,
+        &.{
+            emptyInstructionInfo(prng.random()),
+        },
+        .{
+            .compute_unit_limit = DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT,
+            .loaded_accounts_bytes = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES,
+        },
+    );
+
+    try testComputeBudgetLimits(allocator, FeatureSet.EMPTY, &.{
+        emptyInstructionInfo(prng.random()),
+        try computeBudgetInstructionInfo(
+            allocator,
+            .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES },
+        ),
+        try computeBudgetInstructionInfo(
+            allocator,
+            .{ .set_loaded_accounts_data_size_limit = MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES },
+        ),
+    }, .{ .err = TransactionError.DuplicateInstruction });
 }
