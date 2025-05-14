@@ -7,6 +7,7 @@ const core = sig.core;
 const Allocator = std.mem.Allocator;
 
 const ThreadPool = sig.sync.ThreadPool;
+const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 
 const Entry = core.Entry;
 const Hash = core.Hash;
@@ -15,11 +16,11 @@ const Slot = core.Slot;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-
 const ConfirmationProgress = sig.consensus.progress_map.blockstore_processor.ConfirmationProgress;
 
 const ReplayBatcher = replay.batcher.ReplayBatcher;
 const ResolvedTransaction = replay.resolve.ResolvedTransaction;
+const resolveBatch = replay.resolve.resolveBatch;
 
 const assert = std.debug.assert;
 
@@ -27,7 +28,7 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
 
 /// Asynchronously validate and execute entries from a slot.
 ///
-/// Returns: a SlotConfirmer which you can poll periodically to await a result.
+/// Returns: a ConfirmSlotFuture which you can poll periodically to await a result.
 ///
 /// Analogous to:
 /// - agave: confirm_slot and confirm_slot_entries
@@ -37,58 +38,42 @@ pub fn confirmSlot(
     logger: ScopedLogger,
     thread_pool: *ThreadPool,
     entries: []const Entry,
-    progress: *ConfirmationProgress,
-    config: VerifyTicksConfig,
-    slot: Slot,
-    slot_is_full: bool,
+    last_entry: Hash,
+    verify_ticks_params: VerifyTicksParams,
 ) Allocator.Error!ConfirmSlotFuture {
-    const batcher = ReplayBatcher.initCapacity(allocator, entries.len, thread_pool);
-    errdefer batcher.deinit(allocator);
+    const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries.len);
+    errdefer future.destroy();
 
-    const slot_confirmer = ConfirmSlotFuture{
-        .allocator = allocator,
-        .logger = logger,
-        .poh_verifier = try sig.utils.thread.HomogeneousThreadPool(PohTask)
-            .initBorrowed(allocator, thread_pool, thread_pool.max_threads),
-        .batcher = batcher,
-        .state = .init,
-    };
-
-    if (verifyTicks(
-        slot_confirmer.logger,
-        config,
-        slot,
-        entries,
-        slot_is_full,
-        &progress.tick_hash_count,
-    )) |block_error| {
-        slot_confirmer.status = .{ .failure = .{ .InvalidBlock = block_error } };
-        return slot_confirmer;
+    if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
+        future.status = .{ .failure = .{ .InvalidBlock = block_error } };
+        return future;
     }
 
-    try schedulePohTasks(slot_confirmer, progress.last_entry, entries);
-    const initial_tx_result = try scheduleTransactions(slot_confirmer, entries);
+    try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
+    const initial_tx_result = try startExecuteBatches(future, entries);
 
-    if (.pending != initial_tx_result) {
-        slot_confirmer.status_when_done = initial_tx_result;
+    if (.err == initial_tx_result) {
+        future.status_when_done = initial_tx_result;
     }
+
+    return future;
 }
 
-/// schedule poh verification asynchronously into a ConfirmSlotFuture
-fn schedulePohTasks(
-    self: *ConfirmSlotFuture,
+/// schedule poh verification asynchronously
+fn startPohVerify(
+    allocator: Allocator,
+    pool: *HomogeneousThreadPool(PohTask),
     initial_hash: Hash,
     entries: []const Entry,
 ) Allocator.Error!void {
     if (entries.len == 0) return;
-    const num_tasks = @min(self.poh_verifier.max_concurrent_tasks, entries.len);
+    const num_tasks = @min(pool.max_concurrent_tasks, entries.len);
     const entries_per_task = entries.len / num_tasks;
     var batch_initial_hash = initial_hash;
     for (0..num_tasks) |i| {
         const end = if (i == num_tasks + 1) entries.len else i * entries_per_task;
-        assert(try self.poh_verifier.trySchedule(self.allocator, .{
-            .allocator = self.allocator,
-            .preallocated_nodes = &self.preallocated_nodes[i],
+        assert(try pool.trySchedule(allocator, .{
+            .allocator = allocator,
             .initial_hash = batch_initial_hash,
             .entries = entries[i..end],
         }));
@@ -96,29 +81,23 @@ fn schedulePohTasks(
     }
 }
 
-/// schedule transaction verification/execution asynchronously into a ConfirmSlotFuture
-fn scheduleTransactions(
-    self: *ConfirmSlotFuture,
+/// schedule transaction verification/execution asynchronously
+fn startExecuteBatches(
+    allocator: Allocator,
+    accounts_db: *AccountsDB,
+    batcher: *ReplayBatcher,
     entries: []const Entry,
 ) !ConfirmSlotStatus {
     var total_transactions: usize = 0;
     for (entries) |entry| {
         total_transactions += entry.transactions.items.len;
-        var accounts_to_lock = try std.ArrayListUnmanaged(struct { Pubkey, bool })
-            .initCapacity(self.allocator, core.entry.numAccounts(entries));
-        defer unreachable; // TODO
-        const resolved_txns =
-            try self.allocator.alloc(ResolvedTransaction, entry.transactions.items.len);
-        for (entry.transactions.items, resolved_txns) |transaction, *resolved| {
-            resolved.* = try ResolvedTransaction
-                .init(self.allocator, self.accounts_db, transaction, &accounts_to_lock);
-        }
-        self.batcher.addBatchAssumeCapacity(.{
-            .accounts_to_lock = accounts_to_lock.toOwnedSlice(self.allocator),
-            .transactions = resolved_txns,
-        });
 
-        switch (try self.batcher.poll()) {
+        const batch = try resolveBatch(allocator, accounts_db, entry.transactions.items);
+        errdefer batch.deinit(allocator);
+
+        batcher.addBatchAssumeCapacity(batch);
+
+        switch (try batcher.poll()) {
             .done, .pending => {},
             .err => |err| return .{ .failure = .{ .InvalidTransaction = err } },
         }
@@ -140,16 +119,45 @@ pub const ConfirmSlotStatus = union(enum) {
 /// fd: runtime_process_txns_in_microblock_stream
 pub const ConfirmSlotFuture = struct {
     allocator: Allocator,
-    logger: ScopedLogger,
-    accounts_db: AccountsDB,
     batcher: ReplayBatcher,
-    poh_verifier: sig.utils.thread.HomogeneousThreadPool(PohTask),
+    poh_verifier: HomogeneousThreadPool(PohTask),
 
     /// The current status to return on poll, unless something has changed.
     status: ConfirmSlotStatus,
     /// Temporarily stores errors that occur before completion that need to be
     /// returned when all tasks are complete.
     status_when_done: ConfirmSlotStatus = .done,
+
+    fn create(
+        allocator: Allocator,
+        thread_pool: *ThreadPool,
+        num_entries: usize,
+    ) !*ConfirmSlotFuture {
+        const batcher = ReplayBatcher.initCapacity(allocator, num_entries, thread_pool);
+        errdefer batcher.deinit(allocator);
+
+        const poh_verifier = try HomogeneousThreadPool(PohTask)
+            .initBorrowed(allocator, thread_pool, thread_pool.max_threads);
+        errdefer poh_verifier.deinit(allocator);
+
+        const future = try allocator.create(ConfirmSlotFuture);
+        errdefer allocator.free(future);
+
+        future.* = ConfirmSlotFuture{
+            .allocator = allocator,
+            .poh_verifier = poh_verifier,
+            .batcher = batcher,
+            .status = .pending,
+        };
+
+        return future;
+    }
+
+    fn destroy(self: *ConfirmSlotFuture) void {
+        self.batcher.deinit();
+        self.poh_verifier.deinit(self.allocator);
+        self.allocator.destroy(self);
+    }
 
     pub fn poll(self: *ConfirmSlotFuture) ConfirmSlotStatus {
         switch (self.status) {
@@ -158,6 +166,7 @@ pub const ConfirmSlotFuture = struct {
                 for (self.pollEach()) |status| switch (status) {
                     .pending => pending = true,
                     .err => |err| if (self.status_when_done == .done) {
+                        // TODO: notify threads to exit
                         self.status_when_done = .{ .err = err };
                     },
                     .done => {},
@@ -184,7 +193,7 @@ pub const ConfirmSlotFuture = struct {
 
 const PohTask = struct {
     allocator: Allocator,
-    preallocated_nodes: *std.ArrayListUnmanaged(Hash),
+    // preallocated_nodes: *std.ArrayListUnmanaged(Hash),
     initial_hash: Hash,
     entries: []const Entry,
 
@@ -192,59 +201,64 @@ const PohTask = struct {
         return try core.entry.verifyPoh(
             self.entries,
             self.allocator,
-            self.preallocated_nodes,
+            // self.preallocated_nodes,
+            null,
             self.initial_hash,
         );
     }
 };
 
-const VerifyTicksConfig = struct {
-    /// slot-scoped state
-    tick_height: u64,
-    /// slot-scoped constant
-    max_tick_height: u64,
+pub const VerifyTicksParams = struct {
     /// epoch-scoped constant
     hashes_per_tick: ?u64,
+
+    // slot-scoped constants
+    slot: u64,
+    max_tick_height: u64,
+
+    // slot-scoped state (constant during lifetime of this struct)
+    tick_height: u64,
+    slot_is_full: bool,
+
+    /// slot-scoped state (expected to be mutated while verifying ticks)
+    tick_hash_count: ?*u64,
 };
 
 /// Verify that a segment of entries has the correct number of ticks and hashes
 /// analogous to [verify_ticks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1097)
 fn verifyTicks(
     logger: ScopedLogger,
-    config: VerifyTicksConfig,
-    slot: Slot,
     entries: []const Entry,
-    slot_full: bool,
-    tick_hash_count: *u64,
+    params: VerifyTicksParams,
 ) ?BlockError {
-    const next_bank_tick_height = config.tick_height + core.entry.tickCount(entries);
-    const max_bank_tick_height = config.max_tick_height;
+    const next_bank_tick_height = params.tick_height + core.entry.tickCount(entries);
+    const max_bank_tick_height = params.max_tick_height;
 
     if (next_bank_tick_height > max_bank_tick_height) {
-        logger.warn().logf("Too many entry ticks found in slot: {}", .{slot});
+        logger.warn().logf("Too many entry ticks found in slot: {}", .{params.slot});
         return .TooManyTicks;
     }
 
-    if (next_bank_tick_height < max_bank_tick_height and slot_full) {
-        logger.info().logf("Too few entry ticks found in slot: {}", .{slot});
+    if (next_bank_tick_height < max_bank_tick_height and params.slot_full) {
+        logger.info().logf("Too few entry ticks found in slot: {}", .{params.slot});
         return .TooFewTicks;
     }
 
     if (next_bank_tick_height == max_bank_tick_height) {
         if (entries.len == 0 or !entries[entries.len - 1].isTick()) {
-            logger.warn().logf("Slot: {} did not end with a tick entry", .{slot});
+            logger.warn().logf("Slot: {} did not end with a tick entry", .{params.slot});
             return .TrailingEntry;
         }
 
-        if (!slot_full) {
-            logger.warn().logf("Slot: {} was not marked full", .{slot});
+        if (!params.slot_full) {
+            logger.warn().logf("Slot: {} was not marked full", .{params.slot});
             return .InvalidLastTick;
         }
     }
 
-    const hashes_per_tick = config.hashes_per_tick orelse 0;
-    if (!core.entry.verifyTickHashCount(entries, logger, tick_hash_count, hashes_per_tick)) {
-        logger.warn().logf("Tick with invalid number of hashes found in slot: {}", .{slot});
+    const hashes_per_tick = params.hashes_per_tick orelse 0;
+    if (!core.entry.verifyTickHashCount(entries, logger, params.tick_hash_count, hashes_per_tick)) {
+        logger.warn().logf("Tick with invalid number of hashes found in slot: {}", .{params.slot});
         return .InvalidTickHashCount;
     }
 

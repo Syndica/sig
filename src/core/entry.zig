@@ -27,20 +27,6 @@ pub const Entry = struct {
     }
 };
 
-/// Count the number of accounts in all the entries, including accounts from lookup tables
-pub fn numAccounts(entries: []const Entry) usize {
-    // TODO: should this include the lookup table accounts themselves???
-    var total_accounts: usize = 0;
-    for (entries) |e| for (e.transactions.items) |transaction| {
-        total_accounts += transaction.msg.account_keys;
-        for (transaction.msg.address_lookups) |lookup| {
-            total_accounts += lookup.writable_indexes;
-            total_accounts += lookup.readonly_indexes;
-        }
-    };
-    return total_accounts;
-}
-
 /// Count the number of ticks in all the entries
 pub fn tickCount(entries: []const Entry) u64 {
     var tick_count: u64 = 0;

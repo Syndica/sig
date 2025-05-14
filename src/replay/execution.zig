@@ -16,9 +16,12 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 const ProgressMap = sig.consensus.ProgressMap;
 
 const ConfirmSlotError = replay.confirm_slot.ConfirmSlotError;
+const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
-const VerifyTicksConfig = replay.confirm_slot.VerifyTicksConfig;
+const VerifyTicksConfig = replay.confirm_slot.VerifyTicksParams;
+
+const confirmSlot = replay.confirm_slot.confirmSlot;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay-execution");
 
@@ -87,10 +90,7 @@ const ReplayResult = union(enum) {
 };
 
 /// replay_active_bank
-fn replaySlot(
-    state: *ReplayExecutionState,
-    bank_slot: Slot,
-) !ReplayResult {
+fn replaySlot(state: *ReplayExecutionState, bank_slot: Slot) !ConfirmSlotFuture {
     const fork_progress = try state.progress_map.map.getOrPut(state.allocator, bank_slot);
     if (fork_progress.found_existing and fork_progress.value_ptr.is_dead) {
         return .dead;
@@ -98,11 +98,6 @@ fn replaySlot(
 
     const slot_info = state.slot_tracker.slots.get(bank_slot) orelse return error.MissingSlot;
     const epoch_info = state.epochs.getForSlot(bank_slot) orelse return error.MissingEpoch;
-    const verify_ticks_config = VerifyTicksConfig{
-        .tick_height = slot_info.state.tickHeight(),
-        .max_tick_height = slot_info.constants.max_tick_height,
-        .hashes_per_tick = epoch_info.hashes_per_tick,
-    };
 
     const slot = bank_slot;
     const start_shred = 0; // TODO: progress.num_shreds;
@@ -111,11 +106,28 @@ fn replaySlot(
         try state.blockstore_reader.getSlotEntriesWithShredInfo(bank_slot, start_shred, false);
     _ = num_shreds; // autofix
 
-    return try state.entry_confirmer.start(
-        &fork_progress.value_ptr.replay_progress.arc_ed.rwlock_ed,
+    const verify_ticks_config = VerifyTicksConfig{
+        .tick_height = slot_info.state.tickHeight(),
+        .max_tick_height = slot_info.constants.max_tick_height,
+        .hashes_per_tick = epoch_info.hashes_per_tick,
+        .slot = slot,
+        .slot_is_full = slot_is_full,
+    };
+    _ = verify_ticks_config; // autofix
+
+    const replay_progress = &fork_progress.value_ptr.replay_progress.arc_ed.rwlock_ed;
+
+    return try confirmSlot(
+        state.allocator,
+        state.logger,
         entries.items,
-        verify_ticks_config,
-        slot,
-        slot_is_full,
+        replay_progress.last_entry,
+        .{
+            .tick_height = slot_info.state.tickHeight(),
+            .max_tick_height = slot_info.constants.max_tick_height,
+            .hashes_per_tick = epoch_info.hashes_per_tick,
+            .slot = slot,
+            .slot_is_full = slot_is_full,
+        },
     );
 }

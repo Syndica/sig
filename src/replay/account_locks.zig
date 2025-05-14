@@ -5,6 +5,8 @@ const Allocator = std.mem.Allocator;
 
 const Pubkey = sig.core.Pubkey;
 
+pub const LockableAccount = struct { address: Pubkey, writable: bool };
+
 pub const AccountLocks = struct {
     write_locks: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .{},
     readonly_locks: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .{},
@@ -27,26 +29,25 @@ pub const AccountLocks = struct {
     pub fn lockStrict(
         self: *AccountLocks,
         allocator: Allocator,
-        /// []const struct { pubkey: Pubkey, writable: bool }
-        accounts: anytype,
+        accounts: []const LockableAccount,
     ) LockError!void {
         for (accounts, 0..) |account, i| {
             errdefer std.debug.assert(0 == self.unlock(accounts[0..i]));
             if (account.writable) {
-                if (self.readonly_locks.contains(account.pubkey)) {
+                if (self.readonly_locks.contains(account.address)) {
                     return error.LockFailed;
                 }
-                const entry = try self.write_locks.getOrPut(allocator, account.pubkey);
+                const entry = try self.write_locks.getOrPut(allocator, account.address);
                 if (entry.found_existing) {
                     return error.LockFailed;
                 } else {
                     entry.value_ptr.* = 1;
                 }
             } else {
-                if (self.write_locks.contains(account.pubkey)) {
+                if (self.write_locks.contains(account.address)) {
                     return error.LockFailed;
                 }
-                const entry = try self.readonly_locks.getOrPut(allocator, account.pubkey);
+                const entry = try self.readonly_locks.getOrPut(allocator, account.address);
                 if (entry.found_existing) {
                     entry.value_ptr.* += 1;
                 } else {
@@ -66,24 +67,23 @@ pub const AccountLocks = struct {
     pub fn lockPermissive(
         self: *AccountLocks,
         allocator: Allocator,
-        /// []const struct { pubkey: Pubkey, writable: bool }
-        accounts: anytype,
+        accounts: []const LockableAccount,
     ) LockError!void {
         for (accounts) |account| {
             if (account.writable) {
-                if (self.readonly_locks.contains(account.pubkey) or
-                    self.write_locks.contains(account.pubkey))
+                if (self.readonly_locks.contains(account.address) or
+                    self.write_locks.contains(account.address))
                 {
                     return error.LockFailed;
                 }
-            } else if (self.write_locks.contains(account.pubkey)) {
+            } else if (self.write_locks.contains(account.address)) {
                 return error.LockFailed;
             }
         }
         for (accounts, 0..) |account, i| {
             errdefer std.debug.assert(0 == self.unlock(accounts[0..i]));
             const locks = if (account.writable) &self.write_locks else &self.readonly_locks;
-            const entry = try locks.getOrPut(allocator, account.pubkey);
+            const entry = try locks.getOrPut(allocator, account.address);
             if (entry.found_existing) {
                 entry.value_ptr.* += 1;
             } else {

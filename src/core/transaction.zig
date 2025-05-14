@@ -151,6 +151,20 @@ pub const Transaction = struct {
 
         return TransactionMessage.hash(serialized_message.slice());
     }
+
+    /// Count the number of accounts in the entries, including accounts from lookup tables
+    pub fn numAccounts(transactions: []const Transaction) usize {
+        // TODO: should this include the lookup table accounts themselves???
+        var total_accounts: usize = 0;
+        for (transactions) |transaction| {
+            total_accounts += transaction.msg.account_keys;
+            for (transaction.msg.address_lookups) |lookup| {
+                total_accounts += lookup.writable_indexes;
+                total_accounts += lookup.readonly_indexes;
+            }
+        }
+        return total_accounts;
+    }
 };
 
 pub const TransactionVersion = enum(u8) {

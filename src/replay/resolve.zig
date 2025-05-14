@@ -6,6 +6,7 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
+const Entry = core.Entry;
 const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
 const TransactionAddressLookup = core.transaction.TransactionAddressLookup;
@@ -17,12 +18,25 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const AccountMeta = sig.runtime.InstructionInfo.AccountMeta;
 const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
 
+const LockableAccount = sig.replay.account_locks.LockableAccount;
+
 const ScopedLogger = sig.trace.ScopedLogger("replay-resolve");
+
+pub const ResolvedBatch = struct {
+    transactions: []const ResolvedTransaction,
+    accounts_to_lock: []const LockableAccount,
+
+    pub fn deinit(self: ResolvedBatch, allocator: Allocator) void {
+        for (self.transactions) |tx| tx.deinit(allocator);
+        allocator.free(self.transactions);
+        allocator.free(self.accounts_to_lock);
+    }
+};
 
 /// This is a transaction plus the following additions:
 /// - The lookup table addresses have been resolved from accountsdb.
 /// - The instructions have been expanded out to a more useful form for the SVM.
-const ResolvedTransaction = struct {
+pub const ResolvedTransaction = struct {
     transaction: Transaction,
     // writable_lookups: []const Pubkey,
     // readonly_lookups: []const Pubkey,
@@ -34,88 +48,6 @@ const ResolvedTransaction = struct {
         writable: bool,
     };
 
-    /// Returned data is partially borrowed and partially owned.
-    /// - Ensure `transaction` exceeds the lifetime of this struct.
-    /// - Use `deinit` to free this struct
-    fn init(
-        allocator: Allocator,
-        accounts_db: *AccountsDB,
-        transaction: Transaction,
-        batch_accounts: *std.ArrayListUnmanaged(struct { Pubkey, bool }),
-    ) !ResolvedTransaction {
-        _ = batch_accounts; // autofix // TODO: maybe just split out the lookup table stuff
-        const message = transaction.msg;
-        const instructions = allocator.alloc(InstructionInfo, message.instructions.len);
-        const lookups = try resolveLookupTableAccounts(allocator, accounts_db, message);
-        defer {
-            allocator.free(lookups.writable);
-            allocator.free(lookups.readonly);
-        }
-        const normal_bound = message.account_keys.len;
-        const writable_bound = lookups.writable.len + normal_bound;
-        const readonly_bound = lookups.readonly.len + writable_bound;
-        for (message.instructions, instructions) |input_ix, *output_ix| {
-            const account_metas = try allocator.alloc(AccountMeta, input_ix.account_indexes);
-            const seen = std.bit_set.ArrayBitSet(256).initEmpty();
-            for (input_ix.account_indexes, account_metas, 0..) |index, *account_meta, i| {
-                // find first usage of this account in this instruction
-                const index_in_callee = if (seen.isSet(index))
-                    for (input_ix.account_indexes[0..i], 0..) |prior_index, j| {
-                        if (prior_index == index) break j;
-                    } else unreachable
-                else
-                    i;
-                seen.set(index);
-
-                // expand the account metadata
-                account_meta.* = if (index <= normal_bound) AccountMeta{
-                    .pubkey = message.account_keys[index],
-                    .index_in_transaction = index,
-                    .index_in_caller = index,
-                    .index_in_callee = index_in_callee,
-                    .is_signer = index < message.signature_count,
-                    .is_writable = index < message.signature_count and
-                        index > message.readonly_signed_count or
-                        index >= message.signature_count + message.readonly_unsigned_count,
-                } else if (index <= writable_bound) AccountMeta{
-                    .pubkey = lookups.writable[index - normal_bound],
-                    .index_in_transaction = index,
-                    .index_in_caller = index,
-                    .index_in_callee = index_in_callee,
-                    .is_signer = false,
-                    .is_writable = true,
-                } else if (index <= readonly_bound) AccountMeta{
-                    .pubkey = lookups.readonly[index - writable_bound],
-                    .index_in_transaction = index,
-                    .index_in_caller = index,
-                    .index_in_callee = index_in_callee,
-                    .is_signer = false,
-                    .is_writable = false,
-                } else {
-                    return error.InvalidAccountIndex;
-                };
-            }
-
-            if (input_ix.program_index >= message.account_keys.len) {
-                return error.InvalidAccountIndex;
-            }
-            output_ix.* = .{
-                .program_meta = ProgramMeta{
-                    .pubkey = message.account_keys[input_ix.program_index],
-                    .index_in_transaction = input_ix.program_index,
-                },
-                .account_metas = account_metas,
-                .instruction_data = input_ix.data,
-            };
-        }
-        return .{
-            .transaction = transaction,
-            .instructions = instructions,
-            .writable_lookups = lookups.writable,
-            .readonly_lookups = lookups.readonly,
-        };
-    }
-
     pub fn deinit(self: ResolvedTransaction, allocator: Allocator) void {
         allocator.free(self.instructions);
         allocator.free(self.accounts);
@@ -124,6 +56,111 @@ const ResolvedTransaction = struct {
         // transaction and instruction_data are not freed because they are borrowed.
     }
 };
+
+pub fn resolveBatch(
+    allocator: Allocator,
+    accounts_db: *AccountsDB,
+    batch: []const Transaction,
+) void {
+    var accounts_to_lock = try std.ArrayListUnmanaged(struct { Pubkey, bool })
+        .initCapacity(allocator, Transaction.numAccounts(batch));
+    errdefer accounts_to_lock.deinit(allocator);
+
+    const resolved_txns = try allocator.alloc(ResolvedTransaction, batch.len);
+    errdefer allocator.free(resolved_txns);
+
+    for (batch.items, resolved_txns) |transaction, *resolved| {
+        resolved.* = try ResolvedTransaction
+            .init(allocator, accounts_db, transaction, &accounts_to_lock);
+    }
+
+    return .{
+        .transactions = resolved_txns,
+        .accounts_to_lock = accounts_to_lock.toOwnedSlice(allocator),
+    };
+}
+
+/// Returned data is partially borrowed and partially owned.
+/// - Ensure `transaction` exceeds the lifetime of this struct.
+/// - Use `deinit` to free this struct
+fn resolveTransaction(
+    allocator: Allocator,
+    accounts_db: *AccountsDB,
+    transaction: Transaction,
+    batch_accounts: *std.ArrayListUnmanaged(struct { Pubkey, bool }),
+) !ResolvedTransaction {
+    _ = batch_accounts; // autofix // TODO: maybe just split out the lookup table stuff
+    const message = transaction.msg;
+    const instructions = allocator.alloc(InstructionInfo, message.instructions.len);
+    const lookups = try resolveLookupTableAccounts(allocator, accounts_db, message);
+    defer {
+        allocator.free(lookups.writable);
+        allocator.free(lookups.readonly);
+    }
+    const normal_bound = message.account_keys.len;
+    const writable_bound = lookups.writable.len + normal_bound;
+    const readonly_bound = lookups.readonly.len + writable_bound;
+    for (message.instructions, instructions) |input_ix, *output_ix| {
+        const account_metas = try allocator.alloc(AccountMeta, input_ix.account_indexes);
+        const seen = std.bit_set.ArrayBitSet(256).initEmpty();
+        for (input_ix.account_indexes, account_metas, 0..) |index, *account_meta, i| {
+            // find first usage of this account in this instruction
+            const index_in_callee = if (seen.isSet(index))
+                for (input_ix.account_indexes[0..i], 0..) |prior_index, j| {
+                    if (prior_index == index) break j;
+                } else unreachable
+            else
+                i;
+            seen.set(index);
+
+            // expand the account metadata
+            account_meta.* = if (index <= normal_bound) AccountMeta{
+                .pubkey = message.account_keys[index],
+                .index_in_transaction = index,
+                .index_in_caller = index,
+                .index_in_callee = index_in_callee,
+                .is_signer = index < message.signature_count,
+                .is_writable = index < message.signature_count and
+                    index > message.readonly_signed_count or
+                    index >= message.signature_count + message.readonly_unsigned_count,
+            } else if (index <= writable_bound) AccountMeta{
+                .pubkey = lookups.writable[index - normal_bound],
+                .index_in_transaction = index,
+                .index_in_caller = index,
+                .index_in_callee = index_in_callee,
+                .is_signer = false,
+                .is_writable = true,
+            } else if (index <= readonly_bound) AccountMeta{
+                .pubkey = lookups.readonly[index - writable_bound],
+                .index_in_transaction = index,
+                .index_in_caller = index,
+                .index_in_callee = index_in_callee,
+                .is_signer = false,
+                .is_writable = false,
+            } else {
+                return error.InvalidAccountIndex;
+            };
+        }
+
+        if (input_ix.program_index >= message.account_keys.len) {
+            return error.InvalidAccountIndex;
+        }
+        output_ix.* = .{
+            .program_meta = ProgramMeta{
+                .pubkey = message.account_keys[input_ix.program_index],
+                .index_in_transaction = input_ix.program_index,
+            },
+            .account_metas = account_metas,
+            .instruction_data = input_ix.data,
+        };
+    }
+    return .{
+        .transaction = transaction,
+        .instructions = instructions,
+        .writable_lookups = lookups.writable,
+        .readonly_lookups = lookups.readonly,
+    };
+}
 
 fn resolveLookupTableAccounts(
     allocator: Allocator,

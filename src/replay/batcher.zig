@@ -14,8 +14,9 @@ const Pubkey = core.Pubkey;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountLocks = replay.account_locks.AccountLocks;
-const ResolvedTransaction = replay.resolve.ResolvedTransaction;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
+const ResolvedTransaction = replay.resolve.ResolvedTransaction;
+const ResolvedBatch = replay.resolve.ResolvedBatch;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay-batcher");
 
@@ -34,7 +35,7 @@ const assert = std.debug.assert;
 ///
 /// This should only be used in a single thread.
 pub const ReplayBatcher = struct {
-    batches: ResizeableRingBuffer(ReplayBatch),
+    batches: ResizeableRingBuffer(ResolvedBatch),
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
     results: Channel(?TransactionError),
     locks: AccountLocks,
@@ -51,7 +52,7 @@ pub const ReplayBatcher = struct {
         thread_pool: *ThreadPool,
     ) ReplayBatcher {
         return .{
-            .batches = ResizeableRingBuffer(ReplayBatch).initCapacity(allocator, batch_capacity),
+            .batches = ResizeableRingBuffer(ResolvedBatch).initCapacity(allocator, batch_capacity),
             .thread_pool = try HomogeneousThreadPool(ProcessBatchTask)
                 .initBorrowed(allocator, thread_pool, null),
             .results = try Channel(?TransactionError).init(allocator),
@@ -67,11 +68,11 @@ pub const ReplayBatcher = struct {
         unreachable; // TODO
     }
 
-    pub fn addBatch(self: *ReplayBatcher, batch: ReplayBatch) Allocator.Error!void {
+    pub fn addBatch(self: *ReplayBatcher, batch: ResolvedBatch) Allocator.Error!void {
         try self.batches.put(batch);
     }
 
-    pub fn addBatchAssumeCapacity(self: *ReplayBatcher, batch: ReplayBatch) !void {
+    pub fn addBatchAssumeCapacity(self: *ReplayBatcher, batch: ResolvedBatch) !void {
         self.batches.putAssumeCapacity(batch);
     }
 
@@ -116,11 +117,6 @@ pub const ReplayBatcher = struct {
             self.batches_scheduled += 1;
         }
     }
-};
-
-const ReplayBatch = struct {
-    accounts_to_lock: []const struct { Pubkey, bool },
-    transactions: []const ResolvedTransaction,
 };
 
 const ProcessBatchTask = struct {
