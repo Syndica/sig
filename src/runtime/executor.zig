@@ -335,15 +335,22 @@ pub fn prepareCpiInstructionInfo(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L426-L457
-    const program_index_in_transaction = tc.getAccountIndex(callee.program_id) orelse {
-        try tc.log("Unknown program {}", .{callee.program_id});
-        return InstructionError.MissingAccount;
-    };
-
-    if (!tc.ec.feature_set.active.contains(
+    const program_index_in_transaction = if (tc.feature_set.active.contains(
         features.LIFT_CPI_CALLER_RESTRICTION,
-    )) {
-        const borrowed_account = try caller.borrowProgramAccount();
+    )) blk: {
+        break :blk tc.getAccountIndex(callee.program_id) orelse {
+            try tc.log("Unknown program {}", .{callee.program_id});
+            return InstructionError.MissingAccount;
+        };
+    } else blk: {
+        const index_in_caller = caller.ixn_info.getAccountMetaIndex(callee.program_id) orelse {
+            try tc.log("Unknown program {}", .{callee.program_id});
+            return InstructionError.MissingAccount;
+        };
+        const program_meta = caller.ixn_info.account_metas.buffer[index_in_caller];
+
+        const borrowed_account =
+            try caller.borrowInstructionAccount(index_in_caller);
         defer borrowed_account.release();
 
         if (!tc.feature_set.active.contains(
@@ -354,7 +361,9 @@ pub fn prepareCpiInstructionInfo(
             try tc.log("Account {} is not executable", .{callee.program_id});
             return InstructionError.AccountNotExecutable;
         }
-    }
+
+        break :blk program_meta.index_in_transaction;
+    };
 
     return .{
         .program_meta = .{
