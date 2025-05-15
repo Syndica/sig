@@ -185,11 +185,10 @@ pub const BatchAccountCache = struct {
                         break :blk acc;
                     } else {
                         // account not found, create a new one at this address
-                        var acc = AccountSharedData.EMPTY;
-                        acc.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
-                        map.putAssumeCapacityNoClobber(account_key, acc);
+                        const account = AccountSharedData.NEW;
+                        map.putAssumeCapacityNoClobber(account_key, account);
                         created_new_account = true;
-                        break :blk acc;
+                        break :blk account;
                     }
                 };
 
@@ -226,15 +225,19 @@ pub const BatchAccountCache = struct {
                     continue; // already loaded + counted program account's owner
 
                 const owner_account = if (map.get(program_owner_key.*)) |owner| owner else blk: {
-                    const owner = try accounts_db.getAccountSharedData(
+                    const owner_account = try accounts_db.getAccountSharedData(
                         allocator,
                         program_owner_key,
-                    ) orelse
+                    ) orelse {
+                        // default account ~= account missing
+                        // every account which a load is attempted on should have an entry
+                        map.putAssumeCapacityNoClobber(program_owner_key.*, AccountSharedData.NEW);
                         continue :next_tx; // tx will fail - can't get account
+                    };
 
-                    map.putAssumeCapacityNoClobber(program_owner_key.*, owner);
+                    map.putAssumeCapacityNoClobber(program_owner_key.*, owner_account);
 
-                    break :blk owner;
+                    break :blk owner_account;
                 };
 
                 accumulateAndCheckLoadedAccountDataSize(
@@ -474,7 +477,6 @@ pub const BatchAccountCache = struct {
         if (account.lamports == 0) {
             // a previous instr deallocated this account
             allocator.free(account.data);
-            account.* = undefined; // fail loudly if we try to use it
             return null;
         }
 
@@ -1091,4 +1093,193 @@ test "dont double count program owner account data size" {
         data1.len + data2.len + data_owner.len, // owner counted once, not twice
         loaded_accounts.loaded_accounts_data_size,
     );
+}
+
+test "load, create new account" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(5083);
+    const random = prng.random();
+    const new_account_pk = Pubkey.initRandom(random);
+    var accountsdb = MockedAccountsDb{ .allocator = allocator };
+    defer accountsdb.deinit();
+    const env = newTestingEnv();
+
+    var tx = try emptyTxWithKeys(allocator, &.{new_account_pk});
+    defer tx.accounts.deinit(allocator);
+
+    var account_cache = try BatchAccountCache.initFromAccountsDb(
+        .Mocked,
+        allocator,
+        accountsdb,
+        &.{tx},
+    );
+    defer account_cache.deinit(allocator);
+
+    const loaded_accounts = try account_cache.loadTransactionAccountsInner(
+        allocator,
+        &tx,
+        &env.rent_collector,
+        &env.feature_set,
+        &env.compute_budget_limits,
+    );
+
+    try std.testing.expectEqual(1, loaded_accounts.accounts.len);
+    try std.testing.expectEqual(0, loaded_accounts.rent_collected);
+    try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.lamports);
+}
+
+test "invalid program owner owner" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(5083);
+    const random = prng.random();
+    var accountsdb = MockedAccountsDb{ .allocator = allocator };
+    defer accountsdb.deinit();
+    const env = newTestingEnv();
+
+    const instruction_address = Pubkey.initRandom(random);
+    const instruction_owner = Pubkey.initRandom(random);
+    const invalid_owner_owner = Pubkey.initRandom(random);
+
+    try accountsdb.accounts.put(allocator, instruction_address, .{
+        .data = .{ .empty = .{ .len = 0 } },
+        .lamports = 1,
+        .executable = true,
+        .owner = instruction_owner,
+        .rent_epoch = 0,
+    });
+    try accountsdb.accounts.put(allocator, instruction_owner, .{
+        .data = .{ .empty = .{ .len = 0 } },
+        .lamports = 1,
+        .executable = true,
+        .owner = invalid_owner_owner,
+        .rent_epoch = 0,
+    });
+
+    var tx = try emptyTxWithKeys(allocator, &.{instruction_address});
+    defer tx.accounts.deinit(allocator);
+    tx.instruction_infos = &.{
+        .{
+            .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
+            .account_metas = .{},
+            .instruction_data = "",
+            .initial_account_lamports = 0,
+        },
+    };
+
+    var account_cache = try BatchAccountCache.initFromAccountsDb(
+        .Mocked,
+        allocator,
+        accountsdb,
+        &.{tx},
+    );
+    defer account_cache.deinit(allocator);
+
+    const loaded_accounts_result = account_cache.loadTransactionAccountsInner(
+        allocator,
+        &tx,
+        &env.rent_collector,
+        &env.feature_set,
+        &env.compute_budget_limits,
+    );
+
+    try std.testing.expectError(error.InvalidProgramForExecution, loaded_accounts_result);
+}
+
+test "missing program owner account" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(5083);
+    const random = prng.random();
+    var accountsdb = MockedAccountsDb{ .allocator = allocator };
+    defer accountsdb.deinit();
+    const env = newTestingEnv();
+
+    const instruction_address = Pubkey.initRandom(random);
+    const instruction_owner = Pubkey.initRandom(random);
+
+    try accountsdb.accounts.put(allocator, instruction_address, .{
+        .data = .{ .empty = .{ .len = 0 } },
+        .lamports = 1,
+        .executable = true,
+        .owner = instruction_owner,
+        .rent_epoch = 0,
+    });
+
+    var tx = try emptyTxWithKeys(allocator, &.{instruction_address});
+    defer tx.accounts.deinit(allocator);
+    tx.instruction_infos = &.{
+        .{
+            .program_meta = .{ .pubkey = instruction_address, .index_in_transaction = 0 },
+            .account_metas = .{},
+            .instruction_data = "",
+            .initial_account_lamports = 0,
+        },
+    };
+
+    var account_cache = try BatchAccountCache.initFromAccountsDb(
+        .Mocked,
+        allocator,
+        accountsdb,
+        &.{tx},
+    );
+    defer account_cache.deinit(allocator);
+
+    const loaded_accounts_result = account_cache.loadTransactionAccountsInner(
+        allocator,
+        &tx,
+        &env.rent_collector,
+        &env.feature_set,
+        &env.compute_budget_limits,
+    );
+
+    try std.testing.expectError(error.InvalidProgramForExecution, loaded_accounts_result);
+}
+
+test "deallocate account" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(5083);
+    const random = prng.random();
+    var accountsdb = MockedAccountsDb{ .allocator = allocator };
+    defer accountsdb.deinit();
+    const env = newTestingEnv();
+
+    const dying_account = Pubkey.initRandom(random);
+
+    try accountsdb.accounts.put(allocator, dying_account, .{
+        .data = .{ .unowned_allocation = "this account will soon die, and so will this string" },
+        .lamports = 100,
+        .executable = false,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    });
+
+    var tx = try emptyTxWithKeys(allocator, &.{dying_account});
+    defer tx.accounts.deinit(allocator);
+
+    // load with the account being alive
+    var account_cache = try BatchAccountCache.initFromAccountsDb(
+        .Mocked,
+        allocator,
+        accountsdb,
+        &.{tx},
+    );
+    defer account_cache.deinit(allocator);
+
+    try std.testing.expect(account_cache.account_cache.get(dying_account).?.data.len > 0);
+
+    // "previous transaction" makes the account dead
+    account_cache.account_cache.getPtr(dying_account).?.lamports = 0;
+
+    // load with the account being dead
+    const loaded_accounts = try account_cache.loadTransactionAccountsInner(
+        allocator,
+        &tx,
+        &env.rent_collector,
+        &env.feature_set,
+        &env.compute_budget_limits,
+    );
+
+    // newly created account is returned instead
+    try std.testing.expectEqual(1, loaded_accounts.accounts.len);
+    try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.data.len);
+    try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.lamports);
 }
