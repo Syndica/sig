@@ -125,7 +125,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     const slot_info = state.slot_tracker.slots.get(slot) orelse return error.MissingSlot;
     const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
-    const i_am_leader = slot_info.constants.collector_id.equals(state.my_identity);
+    const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
 
     if (!progress_get_or_put.found_existing) {
         const parent_slot = slot_info.constants.parent_slot;

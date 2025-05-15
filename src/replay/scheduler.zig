@@ -124,7 +124,7 @@ const ProcessBatchTask = struct {
     results: Channel(?TransactionError),
     exit: *std.atomic.Value(bool),
 
-    fn run(self: *ProcessBatchTask) !void {
+    pub fn run(self: *ProcessBatchTask) !void {
         const result = processBatch(self.transactions, self.exit);
         if (result != null) self.exit.store(true, .monotonic);
         try self.results.send(result);

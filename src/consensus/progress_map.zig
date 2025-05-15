@@ -292,7 +292,7 @@ pub const ForkProgress = struct {
             slot: Slot,
             parent_slot: Slot,
             parent: *const ForkProgress,
-            validator_vote_pubkey: *const Pubkey,
+            validator_vote_pubkey: Pubkey,
 
             // information about the slot and epoch
             slot_hash: ?Hash,
@@ -302,26 +302,33 @@ pub const ForkProgress = struct {
         },
     ) !ForkProgress {
         const parent = params.parent;
-        const i_am_collector = params.collector_id.equals(params.validator_identity);
 
         const new_progress = try ForkProgress.init(allocator, .{
             .now = sig.time.Instant.now(),
+
             .last_entry = blk: {
-                const q = params.blockhash_queue.read();
+                var q = params.blockhash_queue.read();
                 defer q.unlock();
                 break :blk q.get().last_hash orelse return error.MissingLastHash;
             },
+
             .prev_leader_slot = if (parent.propagated_stats.is_leader_slot)
                 params.parent_slot
             else
                 parent.propagated_stats.prev_leader_slot,
-            .validator_stake_info = if (i_am_collector) .{
+
+            .validator_stake_info = if (params.i_am_leader) .{
                 .validator_vote_pubkey = params.validator_vote_pubkey,
-                .stake = params.epoch_stakes.stakes.vote_accounts.accounts
-                    .get(params.validator_vote_pubkey) orelse 0,
+                .stake = blk: {
+                    const stake, _ = params.epoch_stakes.stakes.vote_accounts.accounts
+                        .get(params.validator_vote_pubkey) orelse break :blk 0;
+                    break :blk stake;
+                },
                 .total_epoch_stake = params.epoch_stakes.total_stake,
             } else null,
+
             .num_blocks_on_fork = parent.num_blocks_on_fork + 1,
+
             .num_dropped_blocks_on_fork = parent.num_dropped_blocks_on_fork +
                 params.slot - params.parent_slot - 1,
         });

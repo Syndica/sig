@@ -98,7 +98,7 @@ pub const AccountLocks = struct {
     /// Returns the number of items that were already unlocked and thus did not
     /// need to be unlocked. You can use this in a calling scope to assert that
     /// this struct is not being misused.
-    pub fn unlock(self: *AccountLocks, accounts: anytype) u64 {
+    pub fn unlock(self: *AccountLocks, accounts: []const LockableAccount) u64 {
         var already_unlocked: u64 = 0;
         for (accounts) |account| {
             const locks = if (account.writable) &self.write_locks else &self.readonly_locks;
@@ -164,48 +164,48 @@ test "locking/unlocking basically works" {
 
     inline for (.{ AccountLocks.lockStrict, AccountLocks.lockPermissive }) |lockFn| {
         try lockFn(&locks, allocator, &.{
-            .{ test_keys[0], true },
-            .{ test_keys[1], false },
-            .{ test_keys[1], false },
+            .{ .address = test_keys[0], .writable = true },
+            .{ .address = test_keys[1], .writable = false },
+            .{ .address = test_keys[1], .writable = false },
         });
         try lockFn(&locks, allocator, &.{
-            .{ test_keys[1], false },
+            .{ .address = test_keys[1], .writable = false },
         });
 
         try expectError(error.LockFailed, lockFn(&locks, allocator, &.{
-            .{ test_keys[0], false },
+            .{ .address = test_keys[0], .writable = false },
         }));
         try expectError(error.LockFailed, lockFn(&locks, allocator, &.{
-            .{ test_keys[0], true },
+            .{ .address = test_keys[0], .writable = true },
         }));
         try expectError(error.LockFailed, lockFn(&locks, allocator, &.{
-            .{ test_keys[2], false },
-            .{ test_keys[3], true },
-            .{ test_keys[1], true },
+            .{ .address = test_keys[2], .writable = false },
+            .{ .address = test_keys[3], .writable = true },
+            .{ .address = test_keys[1], .writable = true },
         }));
 
         try expectEqual(0, locks.unlock(&.{
-            .{ test_keys[0], true },
-            .{ test_keys[1], false },
-            .{ test_keys[1], false },
-            .{ test_keys[1], false },
+            .{ .address = test_keys[0], .writable = true },
+            .{ .address = test_keys[1], .writable = false },
+            .{ .address = test_keys[1], .writable = false },
+            .{ .address = test_keys[1], .writable = false },
         }));
 
         try lockFn(&locks, allocator, &.{
-            .{ test_keys[0], true },
+            .{ .address = test_keys[0], .writable = true },
         });
 
         try expectEqual(0, locks.unlock(&.{
-            .{ test_keys[0], true },
+            .{ .address = test_keys[0], .writable = true },
         }));
 
         try expectEqual(6, locks.unlock(&.{
-            .{ test_keys[0], true },
-            .{ test_keys[1], false },
-            .{ test_keys[1], false },
-            .{ test_keys[1], false },
-            .{ test_keys[2], false },
-            .{ test_keys[3], true },
+            .{ .address = test_keys[0], .writable = true },
+            .{ .address = test_keys[1], .writable = false },
+            .{ .address = test_keys[1], .writable = false },
+            .{ .address = test_keys[1], .writable = false },
+            .{ .address = test_keys[2], .writable = false },
+            .{ .address = test_keys[3], .writable = true },
         }));
     }
 }
@@ -216,12 +216,12 @@ test "lockStrict is strict" {
     defer locks.deinit(allocator);
 
     try expectError(error.LockFailed, locks.lockStrict(allocator, &.{
-        .{ test_keys[0], true },
-        .{ test_keys[0], true },
+        .{ .address = test_keys[0], .writable = true },
+        .{ .address = test_keys[0], .writable = true },
     }));
     try expectError(error.LockFailed, locks.lockStrict(allocator, &.{
-        .{ test_keys[0], true },
-        .{ test_keys[0], false },
+        .{ .address = test_keys[0], .writable = true },
+        .{ .address = test_keys[0], .writable = false },
     }));
 
     try expectEqual(0, locks.write_locks.count());
@@ -234,18 +234,18 @@ test "lockPermissive is permissive" {
     defer locks.deinit(allocator);
 
     try locks.lockPermissive(allocator, &.{
-        .{ test_keys[0], true },
-        .{ test_keys[0], true },
+        .{ .address = test_keys[0], .writable = true },
+        .{ .address = test_keys[0], .writable = true },
     });
     try locks.lockPermissive(allocator, &.{
-        .{ test_keys[1], true },
-        .{ test_keys[1], false },
+        .{ .address = test_keys[1], .writable = true },
+        .{ .address = test_keys[1], .writable = false },
     });
 
     try expectEqual(0, locks.unlock(&.{
-        .{ test_keys[0], true },
-        .{ test_keys[0], true },
-        .{ test_keys[1], true },
-        .{ test_keys[1], false },
+        .{ .address = test_keys[0], .writable = true },
+        .{ .address = test_keys[0], .writable = true },
+        .{ .address = test_keys[1], .writable = true },
+        .{ .address = test_keys[1], .writable = false },
     }));
 }
