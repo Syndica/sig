@@ -160,6 +160,20 @@ pub fn encrypt(comptime T: type, value: T, pubkey: *const Pubkey) Ciphertext {
     };
 }
 
+pub fn encryptWithOpening(
+    comptime T: type,
+    value: T,
+    pubkey: *const Pubkey,
+    opening: *const pedersen.Opening,
+) Ciphertext {
+    const commitment = pedersen.fromValue(T, value, opening);
+    const handle = pedersen.DecryptHandle.init(pubkey, opening);
+    return .{
+        .commitment = commitment,
+        .handle = handle,
+    };
+}
+
 /// Represents the Discrete Log Problem needed to decrypt the twisted ElGamal ciphertext
 ///
 /// Recovers x ∈ ℤₚ such that x · G = P.
