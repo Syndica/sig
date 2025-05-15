@@ -3187,7 +3187,7 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
 
     epoch_stakes.total_stake = 1000;
     epoch_stakes.stakes.deinit(allocator); // TODO
-    epoch_stakes.stakes = try Stakes(Delegation).initRandom(allocator, random, 1);
+    epoch_stakes.stakes = try Stakes(.delegation).initRandom(allocator, random, 1);
 
     try epoch_stake_map.put(allocator, 0, epoch_stakes);
 
