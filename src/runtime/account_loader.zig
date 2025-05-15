@@ -19,6 +19,7 @@ const MAX_TX_ACCOUNT_LOCKS = 128;
 pub const AccountsDbKind = enum {
     AccountsDb,
     Mocked,
+
     pub fn T(self: AccountsDbKind) type {
         return switch (self) {
             .AccountsDb => *sig.accounts_db.AccountsDB,
@@ -30,6 +31,7 @@ pub const AccountsDbKind = enum {
 pub const MockedAccountsDb = struct {
     allocator: std.mem.Allocator,
     accounts: std.AutoArrayHashMapUnmanaged(Pubkey, sig.core.Account) = .{},
+
     fn deinit(self: *MockedAccountsDb) void {
         self.accounts.deinit(self.allocator);
     }
@@ -40,12 +42,14 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
     return struct {
         inner: kind.T(),
         const Self = @This();
+
         fn allocator(self: Self) std.mem.Allocator {
             return switch (kind) {
                 .AccountsDb => self.inner.accounts_db.allocator,
                 .Mocked => self.inner.allocator,
             };
         }
+
         fn getAccount(
             self: Self,
             pubkey: *const Pubkey,
@@ -55,6 +59,7 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
                 .Mocked => self.inner.accounts.get(pubkey.*) orelse return error.PubkeyNotInIndex,
             };
         }
+
         fn getAccountSharedData(
             self: Self,
             data_allocator: std.mem.Allocator,
@@ -120,8 +125,8 @@ pub const BatchAccountCache = struct {
 
     // holds SYSVAR_INSTRUCTIONS_ID accounts, purely so we can deallocate them later. Index of each
     // one isn't intended to be meaningful.
-    sysvar_instruction_account_datas: std.ArrayListUnmanaged(AccountSharedData) = .{},
     // NOTE: we could take this field out, and have the caller deinit it from inside LoadedTransactionAccounts
+    sysvar_instruction_account_datas: std.ArrayListUnmanaged(AccountSharedData) = .{},
 
     // NOTE: we might want to later add another field that keeps a copy of all writable accounts.
 
