@@ -527,21 +527,23 @@ fn accumulateAndCheckLoadedAccountDataSize(
 // [agave] https://github.com/anza-xyz/agave/blob/cb32984a9b0d5c2c6f7775bed39b66d3a22e3c46/svm/src/account_loader.rs#L639
 fn constructInstructionsAccount(
     allocator: std.mem.Allocator,
-    tx: *const runtime.transaction_execution.RuntimeTransaction,
+    transaction: *const RuntimeTransaction,
 ) error{OutOfMemory}!AccountSharedData {
     const Instruction = sig.core.Instruction;
     const InstructionAccount = sig.core.instruction.InstructionAccount;
 
     var decompiled_instructions = try std.ArrayList(Instruction).initCapacity(
         allocator,
-        tx.instruction_infos.len,
+        transaction.instruction_infos.len,
     );
     defer {
         for (decompiled_instructions.items) |decompiled| allocator.free(decompiled.accounts);
         decompiled_instructions.deinit();
     }
 
-    for (tx.instruction_infos) |instruction| {
+    const tx_accounts = transaction.accounts.slice();
+
+    for (transaction.instruction_infos) |instruction| {
         const accounts_meta = try allocator.alloc(
             InstructionAccount,
             instruction.account_metas.len,
@@ -550,16 +552,16 @@ fn constructInstructionsAccount(
 
         for (instruction.account_metas.slice(), accounts_meta) |account_meta, *new_account_meta| {
             new_account_meta.* = .{
-                .pubkey = tx.accounts.items(.pubkey)[account_meta.index_in_transaction],
-                .is_signer = tx.accounts.items(.is_signer)[account_meta.index_in_transaction],
-                .is_writable = tx.accounts.items(.is_writable)[account_meta.index_in_transaction],
+                .pubkey = tx_accounts.items(.pubkey)[account_meta.index_in_transaction],
+                .is_signer = tx_accounts.items(.is_signer)[account_meta.index_in_transaction],
+                .is_writable = tx_accounts.items(.is_writable)[account_meta.index_in_transaction],
             };
         }
 
         decompiled_instructions.appendAssumeCapacity(.{
             .accounts = accounts_meta,
             .data = instruction.instruction_data,
-            .program_id = tx.accounts.items(.pubkey)[instruction.program_meta.index_in_transaction],
+            .program_id = tx_accounts.items(.pubkey)[instruction.program_meta.index_in_transaction],
         });
     }
 
