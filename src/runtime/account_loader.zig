@@ -720,8 +720,8 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expectEqual(0, rent_debit.rent_collected);
 }
 
-// test "accumulated size" {
-//     const requested_data_size_limit = 123;
+test "accumulated size" {
+    const requested_data_size_limit = 123;
 
 //     var accumulated_size: u32 = 0;
 //     try accumulateAndCheckLoadedAccountDataSize(
