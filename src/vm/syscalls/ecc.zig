@@ -145,7 +145,7 @@ pub fn curveGroupOp(
     }
 }
 
-const weak_mul = struct {
+pub const weak_mul = struct {
     inline fn cMov(p: *Edwards25519, a: Edwards25519, c: u64) void {
         p.x.cMov(a.x, c);
         p.y.cMov(a.y, c);
@@ -162,7 +162,7 @@ const weak_mul = struct {
         return t;
     }
 
-    fn pcMul16(pc: *const [16]Edwards25519, s: [32]u8, comptime vartime: bool) !Edwards25519 {
+    fn pcMul16(pc: *const [16]Edwards25519, s: [32]u8, comptime vartime: bool) Edwards25519 {
         var q = Edwards25519.identityElement;
         var pos: usize = 252;
         while (true) : (pos -= 4) {
@@ -216,7 +216,8 @@ const weak_mul = struct {
         break :pc precompute(Edwards25519.basePoint, 15);
     };
 
-    fn mul(p: Edwards25519, s: [32]u8) !Edwards25519 {
+    /// NOTE: Does not perform checks for weak points!
+    pub fn mul(p: Edwards25519, s: [32]u8) Edwards25519 {
         const xpc = if (p.is_base) basePointPc else precompute(p, 15);
         // xpc[4].rejectIdentity() catch return error.WeakPublicKey;
         return pcMul16(&xpc, s, false);
@@ -224,7 +225,13 @@ const weak_mul = struct {
 
     /// Multiscalar multiplication *IN VARIABLE TIME* for public data
     /// Computes ps0*ss0 + ps1*ss1 + ps2*ss2... faster than doing many of these operations individually
-    fn mulMulti(comptime count: usize, ps: [count]Edwards25519, ss: [count][32]u8) !Edwards25519 {
+    ///
+    /// NOTE: Does not perform checks for weak points!
+    pub fn mulMulti(
+        comptime count: usize,
+        ps: [count]Edwards25519,
+        ss: [count][32]u8,
+    ) Edwards25519 {
         var pcs: [count][9]Edwards25519 = undefined;
 
         var bpc: [9]Edwards25519 = undefined;
@@ -282,7 +289,7 @@ fn groupOp(comptime T: type, group_op: GroupOp, left: [32]u8, right: [32]u8) !T 
             const input_point = try T.fromBytes(right);
             return switch (T) {
                 Edwards25519 => weak_mul.mul(input_point, left),
-                Ristretto255 => .{ .p = try weak_mul.mul(input_point.p, left) },
+                Ristretto255 => .{ .p = weak_mul.mul(input_point.p, left) },
                 else => unreachable,
             };
         },
@@ -388,7 +395,7 @@ fn multiScalarMultiply(comptime T: type, scalars: []const [32]u8, point_data: []
         switch (std.math.floorPowerOfTwo(u64, length)) {
             inline 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 => |N| {
                 const current = scalars.len - length;
-                const segment = try weak_mul.mulMulti(
+                const segment = weak_mul.mulMulti(
                     N,
                     points.constSlice()[current..][0..N].*,
                     scalars[current..][0..N].*,
