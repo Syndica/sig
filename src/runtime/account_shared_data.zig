@@ -30,6 +30,14 @@ pub const AccountSharedData = struct {
         .rent_epoch = 0,
     };
 
+    pub const NEW: AccountSharedData = .{
+        .lamports = 0,
+        .data = &.{},
+        .owner = Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+    };
+
     pub fn isZeroed(self: AccountSharedData) bool {
         return std.mem.allEqual(u8, self.data, 0);
     }
