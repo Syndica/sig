@@ -121,6 +121,17 @@ pub const pedersen = struct {
 
     pub const Commitment = struct {
         point: Ristretto255,
+
+        pub fn fromBase64(string: []const u8) !Commitment {
+            const base64 = std.base64.standard;
+            var buffer: [32]u8 = .{0} ** 32;
+            const decoded_length = try base64.Decoder.calcSizeForSlice(string);
+            try std.base64.standard.Decoder.decode(
+                buffer[0..decoded_length],
+                string,
+            );
+            return .{ .point = try Ristretto255.fromBytes(buffer) };
+        }
     };
 
     pub const DecryptHandle = struct {
