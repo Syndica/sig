@@ -720,8 +720,8 @@ test "loadTransactionAccounts sysvar instruction" {
     try std.testing.expectEqual(0, rent_debit.rent_collected);
 }
 
-// test "accumulated size" {
-//     const requested_data_size_limit = 123;
+test "accumulated size" {
+    const requested_data_size_limit = 123;
 
 //     var accumulated_size: u32 = 0;
 //     try accumulateAndCheckLoadedAccountDataSize(
@@ -851,9 +851,9 @@ test "load accounts rent paid" {
     try std.testing.expectEqual(expected_rent, loaded_accounts.rent_collected);
 }
 
-// test "constructInstructionsAccount" {
-//     const allocator = std.testing.allocator;
-//     var prng = std.rand.DefaultPrng.init(0);
+test "constructInstructionsAccount" {
+    const allocator = std.testing.allocator;
+    var prng = std.rand.DefaultPrng.init(0);
 
 //     var data: [1024]u8 = undefined;
 //     prng.fill(&data);
