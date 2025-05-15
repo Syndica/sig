@@ -168,6 +168,25 @@ pub const TransactionContext = struct {
     ) (error{OutOfMemory} || InstructionError)!void {
         if (self.log_collector) |*lc| try lc.log(self.allocator, fmt, args);
     }
+
+    pub fn takeLogCollector(
+        self: *TransactionContext,
+    ) ?LogCollector {
+        if (self.log_collector) |lc| {
+            self.log_collector = null;
+            return lc;
+        }
+        return null;
+    }
+
+    pub fn takeReturnData(
+        self: *TransactionContext,
+    ) ?TransactionReturnData {
+        if (self.return_data.data.len == 0) return null;
+        const data = self.return_data;
+        self.return_data.data.len = 0;
+        return data;
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L493
