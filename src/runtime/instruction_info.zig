@@ -11,7 +11,7 @@ const Transaction = sig.core.Transaction;
 /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/info/fd_instr_info.h#L14-L15
 pub const InstructionInfo = struct {
     program_meta: ProgramMeta,
-    account_metas: std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS),
+    account_metas: AccountMetas,
     instruction_data: []const u8,
     // Initial account lamports are computed and set immediately before
     // pushing an instruction onto the stack.
@@ -19,6 +19,8 @@ pub const InstructionInfo = struct {
 
     /// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/info/fd_instr_info.h#L12
     pub const MAX_ACCOUNT_METAS: usize = 256;
+
+    pub const AccountMetas = std.BoundedArray(AccountMeta, MAX_ACCOUNT_METAS);
 
     pub const ProgramMeta = struct {
         pubkey: Pubkey,
