@@ -49,16 +49,14 @@ pub const StatusCache = struct {};
 pub const EpochStakes = struct {};
 
 pub const RuntimeTransaction = struct {
+    pub const Accounts = std.MultiArrayList(sig.core.instruction.InstructionAccount);
+
     signature_count: u64,
     fee_payer: Pubkey,
     msg_hash: Hash,
     recent_blockhash: Hash,
     instruction_infos: []const InstructionInfo,
-    accounts: std.MultiArrayList(struct {
-        pubkey: Pubkey,
-        is_writable: bool,
-        is_signer: bool,
-    }) = .{},
+    accounts: Accounts = .{},
 };
 
 pub const TransactionExecutionEnvironment = struct {
@@ -111,7 +109,7 @@ pub const ExecutedTransaction = struct {
     log_collector: ?LogCollector,
     instruction_trace: ?InstructionTrace,
     return_data: ?TransactionReturnData,
-    copmute_meter: u64,
+    compute_meter: u64,
     accounts_data_len_delta: i64,
 
     pub fn deinit(self: ExecutedTransaction, allocator: std.mem.Allocator) void {
@@ -146,7 +144,7 @@ pub const ProcessedTransaction = union(enum(u8)) {
 pub fn loadAndExecuteTransactions(
     allocator: std.mem.Allocator,
     transactions: []const RuntimeTransaction,
-    batch_account_cache: *std.AutoArrayHashMap(Pubkey, AccountSharedData),
+    batch_account_cache: *BatchAccountCache,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
@@ -170,7 +168,7 @@ pub fn loadAndExecuteTransactions(
 pub fn loadAndExecuteTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *std.AutoArrayHashMap(Pubkey, AccountSharedData),
+    batch_account_cache: *BatchAccountCache,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
@@ -338,7 +336,7 @@ pub fn executeTransaction(
         .log_messages = tc.takeLogCollector(),
         .instructions = tc.instruction_trace,
         .return_data = tc.takeReturnData(),
-        .copmute_meter = tc.compute_meter,
+        .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
     };
 }
@@ -350,7 +348,7 @@ pub fn executeTransaction(
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
 pub fn checkAge(
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *std.AutoArrayHashMap(Pubkey, AccountSharedData),
+    batch_account_cache: *BatchAccountCache,
     ancestors: *const Ancestors,
     blockhash_queue: *const BlockhashQueue,
     max_age: u64,
@@ -387,7 +385,7 @@ pub fn checkStatusCache(
 pub fn checkFeePayer(
     fee_payer: *const Pubkey,
     signature_count: u64,
-    batch_account_cache: *std.AutoArrayHashMap(Pubkey, AccountSharedData),
+    batch_account_cache: *BatchAccountCache,
     compute_budget_limits: *const ComputeBudgetLimits,
     nonce_account: ?*const CachedAccount,
     rent_collector: *const RentCollector,
