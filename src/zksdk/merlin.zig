@@ -196,7 +196,7 @@ pub const Transcript = struct {
         return transcript;
     }
 
-    pub fn appendMessage(
+    fn appendMessage(
         t: *Transcript,
         comptime label: []const u8,
         message: []const u8,
@@ -206,6 +206,10 @@ pub const Transcript = struct {
         t.strobe.metaAd(label, false);
         t.strobe.metaAd(&data_len, true);
         t.strobe.ad(message, false);
+    }
+
+    pub fn appendDomSep(t: *Transcript, comptime label: []const u8) void {
+        t.appendMessage("dom-sep", label);
     }
 
     pub fn challengeBytes(
@@ -241,12 +245,12 @@ pub const Transcript = struct {
         t.appendPoint(label, point);
     }
 
-    pub fn appendPoint(
-        t: *Transcript,
-        comptime label: []const u8,
-        point: Ristretto255,
-    ) void {
+    pub fn appendPoint(t: *Transcript, comptime label: []const u8, point: Ristretto255) void {
         t.appendMessage(label, &point.toBytes());
+    }
+
+    pub fn appendScalar(t: *Transcript, comptime label: []const u8, scalar: Scalar) void {
+        t.appendMessage(label, &scalar.toBytes());
     }
 };
 
