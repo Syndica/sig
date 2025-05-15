@@ -22,6 +22,8 @@ const core = sig.core;
 const Allocator = std.heap.Allocator;
 const Atomic = std.atomic.Value;
 
+const RwMux = sig.sync.RwMux;
+
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
 const Hash = core.hash.Hash;
 const LtHash = core.hash.LtHash;
@@ -35,9 +37,10 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const Stakes = core.stake.Stakes;
 const Delegation = core.stake.Delegation;
+const EpochStakes = core.stake.EpochStakes;
 const EpochStakeMap = core.stake.EpochStakeMap;
+const Stakes = core.stake.Stakes;
 const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
 const epochStakeMapRandom = core.stake.epochStakeMapRandom;
@@ -65,6 +68,9 @@ pub const SlotConstants = struct {
     /// Total number of blocks produced up to this slot
     block_height: u64,
 
+    /// The pubkey to send transactions fees to.
+    collector_id: Pubkey,
+
     hard_forks: HardForks,
 
     /// A tick height above this should not be allowed during this slot.
@@ -91,8 +97,11 @@ pub const SlotConstants = struct {
 /// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
 /// [fd_slot_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L2270)
 pub const SlotState = struct {
+    /// FIFO queue of `recent_blockhash` items
+    blockhash_queue: RwMux(BlockhashQueue),
+
     /// Hash of this Bank's state. Only meaningful after freezing.
-    hash: sig.sync.RwMux(?Hash),
+    hash: RwMux(?Hash),
 
     /// Total capitalization, used to calculate inflation.
     capitalization: Atomic(u64),
@@ -148,7 +157,7 @@ pub const EpochConstants = struct {
     schedule: EpochSchedule,
 
     /// The pre-determined stakes assigned to this epoch.
-    stakes: Stakes(Delegation),
+    stakes: EpochStakes,
 
     pub fn deinit(self: EpochConstants, allocator: Allocator) void {
         self.stakes.deinit(allocator);

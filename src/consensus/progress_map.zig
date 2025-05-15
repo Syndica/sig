@@ -239,6 +239,7 @@ pub const ForkProgress = struct {
         };
     }
 
+    // TODO: remove this in favor of initFromParent
     pub fn initFromBank(
         allocator: std.mem.Allocator,
         params: struct {
@@ -276,6 +277,57 @@ pub const ForkProgress = struct {
 
         if (params.bank.isFrozen()) {
             new_progress.fork_stats.bank_hash = params.bank.data.hash;
+        }
+
+        return new_progress;
+    }
+
+    /// Helper init function to init the progress from the parent progress and
+    /// other data about the current slot that agave stores in its bank.
+    /// Analogous to [new_from_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/consensus/progress_map.rs#L143)
+    pub fn initFromParent(
+        allocator: std.mem.Allocator,
+        params: struct {
+            now: sig.time.Instant,
+            slot: Slot,
+            parent_slot: Slot,
+            parent: *const ForkProgress,
+            validator_vote_pubkey: *const Pubkey,
+
+            // information about the slot and epoch
+            slot_hash: ?Hash,
+            i_am_leader: bool,
+            blockhash_queue: *sig.sync.RwMux(sig.core.bank.BlockhashQueue),
+            epoch_stakes: *const sig.core.stake.EpochStakes,
+        },
+    ) !ForkProgress {
+        const parent = params.parent;
+        const i_am_collector = params.collector_id.equals(params.validator_identity);
+
+        const new_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = blk: {
+                const q = params.blockhash_queue.read();
+                defer q.unlock();
+                break :blk q.get().last_hash orelse return error.MissingLastHash;
+            },
+            .prev_leader_slot = if (parent.propagated_stats.is_leader_slot)
+                params.parent_slot
+            else
+                parent.propagated_stats.prev_leader_slot,
+            .validator_stake_info = if (i_am_collector) .{
+                .validator_vote_pubkey = params.validator_vote_pubkey,
+                .stake = params.epoch_stakes.stakes.vote_accounts.accounts
+                    .get(params.validator_vote_pubkey) orelse 0,
+                .total_epoch_stake = params.epoch_stakes.total_stake,
+            } else null,
+            .num_blocks_on_fork = parent.num_blocks_on_fork + 1,
+            .num_dropped_blocks_on_fork = parent.num_dropped_blocks_on_fork +
+                params.slot - params.parent_slot - 1,
+        });
+
+        if (params.slot_hash) |hash| {
+            new_progress.fork_stats.bank_hash = hash;
         }
 
         return new_progress;

@@ -8,15 +8,18 @@ const Allocator = std.mem.Allocator;
 
 const ThreadPool = sig.sync.ThreadPool;
 
+const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
+const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
 
 const ConfirmSlotError = replay.confirm_slot.ConfirmSlotError;
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
+const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 const VerifyTicksConfig = replay.confirm_slot.VerifyTicksParams;
@@ -29,6 +32,8 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-execution");
 pub const ReplayExecutionState = struct {
     allocator: Allocator,
     logger: ScopedLogger,
+    my_identity: Pubkey,
+    vote_account: Pubkey,
     accounts_db: *AccountsDB,
     thread_pool: *ThreadPool,
     blockstore_reader: *BlockstoreReader,
@@ -61,65 +66,116 @@ pub const ReplayExecutionState = struct {
     }
 };
 
+/// 1. Replays transactions from all the slots that need to be replayed.
+/// 2. Store the replay results into the relevant data structures.
+///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
-    // TODO: parallel processing: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3401
-
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
     if (active_slots.len == 0) {
         return false;
     }
 
+    var slot_statuses = std.ArrayListUnmanaged(ReplaySlotStatus){};
     for (active_slots) |slot| {
-        _ = try replaySlot(state, slot);
+        // TODO: consider limiting the max number of slots to process
+        // simultaneously to avoid congestion.
+        try slot_statuses.append(state.allocator, try replaySlot(state, slot));
     }
 
     // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
 
-    return undefined;
+    return false; // TODO
 }
 
-/// Analogous to [ReplaySlotFromBlockstore](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L175)
-const ReplayResult = union(enum) {
-    /// Replay succeeded with this many transactions.
-    success: struct { transaction_count: usize },
-    /// The slot was previously marked as dead, so it was not replayed.
+const ReplaySlotStatus = union(enum) {
+    /// The slot was previously marked as dead (not this time), which means we
+    /// don't need to do anything. see here that agave also does nothing:
+    /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L3005-L3007)
+    /// - [process_replay_results](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L3088-L3091)
     dead,
-    /// Replay failed due to this error.
-    failure: ConfirmSlotError,
+
+    /// This validator is the leader for the slot, so there is nothing to
+    /// replay.
+    ///
+    /// In agave, the `bank.is_complete()` path of process_replay_results is
+    /// still potentially called even when leader, whereas dead slots skip that
+    /// step. TODO: verify that it's actually possible/meaningful to reach that
+    /// step. Maybe dead and leader can be treated the same way when processing
+    /// replay results?
+    leader,
+
+    /// The slot is being confirmed, poll this to await the result.
+    confirm: *ConfirmSlotFuture,
 };
 
-/// replay_active_bank
-fn replaySlot(state: *ReplayExecutionState, bank_slot: Slot) !ConfirmSlotFuture {
-    const fork_progress = try state.progress_map.map.getOrPut(state.allocator, bank_slot);
-    if (fork_progress.found_existing and fork_progress.value_ptr.is_dead) {
+/// - Calls confirmSlot to verify/execute a slot's transactions.
+/// - Initializes the ForkProgress in the progress map for the slot if necessary.
+/// - Extracts the inputs for those functions from the ledger and the slot and epoch trackers.
+///
+/// Combines the logic of three agave functions:
+/// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2979)
+/// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
+/// - [confirm_slot](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1494)
+fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
+    const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
+    if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
         return .dead;
     }
 
-    const slot_info = state.slot_tracker.slots.get(bank_slot) orelse return error.MissingSlot;
-    const epoch_info = state.epochs.getForSlot(bank_slot) orelse return error.MissingEpoch;
+    const slot_info = state.slot_tracker.slots.get(slot) orelse return error.MissingSlot;
+    const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
+    const i_am_leader = slot_info.constants.collector_id.equals(state.my_identity);
 
-    const slot = bank_slot;
-    const start_shred = 0; // TODO: progress.num_shreds;
-    // TODO: measure time
-    const entries, const num_shreds, const slot_is_full =
-        try state.blockstore_reader.getSlotEntriesWithShredInfo(bank_slot, start_shred, false);
-    _ = num_shreds; // autofix
+    if (!progress_get_or_put.found_existing) {
+        const parent_slot = slot_info.constants.parent_slot;
+        const parent = state.progress_map.map.get(parent_slot) orelse
+            return error.MissingParentProgress;
 
-    const replay_progress = &fork_progress.value_ptr.replay_progress.arc_ed.rwlock_ed;
+        progress_get_or_put.value_ptr.* = try ForkProgress.initFromParent(state.allocator, .{
+            .slot = slot,
+            .parent_slot = parent_slot,
+            .parent = parent,
+            .slot_hash = slot_info.state.hash.readCopy(),
+            .i_am_leader = i_am_leader,
+            .blockhash_queue = slot_info.state.blockhash_queue,
+            .epoch_stakes = epoch_info.stakes,
+            .now = sig.time.Instant.now(),
+            .validator_vote_pubkey = state.vote_account,
+        });
+    }
+    const fork_progress = progress_get_or_put.value_ptr;
 
-    return try confirmSlot(
+    if (i_am_leader) {
+        return .leader;
+    }
+
+    // NOTE: Agave acquires the confirmation_progress lock for the entirety of
+    // confirm_slot execution, and then increments the values at the end of the
+    // process. I don't think it matters that we're doing it all eagerly, but
+    // it's worth reconsidering once we introduce actual locking here and flesh
+    // out more usages of this struct.
+    const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
+
+    const entries, const num_shreds, const slot_is_full = try state.blockstore_reader
+        .getSlotEntriesWithShredInfo(slot, confirmation_progress.num_shreds, false);
+
+    confirmation_progress.num_shreds += num_shreds;
+    confirmation_progress.num_entries += entries.len;
+    for (entries.items) |e| confirmation_progress.num_txs += e.transactions.len;
+
+    return .{ .confirm = try confirmSlot(
         state.allocator,
         state.logger,
         entries.items,
-        replay_progress.last_entry,
+        confirmation_progress.last_entry,
         .{
             .tick_height = slot_info.state.tickHeight(),
             .max_tick_height = slot_info.constants.max_tick_height,
             .hashes_per_tick = epoch_info.hashes_per_tick,
             .slot = slot,
             .slot_is_full = slot_is_full,
-            .tick_hash_count = &replay_progress.tick_hash_count,
+            .tick_hash_count = &confirmation_progress.tick_hash_count,
         },
-    );
+    ) };
 }

@@ -6,8 +6,9 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
-const ThreadPool = sig.sync.ThreadPool;
+const ReturnType = sig.utils.types.ReturnType;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
+const ThreadPool = sig.sync.ThreadPool;
 
 const Entry = core.Entry;
 const Hash = core.Hash;
@@ -31,7 +32,7 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
 /// Return: ConfirmSlotFuture which you can poll periodically to await a result.
 ///
 /// Analogous to:
-/// - agave: confirm_slot and confirm_slot_entries
+/// - agave: confirm_slot_entries
 /// - fd: runtime_process_txns_in_microblock_stream
 pub fn confirmSlot(
     allocator: Allocator,
@@ -40,7 +41,7 @@ pub fn confirmSlot(
     entries: []const Entry,
     last_entry: Hash,
     verify_ticks_params: VerifyTicksParams,
-) Allocator.Error!ConfirmSlotFuture {
+) Allocator.Error!*ConfirmSlotFuture {
     const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries.len);
     errdefer future.destroy();
 
@@ -171,7 +172,7 @@ pub const ConfirmSlotFuture = struct {
         return self.status;
     }
 
-    fn pollEach(self: *ConfirmSlotFuture) [2]?ConfirmSlotStatus {
+    fn pollEach(self: *ConfirmSlotFuture) [2]ConfirmSlotStatus {
         return .{
             switch (self.poh_verifier.pollFallible()) {
                 .done => .done,

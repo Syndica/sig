@@ -270,6 +270,13 @@ pub fn RwMux(comptime T: type) type {
             return .{ t, lock_guard };
         }
 
+        /// `read` returns a `RLockGuard` after acquiring a `read` lock
+        pub fn readCopy(self: *Self) T {
+            self.private.r.lockShared();
+            defer self.private.r.unlockShared();
+            return self.private.v.*;
+        }
+
         pub fn writeWithLock(self: *Self) struct { Mutable(T), WLockGuard } {
             var lock_guard = self.write();
             const t = lock_guard.mut();
