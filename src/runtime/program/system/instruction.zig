@@ -64,9 +64,7 @@ pub const Instruction = union(enum) {
         /// Owner program account address
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
-            .deserializer = bincode.readUtf8String,
-        };
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(null);
     },
 
     /// Consumes a stored nonce, replacing it with a successor
@@ -141,9 +139,7 @@ pub const Instruction = union(enum) {
         /// Owner program account
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
-            .deserializer = bincode.readUtf8String,
-        };
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(null);
     },
 
     /// Assign account to a program based on a seed
@@ -161,9 +157,7 @@ pub const Instruction = union(enum) {
         /// Owner program account
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
-            .deserializer = bincode.readUtf8String,
-        };
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(null);
     },
 
     /// Transfer lamports from a derived address
@@ -182,9 +176,7 @@ pub const Instruction = union(enum) {
         /// Owner to use to derive the funding account address
         from_owner: Pubkey,
 
-        pub const @"!bincode-config:from_seed": bincode.FieldConfig([]const u8) = .{
-            .deserializer = bincode.readUtf8String,
-        };
+        pub const @"!bincode-config:from_seed" = bincode.utf8StringCodec(null);
     },
 
     /// One-time idempotent upgrade of legacy nonce versions in order to bump
