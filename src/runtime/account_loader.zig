@@ -5,6 +5,8 @@ const runtime = sig.runtime;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
+const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RentCollector;
+const CollectedInfo = sig.core.rent_collector.CollectedInfo;
 
 const AccountSharedData = runtime.AccountSharedData;
 const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
@@ -179,7 +181,7 @@ pub const BatchAccountCache = struct {
                     } else {
                         // account not found, create a new one at this address
                         var acc = AccountSharedData.EMPTY;
-                        acc.rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
+                        acc.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
                         map.putAssumeCapacityNoClobber(account_key, acc);
                         created_new_account = true;
                         break :blk acc;
@@ -387,7 +389,7 @@ pub const BatchAccountCache = struct {
                 .data = &.{},
                 .owner = Pubkey.ZEROES,
                 .executable = false,
-                .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+                .rent_epoch = RENT_EXEMPT_RENT_EPOCH,
             },
             .loaded_size = 0,
             .rent_collected = 0,
@@ -418,7 +420,7 @@ pub const BatchAccountCache = struct {
             // a previous instruction deallocated this account, we will make a new one in its place.
 
             var account = AccountSharedData.EMPTY;
-            account.rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
+            account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
 
             const result = self.account_cache.getOrPutAssumeCapacity(key.*);
             std.debug.assert(result.found_existing);
@@ -489,22 +491,22 @@ fn collectRentFromAccount(
     account_key: *const Pubkey,
     feature_set: *const runtime.FeatureSet,
     rent_collector: *const RentCollector,
-) sig.core.rent_collector.CollectedInfo {
+) CollectedInfo {
     if (!feature_set.active.contains(runtime.features.DISABLE_RENT_FEES_COLLECTION)) {
         @setCold(true); // this feature should always be enabled?
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
 
-    if (account.rent_epoch != sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH and
+    if (account.rent_epoch != RENT_EXEMPT_RENT_EPOCH and
         rent_collector.getRentDue(
         account.lamports,
         account.data.len,
         account.rent_epoch,
     ) != .Exempt) {
-        account.rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
+        account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
     }
 
-    return sig.core.rent_collector.CollectedInfo.NoneCollected;
+    return CollectedInfo.NoneCollected;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L618
@@ -959,7 +961,7 @@ test "load tx too large" {
         .lamports = 1_000_000,
         .executable = false,
         .owner = sig.runtime.program.system_program.ID,
-        .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+        .rent_epoch = RENT_EXEMPT_RENT_EPOCH,
     });
 
     var tx = try emptyTxWithKeys(allocator, &.{address});
