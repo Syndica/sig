@@ -3367,7 +3367,6 @@ const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ValidatorStakeInfo = sig.consensus.progress_map.ValidatorStakeInfo;
 const EpochStakes = sig.core.stake.EpochStakes;
 const Stakes = sig.core.stake.Stakes;
-const Delegation = sig.core.stake.Delegation;
 
 fn fillProgressMapForkStats(
     allocator: std.mem.Allocator,
