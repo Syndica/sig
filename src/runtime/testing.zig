@@ -184,7 +184,7 @@ pub fn createEpochStakes(
             .delegations = .{},
             .unused = 0,
             .epoch = 0,
-            .history = &.{},
+            .history = .{},
         },
         .total_stake = 0,
         .node_id_to_vote_accounts = .{},

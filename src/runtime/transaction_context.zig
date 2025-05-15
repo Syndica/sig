@@ -27,50 +27,21 @@ pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
 // https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
 pub const MAX_INSTRUCTION_STACK_DEPTH = 5;
 
-pub const EpochContext = struct {
-    /// Allocator
-    allocator: std.mem.Allocator,
-
-    /// Feature Set
-    feature_set: FeatureSet,
-
-    // Exposes epoch stake variables to the VM
-    epoch_stakes: EpochStakes,
-
-    pub fn deinit(self: EpochContext) void {
-        self.feature_set.deinit(self.allocator);
-        self.epoch_stakes.deinit(self.allocator);
-    }
-};
-
-pub const SlotContext = struct {
-    /// Allocator
-    allocator: std.mem.Allocator,
-
-    /// Epoch Context
-    ec: *const EpochContext,
-
-    /// Sysvar Cache
-    sysvar_cache: SysvarCache,
-
-    pub fn deinit(self: SlotContext) void {
-        self.sysvar_cache.deinit(self.allocator);
-    }
-};
-
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
 pub const TransactionContext = struct {
-    /// Allocator
     allocator: std.mem.Allocator,
 
-    /// Contexts
+    // These data structures exist beyond the lifetime of the TransactionContext.
+    // These exist per-epoch.
     feature_set: *const FeatureSet,
     epoch_stakes: *const EpochStakes,
+    // This exists per-slot.
     sysvar_cache: *const SysvarCache,
 
     /// Transaction accounts
     accounts: []TransactionContextAccount,
+
     /// Used by CPI to access serialized account metadata.
     serialized_accounts: std.BoundedArray(
         SerializedAccountMetadata,
@@ -80,13 +51,8 @@ pub const TransactionContext = struct {
     /// Used by syscall.allocFree to implement sbrk bump allocation
     bpf_alloc_pos: u64 = 0,
 
-    /// Instruction stack
     instruction_stack: InstructionStack,
-
-    /// Instruction trace
     instruction_trace: InstructionTrace,
-
-    /// Return data
     return_data: TransactionReturnData,
 
     /// Total change to account data size within transaction
@@ -95,18 +61,13 @@ pub const TransactionContext = struct {
     /// Instruction compute meter, for tracking compute units consumed against
     /// the designated compute budget during program execution.
     compute_meter: u64,
-
-    /// Compute budget for this transaction
     compute_budget: ComputeBudget,
 
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.custom will be returned
     custom_error: ?u32,
 
-    /// Optional log collector
     log_collector: ?LogCollector,
-
-    /// Rent
     rent: Rent,
 
     /// Previous blockhash and lamports per signature from the blockhash queue

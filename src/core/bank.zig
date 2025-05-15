@@ -197,7 +197,7 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes(Delegation),
+    stakes: Stakes(.delegation),
     unused_accounts: UnusedAccounts,
     epoch_stakes: EpochStakeMap,
     is_delta: bool,
@@ -347,7 +347,7 @@ pub const BankFields = struct {
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries);
+        const stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
         errdefer stakes.deinit(allocator);
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);

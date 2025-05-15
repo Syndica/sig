@@ -33,7 +33,7 @@ pub const SerializedAccount = union(enum) {
 
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/invoke_context.rs#L182
 pub const SerializedAccountMeta = struct {
-    original_data_len: usize,
+    original_data_len: u64,
     vm_data_addr: u64,
     vm_key_addr: u64,
     vm_lamports_addr: u64,
