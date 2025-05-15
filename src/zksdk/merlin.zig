@@ -238,6 +238,14 @@ pub const Transcript = struct {
         point: Ristretto255,
     ) !void {
         try point.rejectIdentity();
+        t.appendPoint(label, point);
+    }
+
+    pub fn appendPoint(
+        t: *Transcript,
+        comptime label: []const u8,
+        point: Ristretto255,
+    ) void {
         t.appendMessage(label, &point.toBytes());
     }
 };

@@ -1,0 +1,304 @@
+const std = @import("std");
+const sig = @import("../../sig.zig");
+
+const Edwards25519 = std.crypto.ecc.Edwards25519;
+const el_gamal = sig.zksdk.el_gamal;
+const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
+const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
+const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
+const pedersen = el_gamal.pedersen;
+const Ristretto255 = std.crypto.ecc.Ristretto255;
+const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
+const Transcript = sig.zksdk.Transcript;
+const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+
+pub const CiphertextCiphertextEqualityProof = struct {
+    Y_0: Ristretto255,
+    Y_1: Ristretto255,
+    Y_2: Ristretto255,
+    Y_3: Ristretto255,
+    z_s: Scalar,
+    z_x: Scalar,
+    z_r: Scalar,
+
+    pub fn init(
+        first_kp: *const ElGamalKeypair,
+        second_pubkey: *const ElGamalPubkey,
+        first_ciphertext: *const ElGamalCiphertext,
+        second_opening: *const pedersen.Opening,
+        amount: u64,
+        transcript: *Transcript,
+    ) CiphertextCiphertextEqualityProof {
+        transcript.appendMessage("dom-sep", "ciphertext-ciphertext-equality-proof");
+
+        const P_first = first_kp.public.p;
+        const D_first = first_ciphertext.handle.point;
+        const P_second = second_pubkey.p;
+
+        const s = first_kp.secret.scalar;
+        const x = el_gamal.scalarFromInt(u64, amount);
+        const r = second_opening.scalar;
+
+        var y_s = Scalar.random();
+        var y_x = Scalar.random();
+        var y_r = Scalar.random();
+        defer {
+            std.crypto.utils.secureZero(u64, &y_s.limbs);
+            std.crypto.utils.secureZero(u64, &y_x.limbs);
+            std.crypto.utils.secureZero(u64, &y_r.limbs);
+        }
+
+        const Y_0 = weak_mul.mul(P_first.p, y_s.toBytes());
+        const Y_1 = weak_mul.mulMulti(
+            2,
+            .{ el_gamal.G.p, D_first.p },
+            .{ y_x.toBytes(), y_s.toBytes() },
+        );
+        const Y_2 = weak_mul.mulMulti(
+            2,
+            .{ el_gamal.G.p, el_gamal.H.p },
+            .{ y_x.toBytes(), y_r.toBytes() },
+        );
+        const Y_3 = weak_mul.mul(P_second.p, y_r.toBytes());
+
+        transcript.appendPoint("Y_0", .{ .p = Y_0 });
+        transcript.appendPoint("Y_1", .{ .p = Y_1 });
+        transcript.appendPoint("Y_2", .{ .p = Y_2 });
+        transcript.appendPoint("Y_3", .{ .p = Y_3 });
+
+        const c = transcript.challengeScalar("c");
+        _ = transcript.challengeScalar("w");
+
+        const z_s = Scalar.fromBytes(c).mul(s).add(y_s);
+        const z_x = Scalar.fromBytes(c).mul(x).add(y_x);
+        const z_r = Scalar.fromBytes(c).mul(r).add(y_r);
+
+        return .{
+            .Y_0 = .{ .p = Y_0 },
+            .Y_1 = .{ .p = Y_1 },
+            .Y_2 = .{ .p = Y_2 },
+            .Y_3 = .{ .p = Y_3 },
+            .z_s = z_s,
+            .z_x = z_x,
+            .z_r = z_r,
+        };
+    }
+
+    pub fn verify(
+        self: CiphertextCiphertextEqualityProof,
+        first_pubkey: *const ElGamalPubkey,
+        second_pubkey: *const ElGamalPubkey,
+        first_ciphertext: *const ElGamalCiphertext,
+        second_ciphertext: *const ElGamalCiphertext,
+        transcript: *Transcript,
+    ) !void {
+        transcript.appendMessage("dom-sep", "ciphertext-ciphertext-equality-proof");
+
+        const P_first = first_pubkey.p;
+        const C_first = first_ciphertext.commitment.point;
+        const D_first = first_ciphertext.handle.point;
+
+        const P_second = second_pubkey.p;
+        const C_second = second_ciphertext.commitment.point;
+        const D_second = second_ciphertext.handle.point;
+
+        try transcript.validateAndAppendPoint("Y_0", self.Y_0);
+        try transcript.validateAndAppendPoint("Y_1", self.Y_1);
+        try transcript.validateAndAppendPoint("Y_2", self.Y_2);
+        try transcript.validateAndAppendPoint("Y_3", self.Y_3);
+
+        const c = transcript.challengeScalar("c");
+
+        transcript.appendMessage("z_s", &self.z_s.toBytes());
+        transcript.appendMessage("z_x", &self.z_x.toBytes());
+        transcript.appendMessage("z_r", &self.z_r.toBytes());
+
+        const w = Scalar.fromBytes(transcript.challengeScalar("w")); // w used for batch verification
+        const ww = w.mul(w);
+        const www = ww.mul(w);
+
+        const w_negated = Edwards25519.scalar.neg(w.toBytes());
+        const ww_negated = Edwards25519.scalar.neg(ww.toBytes());
+        const www_negated = Edwards25519.scalar.neg(www.toBytes());
+
+        const Y_0 = self.Y_0;
+        const Y_1 = self.Y_1;
+        const Y_2 = self.Y_2;
+        const Y_3 = self.Y_3;
+
+        const z_s = self.z_s.toBytes();
+        const z_r = self.z_r.toBytes();
+
+        //         points  scalars
+        //     0   G        z_x (w + ww)
+        //     1   H       -c + z_r ww
+        //     2   P1       z_s
+        //     3   D1       z_s w
+        //     4   Y_1     -w
+        //     5   C1      -w c
+        //     6   Y_2     -ww
+        //     7   C2      -ww c
+        //     8   Y_3     -www
+        //     9   D2      -www c
+        //    10   P2       www z_r
+        //   ------------------------ MSM
+        //         Y_0
+
+        // zig fmt: off
+        const check = weak_mul.mulMulti(11, .{
+            el_gamal.G.p,
+            el_gamal.H.p,
+            P_first.p,
+            D_first.p,
+            Y_1.p,
+            C_first.p,
+            Y_2.p,
+            C_second.p,
+            Y_3.p,
+            D_second.p,
+            P_second.p,
+        }, .{
+            w.add(ww).mul(self.z_x).toBytes(),                      // z_x * (w + ww)
+            Edwards25519.scalar.sub(self.z_r.mul(ww).toBytes(), c), // -c + (z_r * ww)
+            z_s,                                                    // z_s
+            self.z_s.mul(w).toBytes(),                              // z_s * w
+            w_negated,                                              // -w
+            Edwards25519.scalar.mul(w_negated, c),                  // -w * c
+            ww_negated,                                             // -ww
+            Edwards25519.scalar.mul(ww_negated, c),                 // -ww * c
+            www_negated,                                            // -www
+            Edwards25519.scalar.mul(www_negated, c),                // -www * c
+            Edwards25519.scalar.mul(www.toBytes(), z_r),            // www * z_r
+        });
+        // zig fmt: on
+
+        if (!Y_0.equivalent(.{ .p = check })) {
+            return error.AlgebraicRelation;
+        }
+    }
+
+    pub fn fromBytes(bytes: [224]u8) !CiphertextCiphertextEqualityProof {
+        return .{
+            .Y_0 = try Ristretto255.fromBytes(bytes[0..32].*),
+            .Y_1 = try Ristretto255.fromBytes(bytes[32..64].*),
+            .Y_2 = try Ristretto255.fromBytes(bytes[64..96].*),
+            .Y_3 = try Ristretto255.fromBytes(bytes[96..128].*),
+            .z_s = Scalar.fromBytes(bytes[128..160].*),
+            .z_x = Scalar.fromBytes(bytes[160..192].*),
+            .z_r = Scalar.fromBytes(bytes[192..224].*),
+        };
+    }
+
+    pub fn fromBase64(string: []const u8) !CiphertextCiphertextEqualityProof {
+        const base64 = std.base64.standard;
+        var buffer: [224]u8 = .{0} ** 224;
+        const decoded_length = try base64.Decoder.calcSizeForSlice(string);
+        try std.base64.standard.Decoder.decode(
+            buffer[0..decoded_length],
+            string,
+        );
+        return fromBytes(buffer);
+    }
+};
+
+test "correctness" {
+    const first_kp = ElGamalKeypair.random();
+    const second_kp = ElGamalKeypair.random();
+    const message: u64 = 55;
+
+    const first_ciphertext = el_gamal.encrypt(u64, message, &first_kp.public);
+    const second_opening = pedersen.Opening.random();
+    const second_ciphertext = el_gamal.encryptWithOpening(
+        u64,
+        message,
+        &second_kp.public,
+        &second_opening,
+    );
+
+    var prover_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.init("test");
+
+    const proof = CiphertextCiphertextEqualityProof.init(
+        &first_kp,
+        &second_kp.public,
+        &first_ciphertext,
+        &second_opening,
+        message,
+        &prover_transcript,
+    );
+    try proof.verify(
+        &first_kp.public,
+        &second_kp.public,
+        &first_ciphertext,
+        &second_ciphertext,
+        &verifier_transcript,
+    );
+}
+
+test "different messages" {
+    const first_kp = ElGamalKeypair.random();
+    const second_kp = ElGamalKeypair.random();
+
+    const first_message: u64 = 55;
+    const second_message: u64 = 77;
+
+    const first_ciphertext = el_gamal.encrypt(u64, first_message, &first_kp.public);
+    const second_opening = pedersen.Opening.random();
+    const second_ciphertext = el_gamal.encryptWithOpening(
+        u64,
+        second_message,
+        &second_kp.public,
+        &second_opening,
+    );
+
+    var prover_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.init("test");
+
+    const proof = CiphertextCiphertextEqualityProof.init(
+        &first_kp,
+        &second_kp.public,
+        &first_ciphertext,
+        &second_opening,
+        first_message,
+        &prover_transcript,
+    );
+    try std.testing.expectError(
+        error.AlgebraicRelation,
+        proof.verify(
+            &first_kp.public,
+            &second_kp.public,
+            &first_ciphertext,
+            &second_ciphertext,
+            &verifier_transcript,
+        ),
+    );
+}
+
+test "proof string" {
+    const first_pubkey_string = "VOPKaqo4nsX4XnbgGjCKHkLkR6JG1jX9D5G/e0EuYmM=";
+    const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);
+
+    const second_pubkey_string = "JnVhtKo9B7g9c8Obo/5/EqvA59i3TvtuOcQWf17T7SU=";
+    const second_pubkey = try ElGamalPubkey.fromBase64(second_pubkey_string);
+
+    // zig fmt: off
+    const first_ciphertext_string = "oKv6zxN051MXdk2cISD+CUsH2+FINoH1iB4WZyuy6nNkE7Q+eLiY9JB8itJhgKHJEA/1sAzDvpnRlLL06OXvIg==";
+    const first_ciphertext = try ElGamalCiphertext.fromBase64(first_ciphertext_string);
+
+    const second_ciphertext_string = "ooSA2cQDqutgyCBoMiQktM1Cu4NDNEbphF010gjG4iF0iMK1N+u/Qxqk0wwO/+w+5S6RiicwPs4mEKRJpFiHEw==";
+    const second_ciphertext = try ElGamalCiphertext.fromBase64(second_ciphertext_string);
+
+    const proof_string = "MlfRDO4sBPbpciEXci3QfVSLVABAJ0s8wMZ/Uz3AyETmGJ1BUE961fHIiNQXPD0j1uu1Josj//E8loPD1w+4E3bfDBJ3Mp2YqeOv41Bdec02YXlAotTGjq/UfncGdUhyampkuXUmSvnmkf5BIp4nr3X18cR9KHTAzBrKv6erjAxIckyRnACaZGEx+ZboEb3FBEXqTklytT1nrebbwkjvDUWbcpZrE+xxBWYek3qeq1x1debzxVhtS2yx44cvR5UIGLzGYa2ec/xh7wvyNEbnX80rZju2dztr4bN5f2vrTgk=";
+    const proof = try CiphertextCiphertextEqualityProof.fromBase64(proof_string);
+    // zig fmt: on
+
+    var verifier_transcript = Transcript.init("Test");
+
+    try proof.verify(
+        &first_pubkey,
+        &second_pubkey,
+        &first_ciphertext,
+        &second_ciphertext,
+        &verifier_transcript,
+    );
+}
