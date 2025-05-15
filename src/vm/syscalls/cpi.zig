@@ -1407,7 +1407,6 @@ const TestContext = struct {
         const tc = try allocator.create(TransactionContext);
         errdefer allocator.destroy(tc);
 
-        const program_id = Pubkey.initRandom(prng);
         const account_key = Pubkey.initRandom(prng);
 
         tc.* = try testing.createTransactionContext(allocator, prng, .{
@@ -1415,35 +1414,32 @@ const TestContext = struct {
                 .{
                     .pubkey = account_key,
                     .data = account_data,
-                    .owner = program_id,
+                    .owner = system_program.ID,
                     .lamports = prng.uintAtMost(u64, 1000),
                 },
                 .{
-                    .pubkey = program_id,
+                    .pubkey = system_program.ID,
                     .owner = ids.NATIVE_LOADER_ID,
+                    .executable = true,
                 },
             },
+            .compute_meter = std.math.maxInt(u64),
         });
         errdefer testing.deinitTransactionContext(allocator, tc.*);
 
-        const ic = InstructionContext{
-            .depth = 0,
-            .tc = tc,
-            .ixn_info = try testing.createInstructionInfo(
-                tc,
-                program_id,
-                system_program.Instruction{ .assign = .{ .owner = account_key } }, // whatever.
-                &.{
-                    .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                    .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
-                },
-            ),
-        };
-        errdefer ic.deinit(allocator);
+        try sig.runtime.executor.pushInstruction(tc, try testing.createInstructionInfo(
+            tc,
+            system_program.ID,
+            "", // empty instruction data.
+            &.{
+                .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            },
+        ));
 
         return .{
             .tc = tc,
-            .ic = ic,
+            .ic = (try tc.getCurrentInstructionContext()).*,
         };
     }
 
@@ -1484,12 +1480,13 @@ const TestAccount = struct {
     executable: bool,
 
     // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
-    fn intoAccountInfoRust(
+    fn intoAccountInfo(
         self: *const TestAccount,
         allocator: std.mem.Allocator,
+        comptime AccountInfoType: type,
         vm_addr: u64,
     ) !struct { []u8, SerializedAccountMetadata } {
-        const size = @sizeOf(AccountInfoRust) +
+        const size = @sizeOf(AccountInfoType) +
             @sizeOf(Pubkey) * 2 +
             @sizeOf(RcBox(RefCell(*u64))) +
             @sizeOf(u64) +
@@ -1499,7 +1496,7 @@ const TestAccount = struct {
         const buffer = try allocator.alloc(u8, size);
         errdefer allocator.free(buffer);
 
-        const key_addr = vm_addr + @sizeOf(AccountInfoRust);
+        const key_addr = vm_addr + @sizeOf(AccountInfoType);
         const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
         const lamports_addr = lamports_cell_addr + @sizeOf(RcBox(RefCell(*u64)));
         const owner_addr = lamports_addr + @sizeOf(u64);
@@ -1507,20 +1504,34 @@ const TestAccount = struct {
         const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
         const data_len = self.data.len;
 
-        buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
-            .key_addr = key_addr,
-            .is_signer = @intFromBool(self.is_signer),
-            .is_writable = @intFromBool(self.is_writable),
-            .lamports_addr = Rc(RefCell(u64)).fromRaw(
-                @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
-            ),
-            .data = Rc(RefCell([]u8)).fromRaw(
-                @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
-            ),
-            .owner_addr = owner_addr,
-            .executable = @intFromBool(self.executable),
-            .rent_epoch = self.rent_epoch,
-        });
+        switch (AccountInfoType) {
+            AccountInfoRust => buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
+                .key_addr = key_addr,
+                .is_signer = @intFromBool(self.is_signer),
+                .is_writable = @intFromBool(self.is_writable),
+                .lamports_addr = Rc(RefCell(u64)).fromRaw(
+                    @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
+                ),
+                .data = Rc(RefCell([]u8)).fromRaw(
+                    @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
+                ),
+                .owner_addr = owner_addr,
+                .executable = @intFromBool(self.executable),
+                .rent_epoch = self.rent_epoch,
+            }),
+            AccountInfoC => buffer[0..@sizeOf(AccountInfoC)].* = @bitCast(AccountInfoC{
+                .key_addr = key_addr,
+                .is_signer = @intFromBool(self.is_signer),
+                .is_writable = @intFromBool(self.is_writable),
+                .lamports_addr = lamports_addr,
+                .data_addr = data_addr,
+                .data_len = data_len,
+                .owner_addr = owner_addr,
+                .executable = @intFromBool(self.executable),
+                .rent_epoch = self.rent_epoch,
+            }),
+            else => @compileError("invalid AccountInfo type"),
+        }
 
         buffer[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.key);
         buffer[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
@@ -1555,7 +1566,8 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
     const account = ctx.getAccount();
     const vm_addr = MM_INPUT_START;
 
-    const buffer, const serialized_metadata = try account.intoAccountInfoRust(allocator, vm_addr);
+    const buffer, const serialized_metadata = 
+        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -1694,7 +1706,8 @@ test "vm.syscalls.cpi: translateAccounts" {
     const account = ctx.getAccount();
     const vm_addr = MM_INPUT_START;
 
-    const buffer, const serialized_metadata = try account.intoAccountInfoRust(allocator, vm_addr);
+    const buffer, const serialized_metadata = 
+        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -1749,26 +1762,19 @@ test "vm.syscalls.cpi: translateAccounts" {
     try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
 }
 
-fn testTranslateInstruction(comptime AccountInfoType: type) !void {
+fn intoStableInstruction(
+    allocator: std.mem.Allocator,
+    comptime AccountInfoType: type,
+    vm_addr: u64,
+    data: []const u8,
+    program_id: Pubkey,
+    accounts: []const InstructionAccount,
+) ![]u8 {
     const InstructionType, const AccountMetaType = switch (AccountInfoType) {
         AccountInfoRust => .{ StableInstructionRust, AccountMetaRust },
         AccountInfoC => .{ StableInstructionC, AccountMetaC },
         else => @compileError("invalid AccountInfo type"),
     };
-
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foo");
-    defer ctx.deinit(allocator);
-
-    const data = "ins data";
-    const program_id = Pubkey.initRandom(prng.random());
-    const accounts = [_]InstructionAccount{.{
-        .pubkey = Pubkey.initRandom(prng.random()),
-        .is_signer = true,
-        .is_writable = false,
-    }};
 
     const accounts_len = @sizeOf(AccountMetaType) * accounts.len;
     var total_size = @sizeOf(InstructionType) + accounts_len + data.len;
@@ -1779,21 +1785,7 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
     }
 
     const buffer = try allocator.alloc(u8, total_size);
-    defer allocator.free(buffer);
-
-    const vm_addr = MM_INPUT_START;
-    const memory_map = try MemoryMap.init(
-        allocator,
-        &.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START),
-            memory.Region.init(.mutable, &.{}, memory.STACK_START),
-            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
-            memory.Region.init(.mutable, buffer, memory.INPUT_START),
-        },
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
+    errdefer allocator.free(buffer);
 
     const ins: InstructionType = switch (InstructionType) {
         StableInstructionRust => .{
@@ -1840,6 +1832,48 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
         try buf.writer().writeAll(std.mem.asBytes(&program_id));
         for (accounts) |a| try buf.writer().writeAll(std.mem.asBytes(&a.pubkey));
     }
+
+    return buffer;
+}
+
+fn testTranslateInstruction(comptime AccountInfoType: type) !void {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
+    defer ctx.deinit(allocator);
+
+    const data = "ins data";
+    const program_id = Pubkey.initRandom(prng.random());
+    const accounts = [_]InstructionAccount{.{
+        .pubkey = Pubkey.initRandom(prng.random()),
+        .is_signer = true,
+        .is_writable = false,
+    }};
+    
+    const vm_addr = MM_INPUT_START;
+    const buffer = try intoStableInstruction(
+        allocator,
+        AccountInfoType,
+        vm_addr,
+        data,
+        program_id,
+        &accounts,
+    );
+    defer allocator.free(buffer);
+
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
+            memory.Region.init(.mutable, buffer, vm_addr),
+        },
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
 
     const translated_instruction = try translateInstruction(
         allocator,
@@ -2620,4 +2654,82 @@ test "vm.syscalls.cpi: updateCallerAccount: data capacity direct mapping" {
             true,
         ),
     ));
+}
+
+test "cpiCommon (invokeSignedRust)" {
+    try testCpiCommon(AccountInfoRust);
+}
+
+test "cpiCommon (invokeSignedC)" {
+    try testCpiCommon(AccountInfoC);
+}
+
+fn testCpiCommon(comptime AccountInfoType: type) !void {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "");
+    defer ctx.deinit(allocator);
+    const account = ctx.getAccount();
+
+    // the CPI program to execute.
+    const program_id = system_program.ID;
+    const data = try sig.bincode.writeAlloc(
+        allocator,
+        system_program.Instruction{ .assign = .{ .owner = Pubkey.initRandom(prng.random()) } },
+        .{},
+    );
+    defer allocator.free(data);
+    const accounts = [_]InstructionAccount{.{
+        .pubkey = account.key,
+        .is_signer = true,
+        .is_writable = true,
+    }};
+
+    // setting up CPI structs in memory
+    const instruction_addr = memory.HEAP_START;
+    const heap_buffer = try intoStableInstruction(
+        allocator,
+        AccountInfoType,
+        instruction_addr,
+        data,
+        program_id,
+        &accounts,
+    );
+    defer allocator.free(heap_buffer);
+
+    const account_info_addr = memory.INPUT_START;
+    const input_buffer, const serialized_metadata = 
+        try account.intoAccountInfo(allocator, AccountInfoType, account_info_addr);
+    defer allocator.free(input_buffer);
+
+    ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
+
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.constant, heap_buffer, instruction_addr),
+            memory.Region.init(.mutable, input_buffer, account_info_addr),
+        },
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    // invoke CPI
+
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r1, instruction_addr);
+    registers.set(.r2, account_info_addr);
+    registers.set(.r3, 1); // account_infos_len
+    registers.set(.r4, 0); // null signers_addr
+    registers.set(.r5, 0); // zero signers_len
+
+    switch (AccountInfoType) {
+        AccountInfoRust => try invokeSignedRust(ctx.tc, &memory_map, &registers),
+        AccountInfoC => try invokeSignedC(ctx.tc, &memory_map, &registers),
+        else => @compileError("invalid AccountInfo type"),
+    }
 }
