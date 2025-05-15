@@ -5,10 +5,8 @@ const vm = sig.vm;
 const features = sig.runtime.features;
 const serialize = sig.runtime.program.bpf.serialize;
 const stable_log = sig.runtime.stable_log;
-const instruction = sig.core.instruction;
 
 const ExecutionError = sig.vm.ExecutionError;
-const ExecutionErrorKind = sig.vm.ExecutionErrorKind;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;

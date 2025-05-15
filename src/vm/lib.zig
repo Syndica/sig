@@ -92,6 +92,7 @@ pub fn getExecutionErrorMessage(err: ExecutionError) []const u8 {
 }
 
 pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKind, []const u8 } {
+    // zig fmt: off
     return switch (err) {
         EbpfError.ElfError => .{ 1, .Ebpf, "ELF error" },
         EbpfError.FunctionAlreadyRegistered => .{ 2, .Ebpf, "function was already registered" },
@@ -195,6 +196,7 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
         SyscallError.InvalidEndianness => .{ -1, .Syscall, "Invalid endianness." },
         SyscallError.InvalidParameters => .{ -1, .Syscall, "Invalid parameters." },
 
+        // zig fmt: on
         else => {
             std.debug.print("Unexpected Sig Error: {s}\n", .{@errorName(err)});
             @panic("Unexpected Sig Error");

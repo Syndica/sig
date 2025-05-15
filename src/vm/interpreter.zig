@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;
-const syscalls = sig.vm.syscalls;
 
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
@@ -11,7 +10,6 @@ const Executable = sig.vm.Executable;
 const BuiltinProgram = sig.vm.BuiltinProgram;
 const TransactionContext = sig.runtime.TransactionContext;
 const ExecutionError = sig.vm.ExecutionError;
-const EbpfError = sig.vm.EbpfError;
 
 pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
 
