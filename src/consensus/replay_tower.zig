@@ -3068,7 +3068,6 @@ test "tower: greatestCommonAncestor" {
 
 test "tower: selectVoteAndResetForks stake not found" {
     const allocator = std.testing.allocator;
-    const FrozenVotes = sig.consensus.unimplemented.FrozenVotes;
     const fork_tuples = sig.consensus.fork_choice.fork_tuples;
 
     var fork_choice = try sig.consensus.fork_choice.forkChoiceForTest(
@@ -3081,7 +3080,7 @@ test "tower: selectVoteAndResetForks stake not found" {
     defer tower.deinit(allocator);
 
     const latest = LatestValidatorVotesForFrozenBanks{
-        .max_gossip_frozen_votes = std.AutoHashMap(Pubkey, FrozenVotes).init(allocator),
+        .max_gossip_frozen_votes = .{},
     };
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
