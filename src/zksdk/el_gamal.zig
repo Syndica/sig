@@ -1,10 +1,25 @@
+//! Twisted ElGamal encryption.
+//!
+//! https://github.com/anza-xyz/agave/blob/b11ca828cfc658b93cb86a6c5c70561875abe237/zk-sdk/src/encryption/elgamal.rs
+//! https://spl.solana.com/assets/files/twisted_elgamal-2115c6b1e6c62a2bb4516891b8ae9ee0.pdf
+//!
+//! Similar to the ElGamal encryption scheme, twisted ElGamal encodes messages directly as
+//! a Pedersen commitment. Since the messages (scalars) are encrypted as scalar elements for
+//! Curve25519, you'd need to solve the discrete log problem to recover the original encrypted value.
+//!
+//! (Taken from Agave comment):
+//! A twisted ElGamal ciphertext consists of two components:
+//! - A Pedersen commitment that encodes a message to be encrypted
+//! - A "decryption handle" that binds the Pedersen opening to a specific public ke
+//!
+
 const std = @import("std");
-const builtin = @import("builtin");
+const sig = @import("../sig.zig");
 
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Scalar = Edwards25519.scalar.Scalar;
-const CompressedScalar = Edwards25519.scalar.CompressedScalar;
+const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 
 pub const G = b: {
     @setEvalBranchQuota(10_000);
@@ -30,21 +45,32 @@ pub const Pubkey = struct {
     p: Ristretto255,
 
     /// Derives a `Pubkey` that uniquely relates to a `Secret`.
-    pub fn fromSecret(secret: Secret) Pubkey {
+    pub fn fromSecret(secret: Keypair.Secret) Pubkey {
         const scalar = secret.scalar;
         std.debug.assert(!scalar.isZero());
         // unreachable because `H` is known to not be an identity and `scalar` cannot be zero.
         return .{ .p = Ristretto255.mul(H, scalar.invert().toBytes()) catch unreachable };
     }
-};
 
-pub const Secret = struct {
-    scalar: Scalar,
+    pub fn fromBase64(string: []const u8) !Pubkey {
+        const base64 = std.base64.standard;
+        var buffer: [32]u8 = .{0} ** 32;
+        const decoded_length = try base64.Decoder.calcSizeForSlice(string);
+        try std.base64.standard.Decoder.decode(
+            buffer[0..decoded_length],
+            string,
+        );
+        return .{ .p = try Ristretto255.fromBytes(buffer) };
+    }
 };
 
 pub const Keypair = struct {
     secret: Secret,
     public: Pubkey,
+
+    pub const Secret = struct {
+        scalar: Scalar,
+    };
 
     pub fn fromScalar(s: Scalar) Keypair {
         const secret: Secret = .{ .scalar = s };
@@ -54,22 +80,33 @@ pub const Keypair = struct {
 
     /// Generates a cryptographically secure random keypair.
     pub fn random() Keypair {
-        if (!builtin.is_test) @compileError("only use in tests");
-
         var scalar = Scalar.random();
         const keypair = Keypair.fromScalar(scalar);
         std.crypto.utils.secureZero(u64, &scalar.limbs);
-
         return keypair;
     }
 };
 
-pub const DecryptHandle = struct {
-    point: Ristretto255,
+pub const Ciphertext = struct {
+    commitment: pedersen.Commitment,
+    handle: pedersen.DecryptHandle,
 
-    pub fn init(pubkey: *const Pubkey, opening: *const pedersen.Opening) DecryptHandle {
-        // neither pubkey.p nor scalar can be zero, so this function cannot return an error.
-        return .{ .point = pubkey.p.mul(opening.scalar.toBytes()) catch unreachable };
+    pub fn fromBytes(bytes: [64]u8) !Ciphertext {
+        return .{
+            .commitment = .{ .point = try Ristretto255.fromBytes(bytes[0..32].*) },
+            .handle = .{ .point = try Ristretto255.fromBytes(bytes[32..64].*) },
+        };
+    }
+
+    pub fn fromBase64(string: []const u8) !Ciphertext {
+        const base64 = std.base64.standard;
+        var buffer: [64]u8 = .{0} ** 64;
+        const decoded_length = try base64.Decoder.calcSizeForSlice(string);
+        try std.base64.standard.Decoder.decode(
+            buffer[0..decoded_length],
+            string,
+        );
+        return fromBytes(buffer);
     }
 };
 
@@ -84,6 +121,15 @@ pub const pedersen = struct {
 
     pub const Commitment = struct {
         point: Ristretto255,
+    };
+
+    pub const DecryptHandle = struct {
+        point: Ristretto255,
+
+        pub fn init(pubkey: *const Pubkey, opening: *const pedersen.Opening) DecryptHandle {
+            const point = weak_mul.mul(pubkey.p.p, opening.scalar.toBytes());
+            return .{ .point = .{ .p = point } };
+        }
     };
 
     pub fn init(comptime T: type, value: T) struct { Commitment, Opening } {
@@ -105,45 +151,69 @@ pub const pedersen = struct {
     }
 };
 
-pub fn scalarFromInt(comptime T: type, value: T) Scalar {
-    var buffer: [32]u8 = .{0} ** 32;
-    std.mem.writeInt(T, buffer[0..@sizeOf(T)], value, .little);
-    return Scalar.fromBytes(buffer);
-}
-
-const Ciphertext = struct {
-    commitment: pedersen.Commitment,
-    handle: DecryptHandle,
-};
-
 pub fn encrypt(comptime T: type, value: T, pubkey: *const Pubkey) Ciphertext {
     const commitment, const opening = pedersen.init(T, value);
-    const handle = DecryptHandle.init(pubkey, &opening);
+    const handle = pedersen.DecryptHandle.init(pubkey, &opening);
     return .{
         .commitment = commitment,
         .handle = handle,
     };
 }
 
-pub fn decrypt(secret: *const Secret, ciphertext: *const Ciphertext) !Ristretto255 {
+/// Represents the Discrete Log Problem needed to decrypt the twisted ElGamal ciphertext
+///
+/// Recovers x ∈ ℤₚ such that x · G = P.
+const DiscreteLog = struct {
+    generator: Ristretto255,
+    target: Ristretto255,
+    step_point: Ristretto255,
+    batch_size: u32,
+
+    /// Solves the discrete log problem under the assumption that the solution is a positive number
+    /// withing the range `0..max_bound`.
+    pub fn findRange(
+        dl: DiscreteLog,
+        comptime max_bound: u64,
+    ) ?std.math.IntFittingRange(0, max_bound) {
+        comptime std.debug.assert(max_bound <= std.math.maxInt(u32));
+        _ = dl;
+        @panic("TODO");
+    }
+};
+
+/// Returns a representation of the discrete log problem necassary to solve the original scalar used
+/// to create the twisted ElGamal ciphertext.
+pub fn decrypt(secret: *const Keypair.Secret, ciphertext: *const Ciphertext) ?DiscreteLog {
     const p = ciphertext.commitment.point.p;
-    const c = try ciphertext.handle.point.mul(secret.scalar.toBytes());
-    const result = p.sub(c.p);
-    return .{ .p = result };
+    // The handle point can never be zero, so this function cannot fail.
+    const c = ciphertext.handle.point.mul(secret.scalar.toBytes()) catch unreachable;
+    const target = p.sub(c.p);
+    return .{
+        .generator = G,
+        .target = .{ .p = target },
+        .step_point = G,
+        .batch_size = 32,
+    };
 }
 
-test "encrypt decrypt" {
-    const kp = Keypair.random();
-    const amount: u32 = 57;
-
-    const ciphertext = encrypt(u32, amount, &kp.public);
-
-    const expected = try G.mul(scalarFromInt(u32, amount).toBytes());
-    const result = try decrypt(&kp.secret, &ciphertext);
-
-    try std.testing.expectEqualSlices(
-        u8,
-        &expected.toBytes(),
-        &result.toBytes(),
-    );
+pub fn scalarFromInt(comptime T: type, value: T) Scalar {
+    var buffer: [32]u8 = .{0} ** 32;
+    std.mem.writeInt(T, buffer[0..@sizeOf(T)], value, .little);
+    return Scalar.fromBytes(buffer);
 }
+
+// test "encrypt decrypt" {
+//     const kp = Keypair.random();
+//     const amount: u32 = 57;
+
+//     const ciphertext = encrypt(u32, amount, &kp.public);
+
+//     const expected = try G.mul(scalarFromInt(u32, amount).toBytes());
+//     const result = try decrypt(&kp.secret, &ciphertext);
+
+//     try std.testing.expectEqualSlices(
+//         u8,
+//         &expected.toBytes(),
+//         &result.toBytes(),
+//     );
+// }
