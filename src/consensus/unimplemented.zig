@@ -15,7 +15,7 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 
 pub const FrozenVotes = struct { slot: Slot, hashes: []Hash };
 pub const LatestValidatorVotesForFrozenBanks = struct {
-    max_gossip_frozen_votes: std.AutoHashMap(Pubkey, FrozenVotes),
+    max_gossip_frozen_votes: std.AutoArrayHashMapUnmanaged(Pubkey, FrozenVotes) = .{},
     pub fn checkAddVote(
         self: *LatestValidatorVotesForFrozenBanks,
         vote_pubkey: Pubkey,
