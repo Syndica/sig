@@ -1556,7 +1556,7 @@ const TestAccount = struct {
     }
 };
 
-test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
+test "CallerAccount.fromAccountInfoRust" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1566,7 +1566,7 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
     const account = ctx.getAccount();
     const vm_addr = MM_INPUT_START;
 
-    const buffer, const serialized_metadata = 
+    const buffer, const serialized_metadata =
         try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
     defer allocator.free(buffer);
 
@@ -1610,7 +1610,7 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
     );
 }
 
-test "vm.syscalls.cpi: CallerAccount.fromAccountInfoC" {
+test "CallerAccount.fromAccountInfoC" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1696,7 +1696,7 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoC" {
     );
 }
 
-test "vm.syscalls.cpi: translateAccounts" {
+test "translateAccounts" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1706,7 +1706,7 @@ test "vm.syscalls.cpi: translateAccounts" {
     const account = ctx.getAccount();
     const vm_addr = MM_INPUT_START;
 
-    const buffer, const serialized_metadata = 
+    const buffer, const serialized_metadata =
         try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
     defer allocator.free(buffer);
 
@@ -1850,7 +1850,7 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
         .is_signer = true,
         .is_writable = false,
     }};
-    
+
     const vm_addr = MM_INPUT_START;
     const buffer = try intoStableInstruction(
         allocator,
@@ -1895,15 +1895,15 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
     }
 }
 
-test "vm.syscalls.cpi: translateInstructionRust" {
+test "translateInstructionRust" {
     try testTranslateInstruction(AccountInfoRust);
 }
 
-test "vm.syscalls.cpi: translateInstructionC" {
+test "translateInstructionC" {
     try testTranslateInstruction(AccountInfoC);
 }
 
-test "vm.syscalls.cpi: translateSigners" {
+test "translateSigners" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2069,7 +2069,7 @@ const TestCallerAccount = struct {
 
 // test CalleeAccount (BorrowedAccount) updates.
 
-test "vm.syscalls.cpi: updateCalleeAccount: lamports owner" {
+test "updateCalleeAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2107,7 +2107,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: lamports owner" {
     try std.testing.expect(callee_account.account.owner.equals(caller_account.owner));
 }
 
-test "vm.syscalls.cpi: updateCalleeAccount: data" {
+test "updateCalleeAccount: data" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2170,7 +2170,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: data" {
     }
 }
 
-test "vm.syscalls.cpi: updateCalleeAccount: data readonly" {
+test "updateCalleeAccount: data readonly" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2227,7 +2227,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: data readonly" {
     );
 }
 
-test "vm.syscalls.cpi: updateCalleeAccount: data direct mapping" {
+test "updateCalleeAccount: data direct mapping" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2296,7 +2296,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: data direct mapping" {
 
 // test CallerAccount updates
 
-test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
+test "updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2334,7 +2334,7 @@ test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
     try std.testing.expect(caller_account.owner.equals(&callee_account.account.owner));
 }
 
-test "vm.syscalls.cpi: updateCallerAccount: data" {
+test "updateCallerAccount: data" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2448,7 +2448,7 @@ test "vm.syscalls.cpi: updateCallerAccount: data" {
     try std.testing.expectEqual(callee_account.account.data.len, 0);
 }
 
-test "vm.syscalls.cpi: updateCallerAccount: data direct mapping" {
+test "updateCallerAccount: data direct mapping" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2599,7 +2599,7 @@ test "vm.syscalls.cpi: updateCallerAccount: data direct mapping" {
     }
 }
 
-test "vm.syscalls.cpi: updateCallerAccount: data capacity direct mapping" {
+test "updateCallerAccount: data capacity direct mapping" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2699,7 +2699,7 @@ fn testCpiCommon(comptime AccountInfoType: type) !void {
     defer allocator.free(heap_buffer);
 
     const account_info_addr = memory.INPUT_START;
-    const input_buffer, const serialized_metadata = 
+    const input_buffer, const serialized_metadata =
         try account.intoAccountInfo(allocator, AccountInfoType, account_info_addr);
     defer allocator.free(input_buffer);
 
