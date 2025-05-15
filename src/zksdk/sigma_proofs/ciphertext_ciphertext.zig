@@ -29,7 +29,7 @@ pub const CiphertextCiphertextEqualityProof = struct {
         amount: u64,
         transcript: *Transcript,
     ) CiphertextCiphertextEqualityProof {
-        transcript.appendMessage("dom-sep", "ciphertext-ciphertext-equality-proof");
+        transcript.appendDomSep("ciphertext-ciphertext-equality-proof");
 
         const P_first = first_kp.public.p;
         const D_first = first_ciphertext.handle.point;
@@ -92,7 +92,7 @@ pub const CiphertextCiphertextEqualityProof = struct {
         second_ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
     ) !void {
-        transcript.appendMessage("dom-sep", "ciphertext-ciphertext-equality-proof");
+        transcript.appendDomSep("ciphertext-ciphertext-equality-proof");
 
         const P_first = first_pubkey.p;
         const C_first = first_ciphertext.commitment.point;
@@ -109,9 +109,9 @@ pub const CiphertextCiphertextEqualityProof = struct {
 
         const c = transcript.challengeScalar("c");
 
-        transcript.appendMessage("z_s", &self.z_s.toBytes());
-        transcript.appendMessage("z_x", &self.z_x.toBytes());
-        transcript.appendMessage("z_r", &self.z_r.toBytes());
+        transcript.appendScalar("z_s", self.z_s);
+        transcript.appendScalar("z_x", self.z_x);
+        transcript.appendScalar("z_r", self.z_r);
 
         const w = Scalar.fromBytes(transcript.challengeScalar("w")); // w used for batch verification
         const ww = w.mul(w);
