@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const executor = sig.runtime.executor;
-const features = sig.runtime.features;
 const compute_budget_program = sig.runtime.program.compute_budget;
 
 const AccountLoader = sig.runtime.account_loader.BatchAccountCache;
