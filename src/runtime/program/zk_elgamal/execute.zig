@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
-const zk_elgamal_program = sig.runtime.program.zk_elgamal_program;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 
