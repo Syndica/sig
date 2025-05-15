@@ -292,7 +292,7 @@ pub const ForkProgress = struct {
             slot: Slot,
             parent_slot: Slot,
             parent: *const ForkProgress,
-            validator_vote_pubkey: Pubkey,
+            validator_vote_pubkey: ?Pubkey,
 
             // information about the slot and epoch
             slot_hash: ?Hash,
@@ -317,15 +317,16 @@ pub const ForkProgress = struct {
             else
                 parent.propagated_stats.prev_leader_slot,
 
-            .validator_stake_info = if (params.i_am_leader) .{
-                .validator_vote_pubkey = params.validator_vote_pubkey,
+            .validator_stake_info = if (!params.i_am_leader) null else .{
+                .validator_vote_pubkey = params.validator_vote_pubkey orelse
+                    return error.MissingLeaderVoteAccount,
                 .stake = blk: {
                     const stake, _ = params.epoch_stakes.stakes.vote_accounts.accounts
-                        .get(params.validator_vote_pubkey) orelse break :blk 0;
+                        .get(params.validator_vote_pubkey.?) orelse break :blk 0;
                     break :blk stake;
                 },
                 .total_epoch_stake = params.epoch_stakes.total_stake,
-            } else null,
+            },
 
             .num_blocks_on_fork = parent.num_blocks_on_fork + 1,
 

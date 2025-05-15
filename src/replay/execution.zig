@@ -33,7 +33,7 @@ pub const ReplayExecutionState = struct {
     allocator: Allocator,
     logger: ScopedLogger,
     my_identity: Pubkey,
-    vote_account: Pubkey,
+    vote_account: ?Pubkey,
     accounts_db: *AccountsDB,
     thread_pool: *ThreadPool,
     blockstore_reader: *BlockstoreReader,
@@ -44,16 +44,19 @@ pub const ReplayExecutionState = struct {
     pub fn init(
         allocator: Allocator,
         logger: sig.trace.Logger,
+        my_identity: Pubkey,
         thread_pool: *ThreadPool,
         epoch_schedule: core.EpochSchedule,
         accounts_db: *AccountsDB,
         blockstore_reader: *BlockstoreReader,
     ) Allocator.Error!ReplayExecutionState {
-        _ = thread_pool; // autofix
         return .{
             .allocator = allocator,
             .logger = ScopedLogger.from(logger),
+            .my_identity = my_identity,
+            .vote_account = null, // voting not currently supported
             .accounts_db = accounts_db,
+            .thread_pool = thread_pool,
             .blockstore_reader = blockstore_reader,
             .slot_tracker = .{},
             .epochs = .{ .schedule = epoch_schedule },

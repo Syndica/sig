@@ -1172,6 +1172,7 @@ fn validator(
         .{.{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
+            .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
             .exit = app_base.exit,
             .blockstore_reader = blockstore_reader,
             .accounts_db = &loaded_snapshot.accounts_db,

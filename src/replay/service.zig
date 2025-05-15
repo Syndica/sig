@@ -20,6 +20,7 @@ pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
     logger: sig.trace.Logger,
+    my_identity: sig.core.Pubkey,
     /// Tell replay when to exit
     exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
@@ -48,6 +49,7 @@ const ReplayState = struct {
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
                 deps.logger,
+                deps.my_identity,
                 thread_pool,
                 deps.epoch_schedule,
                 deps.accounts_db,
