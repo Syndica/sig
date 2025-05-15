@@ -51,9 +51,8 @@ pub const VoteAuthorizeWithSeedArgs = struct {
     current_authority_derived_key_seed: []const u8,
     new_authority: Pubkey,
 
-    pub const @"!bincode-config:current_authority_derived_key_seed": sig.bincode.FieldConfig(
-        []const u8,
-    ) = .{ .deserializer = sig.bincode.readUtf8String };
+    pub const @"!bincode-config:current_authority_derived_key_seed" =
+        sig.bincode.utf8StringCodec([]const u8);
 
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to be updated
@@ -70,9 +69,8 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 
-    pub const @"!bincode-config:current_authority_derived_key_seed": sig.bincode.FieldConfig(
-        []const u8,
-    ) = .{ .deserializer = sig.bincode.readUtf8String };
+    pub const @"!bincode-config:current_authority_derived_key_seed" =
+        sig.bincode.utf8StringCodec([]const u8);
 
     pub const AccountIndex = enum(u8) {
         /// `[Write]` Vote account to be updated
