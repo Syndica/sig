@@ -170,7 +170,7 @@ pub fn execute(
         },
         .err => |err| {
             const err_kind = sig.vm.getExecutionErrorKind(err);
-            if (ic.tc.ec.feature_set.active.contains(features.DEPLETE_CU_METER_ON_VM_FAILURE) and
+            if (ic.tc.feature_set.active.contains(features.DEPLETE_CU_METER_ON_VM_FAILURE) and
                 err_kind != .Syscall)
             {
                 ic.tc.compute_meter = 0;
