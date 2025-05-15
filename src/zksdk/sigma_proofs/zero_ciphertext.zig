@@ -22,7 +22,7 @@ pub const ZeroCiphertextProof = struct {
         ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
     ) ZeroCiphertextProof {
-        transcript.appendMessage("dom-sep", "zero-ciphertext-proof");
+        transcript.appendDomSep("zero-ciphertext-proof");
 
         const P = kp.public.p;
         const s = kp.secret.scalar;
@@ -36,8 +36,8 @@ pub const ZeroCiphertextProof = struct {
         const Y_P = P.mul(y.toBytes()) catch unreachable;
         const Y_D: Ristretto255 = .{ .p = weak_mul.mul(D.p, y.toBytes()) };
 
-        transcript.appendMessage("Y_P", &Y_P.toBytes());
-        transcript.appendMessage("Y_D", &Y_D.toBytes());
+        transcript.appendPoint("Y_P", Y_P);
+        transcript.appendPoint("Y_D", Y_D);
 
         const c = transcript.challengeScalar("c");
         _ = transcript.challengeScalar("w");
@@ -58,7 +58,7 @@ pub const ZeroCiphertextProof = struct {
         ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
     ) !void {
-        transcript.appendMessage("dom-sep", "zero-ciphertext-proof");
+        transcript.appendDomSep("zero-ciphertext-proof");
 
         const P = pubkey.p;
         const C = ciphertext.commitment.point;
@@ -71,7 +71,7 @@ pub const ZeroCiphertextProof = struct {
 
         const c = transcript.challengeScalar("c");
 
-        transcript.appendMessage("z", &self.z.toBytes());
+        transcript.appendScalar("z", self.z);
         const w = transcript.challengeScalar("w"); // w used for batch verification
 
         const w_negated = Edwards25519.scalar.neg(w);
