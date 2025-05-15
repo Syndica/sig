@@ -5,7 +5,7 @@ const runtime = sig.runtime;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
-const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RentCollector;
+const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
 const CollectedInfo = sig.core.rent_collector.CollectedInfo;
 
 const AccountSharedData = runtime.AccountSharedData;
