@@ -1152,9 +1152,9 @@ pub const SnapshotHashes = struct {
         multiple: []const SlotAndHash,
 
         pub const @"!bincode-config": bincode.FieldConfig(IncrementalSnapshotsList) = .{
-            .serializer = bincodeSerializeFn,
-            .deserializer = bincodeDeserializeFn,
-            .free = bincodeFreeFn,
+            .serializer = bincodeWrite,
+            .deserializer = bincodeRead,
+            .free = bincodeFree,
             .skip = false,
             .post_deserialize_fn = null,
         };
@@ -1190,24 +1190,38 @@ pub const SnapshotHashes = struct {
 
         /// Responsibility to `.deinit` the returned snapshot collection with the specified allocator falls to the caller.
         /// Accepts any `list.len`.
-        pub fn initListCloned(allocator: std.mem.Allocator, list: []const SlotAndHash) !IncrementalSnapshotsList {
+        pub fn initListCloned(
+            allocator: std.mem.Allocator,
+            list: []const SlotAndHash,
+        ) !IncrementalSnapshotsList {
             if (list.len == 1) return initSingle(list[0]);
             const uncloned = initList(list);
             return uncloned.clone(allocator);
         }
 
-        pub fn clone(inc: *const IncrementalSnapshotsList, allocator: std.mem.Allocator) !IncrementalSnapshotsList {
+        pub fn clone(
+            inc: *const IncrementalSnapshotsList,
+            allocator: std.mem.Allocator,
+        ) !IncrementalSnapshotsList {
             return switch (inc.*) {
                 .single => |single| .{ .single = single },
                 .multiple => |list| .{ .multiple = try allocator.dupe(SlotAndHash, list) },
             };
         }
 
-        fn bincodeSerializeFn(writer: anytype, inc_list: anytype, params: bincode.Params) !void {
+        fn bincodeWrite(
+            writer: anytype,
+            inc_list: IncrementalSnapshotsList,
+            params: bincode.Params,
+        ) !void {
             try bincode.write(writer, inc_list.getSlice(), params);
         }
 
-        fn bincodeDeserializeFn(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !IncrementalSnapshotsList {
+        fn bincodeRead(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) !IncrementalSnapshotsList {
             const faililng_allocator = sig.utils.allocators.failing.allocator(.{});
 
             const maybe_len = try bincode.readIntAsLength(usize, reader, params);
@@ -1224,8 +1238,8 @@ pub const SnapshotHashes = struct {
             }
         }
 
-        fn bincodeFreeFn(allocator: std.mem.Allocator, inc_list: anytype) void {
-            IncrementalSnapshotsList.deinit(&inc_list, allocator);
+        fn bincodeFree(allocator: std.mem.Allocator, inc_list: IncrementalSnapshotsList) void {
+            inc_list.deinit(allocator);
         }
     };
 };
