@@ -1,10 +1,8 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
 
 const zksdk = sig.zksdk;
 const zk_elgamal = sig.runtime.program.zk_elgamal;
-const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 
