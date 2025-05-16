@@ -19,3 +19,5 @@ pub const CiphertextCommitmentEqualityProof = ciphertext_commitment.Proof;
 pub const PercentageWithCapProof = percentage.Proof;
 pub const PubkeyValidityProof = pubkey_validity.Proof;
 pub const ZeroCiphertextProofData = zero_ciphertext.Data;
+
+pub const bulletproofs = @import("range_proof/bulletproofs.zig");
