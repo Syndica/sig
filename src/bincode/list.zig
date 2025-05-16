@@ -12,7 +12,7 @@ pub fn valueEncodedAsSlice(
             allocator: std.mem.Allocator,
             reader: anytype,
             params: bincode.Params,
-        ) anyerror!T {
+        ) !T {
             const len = (try bincode.readIntAsLength(usize, reader, params)) orelse
                 return Error.SingleElementSliceInvalidLength;
             if (len != 1) return Error.SingleElementSliceInvalidLength;
@@ -24,9 +24,9 @@ pub fn valueEncodedAsSlice(
 
         fn serializeImpl(
             writer: anytype,
-            data: anytype,
+            data: u8,
             params: bincode.Params,
-        ) anyerror!void {
+        ) !void {
             const as_slice: []const T = (&data)[0..1];
             if (config.serializer) |serialize| {
                 return try serialize(writer, as_slice, params);

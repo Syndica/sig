@@ -9,7 +9,7 @@ pub fn defaultToNullOnEof(
         /// When this is true, the field will be encoded and decoded as an optional value, defaulting to null on eof while reading.
         encode_optional: bool = false,
 
-        free: ?fn (allocator: std.mem.Allocator, data: anytype) void = null,
+        free: ?fn (allocator: std.mem.Allocator, data: T) void = null,
     },
 ) bincode.FieldConfig(?T) {
     const S = struct {
@@ -17,7 +17,7 @@ pub fn defaultToNullOnEof(
             allocator: std.mem.Allocator,
             reader: anytype,
             params: bincode.Params,
-        ) anyerror!?T {
+        ) !?T {
             const EncodedType = if (options.encode_optional) ?T else T;
             return bincode.read(allocator, EncodedType, reader, params) catch |err| switch (err) {
                 error.EndOfStream => null,
@@ -27,9 +27,9 @@ pub fn defaultToNullOnEof(
 
         fn serializer(
             writer: anytype,
-            maybe_data: anytype,
+            maybe_data: ?T,
             params: bincode.Params,
-        ) anyerror!void {
+        ) !void {
             if (options.encode_optional) {
                 return try bincode.write(writer, maybe_data, params);
             } else {

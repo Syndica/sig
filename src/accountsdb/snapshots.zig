@@ -261,8 +261,7 @@ pub const ExtraFields = struct {
         return extra_fields;
     }
 
-    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
-        comptime if (@TypeOf(data) == ExtraFields) unreachable;
+    fn bincodeFree(allocator: std.mem.Allocator, data: ExtraFields) void {
         data.deinit(allocator);
     }
 };
@@ -486,7 +485,7 @@ pub const AccountsDbFields = struct {
         };
     }
 
-    fn bincodeWrite(writer: anytype, data: anytype, params: bincode.Params) !void {
+    fn bincodeWrite(writer: anytype, data: AccountsDbFields, params: bincode.Params) !void {
         comptime if (@TypeOf(data) != AccountsDbFields) unreachable;
 
         {
@@ -508,7 +507,7 @@ pub const AccountsDbFields = struct {
         try bincode.write(writer, data.rooted_slot_hashes, params);
     }
 
-    fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
+    fn bincodeFree(allocator: std.mem.Allocator, data: AccountsDbFields) void {
         data.deinit(allocator);
     }
 };

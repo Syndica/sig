@@ -7,7 +7,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
     const list_info = sig.utils.types.boundedArrayInfo(List).?;
 
     const S = struct {
-        fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+        fn serialize(writer: anytype, data: List, params: bincode.Params) !void {
             try bincode.write(writer, data.constSlice(), params);
         }
 
@@ -40,7 +40,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
             }
         }
 
-        fn free(allocator: std.mem.Allocator, data: anytype) void {
+        fn free(allocator: std.mem.Allocator, data: List) void {
             if (list_info.Elem != u8) {
                 for (data.constSlice()) |value| bincode.free(allocator, value);
             }

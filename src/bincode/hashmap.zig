@@ -121,7 +121,7 @@ pub fn hashMapFieldConfig(
     const hm_info = hashMapInfo(HashMapType).?;
 
     const S = struct {
-        fn serialize(writer: anytype, data: anytype, params: Params) anyerror!void {
+        fn serialize(writer: anytype, data: HashMapType, params: Params) !void {
             const T = @TypeOf(data);
 
             // NOTE: we need to use unmanaged here because managed requires a mutable reference
@@ -155,7 +155,7 @@ pub fn hashMapFieldConfig(
             allocator: std.mem.Allocator,
             reader: anytype,
             params: Params,
-        ) anyerror!HashMapType {
+        ) !HashMapType {
             return readCtx(allocator, HashMapType, reader, params, struct {
                 pub fn readKey(
                     _allocator: std.mem.Allocator,
@@ -192,7 +192,7 @@ pub fn hashMapFieldConfig(
             });
         }
 
-        fn free(allocator: std.mem.Allocator, data: anytype) void {
+        fn free(allocator: std.mem.Allocator, data: HashMapType) void {
             var copy = data;
             var iter = copy.iterator();
             while (iter.next()) |entry| {
