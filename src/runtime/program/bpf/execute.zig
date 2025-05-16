@@ -6,6 +6,7 @@ const features = sig.runtime.features;
 const serialize = sig.runtime.program.bpf.serialize;
 const stable_log = sig.runtime.stable_log;
 
+const ExecutionError = sig.vm.ExecutionError;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
@@ -13,7 +14,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
-) (error{OutOfMemory} || InstructionError)!void {
+) ExecutionError!void {
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
     const direct_mapping = ic.tc.feature_set.active.contains(
@@ -159,38 +160,44 @@ pub fn execute(
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1658-L1731
-    const execute_error: ?InstructionError = switch (result) {
+    var maybe_execute_error: ?ExecutionError = null;
+    switch (result) {
+        // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
         .ok => |status| if (status != 0) {
-            // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
-            std.debug.print(
-                "Program {} failed: {}\n",
-                .{ ic.ixn_info.program_meta.pubkey, status },
-            );
-            @panic("sbpf error handling not implemented!");
-        } else null,
-        .err => |sbpf_err| {
-            // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1663-L1730
-            std.debug.print("Sbpf error: {}\n", .{sbpf_err});
-            @panic("sbpf error handling not implemented!");
+            maybe_execute_error = sig.vm.executionErrorFromStatusCode(status);
         },
-    };
+        .err => |err| {
+            const err_kind = sig.vm.getExecutionErrorKind(err);
+            if (ic.tc.feature_set.active.contains(features.DEPLETE_CU_METER_ON_VM_FAILURE) and
+                err_kind != .Syscall)
+            {
+                ic.tc.compute_meter = 0;
+            }
+
+            if (direct_mapping and err == error.AccessViolation) {
+                std.debug.print("TODO: Handle AccessViolation: {s}\n", .{@errorName(err)});
+            }
+
+            maybe_execute_error = err;
+        },
+    }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1750-L1756
-    const execute_or_deserialize_error = if (execute_error == null)
+    if (maybe_execute_error == null)
         serialize.deserializeParameters(
             allocator,
             ic,
             !direct_mapping,
             parameter_bytes,
             accounts_metadata.constSlice(),
-        )
-    else
-        execute_error;
+        ) catch |err| {
+            maybe_execute_error = err;
+        };
 
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1757-L1761
     // TODO: update timings
 
-    return execute_or_deserialize_error;
+    if (maybe_execute_error) |err| return err;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L299-L300

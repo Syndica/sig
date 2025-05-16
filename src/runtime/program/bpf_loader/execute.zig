@@ -64,7 +64,15 @@ pub fn execute(
     // NOTE: We reborrow the program account within bpf_program.execute, this adds an additional
     // borrow wrt Agave's implementation. It should not cause an issue but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
-    try bpf_program.execute(allocator, ic);
+    bpf_program.execute(allocator, ic) catch |err| {
+        _, const kind, const msg = sig.vm.convertExecutionError(err);
+        if (kind != .Instruction) {
+            try sig.runtime.stable_log.programFailure(ic.tc, ic.ixn_info.program_meta.pubkey, msg);
+            return InstructionError.ProgramFailedToComplete;
+        } else {
+            return sig.vm.instructionErrorFromExecutionError(err);
+        }
+    };
 }
 
 // TODO: v4 loader
