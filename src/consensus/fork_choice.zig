@@ -270,6 +270,7 @@ pub const ForkChoice = struct {
         if (self.fork_infos.getPtr(parent)) |parent_fork_info| {
             try parent_fork_info.children.put(slot_hash_key, {});
         } else {
+            std.debug.print("{any}", .{parent});
             // If parent is given then parent's info must
             // already exist by time child is being added.
             return error.MissingParent;
@@ -2006,9 +2007,9 @@ pub fn forkChoiceForTest(
     return fork_choice;
 }
 
-const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
+pub const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
-const fork_tuples = [_]TreeNode{
+pub const fork_tuples = [_]TreeNode{
     // (0)
     // └── (1)
     //     ├── (2)
