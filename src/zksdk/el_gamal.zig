@@ -130,6 +130,12 @@ pub const pedersen = struct {
     pub const Opening = struct {
         scalar: Scalar,
 
+        pub fn fromBytes(bytes: [32]u8) !Opening {
+            const scalar = Scalar.fromBytes(bytes);
+            try Edwards25519.scalar.rejectNonCanonical(bytes);
+            return .{ .scalar = scalar };
+        }
+
         pub fn random() Opening {
             return .{ .scalar = Scalar.random() };
         }
@@ -137,6 +143,10 @@ pub const pedersen = struct {
 
     pub const Commitment = struct {
         point: Ristretto255,
+
+        pub fn fromBytes(bytes: [32]u8) !Commitment {
+            return .{ .point = try Ristretto255.fromBytes(bytes) };
+        }
 
         pub fn fromBase64(string: []const u8) !Commitment {
             const base64 = std.base64.standard;
@@ -146,7 +156,7 @@ pub const pedersen = struct {
                 buffer[0..decoded_length],
                 string,
             );
-            return .{ .point = try Ristretto255.fromBytes(buffer) };
+            return fromBytes(buffer);
         }
     };
 

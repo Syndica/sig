@@ -12,7 +12,7 @@ const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 
-pub const CiphertextCiphertextEqualityProof = struct {
+pub const Proof = struct {
     Y_0: Ristretto255,
     Y_1: Ristretto255,
     Y_2: Ristretto255,
@@ -28,7 +28,7 @@ pub const CiphertextCiphertextEqualityProof = struct {
         second_opening: *const pedersen.Opening,
         amount: u64,
         transcript: *Transcript,
-    ) CiphertextCiphertextEqualityProof {
+    ) Proof {
         transcript.appendDomSep("ciphertext-ciphertext-equality-proof");
 
         const P_first = first_kp.public.p;
@@ -85,7 +85,7 @@ pub const CiphertextCiphertextEqualityProof = struct {
     }
 
     pub fn verify(
-        self: CiphertextCiphertextEqualityProof,
+        self: Proof,
         first_pubkey: *const ElGamalPubkey,
         second_pubkey: *const ElGamalPubkey,
         first_ciphertext: *const ElGamalCiphertext,
@@ -177,19 +177,32 @@ pub const CiphertextCiphertextEqualityProof = struct {
         }
     }
 
-    pub fn fromBytes(bytes: [224]u8) !CiphertextCiphertextEqualityProof {
+    pub fn fromBytes(bytes: [224]u8) !Proof {
+        const Y_0 = try Ristretto255.fromBytes(bytes[0..32].*);
+        const Y_1 = try Ristretto255.fromBytes(bytes[32..64].*);
+        const Y_2 = try Ristretto255.fromBytes(bytes[64..96].*);
+        const Y_3 = try Ristretto255.fromBytes(bytes[96..128].*);
+
+        const z_s = Scalar.fromBytes(bytes[128..160].*);
+        const z_x = Scalar.fromBytes(bytes[160..192].*);
+        const z_r = Scalar.fromBytes(bytes[192..224].*);
+
+        try Edwards25519.scalar.rejectNonCanonical(z_s.toBytes());
+        try Edwards25519.scalar.rejectNonCanonical(z_x.toBytes());
+        try Edwards25519.scalar.rejectNonCanonical(z_r.toBytes());
+
         return .{
-            .Y_0 = try Ristretto255.fromBytes(bytes[0..32].*),
-            .Y_1 = try Ristretto255.fromBytes(bytes[32..64].*),
-            .Y_2 = try Ristretto255.fromBytes(bytes[64..96].*),
-            .Y_3 = try Ristretto255.fromBytes(bytes[96..128].*),
-            .z_s = Scalar.fromBytes(bytes[128..160].*),
-            .z_x = Scalar.fromBytes(bytes[160..192].*),
-            .z_r = Scalar.fromBytes(bytes[192..224].*),
+            .Y_0 = Y_0,
+            .Y_1 = Y_1,
+            .Y_2 = Y_2,
+            .Y_3 = Y_3,
+            .z_s = z_s,
+            .z_x = z_x,
+            .z_r = z_r,
         };
     }
 
-    pub fn fromBase64(string: []const u8) !CiphertextCiphertextEqualityProof {
+    pub fn fromBase64(string: []const u8) !Proof {
         const base64 = std.base64.standard;
         var buffer: [224]u8 = .{0} ** 224;
         const decoded_length = try base64.Decoder.calcSizeForSlice(string);
@@ -218,7 +231,7 @@ test "correctness" {
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
 
-    const proof = CiphertextCiphertextEqualityProof.init(
+    const proof = Proof.init(
         &first_kp,
         &second_kp.public,
         &first_ciphertext,
@@ -254,7 +267,7 @@ test "different messages" {
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
 
-    const proof = CiphertextCiphertextEqualityProof.init(
+    const proof = Proof.init(
         &first_kp,
         &second_kp.public,
         &first_ciphertext,
@@ -289,7 +302,7 @@ test "proof string" {
     const second_ciphertext = try ElGamalCiphertext.fromBase64(second_ciphertext_string);
 
     const proof_string = "MlfRDO4sBPbpciEXci3QfVSLVABAJ0s8wMZ/Uz3AyETmGJ1BUE961fHIiNQXPD0j1uu1Josj//E8loPD1w+4E3bfDBJ3Mp2YqeOv41Bdec02YXlAotTGjq/UfncGdUhyampkuXUmSvnmkf5BIp4nr3X18cR9KHTAzBrKv6erjAxIckyRnACaZGEx+ZboEb3FBEXqTklytT1nrebbwkjvDUWbcpZrE+xxBWYek3qeq1x1debzxVhtS2yx44cvR5UIGLzGYa2ec/xh7wvyNEbnX80rZju2dztr4bN5f2vrTgk=";
-    const proof = try CiphertextCiphertextEqualityProof.fromBase64(proof_string);
+    const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
     var verifier_transcript = Transcript.init("Test");
