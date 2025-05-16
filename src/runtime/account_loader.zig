@@ -603,7 +603,7 @@ fn newTestingEnv() TestingEnv {
         .rent_collector = sig.core.rent_collector.defaultCollector(0),
         .feature_set = sig.runtime.FeatureSet.EMPTY,
         .compute_budget_limits = ComputeBudgetLimits{
-            .updated_heap_bytes = 0,
+            .heap_size = 0,
             .compute_unit_limit = 0,
             .compute_unit_price = 0,
             .loaded_accounts_bytes = 1_000,
@@ -967,7 +967,7 @@ test "load tx too large" {
         .data = .{ .unowned_allocation = account_data },
         .lamports = 1_000_000,
         .executable = false,
-        .owner = sig.runtime.program.system_program.ID,
+        .owner = sig.runtime.program.system.ID,
         .rent_epoch = RENT_EXEMPT_RENT_EPOCH,
     });
 

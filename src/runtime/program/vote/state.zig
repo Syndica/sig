@@ -4,7 +4,7 @@ const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
 
 const InstructionError = sig.core.instruction.InstructionError;
-const VoteError = sig.runtime.program.vote_program.VoteError;
+const VoteError = sig.runtime.program.vote.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;

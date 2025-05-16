@@ -4,7 +4,7 @@ const sig = @import("../../../sig.zig");
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
-const vote_program = sig.runtime.program.vote_program;
+const vote_program = sig.runtime.program.vote;
 
 pub const IntializeAccount = struct {
     node_pubkey: Pubkey,

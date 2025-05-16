@@ -3,8 +3,8 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 const executor = sig.runtime.executor;
-const system_program = sig.runtime.program.system_program;
-const bpf_loader_program = sig.runtime.program.bpf_loader_program;
+const system_program = sig.runtime.program.system;
+const bpf_loader_program = sig.runtime.program.bpf_loader;
 
 const Pubkey = sig.core.Pubkey;
 const Instruction = sig.core.instruction.Instruction;

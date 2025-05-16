@@ -17,6 +17,7 @@ const SlotContext = sig.runtime.SlotContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionError = sig.runtime.transaction_error.TransactionError;
+const TransactionResult = sig.runtime.transaction_error.TransactionResult;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionTrace = TransactionContext.InstructionTrace;
 const LogCollector = sig.runtime.LogCollector;
@@ -79,13 +80,6 @@ pub const TransactionExecutionConfig = struct {
     log: bool,
     log_messages_byte_limit: ?u64,
 };
-
-pub fn TransactionResult(comptime T: type) type {
-    return union(enum(u8)) {
-        ok: T,
-        err: TransactionError,
-    };
-}
 
 pub const TransactionFees = struct {
     transaction_fee: u64,
@@ -199,9 +193,13 @@ pub fn loadAndExecuteTransaction(
     // [agave] hhttps://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L632-L688
 
     // TODO: Should the compute budget program require the feature set?
-    const compute_budget_limits = compute_budget_program.execute(
+    const compute_budget_result = compute_budget_program.execute(
         transaction.instruction_infos,
-    ) catch |err| return .{ .err = err };
+    );
+    const compute_budget_limits = switch (compute_budget_result) {
+        .ok => |limits| limits,
+        .err => |err| return .{ .err = err },
+    };
 
     const check_fee_payer_result = checkFeePayer(
         transaction.fee_payer,
@@ -439,7 +437,7 @@ pub fn loadAccounts(
 //         .lamports = 1,
 //         .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
 //     });
-//     try bank.accounts.put(allocator, sig.runtime.program.vote_program.ID, .{
+//     try bank.accounts.put(allocator, sig.runtime.program.vote.ID, .{
 //         .owner = sig.runtime.ids.NATIVE_LOADER_ID,
 //         .executable = true,
 //         .data = .{ .empty = .{ .len = 0 } },
@@ -509,7 +507,7 @@ pub fn loadAccounts(
 //     // program that should fail
 //     const tx5 = sig.core.Transaction{
 //         .msg = .{
-//             .account_keys = &.{sig.runtime.program.vote_program.ID},
+//             .account_keys = &.{sig.runtime.program.vote.ID},
 //             .instructions = &.{
 //                 .{ .program_index = 0, .account_indexes = &.{0}, .data = "" },
 //             },
