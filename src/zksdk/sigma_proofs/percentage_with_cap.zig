@@ -9,7 +9,7 @@ const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 
-pub const PercentageWithCapProof = struct {
+pub const Proof = struct {
     max_proof: MaxProof,
     equality_proof: EqualityProof,
 
@@ -25,7 +25,7 @@ pub const PercentageWithCapProof = struct {
         claimed_opening: *const pedersen.Opening,
         max_value: u64,
         transcript: *Transcript,
-    ) PercentageWithCapProof {
+    ) Proof {
         transcript.appendDomSep("percentage-with-cap-proof");
 
         var transcript_percentage_above_max = transcript.*;
@@ -82,7 +82,7 @@ pub const PercentageWithCapProof = struct {
         delta_commitment: *const pedersen.Commitment,
         claimed_commitment: *const pedersen.Commitment,
         transcript: *Transcript,
-    ) PercentageWithCapProof {
+    ) Proof {
         const C_delta = delta_commitment.point;
         const C_claimed = claimed_commitment.point;
 
@@ -155,7 +155,7 @@ pub const PercentageWithCapProof = struct {
         claimed_opening: *const pedersen.Opening,
         max_value: u64,
         transcript: *Transcript,
-    ) PercentageWithCapProof {
+    ) Proof {
         const m = el_gamal.scalarFromInt(u64, max_value);
         const C_percentage = percentage_commitment.point;
 
@@ -231,7 +231,7 @@ pub const PercentageWithCapProof = struct {
     }
 
     pub fn verify(
-        self: PercentageWithCapProof,
+        self: Proof,
         percentage_commitment: *const pedersen.Commitment,
         delta_commitment: *const pedersen.Commitment,
         claimed_commitment: *const pedersen.Commitment,
@@ -322,7 +322,7 @@ pub const PercentageWithCapProof = struct {
         }
     }
 
-    pub fn fromBytes(bytes: [256]u8) !PercentageWithCapProof {
+    pub fn fromBytes(bytes: [256]u8) !Proof {
         const Y_max_proof = try Ristretto255.fromBytes(bytes[0..32].*);
         const z_max_proof = Scalar.fromBytes(bytes[32..64].*);
         const c_max_proof = Scalar.fromBytes(bytes[64..96].*);
@@ -355,7 +355,7 @@ pub const PercentageWithCapProof = struct {
         };
     }
 
-    pub fn fromBase64(string: []const u8) !PercentageWithCapProof {
+    pub fn fromBase64(string: []const u8) !Proof {
         const base64 = std.base64.standard;
         var buffer: [256]u8 = .{0} ** 256;
         const decoded_length = try base64.Decoder.calcSizeForSlice(string);
@@ -414,7 +414,7 @@ test "above max proof" {
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
 
-    var proof = PercentageWithCapProof.init(
+    var proof = Proof.init(
         &percentage_commitment,
         &percentage_opening,
         percentage_amount,
@@ -477,7 +477,7 @@ test "below max proof" {
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
 
-    var proof = PercentageWithCapProof.init(
+    var proof = Proof.init(
         &percentage_commitment,
         &percentage_opening,
         percentage_amount,
@@ -529,7 +529,7 @@ test "is zero" {
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
 
-    var proof = PercentageWithCapProof.init(
+    var proof = Proof.init(
         &percentage_commitment,
         &percentage_opening,
         percentage_amount,
@@ -565,7 +565,7 @@ test "proof string" {
 
     // zig fmt: off
     const proof_string = "SpmzL7hrLLp7P/Cz+2kBh22QKq3mWb0v28Er6lO9aRfBer77VY03i9VSEd4uHYMXdaf/MBPUsDVjUxNjoauwBmw6OrAcq6tq9o1Z+NS8lkukVh6sqSrSh9dy9ipq6JcIePAVmGwDNk07ACgPE/ynrenwSPJ7ZHDGZszGkw95h25gTKPyoaMbvZoXGLtkuHmvXJ7KBBJmK2eTzELb6UF2HOUg9cGFgomL8Xa3l14LBDMwLAokJK4n2d6eTkk1O0ECddmTDwoG6lmt0fHXYm37Z+k4yrQkhUgKwph2nLWG3Q7zvRM2qVFxFUGfLWJq5Sm7l7segOm+hQpRaH+q7OHNBg==";
-    const proof = try PercentageWithCapProof.fromBase64(proof_string);
+    const proof = try Proof.fromBase64(proof_string);
     // zig fmt: on
 
     var verifier_transcript = Transcript.init("test");
