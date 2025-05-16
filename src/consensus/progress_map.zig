@@ -343,6 +343,19 @@ pub const ForkProgress = struct {
         num_dropped_blocks_on_fork: u64,
     };
 
+    pub fn zeroes(
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!ForkProgress {
+        return ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 9,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         params: InitParams,
