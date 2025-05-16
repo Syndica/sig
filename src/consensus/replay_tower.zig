@@ -550,6 +550,7 @@ pub const ReplayTower = struct {
         while (iterator.next()) |descendant| {
             const candidate_slot = descendant.key_ptr.*;
             var candidate_descendants = descendant.value_ptr.*;
+
             // 1) Don't consider any banks that haven't been frozen yet
             //    because the needed stats are unavailable
             // 2) Only consider lockouts at the latest `frozen` bank
@@ -599,7 +600,7 @@ pub const ReplayTower = struct {
             else
                 is_candidate_less_eq_root;
 
-            if (!is_valid_switch) {
+            if (is_valid_switch) {
                 continue;
             }
 
@@ -618,6 +619,9 @@ pub const ReplayTower = struct {
                 .fork_stats
                 .lockout_intervals;
 
+            if (lockout_intervals.map.count() == 0) {
+                continue;
+            }
             // Find any locked out intervals for vote accounts in this bank with
             // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
             // `last_vote` on another fork.
@@ -1434,6 +1438,7 @@ pub const ReplayTower = struct {
                 .heaviest_fork_failures = failure_reasons,
             };
         } else {
+            // Unable to vote on the candidate bank.
             return SelectVoteAndResetForkResult{
                 .vote_slot = null,
                 .reset_slot = if (candidate_slots.reset_slot) |slot| slot else null,
@@ -3140,6 +3145,8 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
     var progress_map = ProgressMap.INIT;
     defer progress_map.deinit(allocator);
 
+    try progress_map.map.put(allocator, 0, try ForkProgress.zeroes(allocator));
+
     try progress_map.map.put(allocator, 4, fork_progress);
 
     var prng = std.rand.DefaultPrng.init(91);
@@ -3148,7 +3155,10 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
     var fixture = try TestFixture.init(allocator, default_data.root);
     defer fixture.deinit(allocator);
 
-    try fixture.fill_fork_choice(&default_data.data);
+    var fp = try ForkProgress.zeroes(allocator);
+    fp.fork_stats.computed = true;
+    try fixture.progress.map.put(allocator, 0, fp);
+    try fixture.fill_fork(allocator, &default_data.data);
     try fixture.fill_default_asc_dsc(allocator);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -3178,6 +3188,7 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
         default_data.root.slot,
         &accountsdb,
     );
+    defer replay_tower.deinit(allocator);
 
     var epoch_stake_map: EpochStakeMap = .{};
     defer epoch_stake_map.deinit(allocator);
@@ -3193,7 +3204,7 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
 
     var ancestors: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors.deinit(allocator);
-    for (fixture.descendants.keys(), fixture.descendants.values()) |key, value| {
+    for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
         try ancestors.put(allocator, key, value);
     }
     const descendants = fixture.descendants;
@@ -3206,17 +3217,35 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
         0, // heaviest_epoch
         &ancestors,
         &descendants,
-        &progress_map,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
+    try std.testing.expectEqual(4, result.reset_slot.?);
+    try std.testing.expectEqual(4, result.vote_slot.?.slot);
+    try std.testing.expectEqual(.same_fork, result.vote_slot.?.decision);
+    try std.testing.expectEqual(0, result.heaviest_fork_failures.items.len);
+
+    // Record the vote for 5 which is not on the heaviest fork.
+    _ = try replay_tower.recordBankVote(allocator, 5, Hash.ZEROES);
+    const result2 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        4, // heaviest_slot
+        5, // heaviest_slot_on_same_voted_fork
+        0, // heaviest_epoch
+        &ancestors,
+        &descendants,
+        &fixture.progress,
         &.{ .max_gossip_frozen_votes = .{} },
         &fixture.fork_choice,
         epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
-    try std.testing.expectEqual(4, result.reset_slot.?);
-    try std.testing.expectEqual(4, result.vote_slot.?.slot);
-    try std.testing.expectEqual(.same_fork, result.vote_slot.?.decision);
-    try std.testing.expectEqual(0, result.heaviest_fork_failures.items.len);
+    try std.testing.expectEqual(null, result2.vote_slot);
+    try std.testing.expectEqual(5, result2.reset_slot);
 }
 
 const builtin = @import("builtin");
@@ -3401,9 +3430,12 @@ const TestFixture = struct {
     fork_choice: HeaviestSubtreeForkChoice,
     ancestors: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{},
     descendants: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{},
+    progress: ProgressMap = ProgressMap.INIT,
 
     pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
-        return .{ .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root) };
+        return .{
+            .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
+        };
     }
 
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
@@ -3420,11 +3452,23 @@ const TestFixture = struct {
             entry.value_ptr.deinit();
         }
         self.descendants.deinit(allocator);
+        self.progress.deinit(allocator);
     }
 
-    pub fn fill_fork_choice(self: *TestFixture, trees: []const TreeNode) !void {
+    pub fn fill_fork(
+        self: *TestFixture,
+        allocator: std.mem.Allocator,
+        trees: []const TreeNode,
+    ) !void {
         for (trees) |tree| {
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
+            var fp = try ForkProgress.zeroes(allocator);
+            fp.fork_stats.computed = true;
+            _ = try self.progress.map.getOrPutValue(
+                allocator,
+                tree[0].slot,
+                fp,
+            );
         }
     }
 
