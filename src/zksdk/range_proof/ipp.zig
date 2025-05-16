@@ -1,16 +1,7 @@
 const std = @import("std");
-const sig = @import("../../sig.zig");
 
-const Edwards25519 = std.crypto.ecc.Edwards25519;
-const el_gamal = sig.zksdk.el_gamal;
-const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
-const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
-const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
-const pedersen = el_gamal.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
-const Transcript = sig.zksdk.Transcript;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 
 /// Inner-Product (Sub)Proof
 ///

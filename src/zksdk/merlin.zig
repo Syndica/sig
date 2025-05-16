@@ -274,6 +274,12 @@ pub const Transcript = struct {
         @memcpy(buffer[32..64], &ciphertext.handle.point.toBytes());
         t.appendMessage(label, &buffer);
     }
+
+    pub fn appendU64(t: *Transcript, comptime label: []const u8, x: u64) void {
+        var buffer: [8]u8 = .{0} ** 8;
+        std.mem.writeInt(u64, &buffer, x, .little);
+        t.appendMessage(label, &buffer);
+    }
 };
 
 test "equivalence" {
