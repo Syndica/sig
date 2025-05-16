@@ -52,6 +52,14 @@ pub const Pubkey = struct {
         return .{ .p = Ristretto255.mul(H, scalar.invert().toBytes()) catch unreachable };
     }
 
+    pub fn fromBytes(bytes: [32]u8) !Pubkey {
+        return .{ .p = try Ristretto255.fromBytes(bytes) };
+    }
+
+    pub fn toBytes(self: Pubkey) [32]u8 {
+        return self.p.toBytes();
+    }
+
     pub fn fromBase64(string: []const u8) !Pubkey {
         const base64 = std.base64.standard;
         var buffer: [32]u8 = .{0} ** 32;
@@ -60,7 +68,7 @@ pub const Pubkey = struct {
             buffer[0..decoded_length],
             string,
         );
-        return .{ .p = try Ristretto255.fromBytes(buffer) };
+        return fromBytes(buffer);
     }
 };
 
@@ -70,6 +78,10 @@ pub const Keypair = struct {
 
     pub const Secret = struct {
         scalar: Scalar,
+
+        pub fn random() Secret {
+            return .{ .scalar = Scalar.random() };
+        }
     };
 
     pub fn fromScalar(s: Scalar) Keypair {
@@ -96,6 +108,10 @@ pub const Ciphertext = struct {
             .commitment = .{ .point = try Ristretto255.fromBytes(bytes[0..32].*) },
             .handle = .{ .point = try Ristretto255.fromBytes(bytes[32..64].*) },
         };
+    }
+
+    pub fn toBytes(self: Ciphertext) [64]u8 {
+        return self.commitment.point.toBytes() ++ self.handle.point.toBytes();
     }
 
     pub fn fromBase64(string: []const u8) !Ciphertext {

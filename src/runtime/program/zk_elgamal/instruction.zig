@@ -1,3 +1,6 @@
+const sig = @import("../../../sig.zig");
+const Pubkey = sig.core.Pubkey;
+
 pub const ProofInstruction = enum(u8) {
     /// Close a zero-knowledge proof context state.
     ///
@@ -236,4 +239,9 @@ pub const ProofInstruction = enum(u8) {
     ///   ii. `u32` byte offset if proof is provided as an account
     ///
     verify_batched_grouped_ciphertext3_handles_validity,
+};
+
+pub const ContextStateInfo = struct {
+    state_account: Pubkey,
+    state_authority: Pubkey,
 };
