@@ -7,11 +7,11 @@ pub const var_int_config_u64 = VarIntConfig(u64);
 
 pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
     const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+        pub fn serialize(writer: anytype, data: VarInt, params: bincode.Params) !void {
             _ = params;
             var v = data;
             while (v >= 0x80) {
-                const byte = @as(u8, @intCast(((v & 0x7F) | 0x80)));
+                const byte: u8 = @intCast((v & 0x7F) | 0x80);
                 v >>= 7;
                 try writer.writeByte(byte);
             }
@@ -28,28 +28,19 @@ pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
 
             var out: VarInt = 0;
 
-            const t_bits: u8 = switch (VarInt) {
+            const t_bits = switch (VarInt) {
                 u16 => 16,
                 u32 => 32,
                 u64 => 64,
-                else => {
-                    return error.InvalidType;
-                },
-            };
-
-            const ShiftT: type = switch (VarInt) {
-                u16 => u4,
-                u32 => u5,
-                u64 => u6,
-                else => unreachable,
+                else => @compileError("Invalid type " ++ @typeName(VarInt)),
             };
 
             var shift: u32 = 0;
             while (shift < t_bits) {
                 const byte: u8 = try reader.readByte();
-                out |= @as(VarInt, @intCast((byte & 0x7F))) << @as(ShiftT, @intCast(shift));
+                out |= @as(VarInt, @intCast((byte & 0x7F))) << @intCast(shift);
                 if (byte & 0x80 == 0) {
-                    if (@as(u8, @intCast(out >> @as(ShiftT, @intCast(shift)))) != byte) {
+                    if (@as(u8, @intCast(out >> @intCast(shift))) != byte) {
                         return error.TruncatedLastByte;
                     }
                     if (byte == 0 and (shift != 0 or out != 0)) {
@@ -63,7 +54,7 @@ pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
         }
     };
 
-    return bincode.FieldConfig(VarInt){
+    return .{
         .serializer = S.serialize,
         .deserializer = S.deserialize,
     };
