@@ -167,6 +167,21 @@ pub const pedersen = struct {
             const point = weak_mul.mul(pubkey.p.p, opening.scalar.toBytes());
             return .{ .point = .{ .p = point } };
         }
+
+        pub fn fromBytes(bytes: [32]u8) !DecryptHandle {
+            return .{ .point = try Ristretto255.fromBytes(bytes) };
+        }
+
+        pub fn fromBase64(string: []const u8) !DecryptHandle {
+            const base64 = std.base64.standard;
+            var buffer: [32]u8 = .{0} ** 32;
+            const decoded_length = try base64.Decoder.calcSizeForSlice(string);
+            try std.base64.standard.Decoder.decode(
+                buffer[0..decoded_length],
+                string,
+            );
+            return fromBytes(buffer);
+        }
     };
 
     pub fn init(comptime T: type, value: T) struct { Commitment, Opening } {
