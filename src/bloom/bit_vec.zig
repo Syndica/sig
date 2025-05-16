@@ -63,7 +63,7 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
             return dynamic_bitset;
         }
 
-        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+        pub fn free(allocator: std.mem.Allocator, data: DynamicArrayBitSet(T)) void {
             data.deinit(allocator);
         }
     };

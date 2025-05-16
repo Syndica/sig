@@ -131,10 +131,6 @@ def unused_imports(args, files_to_check):
 
 
 files_excluded_from_line_length_check = [
-    "src/bincode/arraylist.zig",
-    "src/bincode/bincode.zig",
-    "src/bincode/int.zig",
-    "src/bincode/shortvec.zig",
     "src/bloom/bit_set.zig",
     "src/bloom/bit_vec.zig",
     "src/bloom/bitvec.zig",
