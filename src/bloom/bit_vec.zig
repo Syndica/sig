@@ -48,7 +48,11 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
             try bincode.write(writer, bitvec, params);
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !DynamicArrayBitSet(T) {
+        pub fn deserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) !DynamicArrayBitSet(T) {
             var bitvec = try bincode.read(allocator, BitVec(T), reader, params);
             defer bincode.free(allocator, bitvec);
 
@@ -56,7 +60,7 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
             return dynamic_bitset;
         }
 
-        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+        pub fn free(allocator: std.mem.Allocator, data: DynamicArrayBitSet(T)) void {
             data.deinit(allocator);
         }
     };
