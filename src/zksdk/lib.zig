@@ -8,6 +8,7 @@ pub const pedersen = el_gamal.pedersen;
 pub const Strobe128 = merlin.Strobe128;
 pub const Transcript = merlin.Transcript;
 
+// sigma proofs
 const ciphertext_ciphertext = @import("sigma_proofs/ciphertext_ciphertext.zig");
 const ciphertext_commitment = @import("sigma_proofs/ciphertext_commitment.zig");
 const percentage = @import("sigma_proofs/percentage_with_cap.zig");
@@ -20,4 +21,10 @@ pub const PercentageWithCapProof = percentage.Proof;
 pub const PubkeyValidityProof = pubkey_validity.Proof;
 pub const ZeroCiphertextProofData = zero_ciphertext.Data;
 
+// grouped ciphertext validity
+const grouped_cipher_handle_2 = @import("sigma_proofs/grouped_ciphertext/handles_2.zig");
+
+pub const GroupedCiphertext2HandlesValidityProof = grouped_cipher_handle_2.Proof;
+
+// range proof
 pub const bulletproofs = @import("range_proof/bulletproofs.zig");
