@@ -51,6 +51,12 @@ pub const Proof = struct {
         try transcript.validateAndAppendPoint("Y", self.Y);
         const c = transcript.challengeScalar("c");
 
+        //     points  scalars
+        // 0   H        z
+        // 1   P       -c
+        // ----------------------- MSM
+        //     Y
+
         const check = weak_mul.mulMulti(2, .{
             el_gamal.H.p,
             pubkey.p.p,

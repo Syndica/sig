@@ -309,7 +309,7 @@ test "proof string" {
 
     const proof_string = "qMDiQ5zPcTYFhchYBZzRS81UGIt2QRNce2/ULEqDBXBQEnGRI0u0G1HzRJfpIbOWCHBwMaNgsT1jTZwTOTWyMBE/2UjHI4x9IFpAM6ccGuexo/HjSECPDgL+85zrfA8L";
     const proof = try Proof.fromBase64(proof_string);
-        // zig fmt: on
+    // zig fmt: on
 
     var verifier_transcript = Transcript.init("test");
     try proof.verify(&pubkey, &ciphertext, &verifier_transcript);
