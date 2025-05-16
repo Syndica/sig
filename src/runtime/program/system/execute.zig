@@ -136,7 +136,7 @@ fn executeCreateAccountWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     base: Pubkey,
-    seed: []const u8,
+    seed: pubkey_utils.BoundedSeed,
     lamports: u64,
     space: u64,
     owner: Pubkey,
@@ -196,7 +196,7 @@ fn executeTransfer(
 fn executeTransferWithSeed(
     ic: *InstructionContext,
     lamports: u64,
-    from_seed: []const u8,
+    from_seed: pubkey_utils.BoundedSeed,
     from_owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(3);
@@ -354,7 +354,7 @@ fn executeAllocateWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     base: Pubkey,
-    seed: []const u8,
+    seed: pubkey_utils.BoundedSeed,
     space: u64,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
@@ -380,7 +380,7 @@ fn executeAllocateWithSeed(
 fn executeAssignWithSeed(
     ic: *InstructionContext,
     base: Pubkey,
-    seed: []const u8,
+    seed: pubkey_utils.BoundedSeed,
     owner: Pubkey,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(1);
@@ -783,7 +783,7 @@ fn checkSeedAddress(
     expected: Pubkey,
     base: Pubkey,
     owner: Pubkey,
-    seed: []const u8,
+    seed: pubkey_utils.BoundedSeed,
     comptime log_err_fmt: []const u8,
 ) (error{OutOfMemory} || InstructionError)!void {
     const created = pubkey_utils.createWithSeed(base, seed, owner) catch |err| {
@@ -929,7 +929,7 @@ test "executeCreateAccountWithSeed" {
     var prng = std.Random.DefaultPrng.init(5083);
 
     const base = Pubkey.initRandom(prng.random());
-    const seed = &[_]u8{0x10} ** 32;
+    const seed = comptime pubkey_utils.BoundedSeed.fromSlice(&[_]u8{0x10} ** 32) catch unreachable;
 
     const account_0_key = Pubkey.initRandom(prng.random());
     const account_1_key = try pubkey_utils.createWithSeed(base, seed, system_program.ID);
@@ -1377,7 +1377,7 @@ test "executeAllocateWithSeed" {
     var prng = std.Random.DefaultPrng.init(5083);
 
     const base = Pubkey.initRandom(prng.random());
-    const seed = &[_]u8{0x10} ** 32;
+    const seed = comptime pubkey_utils.BoundedSeed.fromSlice(&[_]u8{0x10} ** 32) catch unreachable;
     const allocation_size = 1024;
 
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, system_program.ID);
@@ -1431,7 +1431,7 @@ test "executeAssignWithSeed" {
     var prng = std.Random.DefaultPrng.init(5083);
 
     const base = Pubkey.initRandom(prng.random());
-    const seed = &[_]u8{0x10} ** 32;
+    const seed = comptime pubkey_utils.BoundedSeed.fromSlice(&[_]u8{0x10} ** 32) catch unreachable;
     const owner = Pubkey.initRandom(prng.random());
 
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, owner);
@@ -1476,7 +1476,7 @@ test "executeTransferWithSeed" {
     var prng = std.Random.DefaultPrng.init(5083);
 
     const base = Pubkey.initRandom(prng.random());
-    const seed = &[_]u8{0x10} ** 32;
+    const seed = comptime pubkey_utils.BoundedSeed.fromSlice(&[_]u8{0x10} ** 32) catch unreachable;
     const owner = Pubkey.initRandom(prng.random());
 
     const account_0_key = try pubkey_utils.createWithSeed(base, seed, owner);
