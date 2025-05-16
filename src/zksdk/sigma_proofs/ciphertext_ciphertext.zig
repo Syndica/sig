@@ -168,7 +168,7 @@ pub const CiphertextCiphertextEqualityProof = struct {
             Edwards25519.scalar.mul(ww_negated, c),                 // -ww * c
             www_negated,                                            // -www
             Edwards25519.scalar.mul(www_negated, c),                // -www * c
-            Edwards25519.scalar.mul(www.toBytes(), z_r),            // www * z_r
+            Edwards25519.scalar.mul(www.toBytes(), z_r),            //  www * z_r
         });
         // zig fmt: on
 

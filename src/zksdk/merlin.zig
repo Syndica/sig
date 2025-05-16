@@ -3,6 +3,7 @@
 //! https://merlin.cool/use/protocol.html
 
 const std = @import("std");
+const sig = @import("../sig.zig");
 const Keccak1600 = std.crypto.core.keccak.KeccakF(1600);
 const Ed25519 = std.crypto.ecc.Edwards25519;
 const CompressedScalar = Ed25519.scalar.CompressedScalar;
@@ -245,12 +246,33 @@ pub const Transcript = struct {
         t.appendPoint(label, point);
     }
 
+    // helper functions
+
     pub fn appendPoint(t: *Transcript, comptime label: []const u8, point: Ristretto255) void {
         t.appendMessage(label, &point.toBytes());
     }
 
     pub fn appendScalar(t: *Transcript, comptime label: []const u8, scalar: Scalar) void {
         t.appendMessage(label, &scalar.toBytes());
+    }
+
+    pub fn appendPubkey(
+        t: *Transcript,
+        comptime label: []const u8,
+        pubkey: sig.zksdk.ElGamalPubkey,
+    ) void {
+        t.appendPoint(label, pubkey.p);
+    }
+
+    pub fn appendCiphertext(
+        t: *Transcript,
+        comptime label: []const u8,
+        ciphertext: sig.zksdk.ElGamalCiphertext,
+    ) void {
+        var buffer: [64]u8 = .{0} ** 64;
+        @memcpy(buffer[0..32], &ciphertext.commitment.point.toBytes());
+        @memcpy(buffer[32..64], &ciphertext.handle.point.toBytes());
+        t.appendMessage(label, &buffer);
     }
 };
 

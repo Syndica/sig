@@ -12,7 +12,7 @@ const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 
-pub const ZeroCiphertextProof = struct {
+pub const Proof = struct {
     P: Ristretto255,
     D: Ristretto255,
     z: Scalar,
@@ -21,7 +21,7 @@ pub const ZeroCiphertextProof = struct {
         kp: *const ElGamalKeypair,
         ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
-    ) ZeroCiphertextProof {
+    ) Proof {
         transcript.appendDomSep("zero-ciphertext-proof");
 
         const P = kp.public.p;
@@ -53,7 +53,7 @@ pub const ZeroCiphertextProof = struct {
     }
 
     pub fn verify(
-        self: ZeroCiphertextProof,
+        self: Proof,
         pubkey: *const ElGamalPubkey,
         ciphertext: *const ElGamalCiphertext,
         transcript: *Transcript,
@@ -109,7 +109,7 @@ pub const ZeroCiphertextProof = struct {
         }
     }
 
-    pub fn fromBytes(bytes: [96]u8) !ZeroCiphertextProof {
+    pub fn fromBytes(bytes: [96]u8) !Proof {
         const P = try Ristretto255.fromBytes(bytes[0..32].*);
         const D = try Ristretto255.fromBytes(bytes[32..64].*);
         const z = Scalar.fromBytes(bytes[64..96].*);
@@ -121,7 +121,11 @@ pub const ZeroCiphertextProof = struct {
         };
     }
 
-    pub fn fromBase64(string: []const u8) !ZeroCiphertextProof {
+    pub fn toBytes(self: Proof) [96]u8 {
+        return self.P.toBytes() ++ self.D.toBytes() ++ self.z.toBytes();
+    }
+
+    pub fn fromBase64(string: []const u8) !Proof {
         const base64 = std.base64.standard;
         var buffer: [96]u8 = .{0} ** 96;
         const decoded_length = try base64.Decoder.calcSizeForSlice(string);
@@ -130,6 +134,69 @@ pub const ZeroCiphertextProof = struct {
             string,
         );
         return fromBytes(buffer);
+    }
+};
+
+pub const Data = struct {
+    context: Context,
+    proof: Proof,
+
+    pub const BYTE_LEN = 192;
+
+    pub fn init(
+        keypair: *const ElGamalKeypair,
+        ciphertext: *const ElGamalCiphertext,
+    ) Data {
+        const context: Context = .{
+            .ciphertext = ciphertext.*,
+            .pubkey = keypair.public,
+        };
+        var transcript = context.newTranscript();
+        const proof = Proof.init(keypair, ciphertext, &transcript);
+        return .{ .context = context, .proof = proof };
+    }
+
+    pub fn fromBytes(data: []const u8) !Data {
+        if (data.len != BYTE_LEN) return error.InvalidLength;
+        return .{
+            .context = try Context.fromBytes(data[0..96].*),
+            .proof = try Proof.fromBytes(data[96..192].*),
+        };
+    }
+
+    pub fn toBytes(self: Data) [192]u8 {
+        return self.context.toBytes() ++ self.proof.toBytes();
+    }
+
+    pub fn verify(self: Data) !void {
+        var transcript = self.context.newTranscript();
+        const pubkey = self.context.pubkey;
+        const ciphertext = self.context.ciphertext;
+        try self.proof.verify(&pubkey, &ciphertext, &transcript);
+    }
+};
+
+const Context = struct {
+    pubkey: ElGamalPubkey,
+    ciphertext: ElGamalCiphertext,
+
+    // TODO: is it a problem that we error on invalid point here?
+    pub fn fromBytes(bytes: [96]u8) !Context {
+        return .{
+            .pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*),
+            .ciphertext = try ElGamalCiphertext.fromBytes(bytes[32..96].*),
+        };
+    }
+
+    pub fn toBytes(self: Context) [96]u8 {
+        return self.pubkey.toBytes() ++ self.ciphertext.toBytes();
+    }
+
+    fn newTranscript(self: Context) Transcript {
+        var transcript = Transcript.init("zero-ciphertext-instruction");
+        transcript.appendPubkey("pubkey", self.pubkey);
+        transcript.appendCiphertext("ciphertext", self.ciphertext);
+        return transcript;
     }
 };
 
@@ -142,14 +209,14 @@ test "sanity" {
     // general case: encryption of 0
     {
         const elgamal_ciphertext = el_gamal.encrypt(u64, 0, &kp.public);
-        const proof = ZeroCiphertextProof.init(&kp, &elgamal_ciphertext, &prover_transcript);
+        const proof = Proof.init(&kp, &elgamal_ciphertext, &prover_transcript);
         try proof.verify(&kp.public, &elgamal_ciphertext, &verifier_transcript);
     }
 
     // general case: encryption of > 0
     {
         const elgamal_ciphertext = el_gamal.encrypt(u64, 1, &kp.public);
-        const proof = ZeroCiphertextProof.init(&kp, &elgamal_ciphertext, &prover_transcript);
+        const proof = Proof.init(&kp, &elgamal_ciphertext, &prover_transcript);
         try std.testing.expectError(
             error.AlgebraicRelation,
             proof.verify(&kp.public, &elgamal_ciphertext, &verifier_transcript),
@@ -166,7 +233,7 @@ test "edge case" {
 
         // All zero ciphertext should be a valid encoding for the scalar "0"
         var ciphertext = try ElGamalCiphertext.fromBytes(.{0} ** 64);
-        const proof = ZeroCiphertextProof.init(&kp, &ciphertext, &prover_transcript);
+        const proof = Proof.init(&kp, &ciphertext, &prover_transcript);
         try proof.verify(&kp.public, &ciphertext, &verifier_transcript);
     }
 
@@ -190,7 +257,7 @@ test "edge case" {
             .handle = handle,
         };
 
-        const proof = ZeroCiphertextProof.init(&kp, &ciphertext, &prover_transcript);
+        const proof = Proof.init(&kp, &ciphertext, &prover_transcript);
         try std.testing.expectError(
             error.AlgebraicRelation,
             proof.verify(&kp.public, &ciphertext, &verifier_transcript),
@@ -209,7 +276,7 @@ test "edge case" {
             .handle = .{ .point = try Ristretto255.fromBytes(.{0} ** 32) },
         };
 
-        const proof = ZeroCiphertextProof.init(&kp, &ciphertext, &prover_transcript);
+        const proof = Proof.init(&kp, &ciphertext, &prover_transcript);
         try std.testing.expectError(
             error.AlgebraicRelation,
             proof.verify(&kp.public, &ciphertext, &verifier_transcript),
@@ -224,7 +291,7 @@ test "edge case" {
         const public: ElGamalPubkey = .{ .p = try Ristretto255.fromBytes(.{0} ** 32) };
         const ciphertext = el_gamal.encrypt(u64, 0, &public);
 
-        const proof = ZeroCiphertextProof.init(&kp, &ciphertext, &prover_transcript);
+        const proof = Proof.init(&kp, &ciphertext, &prover_transcript);
         try std.testing.expectError(
             error.AlgebraicRelation,
             proof.verify(&kp.public, &ciphertext, &verifier_transcript),
@@ -241,7 +308,7 @@ test "proof string" {
     const ciphertext = try ElGamalCiphertext.fromBase64(ciphertext_string);
 
     const proof_string = "qMDiQ5zPcTYFhchYBZzRS81UGIt2QRNce2/ULEqDBXBQEnGRI0u0G1HzRJfpIbOWCHBwMaNgsT1jTZwTOTWyMBE/2UjHI4x9IFpAM6ccGuexo/HjSECPDgL+85zrfA8L";
-    const proof = try ZeroCiphertextProof.fromBase64(proof_string);
+    const proof = try Proof.fromBase64(proof_string);
         // zig fmt: on
 
     var verifier_transcript = Transcript.init("test");
