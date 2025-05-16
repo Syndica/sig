@@ -69,6 +69,8 @@ pub fn execute(
         if (kind != .Instruction) {
             try sig.runtime.stable_log.programFailure(ic.tc, ic.ixn_info.program_meta.pubkey, msg);
             return InstructionError.ProgramFailedToComplete;
+        } else {
+            return sig.vm.instructionErrorFromExecutionError(err);
         }
     };
 }
