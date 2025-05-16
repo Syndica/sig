@@ -4,6 +4,9 @@ const bincode = sig.bincode;
 
 const Pubkey = sig.core.Pubkey;
 
+const PUBKEY_SEED_MAX_LEN = sig.runtime.pubkey_utils.MAX_SEED_LEN;
+const PubkeySeed = sig.runtime.pubkey_utils.BoundedSeed;
+
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
 pub const Instruction = union(enum) {
     /// Create a new account
@@ -53,7 +56,7 @@ pub const Instruction = union(enum) {
         base: Pubkey,
 
         /// String of ASCII chars, no longer than `Pubkey::MAX_SEED_LEN`
-        seed: []const u8,
+        seed: PubkeySeed,
 
         /// Number of lamports to transfer to the new account
         lamports: u64,
@@ -64,7 +67,7 @@ pub const Instruction = union(enum) {
         /// Owner program account address
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(null);
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(PUBKEY_SEED_MAX_LEN);
     },
 
     /// Consumes a stored nonce, replacing it with a successor
@@ -131,7 +134,7 @@ pub const Instruction = union(enum) {
         base: Pubkey,
 
         /// String of ASCII chars, no longer than `pubkey::MAX_SEED_LEN`
-        seed: []const u8,
+        seed: PubkeySeed,
 
         /// Number of bytes of memory to allocate
         space: u64,
@@ -139,7 +142,7 @@ pub const Instruction = union(enum) {
         /// Owner program account
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(null);
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(PUBKEY_SEED_MAX_LEN);
     },
 
     /// Assign account to a program based on a seed
@@ -152,12 +155,12 @@ pub const Instruction = union(enum) {
         base: Pubkey,
 
         /// String of ASCII chars, no longer than `pubkey::MAX_SEED_LEN`
-        seed: []const u8,
+        seed: PubkeySeed,
 
         /// Owner program account
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(null);
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec(PUBKEY_SEED_MAX_LEN);
     },
 
     /// Transfer lamports from a derived address
@@ -171,12 +174,12 @@ pub const Instruction = union(enum) {
         lamports: u64,
 
         /// Seed to use to derive the funding account address
-        from_seed: []const u8,
+        from_seed: PubkeySeed,
 
         /// Owner to use to derive the funding account address
         from_owner: Pubkey,
 
-        pub const @"!bincode-config:from_seed" = bincode.utf8StringCodec(null);
+        pub const @"!bincode-config:from_seed" = bincode.utf8StringCodec(PUBKEY_SEED_MAX_LEN);
     },
 
     /// One-time idempotent upgrade of legacy nonce versions in order to bump
