@@ -5,15 +5,10 @@ const sig = @import("../../../sig.zig");
 const zksdk = sig.zksdk;
 const zk_elgamal = sig.runtime.program.zk_elgamal;
 const Pubkey = sig.core.Pubkey;
-const InstructionError = sig.core.instruction.InstructionError;
-const InstructionContext = sig.runtime.InstructionContext;
 const ZeroCiphertextData = zksdk.ZeroCiphertextProofData;
 const program = sig.runtime.program;
-const features = sig.runtime.features;
-const AccountParams = sig.runtime.testing.ExecuteContextsParams.AccountParams;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
-const expectProgramExecuteError = program.testing.expectProgramExecuteError;
 
 test "zero balance" {
     const allocator = std.testing.allocator;
