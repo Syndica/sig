@@ -135,6 +135,291 @@ pub fn SharedPointerWindow(
     };
 }
 
+/// Thread safe hashmap that stores a single copy of data that is shared with
+/// readers as a pointer to the underlying data inside the map.
+///
+/// - this struct owns the data and is responsible for freeing it
+/// - the lifetime of returned pointer exceeds every read operation of that
+///   pointer, even if another thread evicts it from the Window, as long as
+///   `release` is used properly.
+///
+/// TODO: Consolidate this with SharedPointerWindow, since the logic is exactly
+/// the same. But do not to make things more complex. I see two potential
+/// approaches:
+/// 1. Create an entirely generic struct that allows you to specify the generic
+///    container type that's contained within as a parameter. This would replace
+///    both of these structs.
+/// 2. Create a lean and unopinionated struct that manages the lifetimes logic
+///    without actually containing anything, and compose it within these
+///    pre-existing specialized structs to reduce the duplicated logic.
+///
+/// I like the idea of #2 since #1 may result in some confusing abstractions.
+/// But #2 say not even be viable since wrapping may be necessary for
+/// correctness.
+pub fn SharedPointerMap(
+    K: type,
+    V: type,
+    deinitItem_: anytype,
+    DeinitContext: type,
+) type {
+    const Rc = sig.sync.Rc;
+    const deinitItem = normalizeDeinitFunction(V, DeinitContext, deinitItem_);
+
+    return struct {
+        map: std.ArrayHashMapUnmanaged(K, Rc(V)),
+        lock: std.Thread.RwLock = .{},
+        deinit_context: DeinitContext,
+        discard_buf: std.atomic.Value(?[*]?Rc(V)),
+
+        const Self = @This();
+
+        pub fn init(deinit_context: DeinitContext) !Self {
+            return .{
+                .map = .{},
+                .deinit_context = deinit_context,
+                .discard_buf = std.atomic.Value(?[*]?Rc(V)).init(null),
+            };
+        }
+
+        pub fn deinit(self: Self, allocator: Allocator) void {
+            for (self.map.state) |maybe_item| if (maybe_item) |item| {
+                self.releaseItem(item);
+            };
+            self.map.deinit(allocator);
+            if (self.discard_buf.load(.monotonic)) |buf| {
+                allocator.free(buf[0..self.map.state.len]);
+            }
+        }
+
+        pub fn put(self: *Self, allocator: Allocator, key: K, value: V) !void {
+            const ptr = try Rc(V).create(allocator);
+            errdefer ptr.deinit(allocator);
+            ptr.payload().* = value;
+
+            const item_to_release = blk: {
+                self.lock.lock();
+                defer self.lock.unlock();
+                break :blk try self.map.put(key, ptr);
+            };
+
+            if (item_to_release) |old| {
+                self.releaseItem(old);
+            }
+        }
+
+        /// call `release` when you're done with the pointer
+        pub fn get(self: *Self, key: K) ?*const V {
+            self.lock.lockShared();
+            defer self.lock.unlockShared();
+
+            if (self.map.get(key)) |element| {
+                return element.acquire().payload();
+            } else {
+                return null;
+            }
+        }
+
+        /// call `release` when you're done with the pointer
+        pub fn contains(self: *Self, key: K) bool {
+            self.lock.lockShared();
+            defer self.lock.unlockShared();
+
+            return self.map.contains(key);
+        }
+
+        pub fn release(self: *Self, ptr: *const V) void {
+            self.releaseItem(Rc(V).fromPayload(ptr));
+        }
+
+        fn releaseItem(self: *const Self, allocator: Allocator, item: Rc(V)) void {
+            if (item.release()) |bytes_to_free| {
+                deinitItem(item.payload(), self.deinit_context);
+                allocator.free(bytes_to_free);
+            }
+        }
+    };
+}
+
+pub fn SharedPointerMap2(
+    K: type,
+    V: type,
+    deinitItem_: anytype,
+    DeinitContext: type,
+) type {
+    const Rc = sig.sync.Rc;
+    const deinitItem = normalizeDeinitFunction(V, DeinitContext, deinitItem_);
+
+    return struct {
+        map: std.ArrayHashMapUnmanaged(K, Rc(V)),
+        ptr_mgr: SharedPointerManager(V, deinitItem_, DeinitContext),
+
+        const Self = @This();
+
+        pub fn init(deinit_context: DeinitContext) !Self {
+            return .{
+                .map = .{},
+                .deinit_context = deinit_context,
+                .discard_buf = std.atomic.Value(?[*]?Rc(V)).init(null),
+            };
+        }
+
+        pub fn deinit(self: Self, allocator: Allocator) void {
+            for (self.map.state) |maybe_item| if (maybe_item) |item| {
+                self.releaseItem(item);
+            };
+            self.map.deinit(allocator);
+            if (self.discard_buf.load(.monotonic)) |buf| {
+                allocator.free(buf[0..self.map.state.len]);
+            }
+        }
+
+        pub fn put(self: *Self, allocator: Allocator, key: K, value: V) !void {
+            const ptr = try Rc(V).create(allocator);
+            errdefer ptr.deinit(allocator);
+            ptr.payload().* = value;
+
+            const item_to_release = blk: {
+                self.lock.lock();
+                defer self.lock.unlock();
+                break :blk try self.map.put(key, ptr);
+            };
+
+            if (item_to_release) |old| {
+                self.releaseItem(old);
+            }
+        }
+
+        /// call `release` when you're done with the pointer
+        pub fn get(self: *Self, key: K) ?*const V {
+            self.lock.lockShared();
+            defer self.lock.unlockShared();
+
+            if (self.map.get(key)) |element| {
+                return element.acquire().payload();
+            } else {
+                return null;
+            }
+        }
+
+        /// call `release` when you're done with the pointer
+        pub fn contains(self: *Self, key: K) bool {
+            self.lock.lockShared();
+            defer self.lock.unlockShared();
+
+            return self.map.contains(key);
+        }
+
+        pub fn release(self: *Self, ptr: *const V) void {
+            self.releaseItem(Rc(V).fromPayload(ptr));
+        }
+
+        fn releaseItem(self: *const Self, allocator: Allocator, item: Rc(V)) void {
+            if (item.release()) |bytes_to_free| {
+                deinitItem(item.payload(), self.deinit_context);
+                allocator.free(bytes_to_free);
+            }
+        }
+    };
+}
+
+pub fn SharedPointerManager(
+    V: type,
+    deinitItem_: anytype,
+    DeinitContext: type,
+) type {
+    const Rc = sig.sync.Rc;
+    const deinitItem = normalizeDeinitFunction(V, DeinitContext, deinitItem_);
+
+    return struct {
+        lock: std.Thread.RwLock = .{},
+        deinit_context: DeinitContext,
+        discard_buf: std.atomic.Value(?[*]?Rc(V)),
+
+        const Self = @This();
+
+        pub fn init(deinit_context: DeinitContext) !Self {
+            return .{
+                .map = .{},
+                .deinit_context = deinit_context,
+                .discard_buf = std.atomic.Value(?[*]?Rc(V)).init(null),
+            };
+        }
+
+        pub fn deinit(self: Self, allocator: Allocator) void {
+            for (self.map.state) |maybe_item| if (maybe_item) |item| {
+                self.releaseItem(item);
+            };
+            self.map.deinit(allocator);
+            if (self.discard_buf.load(.monotonic)) |buf| {
+                allocator.free(buf[0..self.map.state.len]);
+            }
+        }
+
+        pub fn startPut(self: *Self, allocator: Allocator, value: V) !*V {
+            _ = self; // autofix
+            const ptr = try Rc(V).create(allocator);
+            errdefer ptr.deinit(allocator);
+            ptr.payload().* = value;
+            return ptr.payload().*;
+        }
+
+        pub fn finishPut(self: *Self, allocator: Allocator, item_to_release: ?*V) void {
+            self.lock.lockShared(); // TODO: need??
+            defer self.lock.unlockShared();
+            if (item_to_release) |old| {
+                self.releaseItem(allocator, old);
+            }
+        }
+
+        pub fn startRead(self: *Self) void {
+            _ = self; // autofix
+        }
+        pub fn readUnlock(self: *Self) void {
+            _ = self; // autofix
+        }
+
+        pub fn deleteLock(self: *Self) void {
+            _ = self; // autofix
+        }
+        pub fn deleteUnlock(self: *Self) void {
+            _ = self; // autofix
+        }
+
+        // /// call `release` when you're done with the pointer
+        // pub fn get(self: *Self, key: K) ?*const V {
+        //     self.lock.lockShared();
+        //     defer self.lock.unlockShared();
+
+        //     if (self.map.get(key)) |element| {
+        //         return element.acquire().payload();
+        //     } else {
+        //         return null;
+        //     }
+        // }
+
+        // /// call `release` when you're done with the pointer
+        // pub fn contains(self: *Self, key: K) bool {
+        //     self.lock.lockShared();
+        //     defer self.lock.unlockShared();
+
+        //     return self.map.contains(key);
+        // }
+
+        pub fn release(self: *Self, ptr: *const V) void {
+            self.releaseItem(Rc(V).fromPayload(ptr));
+        }
+
+        fn releaseItem(self: *const Self, allocator: Allocator, item: Rc(V)) void {
+            self.lock.lock();
+            defer self.lock.unlock();
+            if (item.release()) |bytes_to_free| {
+                deinitItem(item.payload(), self.deinit_context);
+                allocator.free(bytes_to_free);
+            }
+        }
+    };
+}
+
 pub fn normalizeDeinitFunction(
     V: type,
     DeinitContext: type,

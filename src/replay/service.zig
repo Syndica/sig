@@ -9,6 +9,8 @@ const ThreadPool = sig.sync.ThreadPool;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
+const ReplayExecutionState = replay.execution.ReplayExecutionState;
+
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
 /// Number of threads to use in replay's thread pool
@@ -18,6 +20,7 @@ pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
     logger: sig.trace.Logger,
+    my_identity: sig.core.Pubkey,
     /// Tell replay when to exit
     exit: *std.atomic.Value(bool),
     /// Used in the EpochManager
@@ -46,6 +49,7 @@ const ReplayState = struct {
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
                 deps.logger,
+                deps.my_identity,
                 thread_pool,
                 deps.epoch_schedule,
                 deps.accounts_db,
@@ -74,13 +78,10 @@ pub fn run(deps: ReplayDependencies) !void {
 /// - replay all active slots that have not been replayed yet
 /// - running concensus on the latest updates
 fn advanceReplay(state: *ReplayState) !void {
-    _ = state; // autofix
-
     // TODO: generate_new_bank_forks
 
-    // TODO: replay_active_banks
-    // _ = try replay.execution.replayActiveSlots(&state.execution);
-    std.time.sleep(100 * std.time.ns_per_ms);
+    // replay_active_banks
+    _ = try replay.execution.replayActiveSlots(&state.execution);
 
     handleEdgeCases();
 
@@ -121,19 +122,3 @@ fn processConsensus() void {
 
     // TODO: if reset_bank: Reset onto a fork
 }
-
-/// stub to represent struct coming in the next pr (already implemented)
-const ReplayExecutionState = struct {
-    fn init(
-        _: Allocator,
-        _: sig.trace.Logger,
-        _: *ThreadPool,
-        _: sig.core.EpochSchedule,
-        _: *AccountsDB,
-        _: *BlockstoreReader,
-    ) !ReplayExecutionState {
-        return .{};
-    }
-
-    fn deinit(_: ReplayExecutionState) void {}
-};

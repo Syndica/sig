@@ -246,6 +246,20 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             return true;
         }
 
+        /// Checks if all tasks are complete.
+        /// Returns a result indicating the outcome:
+        /// - done: all succeeded.
+        /// - pending: some are still running.
+        /// - err: all completed, and at least one failed.
+        pub fn pollFallible(self: *Self) union(enum) { done, pending, err: anyerror } {
+            for (self.tasks.items) |task| {
+                if (!task.done.load(.acquire)) {
+                    return null;
+                }
+            }
+            return if (self.joinFallible()) |_| .done else |err| .{ .err = err };
+        }
+
         /// Blocks until all tasks are complete.
         /// Returns a list of all return values.
         pub fn join(self: *Self, allocator: Allocator) Allocator.Error![]TaskResult {

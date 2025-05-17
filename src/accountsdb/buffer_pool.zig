@@ -872,7 +872,7 @@ pub const AccountDataHandle = union(enum) {
     /// Copies all data into specified buffer. Buf.len === self.len()
     pub fn readAll(self: AccountDataHandle, buf: []u8) void {
         std.debug.assert(buf.len == self.len());
-        self.read(0, buf);
+        _ = self.read(0, buf);
     }
 
     pub fn readAllAllocate(self: AccountDataHandle, allocator: std.mem.Allocator) ![]u8 {
@@ -884,13 +884,16 @@ pub const AccountDataHandle = union(enum) {
         self: *const AccountDataHandle,
         start: FileOffset,
         buf: []u8,
-    ) void {
+    ) u32 {
         const end: FileOffset = @intCast(start + buf.len);
 
         switch (self.*) {
-            .owned_allocation, .unowned_allocation => |data| return @memcpy(buf, data[start..end]),
+            .owned_allocation, .unowned_allocation => |data| {
+                @memcpy(buf, data[start..end]);
+                return end - start;
+            },
             .sub_read => |*sb| return sb.parent.read(sb.start + start, buf),
-            .empty => return,
+            .empty => return 0,
             .buffer_pool_read => {},
         }
 
@@ -904,6 +907,8 @@ pub const AccountDataHandle = union(enum) {
             );
             bytes_copied += @intCast(copy_len);
         }
+
+        return bytes_copied;
     }
 
     pub fn readAllocate(
@@ -913,7 +918,7 @@ pub const AccountDataHandle = union(enum) {
         end: FileOffset,
     ) ![]u8 {
         const buf = try allocator.alloc(u8, end - start);
-        self.read(start, buf);
+        _ = self.read(start, buf);
         return buf;
     }
 
@@ -1046,8 +1051,8 @@ pub const AccountDataHandle = union(enum) {
 
             const read_len = @min(self.bytesRemaining(), buffer.len);
 
-            self.read_handle.read(self.start + self.bytes_read, buffer[0..read_len]);
-            self.bytes_read += @intCast(read_len);
+            self.bytes_read +=
+                self.read_handle.read(self.start + self.bytes_read, buffer[0..read_len]);
             return read_len;
         }
 
