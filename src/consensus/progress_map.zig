@@ -303,7 +303,7 @@ pub const ForkProgress = struct {
     ) !ForkProgress {
         const parent = params.parent;
 
-        const new_progress = try ForkProgress.init(allocator, .{
+        var new_progress = try ForkProgress.init(allocator, .{
             .now = sig.time.Instant.now(),
 
             .last_entry = blk: {
