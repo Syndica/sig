@@ -1321,7 +1321,6 @@ pub const ReplayTower = struct {
 
             const vote_depth = threshold_failure.failed_threshold.vote_depth;
             const fork_stake = threshold_failure.failed_threshold.observed_stake;
-
             try failure_reasons.append(allocator, .{ .FailedThreshold = .{
                 .slot = candidate_vote_bank_slot,
                 .vote_depth = vote_depth,
@@ -1386,7 +1385,6 @@ pub const ReplayTower = struct {
             allocator,
             0,
         );
-        defer failure_reasons.deinit(allocator);
 
         const epoch_stake = epoch_stakes.get(heaviest_epoch) orelse return error.StakeNotFound;
         // Check switch threshold conditions
@@ -1491,7 +1489,6 @@ pub fn selectCandidatesFailedSwitchDuplicateRollback(
 ) !CandidateVoteAndResetSlots {
     // If we can't switch and our last vote was on an unconfirmed duplicate slot,
     // we reset to the heaviest bank (even if not descendant of last vote)
-
     try failure_reasons.append(allocator, .{
         .FailedSwitchThreshold = .{
             .slot = heaviest_slot,
@@ -3230,7 +3227,7 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
 
     // Record the vote for 5 which is not on the heaviest fork.
     _ = try replay_tower.recordBankVote(allocator, 5, Hash.ZEROES);
-    const result2 = try replay_tower.selectVoteAndResetForks(
+    var result2 = try replay_tower.selectVoteAndResetForks(
         allocator,
         4, // heaviest_slot
         5, // heaviest_slot_on_same_voted_fork
@@ -3244,8 +3241,52 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
+    defer {
+        result2.heaviest_fork_failures.deinit(allocator);
+    }
+
     try std.testing.expectEqual(null, result2.vote_slot);
     try std.testing.expectEqual(5, result2.reset_slot);
+
+    // TODO: IN Agave this state update is done in ReplayStage::compute_bank_stats
+    fixture.progress.getForkStats(4).?.is_locked_out = true;
+
+    var result3 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        4, // heaviest_slot
+        5, // heaviest_slot_on_same_voted_fork
+        0, // heaviest_epoch
+        &ancestors,
+        &descendants,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
+
+    defer {
+        result3.heaviest_fork_failures.deinit(allocator);
+    }
+
+    try std.testing.expect(result3.heaviest_fork_failures.items.len == 2);
+
+    switch (result3.heaviest_fork_failures.items[0]) {
+        .FailedSwitchThreshold => |data| {
+            try std.testing.expectEqual(4, data.slot);
+            try std.testing.expectEqual(0, data.observed_stake);
+            try std.testing.expectEqual(1000, data.total_stake);
+        },
+        else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+    }
+
+    // Check second item is LockedOut with expected value
+    switch (result3.heaviest_fork_failures.items[1]) {
+        .LockedOut => |slot| {
+            try std.testing.expectEqual(4, slot);
+        },
+        else => try std.testing.expect(false), // Fail if not LockedOut
+    }
 }
 
 const builtin = @import("builtin");
