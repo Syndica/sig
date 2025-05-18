@@ -2,15 +2,12 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
-const core = sig.core;
-
 const Allocator = std.mem.Allocator;
 
 const Channel = sig.sync.Channel;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 
-const Pubkey = core.Pubkey;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountLocks = replay.account_locks.AccountLocks;
@@ -113,13 +110,15 @@ pub const TransactionScheduler = struct {
 
     fn tryScheduleSome(self: *TransactionScheduler) !?TransactionError {
         while (self.batches.peek()) |peeked_batch| {
-            self.locks.lockStrict(self.allocator, peeked_batch.accounts_to_lock) catch |e| switch (e) {
-                error.LockFailed => if (self.batches_scheduled - self.batches_finished == 0) {
-                    return .AccountInUse;
-                } else {
-                    break;
-                },
-                else => return e,
+            self.locks.lockStrict(self.allocator, peeked_batch.accounts_to_lock) catch |e| {
+                switch (e) {
+                    error.LockFailed => if (self.batches_scheduled - self.batches_finished == 0) {
+                        return .AccountInUse;
+                    } else {
+                        break;
+                    },
+                    else => return e,
+                }
             };
             const batch = self.batches.pop().?;
             assert(try self.thread_pool.trySchedule(self.allocator, .{

@@ -6,7 +6,6 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
-const Entry = core.Entry;
 const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
 const TransactionAddressLookup = core.transaction.TransactionAddressLookup;

@@ -6,21 +6,17 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
-const ReturnType = sig.utils.types.ReturnType;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const ThreadPool = sig.sync.ThreadPool;
 
 const Entry = core.Entry;
 const Hash = core.Hash;
-const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const ConfirmationProgress = sig.consensus.progress_map.blockstore_processor.ConfirmationProgress;
 
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
-const ResolvedTransaction = replay.resolve.ResolvedTransaction;
 const resolveBatch = replay.resolve.resolveBatch;
 
 const assert = std.debug.assert;

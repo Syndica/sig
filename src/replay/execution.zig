@@ -17,12 +17,9 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
 
-const ConfirmSlotError = replay.confirm_slot.ConfirmSlotError;
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
-const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
-const VerifyTicksConfig = replay.confirm_slot.VerifyTicksParams;
 
 const confirmSlot = replay.confirm_slot.confirmSlot;
 

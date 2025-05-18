@@ -3,8 +3,6 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Rc = sig.sync.Rc;
-
 const Epoch = sig.core.Epoch;
 const EpochConstants = sig.core.EpochConstants;
 const EpochSchedule = sig.core.EpochSchedule;
