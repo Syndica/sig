@@ -3109,43 +3109,6 @@ test "tower: selectVoteAndResetForks stake not found" {
 test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
 
-    // Set up fork stats
-    var fork_stats = ForkStats.EMPTY_ZEROES;
-    fork_stats.total_stake = 10000;
-    fork_stats.block_height = 4;
-    fork_stats.is_recent = true;
-    var stakes: sig.consensus.progress_map.consensus.VotedStakes = .{};
-    try stakes.put(allocator, 0, 0);
-    try stakes.put(allocator, 3, 0);
-    try stakes.put(allocator, 1, 0);
-    try stakes.put(allocator, 2, 0);
-    try stakes.put(allocator, 4, 0);
-    fork_stats.voted_stakes = stakes;
-
-    // Set up fork Progress
-    var fork_progress = try ForkProgress.init(allocator, .{
-        .now = sig.time.Instant.now(),
-        .last_entry = Hash.ZEROES,
-        .prev_leader_slot = 9,
-        .validator_stake_info = blk: {
-            var validator_stake_info = ValidatorStakeInfo.DEFAULT;
-            validator_stake_info.stake = 2;
-            validator_stake_info.total_epoch_stake = 100;
-            break :blk validator_stake_info;
-        },
-        .num_blocks_on_fork = 0,
-        .num_dropped_blocks_on_fork = 0,
-    });
-
-    fork_progress.fork_stats = fork_stats;
-
-    var progress_map = ProgressMap.INIT;
-    defer progress_map.deinit(allocator);
-
-    try progress_map.map.put(allocator, 0, try ForkProgress.zeroes(allocator));
-
-    try progress_map.map.put(allocator, 4, fork_progress);
-
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
     const default_data = &default_fork_info(random);
@@ -3249,7 +3212,7 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
     try std.testing.expectEqual(5, result2.reset_slot);
 
     // TODO: IN Agave this state update is done in ReplayStage::compute_bank_stats
-    fixture.progress.getForkStats(4).?.is_locked_out = true;
+    fixture.update_fork_stat_lockout(4, true);
 
     var result3 = try replay_tower.selectVoteAndResetForks(
         allocator,
@@ -3494,6 +3457,11 @@ const TestFixture = struct {
         }
         self.descendants.deinit(allocator);
         self.progress.deinit(allocator);
+    }
+
+    pub fn update_fork_stat_lockout(self: *TestFixture, slot: Slot, locked_out: bool) void {
+        // TODO: IN Agave this state update is done in ReplayStage::compute_bank_stats
+        self.progress.getForkStats(slot).?.is_locked_out = locked_out;
     }
 
     pub fn fill_fork(
