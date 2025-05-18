@@ -6,6 +6,7 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
+const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
 const TransactionAddressLookup = core.transaction.TransactionAddressLookup;
@@ -23,36 +24,29 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-resolve");
 
 pub const ResolvedBatch = struct {
     transactions: []const ResolvedTransaction,
-    accounts_to_lock: []const LockableAccount,
+    accounts: []const LockableAccount,
 
     pub fn deinit(self: ResolvedBatch, allocator: Allocator) void {
         for (self.transactions) |tx| tx.deinit(allocator);
         allocator.free(self.transactions);
-        allocator.free(self.accounts_to_lock);
+        allocator.free(self.accounts);
     }
 };
 
 /// This is a transaction plus the following additions:
 /// - The lookup table addresses have been resolved from accountsdb.
 /// - The instructions have been expanded out to a more useful form for the SVM.
+///
+/// This struct contains some redundancies for ease of access by the SVM.
 pub const ResolvedTransaction = struct {
     transaction: Transaction,
-    // writable_lookups: []const Pubkey,
-    // readonly_lookups: []const Pubkey,
+    accounts: std.MultiArrayList(InstructionAccount),
     instructions: []const InstructionInfo,
-    // accounts: []const TxAccount,
-
-    pub const TxAccount = struct {
-        address: Pubkey,
-        writable: bool,
-    };
 
     pub fn deinit(self: ResolvedTransaction, allocator: Allocator) void {
-        allocator.free(self.instructions);
         allocator.free(self.accounts);
-        // allocator.free(self.writable_lookups);
-        // allocator.free(self.readonly_lookups);
-        // transaction and instruction_data are not freed because they are borrowed.
+        allocator.free(self.instructions);
+        // transaction is not freed because it is borrowed.
     }
 };
 
@@ -61,20 +55,26 @@ pub fn resolveBatch(
     accounts_db: *AccountsDB,
     batch: []const Transaction,
 ) !ResolvedBatch {
-    var accounts_to_lock = try std.ArrayListUnmanaged(LockableAccount)
+    var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
-    errdefer accounts_to_lock.deinit(allocator);
+    errdefer accounts.deinit(allocator);
 
     const resolved_txns = try allocator.alloc(ResolvedTransaction, batch.len);
     errdefer allocator.free(resolved_txns);
 
     for (batch, resolved_txns) |transaction, *resolved| {
-        resolved.* = try resolveTransaction(allocator, accounts_db, transaction, &accounts_to_lock);
+        resolved.* = try resolveTransaction(allocator, accounts_db, transaction);
+        for (
+            resolved.accounts.items(.pubkey),
+            resolved.accounts.items(.is_writable),
+        ) |pubkey, is_writable| {
+            accounts.appendAssumeCapacity(.{ .address = pubkey, .writable = is_writable });
+        }
     }
 
     return .{
         .transactions = resolved_txns,
-        .accounts_to_lock = try accounts_to_lock.toOwnedSlice(allocator),
+        .accounts = try accounts.toOwnedSlice(allocator),
     };
 }
 
@@ -85,23 +85,46 @@ fn resolveTransaction(
     allocator: Allocator,
     accounts_db: *AccountsDB,
     transaction: Transaction,
-    batch_accounts: *std.ArrayListUnmanaged(LockableAccount),
 ) !ResolvedTransaction {
-    _ = batch_accounts; // autofix // TODO: maybe just split out the lookup table stuff
     const message = transaction.msg;
-    const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);
+
     const lookups = try resolveLookupTableAccounts(allocator, accounts_db, message.address_lookups);
     defer {
         allocator.free(lookups.writable);
         allocator.free(lookups.readonly);
     }
-    const normal_bound = message.account_keys.len;
-    const writable_bound = lookups.writable.len + normal_bound;
-    const readonly_bound = lookups.readonly.len + writable_bound;
+
+    // calculate bounds based on the concatenation of normal ++ writable ++ readable accounts
+    const normal_end = message.account_keys.len;
+    const writable_end = lookups.writable.len + normal_end;
+    const readonly_end = lookups.readonly.len + writable_end;
+
+    // construct accounts
+    var accounts = std.MultiArrayList(InstructionAccount){};
+    try accounts.ensureTotalCapacity(allocator, readonly_end + lookups.readonly.len);
+    errdefer accounts.deinit(allocator);
+    for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
+        .pubkey = pubkey,
+        .is_signer = message.isSigner(i),
+        .is_writable = message.isWritable(i),
+    });
+    for (lookups.writable) |pubkey| accounts.appendAssumeCapacity(.{
+        .pubkey = pubkey,
+        .is_signer = false,
+        .is_writable = true,
+    });
+    for (lookups.readonly) |pubkey| accounts.appendAssumeCapacity(.{
+        .pubkey = pubkey,
+        .is_signer = false,
+        .is_writable = false,
+    });
+
+    // construct instructions
+    const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);
+    errdefer allocator.free(instructions);
     for (message.instructions, instructions) |input_ix, *output_ix| {
         var account_metas =
             std.BoundedArray(AccountMeta, InstructionInfo.MAX_ACCOUNT_METAS){};
-        // const account_metas = try allocator.alloc(AccountMeta, input_ix.account_indexes.len);
         var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
         for (input_ix.account_indexes, 0..) |index, i| {
             // find first usage of this account in this instruction
@@ -114,24 +137,22 @@ fn resolveTransaction(
             seen.set(index);
 
             // expand the account metadata
-            (try account_metas.addOne()).* = if (index <= normal_bound) .{
+            (try account_metas.addOne()).* = if (index <= normal_end) .{
                 .pubkey = message.account_keys[index],
                 .index_in_transaction = index,
                 .index_in_caller = index,
                 .index_in_callee = @intCast(index_in_callee),
-                .is_signer = index < message.signature_count,
-                .is_writable = index < message.signature_count and
-                    index > message.readonly_signed_count or
-                    index >= message.signature_count + message.readonly_unsigned_count,
-            } else if (index <= writable_bound) .{
-                .pubkey = lookups.writable[index - normal_bound],
+                .is_signer = message.isWritable(index),
+                .is_writable = message.isSigner(index),
+            } else if (index <= writable_end) .{
+                .pubkey = lookups.writable[index - normal_end],
                 .index_in_transaction = index,
                 .index_in_caller = index,
                 .index_in_callee = @intCast(index_in_callee),
                 .is_signer = false,
                 .is_writable = true,
-            } else if (index <= readonly_bound) .{
-                .pubkey = lookups.readonly[index - writable_bound],
+            } else if (index <= readonly_end) .{
+                .pubkey = lookups.readonly[index - writable_end],
                 .index_in_transaction = index,
                 .index_in_caller = index,
                 .index_in_callee = @intCast(index_in_callee),
@@ -157,8 +178,7 @@ fn resolveTransaction(
     return .{
         .transaction = transaction,
         .instructions = instructions,
-        // .writable_lookups = lookups.writable,
-        // .readonly_lookups = lookups.readonly,
+        .accounts = accounts,
     };
 }
 

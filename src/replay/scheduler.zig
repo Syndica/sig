@@ -110,7 +110,7 @@ pub const TransactionScheduler = struct {
 
     fn tryScheduleSome(self: *TransactionScheduler) !?TransactionError {
         while (self.batches.peek()) |peeked_batch| {
-            self.locks.lockStrict(self.allocator, peeked_batch.accounts_to_lock) catch |e| {
+            self.locks.lockStrict(self.allocator, peeked_batch.accounts) catch |e| {
                 switch (e) {
                     error.LockFailed => if (self.batches_scheduled - self.batches_finished == 0) {
                         return .AccountInUse;
