@@ -126,13 +126,14 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         return .dead;
     }
 
-    const slot_info = state.slot_tracker.slots.get(slot) orelse return error.MissingSlot;
     const epoch_info = state.epochs.getForSlot(slot) orelse return error.MissingEpoch;
+    const slot_info = state.slot_tracker.get(slot) orelse return error.MissingSlot;
+
     const i_am_leader = slot_info.constants.collector_id.equals(&state.my_identity);
 
     if (!progress_get_or_put.found_existing) {
         const parent_slot = slot_info.constants.parent_slot;
-        const parent = state.progress_map.map.get(parent_slot) orelse
+        const parent = state.progress_map.map.getPtr(parent_slot) orelse
             return error.MissingParentProgress;
 
         progress_get_or_put.value_ptr.* = try ForkProgress.initFromParent(state.allocator, .{
@@ -140,9 +141,10 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             .parent_slot = parent_slot,
             .parent = parent,
             .slot_hash = slot_info.state.hash.readCopy(),
+            .last_entry = slot_info.state.blockhash_queue.readField("last_hash") orelse
+                return error.MissingLastHash,
             .i_am_leader = i_am_leader,
-            .blockhash_queue = slot_info.state.blockhash_queue,
-            .epoch_stakes = epoch_info.stakes,
+            .epoch_stakes = &epoch_info.stakes,
             .now = sig.time.Instant.now(),
             .validator_vote_pubkey = state.vote_account,
         });
@@ -164,12 +166,14 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .getSlotEntriesWithShredInfo(slot, confirmation_progress.num_shreds, false);
 
     confirmation_progress.num_shreds += num_shreds;
-    confirmation_progress.num_entries += entries.len;
-    for (entries.items) |e| confirmation_progress.num_txs += e.transactions.len;
+    confirmation_progress.num_entries += entries.items.len;
+    for (entries.items) |e| confirmation_progress.num_txs += e.transactions.items.len;
 
     return .{ .confirm = try confirmSlot(
         state.allocator,
-        state.logger,
+        replay.confirm_slot.ScopedLogger.from(state.logger),
+        state.accounts_db,
+        state.thread_pool,
         entries.items,
         confirmation_progress.last_entry,
         .{

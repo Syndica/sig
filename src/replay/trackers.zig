@@ -3,6 +3,8 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
+const Rc = sig.sync.Rc;
+
 const Epoch = sig.core.Epoch;
 const EpochConstants = sig.core.EpochConstants;
 const EpochSchedule = sig.core.EpochSchedule;
@@ -17,13 +19,41 @@ const SlotState = sig.core.SlotState;
 /// kitchen-sink style approach of storing everything under the sun.
 ///
 /// [BankForks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank_forks.rs#L75)
+///
+/// This struct is *not* thread safe, and the lifetimes of the returned pointers
+/// will end as soon as the items are removed.
 pub const SlotTracker = struct {
-    slots: std.AutoArrayHashMapUnmanaged(Slot, Element) = .{},
+    slots: std.AutoArrayHashMapUnmanaged(Slot, *Element) = .{},
 
     const Element = struct {
         constants: SlotConstants,
-        state: SlotState, // TODO properly handle mutations and lifetime
+        state: SlotState,
     };
+
+    const Reference = struct {
+        constants: *const SlotConstants,
+        state: *SlotState,
+    };
+
+    pub fn put(
+        self: *SlotTracker,
+        allocator: Allocator,
+        slot: Slot,
+        constants: SlotConstants,
+        state: SlotState,
+    ) !void {
+        const elem = try allocator.create(Element);
+        elem.* = .{ .constants = constants, .state = state };
+        try self.slots.put(allocator, slot, elem);
+    }
+
+    pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
+        const elem = self.slots.get(slot) orelse return null;
+        return .{
+            .constants = &elem.constants,
+            .state = &elem.state,
+        };
+    }
 
     pub fn activeSlots(
         self: *const SlotTracker,
@@ -32,7 +62,7 @@ pub const SlotTracker = struct {
         var list = std.ArrayListUnmanaged(Slot){};
         var iter = self.slots.iterator();
         while (iter.next()) |entry| {
-            if (!entry.value_ptr.state.isFrozen()) {
+            if (!entry.value_ptr.*.state.isFrozen()) {
                 try list.append(allocator, entry.key_ptr.*);
             }
         }

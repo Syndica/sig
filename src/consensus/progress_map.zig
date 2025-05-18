@@ -293,24 +293,18 @@ pub const ForkProgress = struct {
             parent_slot: Slot,
             parent: *const ForkProgress,
             validator_vote_pubkey: ?Pubkey,
-
-            // information about the slot and epoch
             slot_hash: ?Hash,
+            last_entry: Hash,
             i_am_leader: bool,
-            blockhash_queue: *sig.sync.RwMux(sig.core.bank.BlockhashQueue),
             epoch_stakes: *const sig.core.stake.EpochStakes,
         },
     ) !ForkProgress {
         const parent = params.parent;
 
-        const new_progress = try ForkProgress.init(allocator, .{
+        var new_progress = try ForkProgress.init(allocator, .{
             .now = sig.time.Instant.now(),
 
-            .last_entry = blk: {
-                var q = params.blockhash_queue.read();
-                defer q.unlock();
-                break :blk q.get().last_hash orelse return error.MissingLastHash;
-            },
+            .last_entry = params.last_entry,
 
             .prev_leader_slot = if (parent.propagated_stats.is_leader_slot)
                 params.parent_slot

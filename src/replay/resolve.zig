@@ -41,7 +41,7 @@ pub const ResolvedTransaction = struct {
     // writable_lookups: []const Pubkey,
     // readonly_lookups: []const Pubkey,
     instructions: []const InstructionInfo,
-    accounts: []const TxAccount,
+    // accounts: []const TxAccount,
 
     pub const TxAccount = struct {
         address: Pubkey,
@@ -62,21 +62,20 @@ pub fn resolveBatch(
     accounts_db: *AccountsDB,
     batch: []const Transaction,
 ) !ResolvedBatch {
-    var accounts_to_lock = try std.ArrayListUnmanaged(struct { Pubkey, bool })
+    var accounts_to_lock = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
     errdefer accounts_to_lock.deinit(allocator);
 
     const resolved_txns = try allocator.alloc(ResolvedTransaction, batch.len);
     errdefer allocator.free(resolved_txns);
 
-    for (batch.items, resolved_txns) |transaction, *resolved| {
-        resolved.* = try ResolvedTransaction
-            .init(allocator, accounts_db, transaction, &accounts_to_lock);
+    for (batch, resolved_txns) |transaction, *resolved| {
+        resolved.* = try resolveTransaction(allocator, accounts_db, transaction, &accounts_to_lock);
     }
 
     return .{
         .transactions = resolved_txns,
-        .accounts_to_lock = accounts_to_lock.toOwnedSlice(allocator),
+        .accounts_to_lock = try accounts_to_lock.toOwnedSlice(allocator),
     };
 }
 
@@ -87,12 +86,12 @@ fn resolveTransaction(
     allocator: Allocator,
     accounts_db: *AccountsDB,
     transaction: Transaction,
-    batch_accounts: *std.ArrayListUnmanaged(struct { Pubkey, bool }),
+    batch_accounts: *std.ArrayListUnmanaged(LockableAccount),
 ) !ResolvedTransaction {
     _ = batch_accounts; // autofix // TODO: maybe just split out the lookup table stuff
     const message = transaction.msg;
-    const instructions = allocator.alloc(InstructionInfo, message.instructions.len);
-    const lookups = try resolveLookupTableAccounts(allocator, accounts_db, message);
+    const instructions = try allocator.alloc(InstructionInfo, message.instructions.len);
+    const lookups = try resolveLookupTableAccounts(allocator, accounts_db, message.address_lookups);
     defer {
         allocator.free(lookups.writable);
         allocator.free(lookups.readonly);
@@ -101,9 +100,11 @@ fn resolveTransaction(
     const writable_bound = lookups.writable.len + normal_bound;
     const readonly_bound = lookups.readonly.len + writable_bound;
     for (message.instructions, instructions) |input_ix, *output_ix| {
-        const account_metas = try allocator.alloc(AccountMeta, input_ix.account_indexes);
-        const seen = std.bit_set.ArrayBitSet(256).initEmpty();
-        for (input_ix.account_indexes, account_metas, 0..) |index, *account_meta, i| {
+        var account_metas =
+            std.BoundedArray(AccountMeta, InstructionInfo.MAX_ACCOUNT_METAS){};
+        // const account_metas = try allocator.alloc(AccountMeta, input_ix.account_indexes.len);
+        var seen = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
+        for (input_ix.account_indexes, 0..) |index, i| {
             // find first usage of this account in this instruction
             const index_in_callee = if (seen.isSet(index))
                 for (input_ix.account_indexes[0..i], 0..) |prior_index, j| {
@@ -114,27 +115,27 @@ fn resolveTransaction(
             seen.set(index);
 
             // expand the account metadata
-            account_meta.* = if (index <= normal_bound) AccountMeta{
+            (try account_metas.addOne()).* = if (index <= normal_bound) .{
                 .pubkey = message.account_keys[index],
                 .index_in_transaction = index,
                 .index_in_caller = index,
-                .index_in_callee = index_in_callee,
+                .index_in_callee = @intCast(index_in_callee),
                 .is_signer = index < message.signature_count,
                 .is_writable = index < message.signature_count and
                     index > message.readonly_signed_count or
                     index >= message.signature_count + message.readonly_unsigned_count,
-            } else if (index <= writable_bound) AccountMeta{
+            } else if (index <= writable_bound) .{
                 .pubkey = lookups.writable[index - normal_bound],
                 .index_in_transaction = index,
                 .index_in_caller = index,
-                .index_in_callee = index_in_callee,
+                .index_in_callee = @intCast(index_in_callee),
                 .is_signer = false,
                 .is_writable = true,
-            } else if (index <= readonly_bound) AccountMeta{
+            } else if (index <= readonly_bound) .{
                 .pubkey = lookups.readonly[index - writable_bound],
                 .index_in_transaction = index,
                 .index_in_caller = index,
-                .index_in_callee = index_in_callee,
+                .index_in_callee = @intCast(index_in_callee),
                 .is_signer = false,
                 .is_writable = false,
             } else {
@@ -157,8 +158,8 @@ fn resolveTransaction(
     return .{
         .transaction = transaction,
         .instructions = instructions,
-        .writable_lookups = lookups.writable,
-        .readonly_lookups = lookups.readonly,
+        // .writable_lookups = lookups.writable,
+        // .readonly_lookups = lookups.readonly,
     };
 }
 
@@ -175,39 +176,46 @@ fn resolveLookupTableAccounts(
         total_readonly += lookup.readonly_indexes.len;
     }
 
-    const writable_accounts = try allocator.alloc(ResolvedTransaction.Account, total_writable);
-    errdefer allocator.free(writable_accounts);
-    const readonly_accounts = try allocator.alloc(ResolvedTransaction.Account, total_readonly);
-    errdefer allocator.free(readonly_accounts);
+    var writable_accounts = try std.ArrayListUnmanaged(Pubkey)
+        .initCapacity(allocator, total_writable);
+    errdefer writable_accounts.deinit(allocator);
+
+    var readonly_accounts = try std.ArrayListUnmanaged(Pubkey)
+        .initCapacity(allocator, total_readonly);
+    errdefer readonly_accounts.deinit(allocator);
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
 
         // get lookup table
         const account = try accounts_db.getAccount(&lookup.table_address);
+        if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
+            return error.LookupTableAccountOverflow;
+        }
         var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
-        const bytes_read = account.data.read(&buf);
-        const table = try AddressLookupTable.deserialize(buf[0..bytes_read]);
+        const account_bytes = buf[0..account.data.len()];
+        account.data.readAll(account_bytes);
+        const table = try AddressLookupTable.deserialize(account_bytes);
 
         // resolve writable addresses
-        for (writable_accounts, lookup.writable_indexes) |*acc, index| {
+        for (lookup.writable_indexes) |index| {
             if (table.addresses.len < index + 1) {
                 return error.LookupTableAccountTooSmall;
             }
-            acc.* = Pubkey{ .data = table.addresses[index].* };
+            writable_accounts.appendAssumeCapacity(table.addresses[index]);
         }
 
         // resolve readonly addresses
-        for (readonly_accounts, lookup.readonly_indexes) |*acc, index| {
+        for (lookup.readonly_indexes) |index| {
             if (table.addresses.len < index + 1) {
                 return error.LookupTableAccountTooSmall;
             }
-            acc.* = Pubkey{ .data = table.addresses[index].* };
+            readonly_accounts.appendAssumeCapacity(table.addresses[index]);
         }
     }
 
     return .{
-        .writable = writable_accounts,
-        .readable = readonly_accounts,
+        .writable = try writable_accounts.toOwnedSlice(allocator),
+        .readonly = try readonly_accounts.toOwnedSlice(allocator),
     };
 }

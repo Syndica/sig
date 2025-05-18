@@ -254,7 +254,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         pub fn pollFallible(self: *Self) union(enum) { done, pending, err: anyerror } {
             for (self.tasks.items) |task| {
                 if (!task.done.load(.acquire)) {
-                    return null;
+                    return .pending;
                 }
             }
             return if (self.joinFallible()) |_| .done else |err| .{ .err = err };
@@ -287,7 +287,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             }
 
             for (self.tasks.items) |task| task.join();
-            for (self.tasks.items) |task| try task.result;
+            for (self.tasks.items) |task| _ = try task.result;
         }
     };
 }
