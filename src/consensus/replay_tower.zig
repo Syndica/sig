@@ -3111,15 +3111,50 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
 
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
-    const default_data = &default_fork_info(random);
-    var fixture = try TestFixture.init(allocator, default_data.root);
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+    var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
     var fp = try ForkProgress.zeroes(allocator);
+    defer fp.deinit(allocator);
     fp.fork_stats.computed = true;
     try fixture.progress.map.put(allocator, 0, fp);
-    try fixture.fill_fork(allocator, &default_data.data);
-    try fixture.fill_default_asc_dsc(allocator);
+
+    // Build fork structure:
+    //
+    //      slot 0
+    //        |
+    //      slot 1
+    //      /    \
+    // slot 2    |
+    //    |      |
+    // slot 3    |
+    //    |      |
+    // slot 4    |
+    //         slot 5
+    const fork = struct {
+        fn fork(r: std.Random, input_root: SlotAndHash) !Tree {
+            var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+            const hash4 = SlotAndHash{ .slot = 4, .hash = Hash.initRandom(r) };
+            const hash3 = SlotAndHash{ .slot = 3, .hash = Hash.initRandom(r) };
+            const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(r) };
+            const hash5 = SlotAndHash{ .slot = 5, .hash = Hash.initRandom(r) };
+            const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(r) };
+            const hash0 = input_root;
+
+            trees.appendSliceAssumeCapacity(&[5]TreeNode{
+                .{ hash1, hash0 },
+                .{ hash5, hash1 },
+                .{ hash2, hash1 },
+                .{ hash3, hash2 },
+                .{ hash4, hash3 },
+            });
+
+            return .{ .root = hash0, .data = trees };
+        }
+    };
+
+    try fixture.fill_fork(allocator, try fork.fork(random, root));
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3145,7 +3180,7 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
         .noop,
         Pubkey.ZEROES,
         Pubkey.ZEROES,
-        default_data.root.slot,
+        root.slot,
         &accountsdb,
     );
     defer replay_tower.deinit(allocator);
@@ -3375,25 +3410,6 @@ fn createSet(allocator: std.mem.Allocator, slots: []const Slot) !SortedSet(Slot)
     return set;
 }
 
-// Helper function to create ancestor or descendants sets
-fn addSlotFamily(
-    allocator: std.mem.Allocator,
-    ancestors: *AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
-    slot: u64,
-    famility_slots: []const u64,
-) !void {
-    if (!builtin.is_test) {
-        @compileError("addSlotFamily should only be used in test");
-    }
-    var set = SortedSet(u64).init(allocator);
-
-    for (famility_slots) |family_slot| {
-        try set.put(family_slot);
-    }
-
-    try ancestors.put(allocator, slot, set);
-}
-
 const TreeNode = sig.consensus.fork_choice.TreeNode;
 const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
@@ -3411,29 +3427,12 @@ fn fillProgressMapForkStats(
     }
 }
 
-pub fn default_fork_info(random: std.Random) struct { root: SlotAndHash, data: [5]TreeNode } {
-    const hash4 = SlotAndHash{ .slot = 4, .hash = Hash.initRandom(random) };
-    const hash3 = SlotAndHash{ .slot = 3, .hash = Hash.initRandom(random) };
-    const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
-    const hash5 = SlotAndHash{ .slot = 5, .hash = Hash.initRandom(random) };
-    const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
-    const hash0 = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
-
-    const trees = [5]TreeNode{
-        .{ hash1, hash0 },
-        .{ hash5, hash1 },
-        .{ hash2, hash1 },
-        .{ hash3, hash2 },
-        .{ hash4, hash3 },
-    };
-
-    return .{ .root = hash0, .data = trees };
-}
-
+const MAX_TEST_TREE_LEN = 100;
+const Tree = struct { root: SlotAndHash, data: std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
 const TestFixture = struct {
     fork_choice: HeaviestSubtreeForkChoice,
-    ancestors: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{},
-    descendants: AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{},
+    ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
+    descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
 
     pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
@@ -3444,19 +3443,25 @@ const TestFixture = struct {
 
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
         self.fork_choice.deinit();
+        self.progress.map.deinit(allocator);
 
-        var ait = self.ancestors.iterator();
-        while (ait.next()) |entry| {
-            entry.value_ptr.deinit();
-        }
-        self.ancestors.deinit(allocator);
+        {
+            var it = self.descendants.iterator();
+            while (it.next()) |child| {
+                child.value_ptr.deinit();
+            }
 
-        var dit = self.descendants.iterator();
-        while (dit.next()) |entry| {
-            entry.value_ptr.deinit();
+            self.descendants.deinit(allocator);
         }
-        self.descendants.deinit(allocator);
-        self.progress.deinit(allocator);
+
+        {
+            var it = self.ancestors.iterator();
+            while (it.next()) |child| {
+                child.value_ptr.deinit();
+            }
+
+            self.ancestors.deinit(allocator);
+        }
     }
 
     pub fn update_fork_stat_lockout(self: *TestFixture, slot: Slot, locked_out: bool) void {
@@ -3467,11 +3472,15 @@ const TestFixture = struct {
     pub fn fill_fork(
         self: *TestFixture,
         allocator: std.mem.Allocator,
-        trees: []const TreeNode,
+        input_tree: Tree,
     ) !void {
-        for (trees) |tree| {
+        // TODO check that root fork exist already and it is being extended
+        for (input_tree.data.constSlice()) |tree| {
+            // Populate forkchoice
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
+            // Populate progress map
             var fp = try ForkProgress.zeroes(allocator);
+            defer fp.deinit(allocator);
             fp.fork_stats.computed = true;
             _ = try self.progress.map.getOrPutValue(
                 allocator,
@@ -3479,22 +3488,156 @@ const TestFixture = struct {
                 fp,
             );
         }
-    }
 
-    pub fn fill_default_asc_dsc(self: *TestFixture, allocator: std.mem.Allocator) !void {
-        // Ancestors
-        try addSlotFamily(allocator, &self.ancestors, 1, &[_]Slot{0});
-        try addSlotFamily(allocator, &self.ancestors, 2, &[_]Slot{ 0, 1 });
-        try addSlotFamily(allocator, &self.ancestors, 0, &[_]Slot{});
-        try addSlotFamily(allocator, &self.ancestors, 5, &[_]Slot{ 1, 0 });
-        try addSlotFamily(allocator, &self.ancestors, 3, &[_]Slot{ 0, 1, 2 });
-        try addSlotFamily(allocator, &self.ancestors, 4, &[_]Slot{ 0, 1, 2, 3 });
-        // Descendants
-        try addSlotFamily(allocator, &self.descendants, 2, &[_]Slot{ 3, 4 });
-        try addSlotFamily(allocator, &self.descendants, 0, &[_]Slot{ 5, 3, 1, 2, 4 });
-        try addSlotFamily(allocator, &self.descendants, 3, &[_]Slot{4});
-        try addSlotFamily(allocator, &self.descendants, 4, &[_]Slot{});
-        try addSlotFamily(allocator, &self.descendants, 5, &[_]Slot{});
-        try addSlotFamily(allocator, &self.descendants, 1, &[_]Slot{ 3, 4, 2, 5 });
+        // Populate ancenstors
+        self.ancestors = try getAncestors(allocator, input_tree);
+        // Populate decendants
+        self.descendants = try getDescendants(allocator, input_tree);
     }
 };
+
+fn getDescendants(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapUnmanaged(
+    Slot,
+    SortedSet(Slot),
+) {
+    if (!builtin.is_test) {
+        @compileError("getDescendants should only be used in test");
+    }
+    var descendants = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
+
+    var children_map = std.AutoHashMap(Slot, std.ArrayList(Slot)).init(allocator);
+    defer {
+        var it = children_map.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        children_map.deinit();
+    }
+
+    try children_map.put(tree.root.slot, std.ArrayList(Slot).init(allocator));
+    for (tree.data.constSlice()) |node| {
+        try children_map.put(node[0].slot, std.ArrayList(Slot).init(allocator));
+        if (node[1]) |parent| {
+            try children_map.put(parent.slot, std.ArrayList(Slot).init(allocator));
+        }
+    }
+
+    for (tree.data.constSlice()) |node| {
+        if (node[1]) |parent| {
+            try children_map.getPtr(parent.slot).?.append(node[0].slot);
+        }
+    }
+
+    var visited = std.AutoHashMap(Slot, void).init(allocator);
+    defer visited.deinit();
+
+    var stack = std.ArrayList(struct { slot: Slot, processed: bool }).init(allocator);
+    defer stack.deinit();
+
+    try stack.append(.{ .slot = tree.root.slot, .processed = false });
+
+    while (stack.items.len > 0) {
+        var current = &stack.items[stack.items.len - 1];
+        if (current.processed) {
+            _ = stack.pop();
+
+            var descendant_list = SortedSet(Slot).init(allocator);
+
+            if (children_map.get(current.slot)) |children| {
+                for (children.items) |item| {
+                    try descendant_list.put(item);
+                }
+
+                for (children.items) |child| {
+                    if (descendants.get(child)) |child_descendants| {
+                        var cd = child_descendants;
+                        for (cd.items()) |item| {
+                            try descendant_list.put(item);
+                        }
+                    }
+                }
+            }
+
+            try descendants.put(allocator, current.slot, descendant_list);
+        } else {
+            if (visited.contains(current.slot)) {
+                _ = stack.pop();
+                continue;
+            }
+            try visited.put(current.slot, {});
+
+            current.processed = true;
+
+            if (children_map.get(current.slot)) |children| {
+                var i = children.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(.{ .slot = children.items[i], .processed = false });
+                }
+            }
+        }
+    }
+
+    return descendants;
+}
+
+fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapUnmanaged(
+    Slot,
+    SortedSet(Slot),
+) {
+    if (!builtin.is_test) {
+        @compileError("getAncestors should only be used in test");
+    }
+    var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
+
+    const root_list = SortedSet(Slot).init(allocator);
+    try ancestors.put(allocator, tree.root.slot, root_list);
+
+    var parent_map = std.AutoHashMap(Slot, Slot).init(allocator);
+    defer parent_map.deinit();
+
+    for (tree.data.constSlice()) |node| {
+        const child = node[0];
+        if (node[1]) |parent| {
+            try parent_map.put(child.slot, parent.slot);
+        }
+    }
+
+    var visited = std.AutoHashMap(Slot, void).init(allocator);
+    defer visited.deinit();
+
+    var queue = std.ArrayList(Slot).init(allocator);
+    defer queue.deinit();
+    try queue.append(tree.root.slot);
+    try visited.put(tree.root.slot, {});
+
+    while (queue.items.len > 0) {
+        const current = queue.orderedRemove(0);
+
+        for (tree.data.constSlice()) |node| {
+            if (node[1]) |parent| {
+                if (parent.slot == current) {
+                    const child = node[0];
+                    if (!visited.contains(child.slot)) {
+                        try queue.append(child.slot);
+                        try visited.put(child.slot, {});
+
+                        var child_ancestors = SortedSet(Slot).init(allocator);
+                        try child_ancestors.put(current);
+
+                        if (ancestors.get(current)) |parent_ancestors| {
+                            var pa = parent_ancestors;
+                            for (pa.items()) |item| {
+                                try child_ancestors.put(item);
+                            }
+                        }
+
+                        try ancestors.put(allocator, child.slot, child_ancestors);
+                    }
+                }
+            }
+        }
+    }
+
+    return ancestors;
+}
