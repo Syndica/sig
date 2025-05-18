@@ -3492,7 +3492,7 @@ const TestFixture = struct {
         // Populate ancenstors
         var extended_ancestors = try getAncestors(allocator, input_tree);
         defer {
-           var it = extended_ancestors.iterator();
+            var it = extended_ancestors.iterator();
             while (it.next()) |child| {
                 child.value_ptr.deinit();
             }
@@ -3502,13 +3502,13 @@ const TestFixture = struct {
         // Populate decendants
         var extended_decendants = try getDescendants(allocator, input_tree);
         defer {
-           var it = extended_decendants.iterator();
+            var it = extended_decendants.iterator();
             while (it.next()) |child| {
                 child.value_ptr.deinit();
             }
             extended_decendants.deinit(allocator);
         }
-        self.descendants = try getDescendants(allocator, extended_decendants);
+        self.descendants = try extendForkTree(allocator, self.descendants, extended_decendants);
     }
 };
 
