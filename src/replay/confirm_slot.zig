@@ -52,7 +52,7 @@ pub fn confirmSlot(
     }
 
     try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
-    try scheduleBatches(allocator, accounts_db, &future.batcher, entries);
+    try scheduleTransactionBatches(allocator, &future.scheduler, accounts_db, entries);
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 
@@ -82,10 +82,10 @@ fn startPohVerify(
 }
 
 /// schedule transaction verification/execution asynchronously
-fn scheduleBatches(
+fn scheduleTransactionBatches(
     allocator: Allocator,
+    scheduler: *TransactionScheduler,
     accounts_db: *AccountsDB,
-    batcher: *TransactionScheduler,
     entries: []const Entry,
 ) !void {
     var total_transactions: usize = 0;
@@ -95,7 +95,7 @@ fn scheduleBatches(
         const batch = try resolveBatch(allocator, accounts_db, entry.transactions.items);
         errdefer batch.deinit(allocator);
 
-        batcher.addBatchAssumeCapacity(batch);
+        scheduler.addBatchAssumeCapacity(batch);
     }
 }
 
@@ -113,7 +113,7 @@ pub const ConfirmSlotStatus = union(enum) {
 /// fd: runtime_process_txns_in_microblock_stream
 pub const ConfirmSlotFuture = struct {
     allocator: Allocator,
-    batcher: TransactionScheduler,
+    scheduler: TransactionScheduler,
     poh_verifier: HomogeneousThreadPool(PohTask),
 
     /// The current status to return on poll, unless something has changed.
@@ -127,8 +127,8 @@ pub const ConfirmSlotFuture = struct {
         thread_pool: *ThreadPool,
         num_entries: usize,
     ) !*ConfirmSlotFuture {
-        var batcher = try TransactionScheduler.initCapacity(allocator, num_entries, thread_pool);
-        errdefer batcher.deinit(allocator);
+        var scheduler = try TransactionScheduler.initCapacity(allocator, num_entries, thread_pool);
+        errdefer scheduler.deinit();
 
         const poh_verifier = try HomogeneousThreadPool(PohTask)
             .initBorrowed(allocator, thread_pool, thread_pool.max_threads);
@@ -140,15 +140,15 @@ pub const ConfirmSlotFuture = struct {
         future.* = ConfirmSlotFuture{
             .allocator = allocator,
             .poh_verifier = poh_verifier,
-            .batcher = batcher,
+            .scheduler = scheduler,
             .status = .pending,
         };
 
         return future;
     }
 
-    fn destroy(self: *ConfirmSlotFuture) void {
-        self.batcher.deinit(self.allocator);
+    pub fn destroy(self: *ConfirmSlotFuture) void {
+        self.scheduler.deinit();
         self.poh_verifier.deinit(self.allocator);
         self.allocator.destroy(self);
     }
@@ -180,7 +180,7 @@ pub const ConfirmSlotFuture = struct {
                 .pending => .pending,
                 .err => .{ .err = .{ .invalid_transaction = .SignatureFailure } },
             },
-            try self.batcher.poll(),
+            try self.scheduler.poll(),
         };
     }
 };

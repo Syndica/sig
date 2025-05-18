@@ -33,7 +33,7 @@ const assert = std.debug.assert;
 /// that indicates fatal/unexpected errors like OOM, and the error will
 /// propagate up when polling.
 ///
-/// This should only be used in a single thread.
+/// This should only be used in a single thread at a time.
 pub const TransactionScheduler = struct {
     allocator: Allocator,
     batches: ResizeableRingBuffer(ResolvedBatch),
@@ -66,10 +66,12 @@ pub const TransactionScheduler = struct {
         };
     }
 
-    pub fn deinit(self: *TransactionScheduler, allocator: Allocator) void {
-        _ = allocator; // autofix
-        _ = self; // autofix
-        unreachable; // TODO
+    pub fn deinit(self: TransactionScheduler) void {
+        self.batches.deinit(self.allocator);
+        self.thread_pool.deinit(self.allocator);
+        var channel = self.results;
+        channel.deinit();
+        self.locks.deinit(self.allocator);
     }
 
     pub fn addBatch(self: *TransactionScheduler, batch: ResolvedBatch) Allocator.Error!void {
@@ -81,7 +83,6 @@ pub const TransactionScheduler = struct {
     }
 
     pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
-        // TODO: self.batches is not thread safe
         const batches_len = self.batches.len();
         assert(self.batches_scheduled <= batches_len);
         assert(self.batches_finished <= batches_len);
@@ -99,9 +100,12 @@ pub const TransactionScheduler = struct {
                 return .{ .err = .{ .invalid_transaction = err } };
             }
         }
-        if (try self.results.receive(.{ .unordered = &self.exit })) |err| {
-            self.exit.store(true, .monotonic);
-            return .{ .err = .{ .invalid_transaction = err } };
+        if (self.results.tryReceive()) |maybe_err| {
+            self.batches_finished += 1;
+            if (maybe_err) |err| {
+                self.exit.store(true, .monotonic);
+                return .{ .err = .{ .invalid_transaction = err } };
+            }
         }
 
         return .pending;
@@ -117,7 +121,7 @@ pub const TransactionScheduler = struct {
                 },
                 else => return e,
             };
-            const batch = self.batches.pop().?; // TODO: reconsider unwrap
+            const batch = self.batches.pop().?;
             assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .transactions = batch.transactions,
                 .results = self.results,
@@ -173,6 +177,10 @@ fn ResizeableRingBuffer(T: type) type {
             capacity: usize,
         ) Allocator.Error!ResizeableRingBuffer(T) {
             return .{ .buffer = try allocator.alloc(T, capacity) };
+        }
+
+        pub fn deinit(self: ResizeableRingBuffer(T), allocator: Allocator) void {
+            allocator.free(self.buffer);
         }
 
         pub fn put(
