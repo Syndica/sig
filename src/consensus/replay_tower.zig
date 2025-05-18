@@ -3641,3 +3641,64 @@ fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapU
 
     return ancestors;
 }
+
+pub fn extendTree(original: Tree, maybe_extension: ?Tree) !Tree {
+    if (!builtin.is_test) {
+        @compileError("extendTree should only be used in test");
+    }
+    const extension = if (maybe_extension) |e| e else return original;
+
+    var highest_slot_in_original = original.root.slot;
+    var highest_hash_in_original = original.root.hash;
+    for (original.data.constSlice()) |node| {
+        const slot_and_hash = node[0];
+        if (slot_and_hash.slot > highest_slot_in_original) {
+            highest_slot_in_original = slot_and_hash.slot;
+            highest_hash_in_original = slot_and_hash.hash;
+        }
+    }
+
+    var new_data = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+
+    try new_data.appendSlice(original.data.constSlice());
+
+    var head = extension.data.constSlice()[0];
+    head[1] = SlotAndHash{
+        .slot = highest_slot_in_original,
+        .hash = highest_hash_in_original,
+    };
+    const tail = extension.data.constSlice()[1..];
+
+    // Add all nodes from extension tree
+    try new_data.append(head);
+    try new_data.appendSlice(tail);
+
+    return Tree{
+        .root = original.root,
+        .data = new_data,
+    };
+}
+
+pub fn extendForkTree(
+    allocator: std.mem.Allocator,
+    original: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+    extension: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+) !std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) {
+    var result = try original.clone(allocator);
+    errdefer result.deinit(allocator);
+
+    for (extension.keys(), extension.values()) |slot, extension_children_| {
+        var extension_children = extension_children_;
+        if (result.getPtr(slot)) |result_children| {
+            // Merge children
+            for (extension_children.items()) |child_slot| {
+                try result_children.put(child_slot);
+            }
+        } else {
+            // Add new entry
+            try result.put(allocator, slot, try extension_children.clone());
+        }
+    }
+
+    return result;
+}
