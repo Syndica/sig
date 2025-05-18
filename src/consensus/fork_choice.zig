@@ -271,7 +271,6 @@ pub const ForkChoice = struct {
         if (self.fork_infos.getPtr(parent)) |parent_fork_info| {
             try parent_fork_info.children.put(slot_hash_key, {});
         } else {
-            std.debug.print("{any}", .{parent});
             // If parent is given then parent's info must
             // already exist by time child is being added.
             return error.MissingParent;

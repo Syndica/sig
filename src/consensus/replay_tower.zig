@@ -1084,7 +1084,7 @@ pub const ReplayTower = struct {
         progress: *const ProgressMap,
         slot_history: *const SlotHistory,
     ) bool {
-        const heaviest_slot = reset_slot orelse {
+        const heaviest_bank_on_same_voted_fork = reset_slot orelse {
             // No reset slot means we are in the middle of dump & repair. Last vote
             // landing is irrelevant.
             return true;
@@ -1096,7 +1096,7 @@ pub const ReplayTower = struct {
         };
 
         const my_latest_landed_vote_slot = progress.myLatestLandedVote(
-            heaviest_slot,
+            heaviest_bank_on_same_voted_fork,
         ) orelse {
             // We've either never landed a vote or fork has been pruned or is in the
             // middle of dump & repair. Either way, no need to super refresh.
@@ -1110,7 +1110,7 @@ pub const ReplayTower = struct {
         // 1. Last vote has landed
         (my_latest_landed_vote_slot >= last_voted_slot) or
             // 2. Already voting at the tip
-            (last_voted_slot >= heaviest_slot) or
+            (last_voted_slot >= heaviest_bank_on_same_voted_fork) or
             // 3. Last vote is within slot hashes, regular refresh is enough
             slot_history.check(last_voted_slot) == .found;
     }
@@ -3107,11 +3107,26 @@ test "tower: selectVoteAndResetForks stake not found" {
 }
 
 test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest fork" {
-    const allocator = std.testing.allocator;
+    // const allocator = std.testing.allocator;
+    const allocator = std.heap.c_allocator;
 
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
+
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    const hash4 = SlotAndHash{ .slot = 4, .hash = Hash.initRandom(random) };
+    const hash3 = SlotAndHash{ .slot = 3, .hash = Hash.initRandom(random) };
+    const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
+    const hash5 = SlotAndHash{ .slot = 5, .hash = Hash.initRandom(random) };
+    const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
+
+    const hash6 = SlotAndHash{ .slot = 6, .hash = Hash.initRandom(random) };
+    const hash7 = SlotAndHash{ .slot = 7, .hash = Hash.initRandom(random) };
+    const hash8 = SlotAndHash{ .slot = 8, .hash = Hash.initRandom(random) };
+    const hash9 = SlotAndHash{ .slot = 9, .hash = Hash.initRandom(random) };
+    const hash10 = SlotAndHash{ .slot = 10, .hash = Hash.initRandom(random) };
+
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
@@ -3132,29 +3147,18 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
     //    |      |
     // slot 4    |
     //         slot 5
-    const fork = struct {
-        fn fork(r: std.Random, input_root: SlotAndHash) !Tree {
-            var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
-            const hash4 = SlotAndHash{ .slot = 4, .hash = Hash.initRandom(r) };
-            const hash3 = SlotAndHash{ .slot = 3, .hash = Hash.initRandom(r) };
-            const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(r) };
-            const hash5 = SlotAndHash{ .slot = 5, .hash = Hash.initRandom(r) };
-            const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(r) };
-            const hash0 = input_root;
+    {
+        var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+        trees.appendSliceAssumeCapacity(&[5]TreeNode{
+            .{ hash1, root },
+            .{ hash5, hash1 },
+            .{ hash2, hash1 },
+            .{ hash3, hash2 },
+            .{ hash4, hash3 },
+        });
 
-            trees.appendSliceAssumeCapacity(&[5]TreeNode{
-                .{ hash1, hash0 },
-                .{ hash5, hash1 },
-                .{ hash2, hash1 },
-                .{ hash3, hash2 },
-                .{ hash4, hash3 },
-            });
-
-            return .{ .root = hash0, .data = trees };
-        }
-    };
-
-    try fixture.fill_fork(allocator, try fork.fork(random, root));
+        try fixture.fill_fork(allocator, .{ .root = root, .data = trees });
+    }
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3280,6 +3284,75 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
 
     // Check second item is LockedOut with expected value
     switch (result3.heaviest_fork_failures.items[1]) {
+        .LockedOut => |slot| {
+            try std.testing.expectEqual(4, slot);
+        },
+        else => try std.testing.expect(false), // Fail if not LockedOut
+    }
+
+    // Continue building on 5
+    //
+    // Build fork structure:
+    //      slot 5
+    //        |
+    //      slot 6
+    //        |
+    //      slot 7
+    //        |
+    //      slot 8
+    //        |
+    //      slot 9
+    //        |
+    //      slot 10
+    {
+        var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+        trees.appendSliceAssumeCapacity(&[5]TreeNode{
+            .{ hash6, hash5 },
+            .{ hash7, hash6 },
+            .{ hash8, hash7 },
+            .{ hash9, hash8 },
+            .{ hash10, hash9 },
+        });
+
+        try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees });
+    }
+
+    // // 4 is still the heaviest slot, but not votable because of lockout.
+    // // 9 is the deepest slot from our last voted fork (5), so it is what we should
+    // // reset to.
+
+    var result4 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        4, // heaviest_slot
+        9, // heaviest_slot_on_same_voted_fork
+        0, // heaviest_epoch
+        &ancestors,
+        &descendants,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
+
+    defer {
+        result4.heaviest_fork_failures.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(null, result4.vote_slot);
+    try std.testing.expectEqual(9, result4.reset_slot);
+
+    switch (result4.heaviest_fork_failures.items[0]) {
+        .FailedSwitchThreshold => |data| {
+            try std.testing.expectEqual(4, data.slot);
+            try std.testing.expectEqual(0, data.observed_stake);
+            try std.testing.expectEqual(1000, data.total_stake);
+        },
+        else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+    }
+
+    // Check second item is LockedOut with expected value
+    switch (result4.heaviest_fork_failures.items[1]) {
         .LockedOut => |slot| {
             try std.testing.expectEqual(4, slot);
         },
@@ -3413,7 +3486,6 @@ fn createSet(allocator: std.mem.Allocator, slots: []const Slot) !SortedSet(Slot)
 const TreeNode = sig.consensus.fork_choice.TreeNode;
 const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
-const ValidatorStakeInfo = sig.consensus.progress_map.ValidatorStakeInfo;
 const EpochStakes = sig.core.stake.EpochStakes;
 const Stakes = sig.core.stake.Stakes;
 
@@ -3447,17 +3519,15 @@ const TestFixture = struct {
 
         {
             var it = self.descendants.iterator();
-            while (it.next()) |child| {
-                child.value_ptr.deinit();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
             }
-
             self.descendants.deinit(allocator);
         }
-
         {
             var it = self.ancestors.iterator();
-            while (it.next()) |child| {
-                child.value_ptr.deinit();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
             }
 
             self.ancestors.deinit(allocator);
@@ -3482,6 +3552,7 @@ const TestFixture = struct {
             var fp = try ForkProgress.zeroes(allocator);
             defer fp.deinit(allocator);
             fp.fork_stats.computed = true;
+            fp.fork_stats.my_latest_landed_vote = null;
             _ = try self.progress.map.getOrPutValue(
                 allocator,
                 tree[0].slot,
@@ -3499,6 +3570,7 @@ const TestFixture = struct {
             extended_ancestors.deinit(allocator);
         }
         self.ancestors = try extendForkTree(allocator, self.ancestors, extended_ancestors);
+
         // Populate decendants
         var extended_decendants = try getDescendants(allocator, input_tree);
         defer {
@@ -3700,18 +3772,26 @@ pub fn extendForkTree(
     original: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
     extension: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) {
+    // TODO fix leak
     var result = try original.clone(allocator);
-    errdefer result.deinit(allocator);
-
-    for (extension.keys(), extension.values()) |slot, extension_children_| {
-        var extension_children = extension_children_;
+    errdefer {
+        var it = result.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        result.deinit(allocator);
+    }
+    for (extension.keys(), extension.values()) |slot, extension_children| {
         if (result.getPtr(slot)) |result_children| {
+            var cloned_children = try extension_children.clone();
+            defer cloned_children.deinit();
+
             // Merge children
-            for (extension_children.items()) |child_slot| {
+            for (cloned_children.items()) |child_slot| {
                 try result_children.put(child_slot);
             }
         } else {
-            // Add new entry
+            // Add new entry with a cloned value
             try result.put(allocator, slot, try extension_children.clone());
         }
     }

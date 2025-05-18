@@ -442,7 +442,7 @@ pub const ForkStats = struct {
     computed: bool,
     lockout_intervals: LockoutIntervals,
     bank_hash: Hash,
-    my_latest_landed_vote: Slot,
+    my_latest_landed_vote: ?Slot,
 
     pub const VoteThreshold = std.ArrayListUnmanaged(consensus.ThresholdDecision);
 
