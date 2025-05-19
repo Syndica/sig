@@ -2440,3 +2440,69 @@ pub fn setupDuplicateForks() !struct {
         .duplicate_leaves_descended_from_6 = try duplicate_leaves_descended_from_6.toOwnedSlice(),
     };
 }
+
+pub fn splitOff(
+    allocator: std.mem.Allocator,
+    fork_choice: *ForkChoice,
+    slot_hash_key: SlotAndHash,
+) !void {
+    if (!builtin.is_test) {
+        @compileError("splitOff should only be used in test");
+    }
+    std.debug.assert(!fork_choice.tree_root.equals(slot_hash_key));
+
+    const node_to_split_at = fork_choice.fork_infos.getPtr(slot_hash_key) orelse
+        return error.SlotHashKeyNotFound;
+    var split_tree_root = node_to_split_at.*;
+    const parent = node_to_split_at.parent orelse return error.SplitNodeIsRoot;
+
+    var update_operations = UpdateOperations.init(allocator);
+    defer update_operations.deinit();
+
+    try fork_choice.insertAggregateOperations(&update_operations, slot_hash_key);
+
+    const parent_info = fork_choice.fork_infos.getPtr(parent) orelse return error.ParentNotFound;
+    std.debug.assert(parent_info.children.orderedRemove(slot_hash_key));
+
+    fork_choice.processUpdateOperations(&update_operations);
+
+    var split_tree_fork_infos = std.AutoHashMap(SlotAndHash, ForkInfo).init(allocator);
+    var to_visit = std.ArrayList(SlotAndHash).init(allocator);
+    defer to_visit.deinit();
+    try to_visit.append(slot_hash_key);
+
+    while (to_visit.popOrNull()) |current_node| {
+        var current_fork_info = fork_choice.fork_infos.fetchRemove(current_node) orelse
+            return error.NodeNotFound;
+
+        var iter = current_fork_info.value.children.iterator();
+        while (iter.next()) |child| {
+            try to_visit.append(child.key_ptr.*);
+        }
+
+        try split_tree_fork_infos.put(current_node, current_fork_info.value);
+    }
+
+    const split_parent = split_tree_root.parent orelse return error.CannotSplitFromRoot;
+    const parent_fork_info = fork_choice.fork_infos.getPtr(split_parent) orelse
+        return error.ParentNotFound;
+    _ = parent_fork_info.children.swapRemoveNoSort(slot_hash_key);
+
+    split_tree_root.parent = null;
+    try split_tree_fork_infos.put(slot_hash_key, split_tree_root);
+
+    var split_tree_latest_votes = try fork_choice.latest_votes.clone();
+    var it = split_tree_latest_votes.iterator();
+    while (it.next()) |entry| {
+        if (!split_tree_fork_infos.contains(entry.value_ptr.*)) {
+            _ = split_tree_latest_votes.removeByPtr(entry.key_ptr);
+        }
+    }
+
+    var it_self = fork_choice.latest_votes.iterator();
+    while (it_self.next()) |entry| {
+        if (!fork_choice.fork_infos.contains(entry.value_ptr.*)) {
+            _ = fork_choice.latest_votes.removeByPtr(entry.key_ptr);
+        }
+    }
+}
