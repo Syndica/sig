@@ -95,7 +95,7 @@ pub const InstructionInfo = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/9eee2f66775291a1ec4c4b1be32efc1d314002f7/transaction-context/src/lib.rs#L736
     pub fn getSigners(
         self: *const InstructionInfo,
-    ) !std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
+    ) std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
         var signers = std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS){};
         for (self.account_metas.constSlice()) |account_meta| {
             if (account_meta.is_signer) {

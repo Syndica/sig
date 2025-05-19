@@ -441,6 +441,16 @@ pub const BlockhashQueue = struct {
         };
     }
 
+    pub fn getHashInfoIfValid(self: BlockhashQueue, hash: *const Hash, max_age: usize) ?HashAge {
+        const age = self.ages.get(hash.*) orelse return null;
+        if (!isHashIndexValid(self.last_hash_index, max_age, age.hash_index)) return null;
+        return age;
+    }
+
+    fn isHashIndexValid(last_hash_index: u64, max_age: usize, hash_index: u64) bool {
+        return last_hash_index - hash_index <= @as(u64, max_age);
+    }
+
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
