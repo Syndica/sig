@@ -11,6 +11,7 @@ const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const Slot = sig.core.Slot;
+const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 
 const UpdateLabel = enum {
     Aggregate,
@@ -102,7 +103,7 @@ pub const ForkInfo = struct {
             // clear the latest invalid ancestor
             if (latest_duplicate_ancestor <= newly_duplicate_ancestor) {
                 self.logger.info().logf(
-                    \\ Fork choice for {} clearing latest invalid ancestor  
+                    \\ Fork choice for {} clearing latest invalid ancestor
                     \\ {} because {} was duplicate confirmed
                 ,
                     .{ my_key, latest_duplicate_ancestor, newly_duplicate_ancestor },
@@ -1074,6 +1075,81 @@ pub const ForkChoice = struct {
         }
     }
 
+    /// [Agave] https://github.com/anza-xyz/agave/blob/9dbfe93720019942a3d70e0d609b654a57c42555/core/src/consensus/heaviest_subtree_fork_choice.rs#L1133
+    fn heaviestSlotOnSameVotedFork(
+        self: *const ForkChoice,
+        replay_tower: *const ReplayTower,
+    ) !?SlotAndHash {
+        if (replay_tower.lastVotedSlotHash()) |last_voted_slot_hash| {
+            if (self.isCandidate(&last_voted_slot_hash)) |is_candidate| {
+                if (is_candidate) {
+                    return self.heaviestSlot(last_voted_slot_hash);
+                } else {
+                    // In this case our last voted fork has been marked invalid because
+                    // it contains a duplicate block. It is critical that we continue to
+                    // build on it as long as there exists at least 1 non duplicate fork.
+                    // This is because there is a chance that this fork is actually duplicate
+                    // confirmed but not observed because there is no block containing the
+                    // required votes.
+                    //
+                    // Scenario 1:
+                    // Slot 0 - Slot 1 (90%)
+                    //        |
+                    //        - Slot 1'
+                    //        |
+                    //        - Slot 2 (10%)
+                    //
+                    // Imagine that 90% of validators voted for Slot 1, but because of the existence
+                    // of Slot 1', Slot 1 is marked as invalid in fork choice. It is impossible to reach
+                    // the required switch threshold for these validators to switch off of Slot 1 to Slot 2.
+                    // In this case it is important for someone to build a Slot 3 off of Slot 1 that contains
+                    // the votes for Slot 1. At this point they will see that the fork off of Slot 1 is duplicate
+                    // confirmed, and the rest of the network can repair Slot 1, and mark it is a valid candidate
+                    // allowing fork choice to converge.
+                    //
+                    // This will only occur after Slot 2 has been created, in order to resolve the following
+                    // scenario:
+                    //
+                    // Scenario 2:
+                    // Slot 0 - Slot 1 (30%)
+                    //        |
+                    //        - Slot 1' (30%)
+                    //
+                    // In this scenario only 60% of the network has voted before the duplicate proof for Slot 1 and 1'
+                    // was viewed. Neither version of the slot will reach the duplicate confirmed threshold, so it is
+                    // critical that a new fork Slot 2 from Slot 0 is created to allow the validators on Slot 1 and
+                    // Slot 1' to switch. Since the `best_slot` is an ancestor of the last vote (Slot 0 is ancestor of last
+                    // vote Slot 1 or Slot 1'), we will trigger `SwitchForkDecision::FailedSwitchDuplicateRollback`, which
+                    // will create an alternate fork off of Slot 0. Once this alternate fork is created, the `best_slot`
+                    // will be Slot 2, at which point we will be in Scenario 1 and continue building off of Slot 1 or Slot 1'.
+                    //
+                    // For more details see the case for
+                    // `SwitchForkDecision::FailedSwitchDuplicateRollback` in `ReplayStage::select_vote_and_reset_forks`.
+                    return self.deepestSlot(&last_voted_slot_hash);
+                }
+            } else {
+                if (!replay_tower.isStrayLastVote()) {
+                    // Unless last vote is stray and stale, self.is_candidate(last_voted_slot_hash) must return
+                    // Some(_), justifying to panic! here.
+                    // Also, adjust_lockouts_after_replay() correctly makes last_voted_slot None,
+                    // if all saved votes are ancestors of replayed_root_slot. So this code shouldn't be
+                    // touched in that case as well.
+                    // In other words, except being stray, all other slots have been voted on while this
+                    // validator has been running, so we must be able to fetch best_slots for all of
+                    // them.
+                    return error.MissingCandidate;
+                } else {
+                    // fork_infos doesn't have corresponding data for the stale stray last vote,
+                    // meaning some inconsistency between saved tower and ledger.
+                    // (newer snapshot, or only a saved tower is moved over to new setup?)
+                    return null;
+                }
+            }
+        } else {
+            return null;
+        }
+    }
+
     fn setStakeVotedAt(
         self: *ForkChoice,
         slot_hash_key: *const SlotAndHash,
@@ -1166,6 +1242,8 @@ fn doInsertAggregateOperation(
     return true;
 }
 const test_allocator = std.testing.allocator;
+const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
+const createTestSlotHistory = sig.consensus.replay_tower.createTestSlotHistory;
 
 // [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L3281
 test "HeaviestSubtreeForkChoice.subtreeDiff" {
@@ -1978,6 +2056,148 @@ test "HeaviestSubtreeForkChoice.isStrictAncestor_is_maybe_ancestor" {
     try std.testing.expect(fork_choice.isStrictAncestor(&maybe_ancestor, &key));
 }
 
+test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_stray_restored_slot" {
+    const tree = [_]TreeNode{
+        //
+        // (0)
+        // └── (1)
+        //     ├── (2)
+        //
+        .{
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+    };
+    var fork_choice = try forkChoiceForTest(test_allocator, tree[0..]);
+    defer fork_choice.deinit();
+
+    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    defer replay_tower.deinit(test_allocator);
+    _ = try replay_tower.recordBankVote(test_allocator, 1, Hash.ZEROES);
+
+    try std.testing.expect(!replay_tower.isStrayLastVote());
+    try std.testing.expectEqualDeep(
+        SlotAndHash{ .slot = @as(Slot, 2), .hash = Hash.ZEROES },
+        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
+    );
+
+    // Make slot 1 (existing in bank_forks) a restored stray slot
+    var slot_history = try createTestSlotHistory(test_allocator);
+    defer slot_history.deinit(test_allocator);
+
+    slot_history.add(0);
+    // Work around TooOldSlotHistory
+    slot_history.add(999);
+
+    try replay_tower.adjustLockoutsAfterReplay(test_allocator, 0, &slot_history);
+
+    try std.testing.expect(replay_tower.isStrayLastVote());
+    try std.testing.expectEqual(
+        SlotAndHash{ .slot = @as(Slot, 2), .hash = Hash.ZEROES },
+        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
+    );
+
+    // Make slot 3 (NOT existing in bank_forks) a restored stray slot
+    _ = try replay_tower.recordBankVote(test_allocator, 3, Hash.ZEROES);
+    try replay_tower.adjustLockoutsAfterReplay(test_allocator, 0, &slot_history);
+
+    try std.testing.expect(replay_tower.isStrayLastVote());
+    try std.testing.expectEqual(
+        null,
+        try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower),
+    );
+}
+
+test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_last_voted_not_found" {
+    var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
+    defer fork_choice.deinit();
+
+    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    defer replay_tower.deinit(test_allocator);
+
+    try std.testing.expectEqualDeep(
+        null,
+        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)),
+    );
+}
+
+test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_use_deepest_slot" {
+    const tree = [_]TreeNode{
+        //
+        // (0)
+        // └── (1)
+        //     ├── (2)
+        //
+        .{
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+        .{
+            SlotAndHash{ .slot = 2, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+        },
+    };
+    var fork_choice = try forkChoiceForTest(test_allocator, &tree);
+    defer fork_choice.deinit();
+
+    // Create a tower that voted on slot 1.
+    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    defer replay_tower.deinit(test_allocator);
+    _ = try replay_tower.recordBankVote(test_allocator, 1, Hash.ZEROES);
+
+    // Initially, slot 1 is valid so we get the heaviest slot (which would be 2)
+    try std.testing.expectEqualDeep(
+        SlotAndHash{ .slot = @as(Slot, 2), .hash = Hash.ZEROES },
+        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
+    );
+
+    // Now mark slot 1 as invalid
+    try fork_choice.markForkInvalidCandidate(
+        &SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+    );
+    try std.testing.expect(
+        !fork_choice.isCandidate(&SlotAndHash{ .slot = 1, .hash = Hash.ZEROES }).?,
+    );
+
+    // Now heaviestSlotOnSameVotedFork should return the deepest slot (2)
+    // even though the fork is invalid
+    try std.testing.expectEqualDeep(
+        SlotAndHash{ .slot = @as(Slot, 2), .hash = Hash.ZEROES },
+        (try fork_choice.heaviestSlotOnSameVotedFork(&replay_tower)).?,
+    );
+}
+
+test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
+    const tree = [_]TreeNode{
+        //
+        // (0)
+        // └── (1)
+        //
+        .{
+            SlotAndHash{ .slot = 1, .hash = Hash.ZEROES },
+            SlotAndHash{ .slot = 0, .hash = Hash.ZEROES },
+        },
+    };
+    var fork_choice = try forkChoiceForTest(test_allocator, &tree);
+    defer fork_choice.deinit();
+
+    // Create a tower that voted on slot 2 which doesn't exist in the fork choice.
+    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    defer replay_tower.deinit(test_allocator);
+    _ = try replay_tower.recordBankVote(test_allocator, 2, Hash.ZEROES);
+
+    try std.testing.expect(!replay_tower.isStrayLastVote());
+
+    try std.testing.expectError(
+        error.MissingCandidate,
+        fork_choice.heaviestSlotOnSameVotedFork(&replay_tower),
+    );
+}
+
 pub fn forkChoiceForTest(
     allocator: std.mem.Allocator,
     forks: []const TreeNode,
@@ -2008,7 +2228,7 @@ pub fn forkChoiceForTest(
 
 const TreeNode = std.meta.Tuple(&.{ SlotAndHash, ?SlotAndHash });
 
-const fork_tuples = [_]TreeNode{
+pub const fork_tuples = [_]TreeNode{
     // (0)
     // └── (1)
     //     ├── (2)
