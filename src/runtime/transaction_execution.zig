@@ -356,22 +356,21 @@ pub fn executeTransaction(
 pub fn checkAge(
     transaction: *const RuntimeTransaction,
     batch_account_cache: *BatchAccountCache,
-    ancestors: *const Ancestors,
     blockhash_queue: *const BlockhashQueue,
     max_age: u64,
     last_blockhash: *const Hash,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-) TransactionResult(CachedAccount) {
-    _ = transaction;
-    _ = ancestors;
-    _ = batch_account_cache;
-    _ = blockhash_queue;
-    _ = max_age;
-    _ = last_blockhash;
-    _ = next_durable_nonce;
-    _ = next_lamports_per_signature;
-    @panic("not implemented");
+) TransactionResult(?CachedAccount) {
+    return sig.runtime.check_transactions.checkAge(
+        transaction,
+        batch_account_cache,
+        blockhash_queue,
+        max_age,
+        last_blockhash,
+        next_durable_nonce,
+        next_lamports_per_signature,
+    );
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
@@ -381,11 +380,12 @@ pub fn checkStatusCache(
     ancestors: *const Ancestors,
     status_cache: *const StatusCache,
 ) ?TransactionError {
-    _ = msg_hash;
-    _ = recent_blockhash;
-    _ = status_cache;
-    _ = ancestors;
-    @panic("not implemented");
+    return sig.runtime.check_transactions.checkStatusCache(
+        msg_hash,
+        recent_blockhash,
+        status_cache,
+        ancestors,
+    );
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L557
