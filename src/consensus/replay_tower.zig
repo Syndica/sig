@@ -3106,7 +3106,14 @@ test "tower: selectVoteAndResetForks stake not found" {
     );
 }
 
-test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest fork" {
+const TreeNode = sig.consensus.fork_choice.TreeNode;
+const ForkStats = sig.consensus.progress_map.ForkStats;
+const ForkProgress = sig.consensus.progress_map.ForkProgress;
+const EpochStakes = sig.core.stake.EpochStakes;
+const Stakes = sig.core.stake.Stakes;
+const splitOff = sig.consensus.fork_choice.splitOff;
+
+test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork" {
     // const allocator = std.testing.allocator;
     const allocator = std.heap.c_allocator;
 
@@ -3358,6 +3365,88 @@ test "wip: tower: test unconfirmed duplicate slots and lockouts for non heaviest
         },
         else => try std.testing.expect(false), // Fail if not LockedOut
     }
+
+    {
+        var result5 = try replay_tower.selectVoteAndResetForks(
+            allocator,
+            4, // heaviest_slot
+            9, // heaviest_slot_on_same_voted_fork
+            0, // heaviest_epoch
+            &ancestors,
+            &descendants,
+            &fixture.progress,
+            &.{ .max_gossip_frozen_votes = .{} },
+            &fixture.fork_choice,
+            epoch_stake_map,
+            &SlotHistory{ .bits = bits, .next_slot = 0 },
+        );
+
+        defer {
+            result5.heaviest_fork_failures.deinit(allocator);
+        }
+
+        try std.testing.expectEqual(null, result5.vote_slot);
+        try std.testing.expectEqual(9, result5.reset_slot);
+
+        switch (result5.heaviest_fork_failures.items[0]) {
+            .FailedSwitchThreshold => |data| {
+                try std.testing.expectEqual(4, data.slot);
+                try std.testing.expectEqual(0, data.observed_stake);
+                try std.testing.expectEqual(1000, data.total_stake);
+            },
+            else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+        }
+
+        // Check second item is LockedOut with expected value
+        switch (result4.heaviest_fork_failures.items[1]) {
+            .LockedOut => |slot| {
+                try std.testing.expectEqual(4, slot);
+            },
+            else => try std.testing.expect(false), // Fail if not LockedOut
+        }
+    }
+
+    _ = try splitOff(allocator, &fixture.fork_choice, hash6);
+
+    {
+        var result6 = try replay_tower.selectVoteAndResetForks(
+            allocator,
+            4, // heaviest_slot
+            5, // heaviest_slot_on_same_voted_fork
+            0, // heaviest_epoch
+            &ancestors,
+            &descendants,
+            &fixture.progress,
+            &.{ .max_gossip_frozen_votes = .{} },
+            &fixture.fork_choice,
+            epoch_stake_map,
+            &SlotHistory{ .bits = bits, .next_slot = 0 },
+        );
+
+        defer {
+            result6.heaviest_fork_failures.deinit(allocator);
+        }
+
+        try std.testing.expectEqual(null, result6.vote_slot);
+        try std.testing.expectEqual(5, result6.reset_slot);
+
+        switch (result6.heaviest_fork_failures.items[0]) {
+            .FailedSwitchThreshold => |data| {
+                try std.testing.expectEqual(4, data.slot);
+                try std.testing.expectEqual(0, data.observed_stake);
+                try std.testing.expectEqual(1000, data.total_stake);
+            },
+            else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+        }
+
+        // Check second item is LockedOut with expected value
+        switch (result4.heaviest_fork_failures.items[1]) {
+            .LockedOut => |slot| {
+                try std.testing.expectEqual(4, slot);
+            },
+            else => try std.testing.expect(false), // Fail if not LockedOut
+        }
+    }
 }
 
 const builtin = @import("builtin");
@@ -3482,12 +3571,6 @@ fn createSet(allocator: std.mem.Allocator, slots: []const Slot) !SortedSet(Slot)
     }
     return set;
 }
-
-const TreeNode = sig.consensus.fork_choice.TreeNode;
-const ForkStats = sig.consensus.progress_map.ForkStats;
-const ForkProgress = sig.consensus.progress_map.ForkProgress;
-const EpochStakes = sig.core.stake.EpochStakes;
-const Stakes = sig.core.stake.Stakes;
 
 fn fillProgressMapForkStats(
     allocator: std.mem.Allocator,
