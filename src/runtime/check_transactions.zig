@@ -56,7 +56,7 @@ pub fn checkAge(
         next_lamports_per_signature,
         batch_account_cache,
     )) |nonce| {
-        const nonce_account = nonce.@"0";
+        const nonce_account = nonce[0];
         return .{ .ok = nonce_account };
     }
 
