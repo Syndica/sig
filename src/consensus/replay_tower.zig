@@ -3154,18 +3154,17 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     //    |      |
     // slot 4    |
     //         slot 5
-    {
-        var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
-        trees.appendSliceAssumeCapacity(&[5]TreeNode{
-            .{ hash1, root },
-            .{ hash5, hash1 },
-            .{ hash2, hash1 },
-            .{ hash3, hash2 },
-            .{ hash4, hash3 },
-        });
 
-        try fixture.fill_fork(allocator, .{ .root = root, .data = trees });
-    }
+    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    trees1.appendSliceAssumeCapacity(&[5]TreeNode{
+        .{ hash1, root },
+        .{ hash5, hash1 },
+        .{ hash2, hash1 },
+        .{ hash3, hash2 },
+        .{ hash4, hash3 },
+    });
+
+    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 });
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3203,7 +3202,7 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     defer epoch_stakes.deinit(allocator);
 
     epoch_stakes.total_stake = 1000;
-    epoch_stakes.stakes.deinit(allocator); // TODO
+    epoch_stakes.stakes.deinit(allocator);
     epoch_stakes.stakes = try Stakes(.delegation).initRandom(allocator, random, 1);
 
     try epoch_stake_map.put(allocator, 0, epoch_stakes);
@@ -3311,18 +3310,23 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     //      slot 9
     //        |
     //      slot 10
-    {
-        var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
-        trees.appendSliceAssumeCapacity(&[5]TreeNode{
-            .{ hash6, hash5 },
-            .{ hash7, hash6 },
-            .{ hash8, hash7 },
-            .{ hash9, hash8 },
-            .{ hash10, hash9 },
-        });
+    var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    trees.appendSliceAssumeCapacity(&[5]TreeNode{
+        .{ hash6, hash5 },
+        .{ hash7, hash6 },
+        .{ hash8, hash7 },
+        .{ hash9, hash8 },
+        .{ hash10, hash9 },
+    });
 
-        try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees });
+    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees });
+
+    var ancestors2: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    defer ancestors2.deinit(allocator);
+    for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
+        try ancestors2.put(allocator, key, value);
     }
+    const descendants2 = fixture.descendants;
 
     // // 4 is still the heaviest slot, but not votable because of lockout.
     // // 9 is the deepest slot from our last voted fork (5), so it is what we should
@@ -3333,8 +3337,8 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
         4, // heaviest_slot
         9, // heaviest_slot_on_same_voted_fork
         0, // heaviest_epoch
-        &ancestors,
-        &descendants,
+        &ancestors2,
+        &descendants2,
         &fixture.progress,
         &.{ .max_gossip_frozen_votes = .{} },
         &fixture.fork_choice,
@@ -3372,8 +3376,8 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
             4, // heaviest_slot
             9, // heaviest_slot_on_same_voted_fork
             0, // heaviest_epoch
-            &ancestors,
-            &descendants,
+            &ancestors2,
+            &descendants2,
             &fixture.progress,
             &.{ .max_gossip_frozen_votes = .{} },
             &fixture.fork_choice,
@@ -3414,8 +3418,8 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
             4, // heaviest_slot
             5, // heaviest_slot_on_same_voted_fork
             0, // heaviest_epoch
-            &ancestors,
-            &descendants,
+            &ancestors2,
+            &descendants2,
             &fixture.progress,
             &.{ .max_gossip_frozen_votes = .{} },
             &fixture.fork_choice,
@@ -3612,7 +3616,6 @@ const TestFixture = struct {
             while (it.next()) |entry| {
                 entry.value_ptr.deinit();
             }
-
             self.ancestors.deinit(allocator);
         }
     }
@@ -3643,6 +3646,8 @@ const TestFixture = struct {
             );
         }
 
+        try self.descendants.ensureTotalCapacity(allocator, input_tree.data.len);
+        try self.ancestors.ensureTotalCapacity(allocator, input_tree.data.len);
         // Populate ancenstors
         var extended_ancestors = try getAncestors(allocator, input_tree);
         defer {
@@ -3652,18 +3657,18 @@ const TestFixture = struct {
             }
             extended_ancestors.deinit(allocator);
         }
-        self.ancestors = try extendForkTree(allocator, self.ancestors, extended_ancestors);
+        try extendForkTree(allocator, &self.ancestors, extended_ancestors);
 
         // Populate decendants
-        var extended_decendants = try getDescendants(allocator, input_tree);
+        var extended_descendants = try getDescendants(allocator, input_tree);
         defer {
-            var it = extended_decendants.iterator();
+            var it = extended_descendants.iterator();
             while (it.next()) |child| {
                 child.value_ptr.deinit();
             }
-            extended_decendants.deinit(allocator);
+            extended_descendants.deinit(allocator);
         }
-        self.descendants = try extendForkTree(allocator, self.descendants, extended_decendants);
+        try extendForkTree(allocator, &self.descendants, extended_descendants);
     }
 };
 
@@ -3813,71 +3818,27 @@ fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapU
     return ancestors;
 }
 
-pub fn extendTree(original: Tree, maybe_extension: ?Tree) !Tree {
-    if (!builtin.is_test) {
-        @compileError("extendTree should only be used in test");
-    }
-    const extension = if (maybe_extension) |e| e else return original;
-
-    var highest_slot_in_original = original.root.slot;
-    var highest_hash_in_original = original.root.hash;
-    for (original.data.constSlice()) |node| {
-        const slot_and_hash = node[0];
-        if (slot_and_hash.slot > highest_slot_in_original) {
-            highest_slot_in_original = slot_and_hash.slot;
-            highest_hash_in_original = slot_and_hash.hash;
-        }
-    }
-
-    var new_data = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
-
-    try new_data.appendSlice(original.data.constSlice());
-
-    var head = extension.data.constSlice()[0];
-    head[1] = SlotAndHash{
-        .slot = highest_slot_in_original,
-        .hash = highest_hash_in_original,
-    };
-    const tail = extension.data.constSlice()[1..];
-
-    // Add all nodes from extension tree
-    try new_data.append(head);
-    try new_data.appendSlice(tail);
-
-    return Tree{
-        .root = original.root,
-        .data = new_data,
-    };
-}
-
 pub fn extendForkTree(
     allocator: std.mem.Allocator,
-    original: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+    original: *std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
     extension: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
-) !std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) {
-    // TODO fix leak
-    var result = try original.clone(allocator);
-    errdefer {
-        var it = result.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit();
-        }
-        result.deinit(allocator);
+) !void {
+    if (!builtin.is_test) {
+        @compileError("extendForkTree should only be used in test");
     }
-    for (extension.keys(), extension.values()) |slot, extension_children| {
-        if (result.getPtr(slot)) |result_children| {
-            var cloned_children = try extension_children.clone();
-            defer cloned_children.deinit();
-
-            // Merge children
-            for (cloned_children.items()) |child_slot| {
-                try result_children.put(child_slot);
-            }
-        } else {
-            // Add new entry with a cloned value
-            try result.put(allocator, slot, try extension_children.clone());
-        }
+    if (extension.count() == 0) {
+        return;
     }
 
-    return result;
+    for (extension.keys(), extension.values()) |slot, e_children| {
+        var extension_children = e_children;
+        var original_children = original.getPtr(slot) orelse {
+            try original.put(allocator, slot, try extension_children.clone());
+            continue;
+        };
+
+        for (extension_children.items()) |extension_child| {
+            try original_children.put(extension_child);
+        }
+    }
 }
