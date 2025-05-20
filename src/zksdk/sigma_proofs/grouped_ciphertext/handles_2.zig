@@ -169,12 +169,14 @@ pub const Proof = struct {
         //      Y_0
 
         var second_pubkey_not_zero: bool = true;
-        // TODO: optimize to affine x coord check
-        if (std.mem.allEqual(u8, &params.second_pubkey.toBytes(), 0)) {
+        if (params.second_pubkey.p.p.x.isZero()) {
             second_pubkey_not_zero = false;
-            // TODO
-            // if second_pubkey is zero, second_handle, second_handle_hi (if exists),
-            // and self.Y_2 must all be zero as well.
+
+            // if second_pubkey is zero, then second_handle, second_handle_hi, and Y_2
+            // must all be zero as well.
+            try params.second_handle.point.rejectIdentity();
+            try self.Y_2.rejectIdentity();
+            if (batched) try params.second_handle_hi.point.rejectIdentity();
         }
 
         const c_negated_w = c_negated.mul(w);
