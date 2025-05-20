@@ -18,10 +18,41 @@ pub const Proof = struct {
     z_r: Scalar,
     z_x: Scalar,
 
+    pub fn initBatched(
+        first_pubkey: *const ElGamalPubkey,
+        second_pubkey: *const ElGamalPubkey,
+        amount_lo: u64,
+        amount_hi: u64,
+        opening_lo: *const pedersen.Opening,
+        opening_hi: *const pedersen.Opening,
+        transcript: *Transcript,
+    ) Proof {
+        transcript.appendDomSep("batched-validity-proof");
+        transcript.appendU64("handles", 2);
+
+        const t = Scalar.fromBytes(transcript.challengeScalar("t"));
+
+        const scalar_lo = el_gamal.scalarFromInt(u64, amount_lo);
+        const scalar_hi = el_gamal.scalarFromInt(u64, amount_hi);
+
+        const batched_message = scalar_hi.mul(t).add(scalar_lo);
+        const batched_opening: pedersen.Opening = .{
+            .scalar = opening_hi.scalar.mul(t).add(opening_lo.scalar),
+        };
+
+        return init(
+            first_pubkey,
+            second_pubkey,
+            batched_message,
+            &batched_opening,
+            transcript,
+        );
+    }
+
     pub fn init(
         first_pubkey: *const ElGamalPubkey,
         second_pubkey: *const ElGamalPubkey,
-        amount: u64,
+        amount: anytype,
         opening: *const pedersen.Opening,
         transcript: *Transcript,
     ) Proof {
@@ -31,7 +62,11 @@ pub const Proof = struct {
         const P_first = first_pubkey.p;
         const P_second = second_pubkey.p;
 
-        const x = el_gamal.scalarFromInt(u64, amount);
+        const x: Scalar = switch (@TypeOf(amount)) {
+            Scalar => amount,
+            u64 => el_gamal.scalarFromInt(u64, amount),
+            else => unreachable,
+        };
         const r = opening.scalar;
 
         var y_r = Scalar.random();
@@ -69,15 +104,37 @@ pub const Proof = struct {
         };
     }
 
+    fn Params(batched: bool) type {
+        return if (batched) struct {
+            first_pubkey: *const ElGamalPubkey,
+            second_pubkey: *const ElGamalPubkey,
+            commitment: *const pedersen.Commitment,
+            commitment_hi: *const pedersen.Commitment,
+            first_handle: *const pedersen.DecryptHandle,
+            first_handle_hi: *const pedersen.DecryptHandle,
+            second_handle: *const pedersen.DecryptHandle,
+            second_handle_hi: *const pedersen.DecryptHandle,
+        } else struct {
+            first_pubkey: *const ElGamalPubkey,
+            second_pubkey: *const ElGamalPubkey,
+            commitment: *const pedersen.Commitment,
+            first_handle: *const pedersen.DecryptHandle,
+            second_handle: *const pedersen.DecryptHandle,
+        };
+    }
+
     pub fn verify(
         self: Proof,
-        commitment: *const pedersen.Commitment,
-        first_pubkey: *const ElGamalPubkey,
-        second_pubkey: *const ElGamalPubkey,
-        first_handle: *const pedersen.DecryptHandle,
-        second_handle: *const pedersen.DecryptHandle,
+        comptime batched: bool,
+        params: Params(batched),
         transcript: *Transcript,
     ) !void {
+        const t = if (batched) t: {
+            transcript.appendDomSep("batched-validity-proof");
+            transcript.appendU64("handles", 2);
+            break :t Scalar.fromBytes(transcript.challengeScalar("t"));
+        } else void; // shouldn't be referenced
+
         transcript.appendDomSep("validity-proof");
         transcript.appendU64("handles", 2);
 
@@ -113,12 +170,15 @@ pub const Proof = struct {
 
         var second_pubkey_not_zero: bool = true;
         // TODO: optimize to affine x coord check
-        if (std.mem.allEqual(u8, &second_pubkey.toBytes(), 0)) {
+        if (std.mem.allEqual(u8, &params.second_pubkey.toBytes(), 0)) {
             second_pubkey_not_zero = false;
             // TODO
             // if second_pubkey is zero, second_handle, second_handle_hi (if exists),
             // and self.Y_2 must all be zero as well.
         }
+
+        const c_negated_w = c_negated.mul(w);
+        const z_r_w = self.z_r.mul(w);
 
         var points: std.BoundedArray(Edwards25519, 12) = .{};
         var scalars: std.BoundedArray([32]u8, 12) = .{};
@@ -128,13 +188,10 @@ pub const Proof = struct {
             el_gamal.H.p,
             self.Y_1.p,
             self.Y_2.p,
-            first_pubkey.p.p,
-            commitment.point.p,
-            first_handle.point.p,
+            params.first_pubkey.p.p,
+            params.commitment.point.p,
+            params.first_handle.point.p,
         });
-
-        const c_negated_w = c_negated.mul(w);
-        const z_r_w = self.z_r.mul(w);
 
         try scalars.appendSlice(&.{
             self.z_x.toBytes(),
@@ -146,15 +203,31 @@ pub const Proof = struct {
             c_negated_w.toBytes(),
         });
 
+        if (batched) {
+            try points.appendSlice(&.{
+                params.commitment_hi.point.p,
+                params.first_handle_hi.point.p,
+            });
+            try scalars.appendSlice(&.{
+                c_negated.mul(t).toBytes(),
+                c_negated_w.mul(t).toBytes(),
+            });
+        }
+
         if (second_pubkey_not_zero) {
             try points.appendSlice(&.{
-                second_pubkey.p.p,
-                second_handle.point.p,
+                params.second_pubkey.p.p,
+                params.second_handle.point.p,
             });
             try scalars.appendSlice(&.{
                 z_r_w.mul(w).toBytes(),
                 c_negated_w.mul(w).toBytes(),
             });
+        }
+
+        if (batched and second_pubkey_not_zero) {
+            try points.append(params.second_handle_hi.point.p);
+            try scalars.append(c_negated_w.mul(w).mul(t).toBytes());
         }
 
         const check = switch (points.len) {
@@ -235,11 +308,14 @@ test "correctness" {
     );
 
     try proof.verify(
-        &commitment,
-        &first_pubkey,
-        &second_pubkey,
-        &first_handle,
-        &second_handle,
+        false,
+        .{
+            .first_pubkey = &first_pubkey,
+            .second_pubkey = &second_pubkey,
+            .commitment = &commitment,
+            .first_handle = &first_handle,
+            .second_handle = &second_handle,
+        },
         &verifier_transcript,
     );
 }
@@ -271,11 +347,14 @@ test "first pubkey zeroed" {
     try std.testing.expectError(
         error.IdentityElement,
         proof.verify(
-            &commitment,
-            &first_pubkey,
-            &second_pubkey,
-            &first_handle,
-            &second_handle,
+            false,
+            .{
+                .first_pubkey = &first_pubkey,
+                .second_pubkey = &second_pubkey,
+                .commitment = &commitment,
+                .first_handle = &first_handle,
+                .second_handle = &second_handle,
+            },
             &verifier_transcript,
         ),
     );
@@ -308,11 +387,14 @@ test "zeroed ciphertext" {
     );
 
     try proof.verify(
-        &commitment,
-        &first_pubkey,
-        &second_pubkey,
-        &first_handle,
-        &second_handle,
+        false,
+        .{
+            .first_pubkey = &first_pubkey,
+            .second_pubkey = &second_pubkey,
+            .commitment = &commitment,
+            .first_handle = &first_handle,
+            .second_handle = &second_handle,
+        },
         &verifier_transcript,
     );
 }
@@ -340,11 +422,108 @@ test "proof string" {
 
     var verifier_transcript = Transcript.init("Test");
     try proof.verify(
-        &commitment,
+        false,
+        .{
+            .first_pubkey = &first_pubkey,
+            .second_pubkey = &second_pubkey,
+            .commitment = &commitment,
+            .first_handle = &first_handle,
+            .second_handle = &second_handle,
+        },
+        &verifier_transcript,
+    );
+}
+
+test "batched sanity" {
+    const first_kp = ElGamalKeypair.random();
+    const first_pubkey = first_kp.public;
+
+    const second_kp = ElGamalKeypair.random();
+    const second_pubkey = second_kp.public;
+
+    const amount_lo: u64 = 55;
+    const amount_hi: u64 = 77;
+
+    const commitment_lo, const opening_lo = pedersen.init(u64, amount_lo);
+    const commitment_hi, const opening_hi = pedersen.init(u64, amount_hi);
+
+    const first_handle_lo = pedersen.DecryptHandle.init(&first_pubkey, &opening_lo);
+    const first_handle_hi = pedersen.DecryptHandle.init(&first_pubkey, &opening_hi);
+
+    const second_handle_lo = pedersen.DecryptHandle.init(&second_pubkey, &opening_lo);
+    const second_handle_hi = pedersen.DecryptHandle.init(&second_pubkey, &opening_hi);
+
+    var prover_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.init("test");
+
+    const proof = Proof.initBatched(
         &first_pubkey,
         &second_pubkey,
-        &first_handle,
-        &second_handle,
+        amount_lo,
+        amount_hi,
+        &opening_lo,
+        &opening_hi,
+        &prover_transcript,
+    );
+
+    try proof.verify(
+        true,
+        .{
+            .first_pubkey = &first_pubkey,
+            .second_pubkey = &second_pubkey,
+            .commitment = &commitment_lo,
+            .commitment_hi = &commitment_hi,
+            .first_handle = &first_handle_lo,
+            .first_handle_hi = &first_handle_hi,
+            .second_handle = &second_handle_lo,
+            .second_handle_hi = &second_handle_hi,
+        },
+        &verifier_transcript,
+    );
+}
+
+test "batched proof string" {
+    const first_pubkey_string = "3FQGicS6AgVkRnX5Sau8ybxJDvlehmbdvBUdo+o+oE4=";
+    const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);
+
+    const second_pubkey_string = "IieU/fJCRksbDNvIJZvg/N/safpnIWAGT/xpUAG7YUg=";
+    const second_pubkey = try ElGamalPubkey.fromBase64(second_pubkey_string);
+
+    const commitment_lo_string = "Lq0z7bx3ccyxIB0rRHoWzcba8W1azvAhMfnJogxcz2I=";
+    const commitment_lo = try pedersen.Commitment.fromBase64(commitment_lo_string);
+
+    const commitment_hi_string = "dLPLdQrcl5ZWb0EaJcmebAlJA6RrzKpMSYPDVMJdOm0=";
+    const commitment_hi = try pedersen.Commitment.fromBase64(commitment_hi_string);
+
+    const first_handle_lo_string = "GizvHRUmu6CMjhH7qWg5Rqu43V69Nyjq4QsN/yXBHT8=";
+    const first_handle_lo = try pedersen.DecryptHandle.fromBase64(first_handle_lo_string);
+
+    const first_handle_hi_string = "qMuR929bbkKiVJfRvYxnb90rbh2btjNDjaXpeLCvQWk=";
+    const first_handle_hi = try pedersen.DecryptHandle.fromBase64(first_handle_hi_string);
+
+    const second_handle_lo_string = "MmDbMo2l/jAcXUIm09AQZsBXa93lI2BapAiGZ6f9zRs=";
+    const second_handle_lo = try pedersen.DecryptHandle.fromBase64(second_handle_lo_string);
+
+    const second_handle_hi_string = "gKhb0o3d22XcUcQl5hENF4l1SJwg1vpgiw2RDYqXOxY=";
+    const second_handle_hi = try pedersen.DecryptHandle.fromBase64(second_handle_hi_string);
+
+    const proof_string = "2n2mADpkNrop+eHJj1sAryXWcTtC/7QKcxMp7FdHeh8wjGKLAa9kC89QLGrphv7pZdb2J25kKXqhWUzRBsJWU0izi5vxau9XX6cyd72F3Q9hMXBfjk3htOHI0VnGAalZ/3dZ6C7erjGQDoeTVGOd1vewQ+NObAbfZwcry3+VhQNpkhL17E1dUgZZ+mb5K0tXAjWCmVh1OfN9h3sGltTUCg==";
+    const proof = try Proof.fromBase64(proof_string);
+
+    var verifier_transcript = Transcript.init("Test");
+
+    try proof.verify(
+        true,
+        .{
+            .first_pubkey = &first_pubkey,
+            .second_pubkey = &second_pubkey,
+            .commitment = &commitment_lo,
+            .commitment_hi = &commitment_hi,
+            .first_handle = &first_handle_lo,
+            .first_handle_hi = &first_handle_hi,
+            .second_handle = &second_handle_lo,
+            .second_handle_hi = &second_handle_hi,
+        },
         &verifier_transcript,
     );
 }
