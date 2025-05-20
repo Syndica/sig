@@ -122,6 +122,14 @@ pub const Vote = struct {
     pub fn deinit(vote: Vote, allocator: std.mem.Allocator) void {
         allocator.free(vote.slots);
     }
+
+    pub fn clone(self: Vote, allocator: std.mem.Allocator) std.mem.Allocator.Error!Vote {
+        return .{
+            .slots = try allocator.dupe(Slot, self.slots),
+            .hash = self.hash,
+            .timestamp = self.timestamp,
+        };
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L178
