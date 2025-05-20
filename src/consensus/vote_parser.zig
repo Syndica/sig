@@ -27,7 +27,7 @@ pub const ParsedVote = struct {
     }
 };
 
-// Used for parsing gossip vote transactions
+/// Used for parsing gossip vote transactions
 pub fn parseVoteTransaction(
     allocator: std.mem.Allocator,
     tx: Transaction,
@@ -79,6 +79,8 @@ fn parseVoteInstructionData(
         error.OutOfMemory => |e| return e,
         else => return null,
     };
+    errdefer vote_instruction.deinit(allocator);
+
     return switch (vote_instruction) {
         .vote => |vote| .{
             .{ .vote = vote.vote },

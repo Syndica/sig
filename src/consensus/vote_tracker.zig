@@ -192,8 +192,12 @@ pub const SlotVoteTracker = struct {
 
     pub fn deinit(self: SlotVoteTracker, allocator: std.mem.Allocator) void {
         var copy = self;
+
         copy.voted.deinit(allocator);
+
+        for (copy.optimistic_votes_tracker.values()) |vst| vst.deinit(allocator);
         copy.optimistic_votes_tracker.deinit(allocator);
+
         copy.initAndOrGetUpdates().deinit(allocator);
     }
 
