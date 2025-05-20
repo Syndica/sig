@@ -3114,8 +3114,7 @@ const Stakes = sig.core.stake.Stakes;
 const splitOff = sig.consensus.fork_choice.splitOff;
 
 test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork" {
-    // const allocator = std.testing.allocator;
-    const allocator = std.heap.c_allocator;
+    const allocator = std.testing.allocator;
 
     var prng = std.rand.DefaultPrng.init(91);
     const random = prng.random();
@@ -3370,86 +3369,81 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
         else => try std.testing.expect(false), // Fail if not LockedOut
     }
 
-    {
-        var result5 = try replay_tower.selectVoteAndResetForks(
-            allocator,
-            4, // heaviest_slot
-            9, // heaviest_slot_on_same_voted_fork
-            0, // heaviest_epoch
-            &ancestors2,
-            &descendants2,
-            &fixture.progress,
-            &.{ .max_gossip_frozen_votes = .{} },
-            &fixture.fork_choice,
-            epoch_stake_map,
-            &SlotHistory{ .bits = bits, .next_slot = 0 },
-        );
+    var result5 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        4, // heaviest_slot
+        9, // heaviest_slot_on_same_voted_fork
+        0, // heaviest_epoch
+        &ancestors2,
+        &descendants2,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
 
-        defer {
-            result5.heaviest_fork_failures.deinit(allocator);
-        }
-
-        try std.testing.expectEqual(null, result5.vote_slot);
-        try std.testing.expectEqual(9, result5.reset_slot);
-
-        switch (result5.heaviest_fork_failures.items[0]) {
-            .FailedSwitchThreshold => |data| {
-                try std.testing.expectEqual(4, data.slot);
-                try std.testing.expectEqual(0, data.observed_stake);
-                try std.testing.expectEqual(1000, data.total_stake);
-            },
-            else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
-        }
-
-        // Check second item is LockedOut with expected value
-        switch (result4.heaviest_fork_failures.items[1]) {
-            .LockedOut => |slot| {
-                try std.testing.expectEqual(4, slot);
-            },
-            else => try std.testing.expect(false), // Fail if not LockedOut
-        }
+    defer {
+        result5.heaviest_fork_failures.deinit(allocator);
     }
 
-    _ = try splitOff(allocator, &fixture.fork_choice, hash6);
+    try std.testing.expectEqual(null, result5.vote_slot);
+    try std.testing.expectEqual(9, result5.reset_slot);
 
-    {
-        var result6 = try replay_tower.selectVoteAndResetForks(
-            allocator,
-            4, // heaviest_slot
-            5, // heaviest_slot_on_same_voted_fork
-            0, // heaviest_epoch
-            &ancestors2,
-            &descendants2,
-            &fixture.progress,
-            &.{ .max_gossip_frozen_votes = .{} },
-            &fixture.fork_choice,
-            epoch_stake_map,
-            &SlotHistory{ .bits = bits, .next_slot = 0 },
-        );
+    switch (result5.heaviest_fork_failures.items[0]) {
+        .FailedSwitchThreshold => |data| {
+            try std.testing.expectEqual(4, data.slot);
+            try std.testing.expectEqual(0, data.observed_stake);
+            try std.testing.expectEqual(1000, data.total_stake);
+        },
+        else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+    }
 
-        defer {
-            result6.heaviest_fork_failures.deinit(allocator);
-        }
+    // Check second item is LockedOut with expected value
+    switch (result5.heaviest_fork_failures.items[1]) {
+        .LockedOut => |slot| {
+            try std.testing.expectEqual(4, slot);
+        },
+        else => try std.testing.expect(false), // Fail if not LockedOut
+    }
 
-        try std.testing.expectEqual(null, result6.vote_slot);
-        try std.testing.expectEqual(5, result6.reset_slot);
+    try splitOff(allocator, &fixture.fork_choice, hash6);
+    var result6 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        4, // heaviest_slot
+        5, // heaviest_slot_on_same_voted_fork
+        0, // heaviest_epoch
+        &ancestors2,
+        &descendants2,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
 
-        switch (result6.heaviest_fork_failures.items[0]) {
-            .FailedSwitchThreshold => |data| {
-                try std.testing.expectEqual(4, data.slot);
-                try std.testing.expectEqual(0, data.observed_stake);
-                try std.testing.expectEqual(1000, data.total_stake);
-            },
-            else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
-        }
+    defer {
+        result6.heaviest_fork_failures.deinit(allocator);
+    }
 
-        // Check second item is LockedOut with expected value
-        switch (result4.heaviest_fork_failures.items[1]) {
-            .LockedOut => |slot| {
-                try std.testing.expectEqual(4, slot);
-            },
-            else => try std.testing.expect(false), // Fail if not LockedOut
-        }
+    try std.testing.expectEqual(null, result6.vote_slot);
+    try std.testing.expectEqual(5, result6.reset_slot);
+
+    switch (result6.heaviest_fork_failures.items[0]) {
+        .FailedSwitchThreshold => |data| {
+            try std.testing.expectEqual(4, data.slot);
+            try std.testing.expectEqual(0, data.observed_stake);
+            try std.testing.expectEqual(1000, data.total_stake);
+        },
+        else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+    }
+
+    // Check second item is LockedOut with expected value
+    switch (result4.heaviest_fork_failures.items[1]) {
+        .LockedOut => |slot| {
+            try std.testing.expectEqual(4, slot);
+        },
+        else => try std.testing.expect(false), // Fail if not LockedOut
     }
 }
 

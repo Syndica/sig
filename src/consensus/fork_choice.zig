@@ -2467,13 +2467,20 @@ pub fn splitOff(
     fork_choice.processUpdateOperations(&update_operations);
 
     var split_tree_fork_infos = std.AutoHashMap(SlotAndHash, ForkInfo).init(allocator);
-    defer split_tree_fork_infos.deinit();
+    defer {
+        var it = split_tree_fork_infos.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        split_tree_fork_infos.deinit();
+    }
     var to_visit = std.ArrayList(SlotAndHash).init(allocator);
     defer to_visit.deinit();
+
     try to_visit.append(slot_hash_key);
 
-    while (to_visit.popOrNull()) |current_node| {
-        var current_fork_info = fork_choice.fork_infos.fetchRemove(current_node) orelse
+    while (to_visit.popOrNull()) |cuurent_slot_hash_key| {
+        var current_fork_info = fork_choice.fork_infos.fetchRemove(cuurent_slot_hash_key) orelse
             return error.NodeNotFound;
 
         var iter = current_fork_info.value.children.iterator();
@@ -2481,7 +2488,7 @@ pub fn splitOff(
             try to_visit.append(child.key_ptr.*);
         }
 
-        try split_tree_fork_infos.put(current_node, current_fork_info.value);
+        try split_tree_fork_infos.put(cuurent_slot_hash_key, current_fork_info.value);
     }
 
     const split_parent = split_tree_root.parent orelse return error.CannotSplitFromRoot;
@@ -2493,6 +2500,7 @@ pub fn splitOff(
     try split_tree_fork_infos.put(slot_hash_key, split_tree_root);
 
     var split_tree_latest_votes = try fork_choice.latest_votes.clone();
+    defer split_tree_latest_votes.deinit();
     var it = split_tree_latest_votes.iterator();
     while (it.next()) |entry| {
         if (!split_tree_fork_infos.contains(entry.value_ptr.*)) {
