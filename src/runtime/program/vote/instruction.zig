@@ -144,6 +144,10 @@ pub const Vote = struct {
         /// `[SIGNER]` Vote authority
         vote_authority = 3,
     };
+
+    pub fn deinit(self: Vote, allocator: std.mem.Allocator) void {
+        self.vote.deinit(allocator);
+    }
 };
 
 pub const VoteSwitch = struct {
@@ -160,6 +164,10 @@ pub const VoteSwitch = struct {
         /// `[SIGNER]` Vote authority
         vote_authority = 3,
     };
+
+    pub fn deinit(self: VoteSwitch, allocator: std.mem.Allocator) void {
+        self.vote.deinit(allocator);
+    }
 };
 
 pub const VoteStateUpdate = struct {
@@ -171,6 +179,10 @@ pub const VoteStateUpdate = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: VoteStateUpdate, allocator: std.mem.Allocator) void {
+        self.vote_state_update.deinit(allocator);
+    }
 };
 
 pub const CompactVoteStateUpdate = struct {
@@ -189,6 +201,10 @@ pub const CompactVoteStateUpdate = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: CompactVoteStateUpdate, allocator: std.mem.Allocator) void {
+        self.vote_state_update.deinit(allocator);
+    }
 };
 
 pub const VoteStateUpdateSwitch = struct {
@@ -201,6 +217,10 @@ pub const VoteStateUpdateSwitch = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: VoteStateUpdateSwitch, allocator: std.mem.Allocator) void {
+        self.vote_state_update.deinit(allocator);
+    }
 };
 
 pub const CompactVoteStateUpdateSwitch = struct {
@@ -220,6 +240,10 @@ pub const CompactVoteStateUpdateSwitch = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: CompactVoteStateUpdateSwitch, allocator: std.mem.Allocator) void {
+        self.vote_state_update.deinit(allocator);
+    }
 };
 
 pub const TowerSync = struct {
@@ -238,6 +262,10 @@ pub const TowerSync = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: TowerSync, allocator: std.mem.Allocator) void {
+        self.tower_sync.deinit(allocator);
+    }
 };
 
 pub const TowerSyncSwitch = struct {
@@ -257,6 +285,10 @@ pub const TowerSyncSwitch = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: TowerSyncSwitch, allocator: std.mem.Allocator) void {
+        self.tower_sync.deinit(allocator);
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
@@ -396,6 +428,31 @@ pub const Instruction = union(enum(u32)) {
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
     tower_sync_switch: TowerSyncSwitch,
+
+    pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .initialize_account,
+            .authorize,
+            .withdraw,
+            .update_validator_identity,
+            .update_commission,
+            .authorize_checked,
+            .authorize_with_seed,
+            .authorize_checked_with_seed,
+            => {},
+
+            inline //
+            .vote,
+            .vote_switch,
+            .update_vote_state,
+            .update_vote_state_switch,
+            .compact_update_vote_state,
+            .compact_update_vote_state_switch,
+            .tower_sync,
+            .tower_sync_switch,
+            => |payload| payload.deinit(allocator),
+        }
+    }
 };
 
 test "CompactVoteStateUpdate.serialize" {
