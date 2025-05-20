@@ -79,7 +79,7 @@ pub const Serializer = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L77-L78
     pub fn writeBytes(self: *Serializer, data: []const u8) u64 {
-        const vaddr = self.vaddr +| self.buffer.items.len -| self.region_start;
+        const vaddr = (self.vaddr +| self.buffer.items.len) -| self.region_start;
         self.buffer.appendSliceAssumeCapacity(data);
         return vaddr;
     }
@@ -91,7 +91,7 @@ pub const Serializer = struct {
     ) (error{OutOfMemory} || InstructionError)!u64 {
         const vm_data_addr = if (self.copy_account_data) blk: {
             const addr = self.vaddr +| self.buffer.items.len;
-            _ = self.writeBytes(account.account.data);
+            _ = self.writeBytes(account.account.data); // intentionally ignored
             break :blk addr;
         } else blk: {
             try self.pushRegion(true);
@@ -172,7 +172,7 @@ pub const Serializer = struct {
         try self.pushRegion(true);
         std.debug.assert(self.region_start == self.buffer.items.len);
         return .{
-            try self.buffer.toOwnedSlice(self.allocator),
+            self.buffer.items.ptr[0..self.buffer.capacity],
             try self.regions.toOwnedSlice(self.allocator),
         };
     }
