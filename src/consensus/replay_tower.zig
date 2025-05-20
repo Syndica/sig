@@ -2511,14 +2511,11 @@ test "adjust lockouts after replay time warped" {
         Lockout{ .slot = 0, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{0};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{0},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
     defer slot_history.bits.deinit(std.testing.allocator);
@@ -2545,14 +2542,11 @@ test "adjust lockouts after replay diverged ancestor" {
         Lockout{ .slot = 2, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{2};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{2},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
     defer slot_history.bits.deinit(std.testing.allocator);
@@ -2584,14 +2578,11 @@ test "adjust lockouts after replay out of order" {
         Lockout{ .slot = 1, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{1};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{1},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
     defer slot_history.bits.deinit(std.testing.allocator);
@@ -2618,14 +2609,11 @@ test "adjust lockouts after replay out of order via clearing history" {
         Lockout{ .slot = 14, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{14};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{14},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
     // Triggers clearning of votes
     replay_tower.tower.initializeRoot(MAX_ENTRIES * 2);
 
@@ -2655,14 +2643,11 @@ test "adjust lockouts after replay reversed votes" {
         Lockout{ .slot = 1, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{1};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{1},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
     defer slot_history.bits.deinit(std.testing.allocator);
@@ -2694,14 +2679,11 @@ test "adjust lockouts after replay repeated non root votes" {
         Lockout{ .slot = 3, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{3};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{3},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
     defer slot_history.bits.deinit(std.testing.allocator);
@@ -2735,14 +2717,11 @@ test "adjust lockouts after replay vote on root" {
         Lockout{ .slot = 44, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{44};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{44},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
     defer slot_history.bits.deinit(std.testing.allocator);
@@ -2774,14 +2753,11 @@ test "adjust lockouts after replay vote on genesis" {
         Lockout{ .slot = 0, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{0};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{0},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
     defer slot_history.bits.deinit(std.testing.allocator);
@@ -2808,14 +2784,11 @@ test "adjust lockouts after replay future tower" {
         Lockout{ .slot = 14, .confirmation_count = 1 },
     );
 
-    const slots = [_]Slot{14};
-    const vote = Vote{
-        .slots = &slots,
+    replay_tower.last_vote = .{ .vote = try Vote.clone(.{
+        .slots = &.{14},
         .hash = Hash.ZEROES,
         .timestamp = null,
-    };
-
-    replay_tower.last_vote = VoteTransaction{ .vote = vote };
+    }, std.testing.allocator) };
     replay_tower.tower.initializeRoot(12);
 
     var slot_history = try createTestSlotHistory(std.testing.allocator);
