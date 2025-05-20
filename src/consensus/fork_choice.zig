@@ -2467,6 +2467,7 @@ pub fn splitOff(
     fork_choice.processUpdateOperations(&update_operations);
 
     var split_tree_fork_infos = std.AutoHashMap(SlotAndHash, ForkInfo).init(allocator);
+    defer split_tree_fork_infos.deinit();
     var to_visit = std.ArrayList(SlotAndHash).init(allocator);
     defer to_visit.deinit();
     try to_visit.append(slot_hash_key);
