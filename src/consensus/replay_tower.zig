@@ -536,7 +536,10 @@ pub const ReplayTower = struct {
                 // stray slots (which should always be empty_ancestors).
                 //
                 // This is covered by test_future_tower_* in local_cluster
-                return SwitchForkDecision{ .failed_switch_threshold = .{ 0, total_stake } };
+                return SwitchForkDecision{ .failed_switch_threshold = .{
+                    .switch_proof_stake = 0,
+                    .total_stake = total_stake,
+                } };
             } else return error.NoAncestorsFoundForLastVote;
         }
 
@@ -721,7 +724,12 @@ pub const ReplayTower = struct {
         }
         // We have not detected sufficient lockout past the last voted slot to generate
         // a switching proof
-        return SwitchForkDecision{ .failed_switch_threshold = .{ locked_out_stake, total_stake } };
+        return SwitchForkDecision{
+            .failed_switch_threshold = .{
+                .switch_proof_stake = locked_out_stake,
+                .total_stake = total_stake,
+            },
+        };
     }
 
     /// Calls the makeCheckSwitchThresholdDecision and stores the result in
@@ -1255,14 +1263,15 @@ pub const ReplayTower = struct {
         slot_history: *const SlotHistory,
     ) !CandidateVoteAndResetSlots {
         return switch (initial_switch_fork_decision) {
-            .failed_switch_threshold => |data| try self.selectCandidatesFailedSwitch(
+            .failed_switch_threshold => |failed_switch_threshold| try self
+                .selectCandidatesFailedSwitch(
                 allocator,
                 heaviest_slot,
                 heaviest_slot_on_same_voted_fork,
                 progress,
                 failure_reasons,
-                data[0],
-                data[1],
+                failed_switch_threshold.switch_proof_stake,
+                failed_switch_threshold.total_stake,
                 initial_switch_fork_decision,
                 slot_history,
             ),
@@ -1467,9 +1476,9 @@ const SwitchForkDecision = union(enum) {
     same_fork,
     failed_switch_threshold: struct {
         /// Switch proof stake
-        Slot,
+        switch_proof_stake: u64,
         /// Total stake
-        Slot,
+        total_stake: u64,
     },
     failed_switch_duplicate_rollback: Slot,
 
