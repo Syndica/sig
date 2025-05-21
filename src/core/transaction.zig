@@ -75,6 +75,40 @@ pub const Transaction = struct {
         };
     }
 
+    pub const InitOwnedMsgWithSigningKeypairsError = error{
+        /// Failed to serialize the provided message.
+        BadMessage,
+        /// Failed to sign the message with one of the keypairs.
+        SigningError,
+    } || std.mem.Allocator.Error;
+
+    /// Takes ownership of the passed in `msg`, and signs it with all of the given keypairs.
+    /// Assumes `msg` was allocated using the given `allocator`, since that will also be used
+    /// to allocate space for the signatures.
+    pub fn initOwnedMsgWithSigningKeypairs(
+        allocator: std.mem.Allocator,
+        version: TransactionVersion,
+        msg: TransactionMessage,
+        keypairs: []const sig.identity.KeyPair,
+    ) InitOwnedMsgWithSigningKeypairsError!Transaction {
+        const msg_bytes_bounded = msg.serializeBounded(version) catch return error.BadMessage;
+        const msg_bytes = msg_bytes_bounded.constSlice();
+
+        const signatures = try allocator.alloc(Signature, keypairs.len);
+        errdefer allocator.free(signatures);
+
+        for (signatures, keypairs) |*signature, keypair| {
+            const msg_signature = keypair.sign(msg_bytes, null) catch return error.SigningError;
+            signature.* = .{ .data = msg_signature.toBytes() };
+        }
+
+        return .{
+            .signatures = signatures,
+            .version = version,
+            .msg = msg,
+        };
+    }
+
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
         std.debug.assert(data.signatures.len <= std.math.maxInt(u16));
         try leb.writeULEB128(writer, @as(u16, @intCast(data.signatures.len)));
