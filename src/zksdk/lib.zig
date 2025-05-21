@@ -22,9 +22,11 @@ pub const PubkeyValidityProof = pubkey_validity.Proof;
 pub const ZeroCiphertextProofData = zero_ciphertext.Data;
 
 // grouped ciphertext validity
-const grouped_cipher_handle_2 = @import("sigma_proofs/grouped_ciphertext/handles_2.zig");
+const grouped_cipher_handles_2 = @import("sigma_proofs/grouped_ciphertext/handles_2.zig");
+const grouped_cipher_handles_3 = @import("sigma_proofs/grouped_ciphertext/handles_3.zig");
 
-pub const GroupedCiphertext2HandlesValidityProof = grouped_cipher_handle_2.Proof;
+pub const GroupedCiphertext2HandlesValidityProof = grouped_cipher_handles_2.Proof;
+pub const GroupedCiphertext3HandlesValidityProof = grouped_cipher_handles_3.Proof;
 
 // range proof
 pub const bulletproofs = @import("range_proof/bulletproofs.zig");
