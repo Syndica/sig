@@ -168,12 +168,15 @@ pub const Serializer = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L172
-    pub fn finish(self: *Serializer) error{OutOfMemory}!struct { []u8, []Region } {
+    pub fn finish(self: *Serializer) error{OutOfMemory}!struct {
+        std.ArrayListUnmanaged(u8),
+        std.ArrayListUnmanaged(Region),
+    } {
         try self.pushRegion(true);
         std.debug.assert(self.region_start == self.buffer.items.len);
         return .{
-            self.buffer.items.ptr[0..self.buffer.capacity],
-            try self.regions.toOwnedSlice(self.allocator),
+            self.buffer,
+            self.regions,
         };
     }
 
@@ -185,8 +188,8 @@ pub const Serializer = struct {
 };
 
 const SerializeReturn = struct {
-    []u8,
-    []Region,
+    std.ArrayListUnmanaged(u8),
+    std.ArrayListUnmanaged(Region),
     std.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
 };
 
@@ -332,10 +335,10 @@ fn serializeParametersUnaligned(
     _ = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
-    const memory, const regions = try serializer.finish();
+    var memory, var regions = try serializer.finish();
     errdefer {
-        allocator.free(memory);
-        allocator.free(regions);
+        memory.deinit(allocator);
+        regions.deinit(allocator);
     }
 
     return .{
@@ -452,10 +455,10 @@ fn serializeParametersAligned(
     _ = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
-    const memory, const regions = try serializer.finish();
+    var memory, var regions = try serializer.finish();
     errdefer {
-        allocator.free(memory);
-        allocator.free(regions);
+        memory.deinit(allocator);
+        regions.deinit(allocator);
     }
 
     return .{
@@ -887,20 +890,20 @@ test "serializeParameters" {
                 allocator.free(pre_accounts);
             }
 
-            const memory, const regions, const account_metas = try serializeParameters(
+            var memory, var regions, const account_metas = try serializeParameters(
                 allocator,
                 &ic,
                 copy_account_data,
             );
             defer {
-                allocator.free(memory);
-                allocator.free(regions);
+                memory.deinit(allocator);
+                regions.deinit(allocator);
             }
 
-            const serialized_regions = try concatRegions(allocator, regions);
+            const serialized_regions = try concatRegions(allocator, regions.items);
             defer allocator.free(serialized_regions);
             if (copy_account_data) {
-                try std.testing.expectEqualSlices(u8, memory, serialized_regions);
+                try std.testing.expectEqualSlices(u8, memory.items, serialized_regions);
             }
 
             // TODO: compare against entrypoint deserialize method once implemented
@@ -911,7 +914,7 @@ test "serializeParameters" {
                 allocator,
                 &ic,
                 copy_account_data,
-                memory,
+                memory.items,
                 account_metas.constSlice(),
             );
             for (pre_accounts, 0..) |pre_account, index_in_transaction| {
