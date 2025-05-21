@@ -1126,87 +1126,6 @@ pub const ReplayTower = struct {
             slot_history.check(last_voted_slot) == .found;
     }
 
-    /// Handles fork selection when switch threshold fails.
-    ///
-    /// Two cases:
-    /// 1. If last vote can't land: vote at current fork tip (SameFork)
-    /// 2. Otherwise: stay on current fork (don't vote) to prevent network halts
-    ///
-    /// Prevents mass fork abandonment that could stall the network.
-    ///
-    /// In essence this function re-evaluates whether to:
-    ///
-    /// Force a vote on the current fork (if stuck).
-    /// Continue waiting (if switching is unsafe).
-    /// Record failures for diagnostics.
-    pub fn recheckForkDecisionFailedSwitchThreshold(
-        self: *const ReplayTower,
-        allocator: std.mem.Allocator,
-        reset_slot: ?Slot,
-        progress: *const ProgressMap,
-        heaviest_bank_slot: Slot,
-        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
-        switch_proof_stake: u64,
-        total_stake: u64,
-        switch_fork_decision: SwitchForkDecision,
-        slot_history: *const SlotHistory,
-    ) !SwitchForkDecision {
-        // Check if validator’s last vote is stuck (no block will include it).
-        // if, so force a new vote on the current fork (SameFork) to unblock progress.
-        if (!self.lastVoteAbleToLand(reset_slot, progress, slot_history)) {
-            // If we reach here, these assumptions are true:
-            // 1. We can't switch because of threshold
-            // 2. Our last vote is now outside slot hashes history of the tip of fork
-            // So, there was no hope of this last vote ever landing again.
-
-            // In this case, we do want to obey threshold, yet try to register our vote on
-            // the current fork, so we choose to vote at the tip of current fork instead.
-            // This will not cause longer lockout because lockout doesn't double after 512
-            // slots, it might be enough to get majority vote.
-            return SwitchForkDecision.same_fork;
-        }
-
-        // If we can't switch, then reset to the next votable bank on the same
-        // fork as our last vote, but don't vote.
-        // We don't just reset to the heaviest fork when switch threshold fails because
-        // a situation like this can occur:
-        // Figure 1:
-        //             slot 0
-        //                 |
-        //             slot 1
-        //             /        \
-        // slot 2 (last vote)     |
-        //             |      slot 8 (10%)
-        //     slot 4 (9%)
-        // Imagine 90% of validators voted on slot 4, but only 9% landed. If everybody that fails
-        // the switch threshold abandons slot 4 to build on slot 8 (because it's *currently* heavier),
-        // then there will be no blocks to include the votes for slot 4, and the network halts
-        // because 90% of validators can't vote
-        self.logger.info().logf(
-            \\ Waiting to switch vote to {d}, resetting to slot {?} for now,
-            \\ switch proof stake: {d}, threshold stake: {d:.2}, total stake: {d}"
-        ,
-            .{
-                heaviest_bank_slot,
-                if (reset_slot) |slot| slot else null,
-                switch_proof_stake,
-                @as(f64, @floatFromInt(total_stake)) * SWITCH_FORK_THRESHOLD,
-                total_stake,
-            },
-        );
-
-        try failure_reasons.append(allocator, .{
-            .FailedSwitchThreshold = .{
-                .slot = heaviest_bank_slot,
-                .observed_stake = switch_proof_stake,
-                .total_stake = total_stake,
-            },
-        });
-
-        // Return the original switch_fork_decision.
-        return switch_fork_decision;
-    }
-
     /// Handles candidate selection when fork switching fails threshold checks
     pub fn selectCandidatesFailedSwitch(
         self: *const ReplayTower,
@@ -1222,17 +1141,35 @@ pub const ReplayTower = struct {
     ) !CandidateVoteAndResetSlots {
         // If our last vote is unable to land (even through normal refresh), then we
         // temporarily "super" refresh our vote to the tip of our last voted fork.
-        const final_switch_fork_decision = try self.recheckForkDecisionFailedSwitchThreshold(
-            allocator,
+
+        const can_land_last_vote = self.lastVoteAbleToLand(
             if (heaviest_slot_on_same_voted_fork) |slot| slot else null,
             progress,
-            heaviest_slot,
-            failure_reasons,
-            switch_proof_stake,
-            total_stake,
-            initial_switch_fork_decision,
             slot_history,
         );
+
+        const final_switch_fork_decision = if (!can_land_last_vote) blk: {
+            // Decision rationale:
+            // 1. We can't switch due to threshold constraints
+            // 2. Our last vote is now outside the slot hashes history of the fork's tip
+            //    (no possibility of this vote landing again)
+            //
+            // Action: Obey threshold while trying to register our vote on the current fork.
+            // Voting at the tip of the current fork won't cause longer lockout
+            // (lockout doesn't double after 512 slots) and might help achieve majority.
+            break :blk SwitchForkDecision.same_fork;
+        } else blk: {
+            // Record the failed switch attempt with details
+            const failure_detail = .{
+                .FailedSwitchThreshold = .{
+                    .slot = heaviest_slot,
+                    .observed_stake = switch_proof_stake,
+                    .total_stake = total_stake,
+                },
+            };
+            try failure_reasons.append(allocator, failure_detail);
+            break :blk initial_switch_fork_decision;
+        };
 
         const candidate_vote_slot = if (final_switch_fork_decision.canVote())
             // We need to "super" refresh our vote to the tip of our last voted fork
