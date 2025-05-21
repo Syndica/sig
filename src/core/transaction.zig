@@ -261,10 +261,9 @@ pub const TransactionMessage = struct {
     pub fn isWritable(self: TransactionMessage, index: usize) bool {
         const is_readonly_signed =
             index < self.signature_count and
-            index > self.signature_count - self.readonly_signed_count;
+            index >= self.signature_count - self.readonly_signed_count;
 
-        const is_readonly_unsigned = index >= self.signature_count and
-            index < self.account_keys.len - self.readonly_unsigned_count;
+        const is_readonly_unsigned = index >= self.account_keys.len - self.readonly_unsigned_count;
 
         return !(is_readonly_signed or is_readonly_unsigned);
     }

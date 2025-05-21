@@ -109,6 +109,9 @@ const ReplaySlotStatus = union(enum) {
     confirm: *ConfirmSlotFuture,
 };
 
+/// Replay the transactions from any entries in the slot that we've received but
+/// haven't yet replayed. Integrates with accountsdb and blockstore.
+///
 /// - Calls confirmSlot to verify/execute a slot's transactions.
 /// - Initializes the ForkProgress in the progress map for the slot if necessary.
 /// - Extracts the inputs for those functions from the ledger and the slot and epoch trackers.

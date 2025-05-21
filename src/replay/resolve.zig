@@ -44,7 +44,8 @@ pub const ResolvedTransaction = struct {
     instructions: []const InstructionInfo,
 
     pub fn deinit(self: ResolvedTransaction, allocator: Allocator) void {
-        allocator.free(self.accounts);
+        var acc = self.accounts;
+        acc.deinit(allocator);
         allocator.free(self.instructions);
         // transaction is not freed because it is borrowed.
     }
@@ -55,6 +56,15 @@ pub fn resolveBatch(
     accounts_db: *AccountsDB,
     batch: []const Transaction,
 ) !ResolvedBatch {
+    return resolveBatchGeneric(allocator, .accounts_db, accounts_db, batch);
+}
+
+fn resolveBatchGeneric(
+    allocator: Allocator,
+    comptime reader_tag: LookupTableReader,
+    reader: reader_tag.T(),
+    batch: []const Transaction,
+) !ResolvedBatch {
     var accounts = try std.ArrayListUnmanaged(LockableAccount)
         .initCapacity(allocator, Transaction.numAccounts(batch));
     errdefer accounts.deinit(allocator);
@@ -63,7 +73,7 @@ pub fn resolveBatch(
     errdefer allocator.free(resolved_txns);
 
     for (batch, resolved_txns) |transaction, *resolved| {
-        resolved.* = try resolveTransaction(allocator, accounts_db, transaction);
+        resolved.* = try resolveTransaction(allocator, reader_tag, reader, transaction);
         for (
             resolved.accounts.items(.pubkey),
             resolved.accounts.items(.is_writable),
@@ -83,25 +93,31 @@ pub fn resolveBatch(
 /// - Use `deinit` to free this struct
 fn resolveTransaction(
     allocator: Allocator,
-    accounts_db: *AccountsDB,
+    comptime reader_tag: LookupTableReader,
+    reader: reader_tag.T(),
     transaction: Transaction,
 ) !ResolvedTransaction {
     const message = transaction.msg;
 
-    const lookups = try resolveLookupTableAccounts(allocator, accounts_db, message.address_lookups);
+    const lookups = try resolveLookupTableAccounts(
+        allocator,
+        reader_tag,
+        reader,
+        message.address_lookups,
+    );
     defer {
         allocator.free(lookups.writable);
         allocator.free(lookups.readonly);
     }
 
-    // calculate bounds based on the concatenation of normal ++ writable ++ readable accounts
-    const normal_end = message.account_keys.len;
-    const writable_end = lookups.writable.len + normal_end;
-    const readonly_end = lookups.readonly.len + writable_end;
+    // calculate bounds based on the concatenation of normal ++ writable ++ readonly accounts
+    const lookups_start = message.account_keys.len;
+    const readable_lookups_start = lookups.writable.len + lookups_start;
+    const lookups_end = lookups.readonly.len + readable_lookups_start;
 
     // construct accounts
     var accounts = std.MultiArrayList(InstructionAccount){};
-    try accounts.ensureTotalCapacity(allocator, readonly_end + lookups.readonly.len);
+    try accounts.ensureTotalCapacity(allocator, lookups_end);
     errdefer accounts.deinit(allocator);
     for (message.account_keys, 0..) |pubkey, i| accounts.appendAssumeCapacity(.{
         .pubkey = pubkey,
@@ -137,22 +153,22 @@ fn resolveTransaction(
             seen.set(index);
 
             // expand the account metadata
-            (try account_metas.addOne()).* = if (index <= normal_end) .{
+            (try account_metas.addOne()).* = if (index < lookups_start) .{
                 .pubkey = message.account_keys[index],
                 .index_in_transaction = index,
                 .index_in_caller = index,
                 .index_in_callee = @intCast(index_in_callee),
-                .is_signer = message.isWritable(index),
-                .is_writable = message.isSigner(index),
-            } else if (index <= writable_end) .{
-                .pubkey = lookups.writable[index - normal_end],
+                .is_signer = message.isSigner(index),
+                .is_writable = message.isWritable(index),
+            } else if (index < readable_lookups_start) .{
+                .pubkey = lookups.writable[index - lookups_start],
                 .index_in_transaction = index,
                 .index_in_caller = index,
                 .index_in_callee = @intCast(index_in_callee),
                 .is_signer = false,
                 .is_writable = true,
-            } else if (index <= readonly_end) .{
-                .pubkey = lookups.readonly[index - writable_end],
+            } else if (index < lookups_end) .{
+                .pubkey = lookups.readonly[index - readable_lookups_start],
                 .index_in_transaction = index,
                 .index_in_caller = index,
                 .index_in_callee = @intCast(index_in_callee),
@@ -184,7 +200,8 @@ fn resolveTransaction(
 
 fn resolveLookupTableAccounts(
     allocator: Allocator,
-    accounts_db: *AccountsDB,
+    comptime reader_tag: LookupTableReader,
+    reader: reader_tag.T(),
     address_lookups: []const TransactionAddressLookup,
 ) !struct { writable: []const Pubkey, readonly: []const Pubkey } {
     // count number of accounts
@@ -205,16 +222,7 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-
-        // get lookup table
-        const account = try accounts_db.getAccount(&lookup.table_address);
-        if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
-            return error.LookupTableAccountOverflow;
-        }
-        var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
-        const account_bytes = buf[0..account.data.len()];
-        account.data.readAll(account_bytes);
-        const table = try AddressLookupTable.deserialize(account_bytes);
+        const table = try reader_tag.get(reader, &lookup.table_address);
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
@@ -237,4 +245,231 @@ fn resolveLookupTableAccounts(
         .writable = try writable_accounts.toOwnedSlice(allocator),
         .readonly = try readonly_accounts.toOwnedSlice(allocator),
     };
+}
+
+const LookupTableReader = enum {
+    accounts_db,
+    map,
+
+    fn T(self: LookupTableReader) type {
+        return switch (self) {
+            .accounts_db => *AccountsDB,
+            .map => *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable),
+        };
+    }
+
+    fn get(
+        comptime tag: LookupTableReader,
+        reader: tag.T(),
+        table_address: *const Pubkey,
+    ) !AddressLookupTable {
+        switch (tag) {
+            .accounts_db => {
+                const accounts_db: *AccountsDB = reader;
+                const account = try accounts_db.getAccount(table_address);
+                if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
+                    return error.LookupTableAccountOverflow;
+                }
+                var buf: [AddressLookupTable.MAX_SERIALIZED_SIZE]u8 = undefined;
+                const account_bytes = buf[0..account.data.len()];
+                account.data.readAll(account_bytes);
+                return try AddressLookupTable.deserialize(account_bytes);
+            },
+            .map => {
+                const map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable) = reader;
+                return map.get(table_address.*) orelse return error.PubkeyNotInIndex;
+            },
+        }
+    }
+};
+
+// TODO verify state of lookup table for timing of slots
+
+test "resolve lookups" {
+    var rng = std.Random.DefaultPrng.init(0);
+
+    // concisely represents all the expected account metas within an InstructionInfo
+    const ExpectedAccountMetas = struct {
+        index_in_transaction: []const u8,
+        index_in_caller: []const u8,
+        index_in_callee: []const u16,
+        is_signer: []const u8,
+        is_writable: []const u8,
+    };
+
+    // concisely represents all the expected lockable accounts within a ResolvedTransaction
+    const ExpectedAccounts = struct {
+        pubkey: []const Pubkey,
+        is_writable: []const u8,
+    };
+
+    var pubkeys: [9]Pubkey = undefined;
+    for (&pubkeys) |*pubkey| {
+        pubkey.* = Pubkey.initRandom(rng.random());
+    }
+
+    const lookup_table_addresses = .{
+        Pubkey.initRandom(rng.random()),
+        Pubkey.initRandom(rng.random()),
+    };
+
+    const lookup_tables: [2]AddressLookupTable = .{
+        .{
+            .meta = .{},
+            .addresses = &.{
+                Pubkey.initRandom(rng.random()),
+                Pubkey.initRandom(rng.random()),
+                Pubkey.initRandom(rng.random()),
+                Pubkey.initRandom(rng.random()),
+            },
+        },
+        .{
+            .meta = .{},
+            .addresses = &.{
+                Pubkey.initRandom(rng.random()),
+                Pubkey.initRandom(rng.random()),
+                Pubkey.initRandom(rng.random()),
+                Pubkey.initRandom(rng.random()),
+            },
+        },
+    };
+
+    var map = std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable){};
+    defer map.deinit(std.testing.allocator);
+    try map.put(std.testing.allocator, lookup_table_addresses[0], lookup_tables[0]);
+    try map.put(std.testing.allocator, lookup_table_addresses[1], lookup_tables[1]);
+
+    const tx = Transaction{
+        .signatures = &.{},
+        .version = .v0,
+        .msg = .{
+            .signature_count = 5,
+            .readonly_signed_count = 2,
+            .readonly_unsigned_count = 2,
+            .account_keys = &pubkeys,
+            .recent_blockhash = sig.core.Hash.ZEROES,
+            .instructions = &.{
+                .{
+                    .program_index = 7,
+                    .account_indexes = &.{ 1, 2, 3, 4, 5, 6, 11, 13 },
+                    .data = &.{123},
+                },
+                .{
+                    .program_index = 8,
+                    .account_indexes = &.{ 3, 7, 3, 8, 9, 11, 12, 14 },
+                    .data = &.{234},
+                },
+            },
+            .address_lookups = &.{
+                .{
+                    .table_address = lookup_table_addresses[0],
+                    .writable_indexes = &.{2},
+                    .readonly_indexes = &.{1},
+                },
+                .{
+                    .table_address = lookup_table_addresses[1],
+                    .writable_indexes = &.{0},
+                    .readonly_indexes = &.{ 1, 2, 3 },
+                },
+            },
+        },
+    };
+
+    // layout:
+    //  0-2: writable signers
+    //  3-4: readonly signer
+    //  5-6: writable non-signers
+    //  7-8: readonly non-signers (programs 1 and 2)
+    //  9-10: writable lookups 0.2, 1.0
+    //  11-14: readonly lookups 0.1, 1.1-1.3
+    // lookup table 1:
+    //  2 - writable
+    //  1 - readonly
+    // lookup table 2:
+    //  0 - writable
+    //  1,2,3 - readonly
+    // .account_indexes = &.{ 1, 2, 3, 4, 5, 6, 11, 13 },
+    // .account_indexes = &.{ 3, 7, 3, 8, 9, 11, 12, 14 },
+
+    const lt = .{ lookup_tables[0].addresses, lookup_tables[1].addresses };
+    const expected_accounts = ExpectedAccounts{
+        .pubkey = &(pubkeys ++ .{ lt[0][2], lt[1][0], lt[0][1], lt[1][1], lt[1][2], lt[1][3] }),
+        .is_writable = &.{ 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0 },
+    };
+
+    const expected_account_metas = [2]ExpectedAccountMetas{
+        .{
+            .index_in_transaction = tx.msg.instructions[0].account_indexes,
+            .index_in_caller = tx.msg.instructions[0].account_indexes,
+            .index_in_callee = &.{ 0, 1, 2, 3, 4, 5, 6, 7 },
+            .is_signer = &.{ 1, 1, 1, 1, 0, 0, 0, 0 },
+            .is_writable = &.{ 1, 1, 0, 0, 1, 1, 0, 0 },
+        },
+        .{
+            .index_in_transaction = tx.msg.instructions[1].account_indexes,
+            .index_in_caller = tx.msg.instructions[1].account_indexes,
+            .index_in_callee = &.{ 0, 1, 0, 3, 4, 5, 6, 7 },
+            .is_signer = &.{ 1, 0, 1, 0, 0, 0, 0, 0 },
+            .is_writable = &.{ 0, 0, 0, 0, 1, 0, 0, 0 },
+        },
+    };
+
+    const resolved = try resolveBatchGeneric(std.testing.allocator, .map, &map, &.{tx});
+    defer resolved.deinit(std.testing.allocator);
+
+    for (
+        resolved.accounts,
+        expected_accounts.pubkey,
+        expected_accounts.is_writable,
+        0..,
+    ) |acc, pubkey, is_writable, i| {
+        const tx_account = resolved.transactions[0].accounts.get(i);
+        try std.testing.expectEqual(pubkey, acc.address);
+        try std.testing.expectEqual(pubkey, tx_account.pubkey);
+        try std.testing.expectEqual(is_writable != 0, acc.writable);
+        try std.testing.expectEqual(is_writable != 0, tx_account.is_writable);
+        try std.testing.expectEqual(i < 5, tx_account.is_signer);
+    }
+
+    const ix0 = resolved.transactions[0].instructions[0];
+    try std.testing.expectEqual(pubkeys[7], ix0.program_meta.pubkey);
+    try std.testing.expectEqual(7, ix0.program_meta.index_in_transaction);
+    try std.testing.expectEqual(tx.msg.instructions[0].data, ix0.instruction_data);
+
+    const ix1 = resolved.transactions[0].instructions[1];
+    try std.testing.expectEqual(pubkeys[8], ix1.program_meta.pubkey);
+    try std.testing.expectEqual(8, ix1.program_meta.index_in_transaction);
+    try std.testing.expectEqual(tx.msg.instructions[1].data, ix1.instruction_data);
+
+    for (
+        tx.msg.instructions,
+        resolved.transactions[0].instructions,
+        expected_account_metas,
+    ) |input_ix, output_ix, expect| {
+        for (
+            input_ix.account_indexes,
+            output_ix.account_metas.slice(),
+            expect.index_in_transaction,
+            expect.index_in_caller,
+            expect.index_in_callee,
+            expect.is_signer,
+            expect.is_writable,
+        ) |
+            input_index,
+            output_meta,
+            index_in_transaction,
+            index_in_caller,
+            index_in_callee,
+            is_signer,
+            is_writable,
+        | {
+            const address = resolved.accounts[input_index].address;
+            try std.testing.expectEqual(address, output_meta.pubkey);
+            try std.testing.expectEqual(index_in_transaction, output_meta.index_in_transaction);
+            try std.testing.expectEqual(index_in_caller, output_meta.index_in_caller);
+            try std.testing.expectEqual(index_in_callee, output_meta.index_in_callee);
+            try std.testing.expectEqual(is_signer != 0, output_meta.is_signer);
+            try std.testing.expectEqual(is_writable != 0, output_meta.is_writable);
+        }
+    }
 }
