@@ -6,23 +6,25 @@
 
 const std = @import("std");
 const sig = @import("../../sig.zig");
-const InnerProductProof = @import("ipp.zig").Proof;
+pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 
 const el_gamal = sig.zksdk.el_gamal;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 
-pub const Proof = struct {
-    A: Ristretto255,
-    S: Ristretto255,
-    T_1: Ristretto255,
-    T_2: Ristretto255,
-    t_x: Scalar,
-    t_x_blinding: Scalar,
-    e_blinding: Scalar,
-    ipp: InnerProductProof,
-};
+pub fn Proof(bit_size: comptime_int) type {
+    return struct {
+        A: Ristretto255,
+        S: Ristretto255,
+        T_1: Ristretto255,
+        T_2: Ristretto255,
+        t_x: Scalar,
+        t_x_blinding: Scalar,
+        e_blinding: Scalar,
+        ipp: InnerProductProof(bit_size),
+    };
+}
 
 test "single rangeproof" {
     const commitment, const opening = el_gamal.pedersen.init(u64, 55);
