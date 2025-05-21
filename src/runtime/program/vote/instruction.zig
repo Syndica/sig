@@ -6,7 +6,7 @@ const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
 const vote_program = sig.runtime.program.vote_program;
 
-pub const IntializeAccount = struct {
+pub const InitializeAccount = struct {
     node_pubkey: Pubkey,
     /// The vote authority keypair signs vote transactions. Can be the same as the identity account.
     authorized_voter: Pubkey,
@@ -302,7 +302,7 @@ pub const Instruction = union(enum(u32)) {
     ///   1. `[]` Rent sysvar
     ///   2. `[]` Clock sysvar
     ///   3. `[SIGNER]` New validator identity (node_pubkey)
-    initialize_account: IntializeAccount,
+    initialize_account: InitializeAccount,
 
     /// Authorize a key to send votes or issue a withdrawal
     ///
