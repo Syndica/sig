@@ -1095,11 +1095,14 @@ pub const ReplayTower = struct {
             return true;
         };
 
-        const my_latest_landed_vote_slot = progress.myLatestLandedVote(
-            heaviest_bank_on_same_voted_fork,
-        ) orelse {
-            // We've either never landed a vote or fork has been pruned or is in the
-            // middle of dump & repair. Either way, no need to super refresh.
+        const stats = progress.map.get(heaviest_bank_on_same_voted_fork) orelse {
+            // No stats available (fork pruned, mid-repair, or no votes landed)
+            // => No need to super refresh
+            return true;
+        };
+
+        const my_latest_landed_vote_slot = stats.fork_stats.my_latest_landed_vote orelse {
+            // We've never landed a vote on this fork
             return true;
         };
 
@@ -1295,8 +1298,11 @@ pub const ReplayTower = struct {
     ) !bool {
         const fork_stats = progress.getForkStats(candidate_vote_bank_slot) orelse
             return error.ForkStatsNotFound;
-        const propagated_stats = progress.getPropagatedStats(candidate_vote_bank_slot) orelse
+
+        const fork_progress = progress.map.get(candidate_vote_bank_slot) orelse
             return error.PropagatedStatsNotFound;
+
+        const propagated_stats = fork_progress.propagated_stats;
 
         const is_locked_out = fork_stats.is_locked_out;
         const vote_thresholds = &fork_stats.vote_threshold;
@@ -3446,6 +3452,8 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
         else => try std.testing.expect(false), // Fail if not LockedOut
     }
 }
+
+test "tower: test tower sync from bank failed lockout" {}
 
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
