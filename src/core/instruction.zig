@@ -443,7 +443,7 @@ pub const InstructionErrorEnum = union(enum) {
     InvalidAccountOwner,
 
     /// Program arithmetic overflowed
-    ArithmeticOverflow,
+    ProgramArithmeticOverflow,
 
     /// Unsupported sysvar
     UnsupportedSysvar,
@@ -470,5 +470,66 @@ pub const InstructionErrorEnum = union(enum) {
             .BorshIoError => |it| allocator.free(it),
             else => {},
         }
+    }
+
+    pub fn fromError(err: InstructionError, custom: ?u32, borsh_io: ?[]u8) !InstructionErrorEnum {
+        return switch (err) {
+            error.GenericError => .GenericError,
+            error.InvalidArgument => .InvalidArgument,
+            error.InvalidInstructionData => .InvalidInstructionData,
+            error.InvalidAccountData => .InvalidAccountData,
+            error.AccountDataTooSmall => .AccountDataTooSmall,
+            error.InsufficientFunds => .InsufficientFunds,
+            error.IncorrectProgramId => .IncorrectProgramId,
+            error.MissingRequiredSignature => .MissingRequiredSignature,
+            error.AccountAlreadyInitialized => .AccountAlreadyInitialized,
+            error.UninitializedAccount => .UninitializedAccount,
+            error.UnbalancedInstruction => .UnbalancedInstruction,
+            error.ModifiedProgramId => .ModifiedProgramId,
+            error.ExternalAccountLamportSpend => .ExternalAccountLamportSpend,
+            error.ExternalAccountDataModified => .ExternalAccountDataModified,
+            error.ReadonlyLamportChange => .ReadonlyLamportChange,
+            error.ReadonlyDataModified => .ReadonlyDataModified,
+            error.DuplicateAccountIndex => .DuplicateAccountIndex,
+            error.ExecutableModified => .ExecutableModified,
+            error.RentEpochModified => .RentEpochModified,
+            error.NotEnoughAccountKeys => .NotEnoughAccountKeys,
+            error.AccountDataSizeChanged => .AccountDataSizeChanged,
+            error.AccountNotExecutable => .AccountNotExecutable,
+            error.AccountBorrowFailed => .AccountBorrowFailed,
+            error.AccountBorrowOutstanding => .AccountBorrowOutstanding,
+            error.DuplicateAccountOutOfSync => .DuplicateAccountOutOfSync,
+            error.Custom => .{ .Custom = custom orelse return error.MissingCustomError },
+            error.InvalidError => .InvalidError,
+            error.ExecutableDataModified => .ExecutableDataModified,
+            error.ExecutableLamportChange => .ExecutableLamportChange,
+            error.ExecutableAccountNotRentExempt => .ExecutableAccountNotRentExempt,
+            error.UnsupportedProgramId => .UnsupportedProgramId,
+            error.CallDepth => .CallDepth,
+            error.MissingAccount => .MissingAccount,
+            error.ReentrancyNotAllowed => .ReentrancyNotAllowed,
+            error.MaxSeedLengthExceeded => .MaxSeedLengthExceeded,
+            error.InvalidSeeds => .InvalidSeeds,
+            error.InvalidRealloc => .InvalidRealloc,
+            error.ComputationalBudgetExceeded => .ComputationalBudgetExceeded,
+            error.PrivilegeEscalation => .PrivilegeEscalation,
+            error.ProgramEnvironmentSetupFailure => .ProgramEnvironmentSetupFailure,
+            error.ProgramFailedToComplete => .ProgramFailedToComplete,
+            error.ProgramFailedToCompile => .ProgramFailedToCompile,
+            error.Immutable => .Immutable,
+            error.IncorrectAuthority => .IncorrectAuthority,
+            error.BorshIoError => .{
+                .BorshIoError = borsh_io orelse return error.MissingBorshIoError,
+            },
+            error.AccountNotRentExempt => .AccountNotRentExempt,
+            error.InvalidAccountOwner => .InvalidAccountOwner,
+            error.ProgramArithmeticOverflow => .ProgramArithmeticOverflow,
+            error.UnsupportedSysvar => .UnsupportedSysvar,
+            error.IllegalOwner => .IllegalOwner,
+            error.MaxAccountsDataAllocationsExceeded => .MaxAccountsDataAllocationsExceeded,
+            error.MaxAccountsExceeded => .MaxAccountsExceeded,
+            error.MaxInstructionTraceLengthExceeded => .MaxInstructionTraceLengthExceeded,
+            error.BuiltinProgramsMustConsumeComputeUnits => .BuiltinProgramsMustConsumeComputeUnits,
+        };
     }
 };

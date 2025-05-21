@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const InstructionError = sig.core.instruction.InstructionErrorEnum;
+const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 
 pub const TransactionStatusMeta = struct {
     /// Indicates whether the transaction succeeded, or exactly what error caused it to fail
@@ -205,7 +205,7 @@ pub const TransactionError = union(enum) {
 
     /// An error occurred while processing an instruction. The first element of the tuple
     /// indicates the instruction index in which the error occurred.
-    InstructionError: struct { u8, InstructionError },
+    InstructionError: struct { u8, InstructionErrorEnum },
 
     /// Loader call chain is too deep
     CallChainTooDeep,
@@ -300,5 +300,55 @@ pub const TransactionError = union(enum) {
             .InstructionError => |it| it[1].deinit(allocator),
             else => {},
         }
+    }
+
+    pub fn fromError(
+        err: anyerror,
+        index: ?u8,
+        instruction_error: ?InstructionErrorEnum,
+    ) TransactionError {
+        return switch (err) {
+            // zig fmt: off
+            error.AccountInUse                          => .AccountInUse,
+            error.AccountLoadedTwice                    => .AccountLoadedTwice,
+            error.AccountNotFound                       => .AccountNotFound,
+            error.ProgramAccountNotFound                => .ProgramAccountNotFound,
+            error.InsufficientFundsForFee               => .InsufficientFundsForFee,
+            error.InvalidAccountForFee                  => .InvalidAccountForFee,
+            error.AlreadyProcessed                      => .AlreadyProcessed,
+            error.BlockhashNotFound                     => .BlockhashNotFound,
+            error.InstructionError                      => .{ .InstructionError = .{index.?, instruction_error.?}},
+            error.CallChainTooDeep                      => .CallChainTooDeep,
+            error.MissingSignatureForFee                => .MissingSignatureForFee,
+            error.InvalidAccountIndex                   => .InvalidAccountIndex,
+            error.SignatureFailure                      => .SignatureFailure,
+            error.InvalidProgramForExecution            => .InvalidProgramForExecution,
+            error.SanitizeFailure                       => .SanitizeFailure,
+            error.ClusterMaintenance                    => .ClusterMaintenance,
+            error.AccountBorrowOutstanding              => .AccountBorrowOutstanding,
+            error.WouldExceedMaxBlockCostLimit          => .WouldExceedMaxBlockCostLimit,
+            error.UnsupportedVersion                    => .UnsupportedVersion,
+            error.InvalidWritableAccount                => .InvalidWritableAccount,
+            error.WouldExceedMaxAccountCostLimit        => .WouldExceedMaxAccountCostLimit,
+            error.WouldExceedAccountDataBlockLimit      => .WouldExceedAccountDataBlockLimit,
+            error.TooManyAccountLocks                   => .TooManyAccountLocks,
+            error.AddressLookupTableNotFound            => .AddressLookupTableNotFound,
+            error.InvalidAddressLookupTableOwner        => .InvalidAddressLookupTableOwner,
+            error.InvalidAddressLookupTableData         => .InvalidAddressLookupTableData,
+            error.InvalidAddressLookupTableIndex        => .InvalidAddressLookupTableIndex,
+            error.InvalidRentPayingAccount              => .InvalidRentPayingAccount,
+            error.WouldExceedMaxVoteCostLimit           => .WouldExceedMaxVoteCostLimit,
+            error.WouldExceedAccountDataTotalLimit      => .WouldExceedAccountDataTotalLimit,
+            error.DuplicateInstruction                  => .{.DuplicateInstruction = index.?},
+            error.InsufficientFundsForRent              => .{.InsufficientFundsForRent = .{.account_index = index.?}},
+            error.MaxLoadedAccountsDataSizeExceeded     => .MaxLoadedAccountsDataSizeExceeded,
+            error.InvalidLoadedAccountsDataSizeLimit    => .InvalidLoadedAccountsDataSizeLimit,
+            error.ResanitizationNeeded                  => .ResanitizationNeeded,
+            error.ProgramExecutionTemporarilyRestricted => .{.ProgramExecutionTemporarilyRestricted = .{.account_index = index.?}},
+            error.UnbalancedTransaction                 => .UnbalancedTransaction,
+            error.ProgramCacheHitMaxLimit               => .ProgramCacheHitMaxLimit,
+            else => @panic("Unknown transaction error"),
+            // zig fmt: on
+        };
     }
 };

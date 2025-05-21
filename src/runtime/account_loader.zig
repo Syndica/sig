@@ -14,7 +14,7 @@ const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = runtime.transaction_execution.TransactionResult;
 
 // [firedancer] https://github.com/firedancer-io/firedancer/blob/ddde57c40c4d4334c25bb32de17f833d4d79a889/src/ballet/txn/fd_txn.h#L116
-const MAX_TX_ACCOUNT_LOCKS = 128;
+pub const MAX_TX_ACCOUNT_LOCKS = 128;
 
 pub const AccountsDbKind = enum {
     AccountsDb,
