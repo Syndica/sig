@@ -135,6 +135,13 @@ pub const ProcessedTransaction = union(enum(u8)) {
     }
 };
 
+pub fn TransactionResult(comptime T: type) type {
+    return union(enum(u8)) {
+        ok: T,
+        err: TransactionError,
+    };
+}
+
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransactions(
     allocator: std.mem.Allocator,
@@ -197,7 +204,12 @@ pub fn loadAndExecuteTransaction(
     // TODO: Should the compute budget program require the feature set?
     const compute_budget_result = compute_budget_program.execute(
         transaction.instruction_infos,
-    ) catch |err| return .{ .err = TransactionError.fromError(err, null, null) };
+        environment.feature_set,
+    );
+    const compute_budget_limits = switch (compute_budget_result) {
+        .ok => |limits| limits,
+        .err => |err| return .{ .err = err },
+    };
 
     const check_fee_payer_result = checkFeePayer(
         &transaction.fee_payer,

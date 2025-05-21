@@ -8,8 +8,8 @@ const builtin_costs = sig.runtime.program.builtin_costs;
 const Pubkey = sig.core.Pubkey;
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
-const TransactionError = sig.runtime.transaction_error.TransactionError;
-const TransactionResult = sig.runtime.transaction_error.TransactionResult;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 
 const MIGRATING_BUILTIN_COSTS = builtin_costs.MIGRATING_BUILTIN_COSTS;
 const MAX_TRANSACTION_ACCOUNTS = sig.core.Transaction.MAX_ACCOUNTS;
@@ -91,7 +91,7 @@ pub fn execute(
         if (isComputeBudgetProgram(&is_compute_budget_cache, program_index, program_id)) {
             const invalid_instruction_data_error: TransactionResult(ComputeBudgetLimits) = .{
                 .err = .{
-                    .InstructionError = .{ @intCast(index), error.InvalidInstructionData },
+                    .InstructionError = .{ @intCast(index), .InvalidInstructionData },
                 },
             };
             const duplicate_instruction_error: TransactionResult(ComputeBudgetLimits) = .{
@@ -170,7 +170,7 @@ pub fn execute(
             else
                 return .{
                     .err = .{
-                        .InstructionError = .{ index, error.InvalidInstructionData },
+                        .InstructionError = .{ index, .InvalidInstructionData },
                     },
                 };
         }
@@ -497,7 +497,7 @@ test execute {
             emptyInstructionInfo(prng.random()),
         },
         .{ .err = .{
-            .InstructionError = .{ 0, error.InvalidInstructionData },
+            .InstructionError = .{ 0, .InvalidInstructionData },
         } },
     );
 
@@ -512,7 +512,7 @@ test execute {
             emptyInstructionInfo(prng.random()),
         },
         .{ .err = .{
-            .InstructionError = .{ 0, error.InvalidInstructionData },
+            .InstructionError = .{ 0, .InvalidInstructionData },
         } },
     );
 
@@ -527,7 +527,7 @@ test execute {
             emptyInstructionInfo(prng.random()),
         },
         .{ .err = .{
-            .InstructionError = .{ 0, error.InvalidInstructionData },
+            .InstructionError = .{ 0, .InvalidInstructionData },
         } },
     );
 
@@ -581,7 +581,7 @@ test execute {
             ),
         },
         .{ .err = .{
-            .InstructionError = .{ 3, error.InvalidInstructionData },
+            .InstructionError = .{ 3, .InvalidInstructionData },
         } },
     );
 
