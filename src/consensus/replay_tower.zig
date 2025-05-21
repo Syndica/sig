@@ -1269,7 +1269,6 @@ pub const ReplayTower = struct {
             .failed_switch_duplicate_rollback => |latest_duplicate_ancestor| blk: {
                 break :blk try selectCandidatesFailedSwitchDuplicateRollback(
                     allocator,
-                    heaviest_slot,
                     latest_duplicate_ancestor,
                     failure_reasons,
                     initial_switch_fork_decision,
@@ -1488,8 +1487,6 @@ const SwitchForkDecision = union(enum) {
 pub fn selectCandidatesFailedSwitchDuplicateRollback(
     allocator: std.mem.Allocator,
     heaviest_slot: Slot,
-    // [Audit] Only used in logging in Agave
-    _: Slot,
     failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
     initial_switch_fork_decision: SwitchForkDecision,
 ) !CandidateVoteAndResetSlots {
