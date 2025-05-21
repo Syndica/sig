@@ -33,7 +33,7 @@ pub const Authorize = struct {
     /// Public Key to be made the new authority for the vote account.
     new_authority: Pubkey,
     /// Type of autorization to grant.
-    vote_authorize: vote_program.state.VoteAuthorize,
+    vote_authorize: VoteAuthorize,
 
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to be updated with the Pubkey for authorization
@@ -46,7 +46,7 @@ pub const Authorize = struct {
 };
 
 pub const VoteAuthorizeWithSeedArgs = struct {
-    authorization_type: vote_program.state.VoteAuthorize,
+    authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
     new_authority: Pubkey,
@@ -65,7 +65,7 @@ pub const VoteAuthorizeWithSeedArgs = struct {
 };
 
 pub const VoteAuthorizeCheckedWithSeedArgs = struct {
-    authorization_type: vote_program.state.VoteAuthorize,
+    authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 
