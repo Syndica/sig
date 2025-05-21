@@ -3,8 +3,9 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
 
+const vote_program = sig.runtime.program.vote_program;
 const InstructionError = sig.core.instruction.InstructionError;
-const VoteError = sig.runtime.program.vote_program.VoteError;
+const VoteError = vote_program.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
@@ -1844,10 +1845,8 @@ pub const VoteState = struct {
     }
 };
 
-pub const VoteAuthorize = enum {
-    voter,
-    withdrawer,
-};
+/// Re-export of the `VoteAuthorize` enum.
+pub const VoteAuthorize = vote_program.vote_instruction.VoteAuthorize;
 
 pub fn createTestVoteState(
     allocator: std.mem.Allocator,
