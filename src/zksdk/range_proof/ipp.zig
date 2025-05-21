@@ -37,7 +37,13 @@ const ONE = Scalar.fromBytes(.{1} ++ .{0} ** 31);
 /// - Dalek Bulletproofs implementation and docs: https://doc.dalek.rs/bulletproofs/
 /// - Agave IPP implementation: https://github.com/anza-xyz/agave/blob/93699947720534741b2b4d9b6e1696d81e386dcc/zk-sdk/src/range_proof/inner_product.rs
 pub fn Proof(bit_size: comptime_int) type {
-    const log_n = std.math.log2_int(u64, bit_size);
+    const log_n: u64 = std.math.log2_int(u64, bit_size);
+    const max_elements =
+        bit_size * 2 + // g_times_a_times_s and h_times_b_div_s
+        log_n * 2 + // neg_u_sq and neg_u_inv_sq
+        1 // a * b
+    ;
+
     return struct {
         L_vec: [log_n]Ristretto255,
         R_vec: [log_n]Ristretto255,
@@ -157,18 +163,22 @@ pub fn Proof(bit_size: comptime_int) type {
                 for (0..n) |i| {
                     a_L[i] = a_L[i].mul(u).add(u_inv.mul(a_R[i]));
                     b_L[i] = b_L[i].mul(u_inv).add(u.mul(b_R[i]));
-                    G_L[i] = .{ .p = weak_mul.mulMulti(2, .{
-                        G_L[i].p, G_R[i].p,
-                    }, .{
-                        u_inv.mul(G_factors[i]).toBytes(),
-                        u.mul(G_factors[n + i]).toBytes(),
-                    }) };
-                    H_L[i] = .{ .p = weak_mul.mulMulti(2, .{
-                        H_L[i].p, H_R[i].p,
-                    }, .{
-                        u.mul(H_factors[i]).toBytes(),
-                        u_inv.mul(H_factors[n + i]).toBytes(),
-                    }) };
+                    G_L[i] = .{ .p = weak_mul.mulMulti(
+                        2,
+                        .{ G_L[i].p, G_R[i].p },
+                        .{
+                            u_inv.mul(G_factors[i]).toBytes(),
+                            u.mul(G_factors[n + i]).toBytes(),
+                        },
+                    ) };
+                    H_L[i] = .{ .p = weak_mul.mulMulti(
+                        2,
+                        .{ H_L[i].p, H_R[i].p },
+                        .{
+                            u.mul(H_factors[i]).toBytes(),
+                            u_inv.mul(H_factors[n + i]).toBytes(),
+                        },
+                    ) };
                 }
 
                 a = a_L;
@@ -289,6 +299,116 @@ pub fn Proof(bit_size: comptime_int) type {
                 .b = b[0],
             };
         }
+
+        pub fn verify(
+            self: Self,
+            G_factors: []const Scalar,
+            H_factors: []const Scalar,
+            P: Ristretto255,
+            Q: Ristretto255,
+            G: []const Ristretto255,
+            H: []const Ristretto255,
+            transcript: *Transcript,
+        ) !void {
+            const u_sq, const u_inv_sq, const s = try self.verificationScalars(transcript);
+
+            var scalars: std.BoundedArray([32]u8, max_elements) = .{};
+            var points: std.BoundedArray(Edwards25519, max_elements) = .{};
+
+            scalars.appendAssumeCapacity(self.a.mul(self.b).toBytes());
+            for (G_factors, s) |gi, si| {
+                const mul = self.a.mul(si).mul(gi);
+                scalars.appendAssumeCapacity(mul.toBytes());
+            }
+            // 1/s[i] is s[!i], and !i runs from n-1 to 0 as i runs from 0 to n-1
+            for (H_factors, 0..bit_size) |hi, idx| {
+                const si_inv = s[bit_size - idx - 1];
+                const mul = self.b.mul(si_inv).mul(hi);
+                scalars.appendAssumeCapacity(mul.toBytes());
+            }
+            for (u_sq) |ui| {
+                const neg = Edwards25519.scalar.neg(ui.toBytes());
+                scalars.appendAssumeCapacity(neg);
+            }
+            for (u_inv_sq) |ui| {
+                const neg = Edwards25519.scalar.neg(ui.toBytes());
+                scalars.appendAssumeCapacity(neg);
+            }
+
+            points.appendAssumeCapacity(Q.p);
+            for (G) |g| points.appendAssumeCapacity(g.p);
+            for (H) |h| points.appendAssumeCapacity(h.p);
+            for (self.L_vec) |l| points.appendAssumeCapacity(l.p);
+            for (self.R_vec) |r| points.appendAssumeCapacity(r.p);
+
+            const check = weak_mul.mulMulti(
+                max_elements,
+                points.constSlice()[0..max_elements].*,
+                scalars.constSlice()[0..max_elements].*,
+            );
+
+            if (!P.equivalent(.{ .p = check })) {
+                return error.AlgebraicRelation;
+            }
+        }
+
+        fn verificationScalars(self: Self, transcript: *Transcript) !struct {
+            [log_n]Scalar, // u_sq
+            [log_n]Scalar, // u_inv_sq
+            [bit_size]Scalar, // s
+        } {
+            transcript.appendDomSep("inner-product");
+            transcript.appendU64("n", bit_size);
+
+            // 1. Recompute x_k,...,x_1 based on the proof transcript
+
+            var challenges: std.BoundedArray(Scalar, log_n) = .{};
+            for (self.L_vec, self.R_vec) |L, R| {
+                try transcript.validateAndAppendPoint("L", L);
+                try transcript.validateAndAppendPoint("R", R);
+                challenges.appendAssumeCapacity(Scalar.fromBytes(transcript.challengeScalar("u")));
+            }
+
+            // 2. Compute 1/(u_k...u_1) and 1/u_k, ..., 1/u_1
+
+            // The inverse of the product of all scalars in the challenge.
+            var allinv = ONE;
+            var challenges_inv = challenges;
+            for (challenges_inv.slice()) |*scalar| {
+                allinv = allinv.mul(scalar.*);
+                scalar.* = scalar.invert();
+            }
+            allinv = allinv.invert();
+
+            // 3. Compute u_i^2 and (1/u_i)^2
+
+            for (challenges.slice(), challenges_inv.slice()) |*c, *c_inv| {
+                c.* = c.mul(c.*);
+                c_inv.* = c_inv.mul(c_inv.*);
+            }
+            const challenges_sq = challenges;
+            const challenges_inv_sq = challenges_inv;
+
+            // 4. Compute s values inductively.
+
+            var s: std.BoundedArray(Scalar, bit_size) = .{};
+            s.appendAssumeCapacity(allinv);
+            for (1..bit_size) |i| {
+                const log_i = std.math.log2_int(u64, i);
+                const k = @as(u64, 1) << log_i;
+                const u_lg_i_sq = challenges_sq.constSlice()[log_n - 1 - log_i];
+                s.appendAssumeCapacity(s.constSlice()[i - k].mul(u_lg_i_sq));
+            }
+
+            std.debug.assert(challenges_sq.len == log_n);
+            std.debug.assert(challenges_inv_sq.len == log_n);
+            std.debug.assert(s.len == bit_size);
+            return .{
+                challenges_sq.buffer,
+                challenges_inv_sq.buffer,
+                s.buffer,
+            };
+        }
     };
 }
 
@@ -361,8 +481,8 @@ test "basic correctness" {
     defer b.deinit(allocator);
 
     for (0..n) |_| {
-        try a.append(allocator, Scalar.random());
-        try b.append(allocator, Scalar.random());
+        try a.append(allocator, ONE);
+        try b.append(allocator, ONE);
     }
     const c = innerProduct(a.items, b.items);
 
@@ -370,7 +490,7 @@ test "basic correctness" {
     defer allocator.free(G_factors);
     @memset(G_factors, ONE);
 
-    const y_inv = Scalar.random();
+    const y_inv = ONE;
     const H_factors = try genPowers(allocator, y_inv, n);
     defer allocator.free(H_factors);
 
@@ -393,16 +513,19 @@ test "basic correctness" {
     for (H.items) |h| try points.append(allocator, h.p);
     try points.append(allocator, Q.p);
 
-    const P = weak_mul.mulMulti(
-        n,
-        points.items[0..n].*,
-        scalars.items[0..n].*,
-    );
-    _ = P;
+    const P_len = 2 * n + 1;
+    const P: Ristretto255 = .{ .p = weak_mul.mulMulti(
+        P_len,
+        points.items[0..P_len].*,
+        scalars.items[0..P_len].*,
+    ) };
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
+
     var prover_transcript = Transcript.init("innerproducttest");
+    var verifier_transcript = Transcript.init("innerproducttest");
+
     const proof = try Proof(32).init(
         &arena,
         Q,
@@ -414,5 +537,14 @@ test "basic correctness" {
         b.items,
         &prover_transcript,
     );
-    _ = proof;
+
+    try proof.verify(
+        &(.{ONE} ** n),
+        H_factors,
+        P,
+        Q,
+        G.items,
+        H.items,
+        &verifier_transcript,
+    );
 }
