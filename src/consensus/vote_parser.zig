@@ -13,7 +13,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Transaction = sig.core.Transaction;
-
+const TransactionMessage = sig.core.transaction.TransactionMessage;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 
 pub const ParsedVote = struct {
@@ -125,4 +125,159 @@ fn parseVoteInstructionData(
         .withdraw,
         => null,
     };
+}
+
+test testParseVoteTransaction {
+    var prng = std.Random.DefaultPrng.init(42);
+    const random = prng.random();
+    try testParseVoteTransaction(null, random);
+    try testParseVoteTransaction(Hash.generateSha256(&[_]u8{42}), random);
+}
+
+fn testParseVoteTransaction(input_hash: ?Hash, random: std.Random) !void {
+    const allocator = std.testing.allocator;
+
+    const node_keypair = try randomKeyPair(random);
+    const auth_voter_keypair = try randomKeyPair(random);
+    const vote_keypair = try randomKeyPair(random);
+
+    const vote_key = Pubkey.fromPublicKey(&vote_keypair.public_key);
+
+    {
+        const bank_hash = Hash.ZEROES;
+        const vote_tx = try newVoteTransaction(
+            allocator,
+            &.{42},
+            bank_hash,
+            Hash.ZEROES,
+            node_keypair,
+            vote_key,
+            auth_voter_keypair,
+            input_hash,
+        );
+        defer vote_tx.deinit(allocator);
+
+        const maybe_parsed_tx = try parseVoteTransaction(allocator, vote_tx);
+        defer if (maybe_parsed_tx) |parsed_tx| parsed_tx.deinit(allocator);
+
+        try std.testing.expectEqualDeep(ParsedVote{
+            .key = vote_key,
+            .vote = .{ .vote = .{
+                .slots = &.{42},
+                .hash = bank_hash,
+                .timestamp = null,
+            } },
+            .switch_proof_hash = input_hash,
+            .signature = vote_tx.signatures[0],
+        }, maybe_parsed_tx);
+    }
+
+    // Test bad program id fails
+    var vote_ix = try vote_program.Instruction.voteIx(
+        allocator,
+        vote_key,
+        Pubkey.fromPublicKey(&auth_voter_keypair.public_key),
+        .{ .vote = .{
+            .slots = &.{ 1, 2 },
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        } },
+    );
+    defer vote_ix.deinit(allocator);
+    vote_ix.program_id = Pubkey.ZEROES;
+
+    const vote_tx = blk: {
+        const vote_tx_msg = try TransactionMessage.legacyCompileFrom(
+            allocator,
+            &.{vote_ix},
+            Pubkey.fromPublicKey(&node_keypair.public_key),
+            Hash.ZEROES,
+        );
+        errdefer vote_tx_msg.deinit(allocator);
+        break :blk try Transaction.initOwnedMsgWithSigningKeypairs(
+            allocator,
+            .legacy,
+            vote_tx_msg,
+            &.{},
+        );
+    };
+    defer vote_tx.deinit(allocator);
+    try std.testing.expectEqual(null, parseVoteTransaction(allocator, vote_tx));
+}
+
+/// Reimplemented locally from Vote program.
+fn newVoteTransaction(
+    allocator: std.mem.Allocator,
+    slots: []const sig.core.Slot,
+    bank_hash: Hash,
+    blockhash: Hash,
+    node_keypair: sig.identity.KeyPair,
+    vote_key: Pubkey,
+    authorized_voter_keypair: sig.identity.KeyPair,
+    maybe_switch_proof_hash: ?Hash,
+) !Transaction {
+    const vote_ix = try newVoteInstruction(
+        allocator,
+        slots,
+        bank_hash,
+        vote_key,
+        Pubkey.fromPublicKey(&authorized_voter_keypair.public_key),
+        maybe_switch_proof_hash,
+    );
+    defer vote_ix.deinit(allocator);
+
+    const vote_tx_msg = try TransactionMessage.legacyCompileFrom(
+        allocator,
+        &.{vote_ix},
+        Pubkey.fromPublicKey(&node_keypair.public_key),
+        blockhash,
+    );
+    errdefer vote_tx_msg.deinit(allocator);
+    return try Transaction.initOwnedMsgWithSigningKeypairs(
+        allocator,
+        .legacy,
+        vote_tx_msg,
+        &.{ node_keypair, authorized_voter_keypair },
+    );
+}
+
+fn newVoteInstruction(
+    allocator: std.mem.Allocator,
+    slots: []const sig.core.Slot,
+    bank_hash: Hash,
+    vote_key: Pubkey,
+    authorized_voter_key: Pubkey,
+    maybe_switch_proof_hash: ?Hash,
+) !sig.core.Instruction {
+    const vote_state: vote_program.state.Vote = .{
+        .slots = slots,
+        .hash = bank_hash,
+        .timestamp = null,
+    };
+
+    if (maybe_switch_proof_hash) |switch_proof_hash| {
+        return try vote_program.Instruction.voteSwitchIx(
+            allocator,
+            vote_key,
+            authorized_voter_key,
+            .{
+                .vote = vote_state,
+                .hash = switch_proof_hash,
+            },
+        );
+    }
+    return try vote_program.Instruction.voteIx(
+        allocator,
+        vote_key,
+        authorized_voter_key,
+        .{
+            .vote = vote_state,
+        },
+    );
+}
+
+fn randomKeyPair(random: std.Random) !sig.identity.KeyPair {
+    var seed: [sig.identity.KeyPair.seed_length]u8 = undefined;
+    random.bytes(&seed);
+    return try sig.identity.KeyPair.create(seed);
 }
