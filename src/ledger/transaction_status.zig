@@ -302,6 +302,7 @@ pub const TransactionError = union(enum) {
         }
     }
 
+    /// TODO: Refactor this approach to remove panic on null index or instruction error
     pub fn fromError(
         err: anyerror,
         index: ?u8,

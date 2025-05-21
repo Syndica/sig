@@ -425,6 +425,7 @@ test "transaction_execution" {
         allocator,
         10,
     );
+    defer blockhash_queue.deinit(allocator);
     const epoch_stakes: EpochStakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
 
