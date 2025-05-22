@@ -147,7 +147,6 @@ files_excluded_from_line_length_check = [
     "src/bloom/bitvec.zig",
     "src/core/leader_schedule.zig",
     "src/core/transaction.zig",
-    "src/geyser/core.zig",
     "src/gossip/data.zig",
     "src/gossip/fuzz_service.zig",
     "src/gossip/fuzz_table.zig",
