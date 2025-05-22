@@ -3163,10 +3163,12 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     const descendants = fixture.descendants;
     const bits = try DynamicArrayBitSet(u64).initEmpty(allocator, 10);
     defer bits.deinit(allocator);
+
+    const forks1 = try fixture.select_fork_slots(&replay_tower);
     const result = try replay_tower.selectVoteAndResetForks(
         allocator,
-        4, // heaviest_slot
-        null, // heaviest_slot_on_same_voted_fork
+        forks1.heaviest,
+        forks1.heaviest_on_same_fork,
         0, // heaviest_epoch
         &ancestors,
         &descendants,
@@ -3183,10 +3185,11 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
 
     // Record the vote for 5 which is not on the heaviest fork.
     _ = try replay_tower.recordBankVote(allocator, hash5.slot, hash5.hash);
+    const forks2 = try fixture.select_fork_slots(&replay_tower);
     var result2 = try replay_tower.selectVoteAndResetForks(
         allocator,
-        4, // heaviest_slot
-        5, // heaviest_slot_on_same_voted_fork
+        forks2.heaviest,
+        forks2.heaviest_on_same_fork,
         0, // heaviest_epoch
         &ancestors,
         &descendants,
@@ -3207,10 +3210,11 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     // TODO: IN Agave this state update is done in ReplayStage::compute_bank_stats
     fixture.update_fork_stat_lockout(4, true);
 
+    const forks3 = try fixture.select_fork_slots(&replay_tower);
     var result3 = try replay_tower.selectVoteAndResetForks(
         allocator,
-        4, // heaviest_slot
-        5, // heaviest_slot_on_same_voted_fork
+        forks3.heaviest,
+        forks3.heaviest_on_same_fork,
         0, // heaviest_epoch
         &ancestors,
         &descendants,
@@ -3277,12 +3281,12 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     // 4 is still the heaviest slot, but not votable because of lockout.
     // 9 is the deepest slot from our last voted fork (5), so it is what we should
     // reset to.
-    const forks = try fixture.select_fork_slots(&replay_tower);
+    const forks4 = try fixture.select_fork_slots(&replay_tower);
 
     var result4 = try replay_tower.selectVoteAndResetForks(
         allocator,
-        forks.heaviest,
-        forks.heaviest_on_same_fork,
+        forks4.heaviest,
+        forks4.heaviest_on_same_fork,
         0, // heaviest_epoch
         &ancestors2,
         &descendants2,
@@ -3319,12 +3323,12 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
 
     try splitOff(allocator, &fixture.fork_choice, hash6);
 
-    const forks2 = try fixture.select_fork_slots(&replay_tower);
+    const forks5 = try fixture.select_fork_slots(&replay_tower);
 
-    var result6 = try replay_tower.selectVoteAndResetForks(
+    var result5 = try replay_tower.selectVoteAndResetForks(
         allocator,
-        forks2.heaviest,
-        forks2.heaviest_on_same_fork,
+        forks5.heaviest,
+        forks5.heaviest_on_same_fork,
         0, // heaviest_epoch
         &ancestors2,
         &descendants2,
@@ -3336,13 +3340,13 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     );
 
     defer {
-        result6.heaviest_fork_failures.deinit(allocator);
+        result5.heaviest_fork_failures.deinit(allocator);
     }
 
-    try std.testing.expectEqual(null, result6.vote_slot);
-    try std.testing.expectEqual(5, result6.reset_slot);
+    try std.testing.expectEqual(null, result5.vote_slot);
+    try std.testing.expectEqual(5, result5.reset_slot);
 
-    switch (result6.heaviest_fork_failures.items[0]) {
+    switch (result5.heaviest_fork_failures.items[0]) {
         .FailedSwitchThreshold => |data| {
             try std.testing.expectEqual(4, data.slot);
             try std.testing.expectEqual(0, data.observed_stake);
@@ -3536,15 +3540,17 @@ const TestFixture = struct {
 
     pub fn select_fork_slots(self: *const TestFixture, replay_tower: *const ReplayTower) !struct {
         heaviest: Slot,
-        heaviest_on_same_fork: Slot,
+        heaviest_on_same_fork: ?Slot,
     } {
         const heaviest_on_same_fork =
-            (try self.fork_choice.heaviestSlotOnSameVotedFork(replay_tower)) orelse {
-            return error.MissingSlot;
-        };
+            (try self.fork_choice.heaviestSlotOnSameVotedFork(replay_tower)) orelse null;
+
         return .{
             .heaviest = self.fork_choice.heaviestOverallSlot().slot,
-            .heaviest_on_same_fork = heaviest_on_same_fork.slot,
+            .heaviest_on_same_fork = if (heaviest_on_same_fork == null)
+                null
+            else
+                heaviest_on_same_fork.?.slot,
         };
     }
 
