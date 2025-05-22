@@ -3182,7 +3182,7 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     try std.testing.expectEqual(0, result.heaviest_fork_failures.items.len);
 
     // Record the vote for 5 which is not on the heaviest fork.
-    _ = try replay_tower.recordBankVote(allocator, 5, Hash.ZEROES);
+    _ = try replay_tower.recordBankVote(allocator, hash5.slot, hash5.hash);
     var result2 = try replay_tower.selectVoteAndResetForks(
         allocator,
         4, // heaviest_slot
@@ -3274,14 +3274,15 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     }
     const descendants2 = fixture.descendants;
 
-    // // 4 is still the heaviest slot, but not votable because of lockout.
-    // // 9 is the deepest slot from our last voted fork (5), so it is what we should
-    // // reset to.
+    // 4 is still the heaviest slot, but not votable because of lockout.
+    // 9 is the deepest slot from our last voted fork (5), so it is what we should
+    // reset to.
+    const forks = try fixture.select_fork_slots(&replay_tower);
 
     var result4 = try replay_tower.selectVoteAndResetForks(
         allocator,
-        4, // heaviest_slot
-        9, // heaviest_slot_on_same_voted_fork
+        forks.heaviest,
+        forks.heaviest_on_same_fork,
         0, // heaviest_epoch
         &ancestors2,
         &descendants2,
@@ -3316,49 +3317,14 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
         else => try std.testing.expect(false), // Fail if not LockedOut
     }
 
-    var result5 = try replay_tower.selectVoteAndResetForks(
-        allocator,
-        4, // heaviest_slot
-        9, // heaviest_slot_on_same_voted_fork
-        0, // heaviest_epoch
-        &ancestors2,
-        &descendants2,
-        &fixture.progress,
-        &.{ .max_gossip_frozen_votes = .{} },
-        &fixture.fork_choice,
-        epoch_stake_map,
-        &SlotHistory{ .bits = bits, .next_slot = 0 },
-    );
-
-    defer {
-        result5.heaviest_fork_failures.deinit(allocator);
-    }
-
-    try std.testing.expectEqual(null, result5.vote_slot);
-    try std.testing.expectEqual(9, result5.reset_slot);
-
-    switch (result5.heaviest_fork_failures.items[0]) {
-        .FailedSwitchThreshold => |data| {
-            try std.testing.expectEqual(4, data.slot);
-            try std.testing.expectEqual(0, data.observed_stake);
-            try std.testing.expectEqual(1000, data.total_stake);
-        },
-        else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
-    }
-
-    // Check second item is LockedOut with expected value
-    switch (result5.heaviest_fork_failures.items[1]) {
-        .LockedOut => |slot| {
-            try std.testing.expectEqual(4, slot);
-        },
-        else => try std.testing.expect(false), // Fail if not LockedOut
-    }
-
     try splitOff(allocator, &fixture.fork_choice, hash6);
+
+    const forks2 = try fixture.select_fork_slots(&replay_tower);
+
     var result6 = try replay_tower.selectVoteAndResetForks(
         allocator,
-        4, // heaviest_slot
-        5, // heaviest_slot_on_same_voted_fork
+        forks2.heaviest,
+        forks2.heaviest_on_same_fork,
         0, // heaviest_epoch
         &ancestors2,
         &descendants2,
@@ -3566,6 +3532,20 @@ const TestFixture = struct {
     pub fn update_fork_stat_lockout(self: *TestFixture, slot: Slot, locked_out: bool) void {
         // TODO: IN Agave this state update is done in ReplayStage::compute_bank_stats
         self.progress.getForkStats(slot).?.is_locked_out = locked_out;
+    }
+
+    pub fn select_fork_slots(self: *const TestFixture, replay_tower: *const ReplayTower) !struct {
+        heaviest: Slot,
+        heaviest_on_same_fork: Slot,
+    } {
+        const heaviest_on_same_fork =
+            (try self.fork_choice.heaviestSlotOnSameVotedFork(replay_tower)) orelse {
+            return error.MissingSlot;
+        };
+        return .{
+            .heaviest = self.fork_choice.heaviestOverallSlot().slot,
+            .heaviest_on_same_fork = heaviest_on_same_fork.slot,
+        };
     }
 
     pub fn fill_fork(
