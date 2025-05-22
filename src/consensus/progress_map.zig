@@ -320,7 +320,7 @@ pub const ForkProgress = struct {
         return ForkProgress.init(allocator, .{
             .now = sig.time.Instant.now(),
             .last_entry = Hash.ZEROES,
-            .prev_leader_slot = 9,
+            .prev_leader_slot = 0,
             .validator_stake_info = ValidatorStakeInfo.DEFAULT,
             .num_blocks_on_fork = 0,
             .num_dropped_blocks_on_fork = 0,
