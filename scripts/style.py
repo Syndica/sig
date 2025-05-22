@@ -137,7 +137,6 @@ files_excluded_from_line_length_check = [
     "src/accountsdb/index.zig",
     "src/accountsdb/snapshots.zig",
     "src/accountsdb/swiss_map.zig",
-    "src/accountsdb/sysvars.zig",
     "src/benchmarks.zig",
     "src/bincode/arraylist.zig",
     "src/bincode/bincode.zig",
