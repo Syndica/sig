@@ -112,6 +112,16 @@ pub fn pushInstruction(
         .ixn_info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
     });
+
+    if (tc.getAccountIndex(sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) |index_in_transaction| {
+        const account = tc.getAccountAtIndex(index_in_transaction) orelse
+            return InstructionError.NotEnoughAccountKeys;
+        const data = account.account.data;
+        if (data.len >= 2) {
+            const last_index = data.len - 2;
+            @memcpy(data[last_index..][0..2], std.mem.asBytes(&tc.top_level_instruction_index));
+        }
+    }
 }
 
 /// Execute an instruction context after it has been pushed onto the instruction stack\
@@ -217,6 +227,9 @@ pub fn popInstruction(
     };
 
     _ = tc.instruction_stack.pop();
+    if (tc.instruction_stack.len == 0) {
+        tc.top_level_instruction_index +|= 1;
+    }
 
     if (unbalanced_instruction) return InstructionError.UnbalancedInstruction;
 }
@@ -228,8 +241,7 @@ pub fn prepareCpiInstructionInfo(
     callee: Instruction,
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
-    if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
-    const caller = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+    const caller = try tc.getCurrentInstructionContext();
 
     var deduped_account_metas = std.BoundedArray(
         InstructionInfo.AccountMeta,
@@ -243,7 +255,7 @@ pub fn prepareCpiInstructionInfo(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
     for (callee.accounts, 0..) |account, index| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
-            try tc.log("Instruction references unknown account {}", .{account.pubkey});
+            try tc.log("Instruction references an unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
@@ -263,7 +275,7 @@ pub fn prepareCpiInstructionInfo(
             deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
         } else {
             const index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse {
-                try tc.log("Instruction references unknown account {}", .{account.pubkey});
+                try tc.log("Instruction references an unknown account {}", .{account.pubkey});
                 return InstructionError.MissingAccount;
             };
 
@@ -283,7 +295,7 @@ pub fn prepareCpiInstructionInfo(
     for (deduped_account_metas.slice()) |callee_account| {
         // Borrow the account via the caller context
         const caller_account =
-            try caller.borrowInstructionAccount(callee_account.index_in_transaction);
+            try caller.borrowInstructionAccount(callee_account.index_in_caller);
         defer caller_account.release();
 
         // Readonly in caller cannot become writable in callee

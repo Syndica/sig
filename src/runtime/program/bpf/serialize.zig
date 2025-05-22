@@ -79,7 +79,7 @@ pub const Serializer = struct {
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L77-L78
     pub fn writeBytes(self: *Serializer, data: []const u8) u64 {
-        const vaddr = self.vaddr +| self.buffer.items.len -| self.region_start;
+        const vaddr = (self.vaddr +| self.buffer.items.len) -| self.region_start;
         self.buffer.appendSliceAssumeCapacity(data);
         return vaddr;
     }
@@ -91,7 +91,7 @@ pub const Serializer = struct {
     ) (error{OutOfMemory} || InstructionError)!u64 {
         const vm_data_addr = if (self.copy_account_data) blk: {
             const addr = self.vaddr +| self.buffer.items.len;
-            _ = self.writeBytes(account.account.data);
+            _ = self.writeBytes(account.account.data); // intentionally ignored
             break :blk addr;
         } else blk: {
             try self.pushRegion(true);
@@ -168,12 +168,15 @@ pub const Serializer = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L172
-    pub fn finish(self: *Serializer) error{OutOfMemory}!struct { []u8, []Region } {
+    pub fn finish(self: *Serializer) error{OutOfMemory}!struct {
+        std.ArrayListUnmanaged(u8),
+        std.ArrayListUnmanaged(Region),
+    } {
         try self.pushRegion(true);
         std.debug.assert(self.region_start == self.buffer.items.len);
         return .{
-            try self.buffer.toOwnedSlice(self.allocator),
-            try self.regions.toOwnedSlice(self.allocator),
+            self.buffer,
+            self.regions,
         };
     }
 
@@ -185,8 +188,8 @@ pub const Serializer = struct {
 };
 
 const SerializeReturn = struct {
-    []u8,
-    []Region,
+    std.ArrayListUnmanaged(u8),
+    std.ArrayListUnmanaged(Region),
     std.BoundedArray(SerializedAccountMeta, InstructionInfo.MAX_ACCOUNT_METAS),
 };
 
@@ -195,6 +198,7 @@ pub fn serializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     copy_account_data: bool,
+    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
@@ -228,6 +232,7 @@ pub fn serializeParameters(
             ic.ixn_info.instruction_data,
             ic.ixn_info.program_meta.pubkey,
             copy_account_data,
+            mask_out_rent_epoch_in_vm_serialization,
         )
     else
         serializeParametersAligned(
@@ -236,6 +241,7 @@ pub fn serializeParameters(
             ic.ixn_info.instruction_data,
             ic.ixn_info.program_meta.pubkey,
             copy_account_data,
+            mask_out_rent_epoch_in_vm_serialization,
         );
 }
 
@@ -246,6 +252,7 @@ fn serializeParametersUnaligned(
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
+    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: usize = @sizeOf(u64);
     for (accounts) |account| {
@@ -309,9 +316,14 @@ fn serializeParametersUnaligned(
                 const vm_owner_addr = serializer.writeBytes(&borrowed_account.account.owner.data);
 
                 _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
+
+                const rent_epoch: u64 = if (mask_out_rent_epoch_in_vm_serialization)
+                    std.math.maxInt(u64)
+                else
+                    borrowed_account.account.rent_epoch;
                 _ = serializer.write(
                     u64,
-                    std.mem.nativeToLittle(u64, borrowed_account.account.rent_epoch),
+                    std.mem.nativeToLittle(u64, rent_epoch),
                 );
 
                 account_metas.appendAssumeCapacity(.{
@@ -332,10 +344,10 @@ fn serializeParametersUnaligned(
     _ = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
-    const memory, const regions = try serializer.finish();
+    var memory, var regions = try serializer.finish();
     errdefer {
-        allocator.free(memory);
-        allocator.free(regions);
+        memory.deinit(allocator);
+        regions.deinit(allocator);
     }
 
     return .{
@@ -352,6 +364,7 @@ fn serializeParametersAligned(
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
+    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: u64 = @sizeOf(u64);
     for (accounts) |account| {
@@ -427,9 +440,13 @@ fn serializeParametersAligned(
                 );
                 const vm_data_addr = try serializer.writeAccount(&borrowed_account);
 
+                const rent_epoch: u64 = if (mask_out_rent_epoch_in_vm_serialization)
+                    std.math.maxInt(u64)
+                else
+                    borrowed_account.account.rent_epoch;
                 _ = serializer.write(
                     u64,
-                    std.mem.nativeToLittle(u64, borrowed_account.account.rent_epoch),
+                    std.mem.nativeToLittle(u64, rent_epoch),
                 );
 
                 account_metas.appendAssumeCapacity(.{
@@ -452,10 +469,10 @@ fn serializeParametersAligned(
     _ = serializer.writeBytes(instruction_data);
     _ = serializer.writeBytes(&program_id.data);
 
-    const memory, const regions = try serializer.finish();
+    var memory, var regions = try serializer.finish();
     errdefer {
-        allocator.free(memory);
-        allocator.free(regions);
+        memory.deinit(allocator);
+        regions.deinit(allocator);
     }
 
     return .{
@@ -887,20 +904,21 @@ test "serializeParameters" {
                 allocator.free(pre_accounts);
             }
 
-            const memory, const regions, const account_metas = try serializeParameters(
+            var memory, var regions, const account_metas = try serializeParameters(
                 allocator,
                 &ic,
                 copy_account_data,
+                false,
             );
             defer {
-                allocator.free(memory);
-                allocator.free(regions);
+                memory.deinit(allocator);
+                regions.deinit(allocator);
             }
 
-            const serialized_regions = try concatRegions(allocator, regions);
+            const serialized_regions = try concatRegions(allocator, regions.items);
             defer allocator.free(serialized_regions);
             if (copy_account_data) {
-                try std.testing.expectEqualSlices(u8, memory, serialized_regions);
+                try std.testing.expectEqualSlices(u8, memory.items, serialized_regions);
             }
 
             // TODO: compare against entrypoint deserialize method once implemented
@@ -911,7 +929,7 @@ test "serializeParameters" {
                 allocator,
                 &ic,
                 copy_account_data,
-                memory,
+                memory.items,
                 account_metas.constSlice(),
             );
             for (pre_accounts, 0..) |pre_account, index_in_transaction| {

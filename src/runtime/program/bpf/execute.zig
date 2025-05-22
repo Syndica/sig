@@ -99,17 +99,22 @@ pub fn execute(
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1583-L1584
     // TODO: jit
 
+    const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active.contains(
+        features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
+    );
+
     // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
-    const parameter_bytes, //
-    const regions, //
+    var parameter_bytes, //
+    var regions, //
     const accounts_metadata = try serialize.serializeParameters(
         allocator,
         ic,
         !direct_mapping,
+        mask_out_rent_epoch_in_vm_serialization,
     );
     defer {
-        allocator.free(parameter_bytes);
-        allocator.free(regions);
+        parameter_bytes.deinit(allocator);
+        regions.deinit(allocator);
     }
 
     // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/lib.rs#L278-L282
@@ -125,7 +130,7 @@ pub fn execute(
             allocator,
             ic.tc,
             &executable,
-            regions,
+            regions.items,
             &syscalls,
         ) catch |err| {
             try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
@@ -188,7 +193,7 @@ pub fn execute(
             allocator,
             ic,
             !direct_mapping,
-            parameter_bytes,
+            parameter_bytes.items,
             accounts_metadata.constSlice(),
         ) catch |err| {
             maybe_execute_error = err;
