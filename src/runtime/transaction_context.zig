@@ -53,6 +53,7 @@ pub const TransactionContext = struct {
 
     instruction_stack: InstructionStack,
     instruction_trace: InstructionTrace,
+    top_level_instruction_index: u16 = 0,
     return_data: TransactionReturnData,
 
     /// Total change to account data size within transaction

@@ -112,6 +112,16 @@ pub fn pushInstruction(
         .ixn_info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
     });
+
+    if (tc.getAccountIndex(sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) |index_in_transaction| {
+        const account = tc.getAccountAtIndex(index_in_transaction) orelse
+            return InstructionError.NotEnoughAccountKeys;
+        const data = account.account.data;
+        if (data.len >= 2) {
+            const last_index = data.len - 2;
+            @memcpy(data[last_index..][0..2], std.mem.asBytes(&tc.top_level_instruction_index));
+        }
+    }
 }
 
 /// Execute an instruction context after it has been pushed onto the instruction stack\
@@ -217,6 +227,9 @@ pub fn popInstruction(
     };
 
     _ = tc.instruction_stack.pop();
+    if (tc.instruction_stack.len == 0) {
+        tc.top_level_instruction_index +|= 1;
+    }
 
     if (unbalanced_instruction) return InstructionError.UnbalancedInstruction;
 }

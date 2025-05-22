@@ -41,9 +41,10 @@ pub const InstructionContext = struct {
     pub fn borrowProgramAccount(
         self: *const InstructionContext,
     ) InstructionError!BorrowedAccount {
-        return self.tc.borrowAccountAtIndex(self.ixn_info.program_meta.index_in_transaction, .{
-            .program_id = self.ixn_info.program_meta.pubkey,
-        });
+        return self.tc.borrowAccountAtIndex(
+            self.ixn_info.program_meta.index_in_transaction,
+            .{ .program_id = self.ixn_info.program_meta.pubkey },
+        );
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L647

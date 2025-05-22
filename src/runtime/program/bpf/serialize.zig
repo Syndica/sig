@@ -198,6 +198,7 @@ pub fn serializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     copy_account_data: bool,
+    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
@@ -231,6 +232,7 @@ pub fn serializeParameters(
             ic.ixn_info.instruction_data,
             ic.ixn_info.program_meta.pubkey,
             copy_account_data,
+            mask_out_rent_epoch_in_vm_serialization,
         )
     else
         serializeParametersAligned(
@@ -239,6 +241,7 @@ pub fn serializeParameters(
             ic.ixn_info.instruction_data,
             ic.ixn_info.program_meta.pubkey,
             copy_account_data,
+            mask_out_rent_epoch_in_vm_serialization,
         );
 }
 
@@ -249,6 +252,7 @@ fn serializeParametersUnaligned(
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
+    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: usize = @sizeOf(u64);
     for (accounts) |account| {
@@ -312,9 +316,14 @@ fn serializeParametersUnaligned(
                 const vm_owner_addr = serializer.writeBytes(&borrowed_account.account.owner.data);
 
                 _ = serializer.write(u8, @intFromBool(borrowed_account.account.executable));
+
+                const rent_epoch: u64 = if (mask_out_rent_epoch_in_vm_serialization)
+                    std.math.maxInt(u64)
+                else
+                    borrowed_account.account.rent_epoch;
                 _ = serializer.write(
                     u64,
-                    std.mem.nativeToLittle(u64, borrowed_account.account.rent_epoch),
+                    std.mem.nativeToLittle(u64, rent_epoch),
                 );
 
                 account_metas.appendAssumeCapacity(.{
@@ -355,6 +364,7 @@ fn serializeParametersAligned(
     instruction_data: []const u8,
     program_id: Pubkey,
     copy_account_data: bool,
+    mask_out_rent_epoch_in_vm_serialization: bool,
 ) (error{OutOfMemory} || InstructionError)!SerializeReturn {
     var size: u64 = @sizeOf(u64);
     for (accounts) |account| {
@@ -430,9 +440,13 @@ fn serializeParametersAligned(
                 );
                 const vm_data_addr = try serializer.writeAccount(&borrowed_account);
 
+                const rent_epoch: u64 = if (mask_out_rent_epoch_in_vm_serialization)
+                    std.math.maxInt(u64)
+                else
+                    borrowed_account.account.rent_epoch;
                 _ = serializer.write(
                     u64,
-                    std.mem.nativeToLittle(u64, borrowed_account.account.rent_epoch),
+                    std.mem.nativeToLittle(u64, rent_epoch),
                 );
 
                 account_metas.appendAssumeCapacity(.{
@@ -894,6 +908,7 @@ test "serializeParameters" {
                 allocator,
                 &ic,
                 copy_account_data,
+                false,
             );
             defer {
                 memory.deinit(allocator);
