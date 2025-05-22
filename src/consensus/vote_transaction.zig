@@ -115,9 +115,9 @@ pub const VoteTransaction = union(enum) {
         switch (self.*) {
             .vote => |self_vote| {
                 const other_vote = other.vote;
-                if (self_vote.timestamp != other_vote.timestamp) return false;
-                if (!self_vote.hash.eql(other_vote.hash)) return false;
-                return std.mem.eql(Slot, self_vote.slots, other_vote.slots);
+                return self_vote.timestamp == other_vote.timestamp and
+                    self_vote.hash.eql(other_vote.hash) and
+                    std.mem.eql(Slot, self_vote.slots, other_vote.slots);
             },
             inline //
             .vote_state_update,
@@ -125,12 +125,14 @@ pub const VoteTransaction = union(enum) {
             .tower_sync,
             => |self_pl, tag| {
                 const other_pl = @field(other, @tagName(tag));
-                if (self_pl.lockouts.items.len != other_pl.lockouts.items.len) return false;
-                if (self_pl.timestamp != other_pl.timestamp) return false;
-                if (!self_pl.hash.eql(other_pl.hash)) return false;
+                if (self_pl.lockouts.items.len != other_pl.lockouts.items.len or
+                    self_pl.timestamp != other_pl.timestamp or
+                    !self_pl.hash.eql(other_pl.hash) //
+                ) return false;
                 for (self_pl.lockouts.items, other_pl.lockouts.items) |self_lo, other_lo| {
-                    if (self_lo.slot != other_lo.slot) return false;
-                    if (self_lo.confirmation_count != other_lo.confirmation_count) return false;
+                    if (self_lo.slot != other_lo.slot or
+                        self_lo.confirmation_count != other_lo.confirmation_count //
+                    ) return false;
                 }
                 return true;
             },
