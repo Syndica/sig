@@ -286,7 +286,7 @@ pub fn intRangeLessThanRust(comptime T: type, random: std.Random, at_least: T, l
         const v_ul = random.int(UnsignedLarge);
         const tmp = std.math.mulWide(UnsignedLarge, v_ul, range_ul);
         const lo: UnsignedLarge = @truncate(tmp);
-        const hi: Unsigned = @truncate(tmp >> @typeInfo(UnsignedLarge).Int.bits);
+        const hi: Unsigned = @truncate(tmp >> @typeInfo(UnsignedLarge).int.bits);
         if (lo <= zone_ul) return at_least + @as(T, @intCast(hi));
     }
 }

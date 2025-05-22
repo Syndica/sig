@@ -585,7 +585,7 @@ pub const Instant = struct {
     inner: std.time.Instant,
 
     pub const UNIX_EPOCH = Instant{ .inner = .{
-        .timestamp = if (is_posix) .{ .tv_sec = 0, .tv_nsec = 0 } else 0,
+        .timestamp = if (is_posix) .{ .sec = 0, .nsec = 0 } else 0,
     } };
 
     const is_posix = switch (builtin.os.tag) {
@@ -607,10 +607,10 @@ pub const Instant = struct {
 
     pub fn plus(self: Instant, duration: Duration) Instant {
         if (is_posix) {
-            const new_ns = self.inner.timestamp.tv_nsec + @as(isize, @intCast(duration.ns));
+            const new_ns = self.inner.timestamp.nsec + @as(isize, @intCast(duration.ns));
             return .{ .inner = .{ .timestamp = .{
-                .tv_sec = self.inner.timestamp.tv_sec + @divFloor(new_ns, std.time.ns_per_s),
-                .tv_nsec = @mod(new_ns, std.time.ns_per_s),
+                .sec = self.inner.timestamp.sec + @divFloor(new_ns, std.time.ns_per_s),
+                .nsec = @mod(new_ns, std.time.ns_per_s),
             } } };
         } else {
             return .{ .inner = .{ .timestamp = self.inner.timestamp + duration.ns } };
@@ -620,7 +620,7 @@ pub const Instant = struct {
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         return try writer.print("{s}", .{std.fmt.fmtDuration(switch (@TypeOf(self.inner.timestamp)) {
             u64 => self.inner.timestamp,
-            std.posix.timespec => @intCast(self.inner.timestamp.tv_sec * 1_000_000_000 + self.inner.timestamp.tv_nsec),
+            std.posix.timespec => @intCast(self.inner.timestamp.sec * 1_000_000_000 + self.inner.timestamp.nsec),
             else => @compileError("Instant: unknown timestamp type"),
         })});
     }

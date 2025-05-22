@@ -171,7 +171,7 @@ pub const BatchAccountCache = struct {
                 if (account_key.equals(&sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
                     // this code is special, and requires constructing per-transaction accounts,
                     // which we will not perform in advance.
-                    @setCold(true);
+                    @branchHint(.unlikely);
                     continue;
                 }
 
@@ -414,7 +414,7 @@ pub const BatchAccountCache = struct {
         is_writable: bool,
     ) error{OutOfMemory}!LoadedTransactionAccount {
         if (key.equals(&runtime.ids.SYSVAR_INSTRUCTIONS_ID)) {
-            @setCold(true);
+            @branchHint(.unlikely);
             const account = try self.sysvar_instruction_account_datas.addOne(allocator);
             account.* = try constructInstructionsAccount(allocator, transaction);
             return .{
@@ -467,7 +467,7 @@ pub const BatchAccountCache = struct {
         const maybe_account: ?*AccountSharedData = if (key.equals(
             &runtime.ids.SYSVAR_INSTRUCTIONS_ID,
         )) account: {
-            @setCold(true);
+            @branchHint(.unlikely);
             const account = try self.sysvar_instruction_account_datas.addOne(allocator);
             account.* = try constructInstructionsAccount(allocator, transaction);
             break :account account;
@@ -500,16 +500,17 @@ fn collectRentFromAccount(
     rent_collector: *const RentCollector,
 ) CollectedInfo {
     if (!feature_set.active.contains(runtime.features.DISABLE_RENT_FEES_COLLECTION)) {
-        @setCold(true); // this feature should always be enabled?
+        @branchHint(.unlikely); // this feature should always be enabled?
         return rent_collector.collectFromExistingAccount(account_key, account);
     }
 
     if (account.rent_epoch != RENT_EXEMPT_RENT_EPOCH and
         rent_collector.getRentDue(
-        account.lamports,
-        account.data.len,
-        account.rent_epoch,
-    ) != .Exempt) {
+            account.lamports,
+            account.data.len,
+            account.rent_epoch,
+        ) != .Exempt)
+    {
         account.rent_epoch = RENT_EXEMPT_RENT_EPOCH;
     }
 
@@ -744,14 +745,13 @@ test "accumulated size" {
 
 test "load accounts rent paid" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(5083);
     var accountsdb = MockedAccountsDb{ .allocator = allocator };
     defer accountsdb.deinit();
     var env = newTestingEnv();
     env.compute_budget_limits.loaded_accounts_bytes = 2_000;
 
     const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
-
     const fee_payer_address = Pubkey.initRandom(prng.random());
     const instruction_address = Pubkey.initRandom(prng.random());
 
@@ -852,7 +852,7 @@ test "load accounts rent paid" {
 
 test "constructInstructionsAccount" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var data: [1024]u8 = undefined;
     prng.fill(&data);
@@ -954,7 +954,7 @@ test "load tx too large" {
     var env = newTestingEnv();
     env.compute_budget_limits.loaded_accounts_bytes = 1000;
 
-    var prng = std.rand.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
     const address = Pubkey.initRandom(random);
@@ -998,7 +998,7 @@ test "dont double count program owner account data size" {
     var accountsdb = MockedAccountsDb{ .allocator = allocator };
     defer accountsdb.deinit();
     const env = newTestingEnv();
-    var prng = std.rand.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
 
     const data1 = "data1"; // 5
@@ -1097,7 +1097,7 @@ test "dont double count program owner account data size" {
 
 test "load, create new account" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
     const new_account_pk = Pubkey.initRandom(random);
     var accountsdb = MockedAccountsDb{ .allocator = allocator };
@@ -1130,7 +1130,7 @@ test "load, create new account" {
 
 test "invalid program owner owner" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
     var accountsdb = MockedAccountsDb{ .allocator = allocator };
     defer accountsdb.deinit();
@@ -1187,7 +1187,7 @@ test "invalid program owner owner" {
 
 test "missing program owner account" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
     var accountsdb = MockedAccountsDb{ .allocator = allocator };
     defer accountsdb.deinit();
@@ -1236,7 +1236,7 @@ test "missing program owner account" {
 
 test "deallocate account" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(5083);
+    var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
     var accountsdb = MockedAccountsDb{ .allocator = allocator };
     defer accountsdb.deinit();

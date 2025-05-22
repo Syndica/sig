@@ -253,10 +253,8 @@ pub fn Channel(T: type) type {
                 // A bit confusing, but this checks if the current head *doesn't* have a next block linked.
                 // It's encoded as a bit in order to be able to tell without dereferencing it.
                 if (new_head & HAS_NEXT == 0) {
-                    // A rare usecase for fence :P, we need to create a barrier before anything else modifying
-                    // the index. This is just easier than creating an acquire-release pair.
-                    channel.tail.index.fence(.seq_cst);
-                    const tail = channel.tail.index.load(.monotonic);
+                    // NOTE: could also be tail.index.load(.acquire), but to be safe, seq_cst RMW load
+                    const tail = channel.tail.index.fetchAdd(0, .seq_cst);
 
                     // If the indicies are the same, the channel is empty and there's nothing to receive.
                     if (head >> SHIFT == tail >> SHIFT) {

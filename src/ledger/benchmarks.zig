@@ -155,7 +155,7 @@ pub const BenchmarkLedger = struct {
 
         var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, num_reads);
         defer indices.deinit();
-        for (num_reads) |_| {
+        for (0..num_reads) |_| {
             indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
         }
 
@@ -228,7 +228,7 @@ pub const BenchmarkLedger = struct {
 
         var indices = try std.ArrayList(u32).initCapacity(inserter.allocator, total_shreds);
         defer indices.deinit();
-        for (total_shreds) |_| {
+        for (0..total_shreds) |_| {
             indices.appendAssumeCapacity(rng.random().uintAtMost(u32, @intCast(total_shreds)));
         }
 
@@ -274,7 +274,7 @@ pub const BenchmarkLedger = struct {
         const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
         defer state.deinit();
         var writer = try state.writer();
-        var rng = std.rand.DefaultPrng.init(100);
+        var rng = std.Random.DefaultPrng.init(100);
 
         var signatures: std.ArrayList(Signature) = try std.ArrayList(Signature).initCapacity(state.allocator, 64);
         defer signatures.deinit();

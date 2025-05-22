@@ -112,7 +112,7 @@ pub fn BoundedString(comptime capacity: usize) type {
 inline fn maxArgs(comptime Args: type) Args {
     comptime {
         var max_args: Args = undefined;
-        for (@typeInfo(Args).Struct.fields) |field| {
+        for (@typeInfo(Args).@"struct".fields) |field| {
             if (field.is_comptime) continue;
             const ptr = &@field(max_args, field.name);
             ptr.* = maxArg(field.type);
@@ -123,20 +123,20 @@ inline fn maxArgs(comptime Args: type) Args {
 
 inline fn maxArg(comptime T: type) T {
     comptime switch (@typeInfo(T)) {
-        .ComptimeInt => @compileError("comptime_int field without default value has no max value"),
-        .Int => return std.math.maxInt(T),
-        .Struct => {
+        .comptime_int => @compileError("comptime_int field without default value has no max value"),
+        .int => return std.math.maxInt(T),
+        .@"struct" => {
             if (boundedStringMaxArg(T)) |max_value| return max_value;
         },
-        .Array => |array| if (array.child == u8) return .{255} ** array.len,
-        .Pointer => |pointer| switch (pointer.size) {
+        .array => |array| if (array.child == u8) return .{255} ** array.len,
+        .pointer => |pointer| switch (pointer.size) {
             .One => switch (@typeInfo(pointer.child)) {
-                .Array => |array| if (array.child == u8) {
-                    const Array = if (array.sentinel) |s_ptr|
-                        [array.len:sig.utils.types.comptimeZeroSizePtrCast(array.child, s_ptr)]u8
+                .array => |array| if (array.child == u8) {
+                    const arr = if (array.sentinel()) |sentinel|
+                        [array.len:sentinel]u8
                     else
                         [array.len]u8;
-                    const result: Array align(pointer.alignment) = .{255} ** array.len;
+                    const result: arr align(pointer.alignment) = .{255} ** arr.len;
                     return &result;
                 },
                 else => {},
@@ -152,15 +152,15 @@ inline fn boundedStringMaxArg(comptime T: type) ?T {
     comptime {
         const structure = switch (@typeInfo(T)) {
             else => return null,
-            .Struct => |info| info,
+            .@"struct" => |info| info,
         };
         if (structure.fields.len != 1) return null;
         if (!@hasField(T, "bounded")) return null;
         const Bounded = switch (@typeInfo(structure.fields[0].type)) {
             else => return null,
-            .Pointer => |info| switch (info.size) {
+            .pointer => |info| switch (info.size) {
                 else => return null,
-                .One => info.child,
+                .one => info.child,
             },
         };
         const ba_info = sig.utils.types.boundedArrayInfo(Bounded) orelse return null;

@@ -4,7 +4,6 @@ const network = @import("zig-network");
 const xev = @import("xev");
 const ssl = @import("ssl");
 const sig = @import("../sig.zig");
-const send_msg = @import("send_msg.zig");
 
 const Packet = sig.net.Packet;
 const Channel = sig.sync.Channel;
@@ -211,7 +210,7 @@ pub fn Client(
             peer_address: std.net.Address,
             _: xev.UDP,
             xev_read_buffer: xev.ReadBuffer,
-            xev_read_error: xev.UDP.ReadError!usize,
+            xev_read_error: xev.ReadError!usize,
         ) xev.CallbackAction {
             errdefer |err| std.debug.panic("onPacketsIn failed with: {s}", .{@errorName(err)});
             const bytes = try xev_read_error;
@@ -386,7 +385,7 @@ pub fn Client(
             fn onNewConn(
                 _: ?*anyopaque,
                 maybe_lsquic_connection: ?*lsquic.lsquic_conn_t,
-            ) callconv(.C) *lsquic.lsquic_conn_ctx_t {
+            ) callconv(.c) *lsquic.lsquic_conn_ctx_t {
                 const conn_ctx = lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?;
                 const self: *Connection = @alignCast(@ptrCast(conn_ctx));
 
@@ -397,7 +396,7 @@ pub fn Client(
                 return @ptrCast(self);
             }
 
-            fn onConnClosed(maybe_lsquic_connection: ?*lsquic.lsquic_conn_t) callconv(.C) void {
+            fn onConnClosed(maybe_lsquic_connection: ?*lsquic.lsquic_conn_t) callconv(.c) void {
                 const conn_ctx = lsquic.lsquic_conn_get_ctx(maybe_lsquic_connection).?;
                 const conn: *Connection = @alignCast(@ptrCast(conn_ctx));
 
@@ -420,7 +419,7 @@ pub fn Client(
             fn onNewStream(
                 _: ?*anyopaque,
                 maybe_lsquic_stream: ?*lsquic.lsquic_stream_t,
-            ) callconv(.C) *lsquic.lsquic_stream_ctx_t {
+            ) callconv(.c) *lsquic.lsquic_stream_ctx_t {
                 const lsquic_connection = lsquic.lsquic_stream_conn(maybe_lsquic_stream);
                 const conn_ctx = lsquic.lsquic_conn_get_ctx(lsquic_connection).?;
                 const connection: *Connection = @alignCast(@ptrCast(conn_ctx));
@@ -440,14 +439,14 @@ pub fn Client(
             fn onRead(
                 _: ?*lsquic.lsquic_stream_t,
                 _: ?*lsquic.lsquic_stream_ctx_t,
-            ) callconv(.C) void {
+            ) callconv(.c) void {
                 @panic("uni-directional streams should never receive data");
             }
 
             fn onWrite(
                 maybe_lsquic_stream: ?*lsquic.lsquic_stream_t,
                 maybe_stream: ?*lsquic.lsquic_stream_ctx_t,
-            ) callconv(.C) void {
+            ) callconv(.c) void {
                 const stream: *Stream = @alignCast(@ptrCast(maybe_stream.?));
 
                 if (stream.packet.size != lsquic.lsquic_stream_write(
@@ -466,7 +465,7 @@ pub fn Client(
             fn onClose(
                 _: ?*lsquic.lsquic_stream_t,
                 maybe_stream: ?*lsquic.lsquic_stream_ctx_t,
-            ) callconv(.C) void {
+            ) callconv(.c) void {
                 const stream: *Stream = @alignCast(@ptrCast(maybe_stream.?));
                 stream.connection.client.allocator.destroy(stream);
             }
@@ -477,7 +476,7 @@ pub fn Client(
 fn getSslContext(
     peer_ctx: ?*anyopaque,
     _: ?*const lsquic.struct_sockaddr,
-) callconv(.C) *lsquic.struct_ssl_ctx_st {
+) callconv(.c) *lsquic.struct_ssl_ctx_st {
     return @ptrCast(peer_ctx.?);
 }
 
@@ -581,8 +580,8 @@ fn packetsOut(
     ctx: ?*anyopaque,
     specs: ?[*]const lsquic.lsquic_out_spec,
     n_specs: u32,
-) callconv(.C) i32 {
-    var msg: send_msg.msghdr_const = undefined;
+) callconv(.c) i32 {
+    var msg: std.posix.msghdr_const = undefined;
     const socket: *network.Socket = @alignCast(@ptrCast(ctx.?));
 
     for (specs.?[0..n_specs]) |spec| {
@@ -593,7 +592,7 @@ fn packetsOut(
         msg.flags = 0;
         msg.control = null;
         msg.controllen = 0;
-        _ = send_msg.sendmsgPosix(socket.internal, &msg, 0) catch |err| {
+        _ = std.posix.sendmsg(socket.internal, &msg, 0) catch |err| {
             std.debug.panic("sendmsgPosix failed with: {s}", .{@errorName(err)});
         };
     }

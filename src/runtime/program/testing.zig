@@ -61,7 +61,7 @@ pub fn expectProgramExecuteResult(
     }
 
     // Create the initial transaction context
-    var initial_prng = std.rand.DefaultPrng.init(0);
+    var initial_prng = std.Random.DefaultPrng.init(0);
 
     var initial_tc = try createTransactionContext(
         allocator,
@@ -80,7 +80,7 @@ pub fn expectProgramExecuteResult(
     }
 
     // Create the expected transaction context
-    var expected_prng = std.rand.DefaultPrng.init(0);
+    var expected_prng = std.Random.DefaultPrng.init(0);
 
     const expected_tc = try createTransactionContext(
         allocator,

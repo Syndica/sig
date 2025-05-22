@@ -9,9 +9,9 @@ const MetricType = prometheus.metric.MetricType;
 
 pub fn GaugeCallFnType(comptime StateType: type, comptime Return: type) type {
     const CallFnArgType = switch (@typeInfo(StateType)) {
-        .Pointer => StateType,
-        .Optional => |opt| opt.child,
-        .Void => void,
+        .pointer => StateType,
+        .optional => |opt| opt.child,
+        .void => void,
         else => *StateType,
     };
 
@@ -39,10 +39,10 @@ pub fn GaugeFn(comptime StateType: type, comptime Return: type) type {
         pub fn get(self: *Self) Return {
             const TypeInfo = @typeInfo(StateType);
             switch (TypeInfo) {
-                .Pointer, .Void => {
+                .pointer, .void => {
                     return self.callFn(self.state);
                 },
-                .Optional => {
+                .optional => {
                     if (self.state) |state| {
                         return self.callFn(state);
                     }

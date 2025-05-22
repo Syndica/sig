@@ -87,8 +87,8 @@ const IoUringError = err: {
     const fns = &.{ IoUring.read, IoUring.submit_and_wait, IoUring.copy_cqes, IoUring.init };
     for (fns) |func| {
         Error = Error || @typeInfo(
-            @typeInfo(@TypeOf(func)).Fn.return_type.?,
-        ).ErrorUnion.error_set;
+            @typeInfo(@TypeOf(func)).@"fn".return_type.?,
+        ).error_union.error_set;
     }
 
     break :err Error;
@@ -106,7 +106,7 @@ const IoUringError = err: {
 /// A frame dies when its index is evicted from HierarchicalFifo (inside of
 /// evictUnusedFrame).
 pub const BufferPool = struct {
-    frames: []align(std.mem.page_size) Frame,
+    frames: []align(std.heap.page_size_min) Frame,
     frame_manager: FrameManager,
 
     pub const ReadBlockingError = FrameManager.GetError || std.posix.PReadError;
@@ -127,7 +127,7 @@ pub const BufferPool = struct {
         if (num_frames == 0 or num_frames == 1) return error.InvalidArgument;
 
         // Alignment of frames is good for read performance (and necessary if we want to use O_DIRECT.)
-        const frames = try allocator.alignedAlloc(Frame, std.mem.page_size, num_frames);
+        const frames = try allocator.alignedAlloc(Frame, std.heap.page_size_min, num_frames);
         errdefer allocator.free(frames);
 
         var frame_manager = try FrameManager.init(allocator, num_frames);
@@ -417,7 +417,6 @@ pub const FrameManager = struct {
         for (self.frame_ref_counts, 0..) |*frame_ref_count, i| {
             if (frame_ref_count.load(.seq_cst) > 0) {
                 std.debug.panicExtra(
-                    null,
                     @returnAddress(),
                     "BufferPool deinitialised with alive handle: {}\n",
                     .{i},
@@ -535,7 +534,7 @@ pub const FrameManager = struct {
 
     /// To be called on read failure. This should be extremely rare.
     fn getAllIndicesRollback(self: *FrameManager, frame_refs: []FrameRef) void {
-        @setCold(true);
+        @branchHint(.cold);
 
         // rollback rcs
         for (frame_refs) |f_ref| _ = self.frame_ref_counts[f_ref.index].fetchSub(1, .seq_cst);
@@ -1267,10 +1266,11 @@ test "BufferPool basic usage" {
 }
 
 test "BufferPool allocation sizes" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{
+    var gpa_state: std.heap.DebugAllocator(.{
         .enable_memory_limit = true,
-    }){};
-    const allocator = gpa.allocator();
+    }) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
 
     const frame_count = 2048; // 2048 frames = 1MiB cached
 
@@ -1281,7 +1281,7 @@ test "BufferPool allocation sizes" {
     // As of writing, all metadata (excluding eviction_lfu, including frame_map)
     // is 50 bytes or ~9% of memory usage at a frame size of 512, or 50MB for a
     // million frames.
-    try std.testing.expect((gpa.total_requested_bytes / frame_count) - FRAME_SIZE <= 80);
+    try std.testing.expect((gpa_state.total_requested_bytes / frame_count) - FRAME_SIZE <= 80);
 }
 
 test "BufferPool filesize > frame_size * num_frames" {
@@ -1345,9 +1345,7 @@ test "BufferPool random read" {
 
     var reads: usize = 0;
     while (reads < 5000) : (reads += 1) {
-        var gpa = std.heap.GeneralPurposeAllocator(.{
-            .safety = true,
-        }){};
+        var gpa: std.heap.DebugAllocator(.{}) = .init;
         defer _ = gpa.deinit();
 
         const range_start = prng.random().intRangeAtMost(u32, 0, file_size);

@@ -55,7 +55,7 @@ pub const TowerVoteState = struct {
     pub fn popExpiredVotes(self: *TowerVoteState, next_vote_slot: Slot) void {
         while (self.lastLockout()) |vote| {
             if (!vote.isLockedOutAtSlot(next_vote_slot)) {
-                _ = self.votes.popOrNull();
+                _ = self.votes.pop();
             } else {
                 break;
             }

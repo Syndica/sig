@@ -56,7 +56,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 .{
                     allocator,
                     owned_path,
-                    .{ .create_if_missing = true, .create_missing_column_families = true },
+                    rocks.DBOptions{ .create_if_missing = true, .create_missing_column_families = true },
                     column_family_descriptions,
                 },
             );

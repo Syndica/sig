@@ -169,7 +169,6 @@ files_excluded_from_line_length_check = [
     "src/net/net.zig",
     "src/prometheus/histogram.zig",
     "src/prometheus/metric.zig",
-    "src/prometheus/registry.zig",
     "src/rand/rand.zig",
     "src/rpc/client.zig",
     "src/rpc/request.zig",

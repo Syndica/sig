@@ -87,9 +87,9 @@ const MAX_ENCODING_LENGTH: u2 = 3;
 
 pub const DeserializeShortU16Error =
     VisitByteError || error{
-    ReaderError,
-    EndOfStream,
-};
+        ReaderError,
+        EndOfStream,
+    };
 
 pub fn deserializeShortU16(reader: anytype) DeserializeShortU16Error!struct { u16, u2 } {
     var current_value: u16 = 0;

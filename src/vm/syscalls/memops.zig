@@ -75,8 +75,8 @@ const MemoryChunkIterator = struct {
                     } else {
                         region_is_account = (account.original_data_len != 0 and
                             region.vm_addr_start == account_addr)
-                        // Unaligned programs don't have a resize area.
-                        or (self.resize_area and region.vm_addr_start == resize_addr);
+                            // Unaligned programs don't have a resize area.
+                            or (self.resize_area and region.vm_addr_start == resize_addr);
                         break;
                     }
                 } else {
@@ -86,8 +86,8 @@ const MemoryChunkIterator = struct {
                     } else {
                         region_is_account = (account.original_data_len != 0 and
                             region.vm_addr_start == account_addr)
-                        // Unaligned programs don't have a resize area.
-                        or (self.resize_area and region.vm_addr_start == resize_addr);
+                            // Unaligned programs don't have a resize area.
+                            or (self.resize_area and region.vm_addr_start == resize_addr);
                         break;
                     }
                 }
@@ -217,7 +217,7 @@ const MemmoveContext = struct {
     // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this symbol:
     // https://github.com/ziglang/zig/blob/79460d4a3eef8eb927b02a7eda8bc9999a766672/lib/compiler_rt/memmove.zig#L9-L22
     // TODO(0.15): Use `@memmove` builtin.
-    extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.C) ?[*]u8;
+    extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
 
     fn run(_: *@This(), src: []const u8, dst: []u8) !void {
         std.debug.assert(dst.len == src.len);

@@ -346,12 +346,11 @@ pub const Matrix = struct {
     }
 
     fn initUndefined(allocator: Allocator, rows: usize, cols: usize) Allocator.Error!Self {
-        const self = .{
+        return .{
             .row_count = rows,
             .col_count = cols,
             .data = try allocator.alloc(u8, rows * cols),
         };
-        return self;
     }
 
     pub fn subMatrix(
@@ -587,7 +586,7 @@ test "ReedSolomon.reconstruct basic 0-11 sequence with any missing combination" 
         .{ 16, 17, 18, 19 },
     };
     for (0..5) |i| for (0..5) |j| {
-        var data = ArrayList(?[]u8).init(allocator);
+        var data = ArrayList(?[]const u8).init(allocator);
         defer data.deinit();
         defer for (data.items) |md| if (md) |d| allocator.free(d);
         for (0..5) |s| {
@@ -645,7 +644,7 @@ test "ReedSolomon.reconstruct lorem ipsum with any missing combination" {
         },
     };
     for (0..num_shards) |i| for (0..num_shards) |j| for (0..num_shards) |k| for (0..num_shards) |l| {
-        var data = ArrayList(?[]u8).init(allocator);
+        var data = ArrayList(?[]const u8).init(allocator);
         defer data.deinit();
         defer for (data.items) |md| if (md) |d| allocator.free(d);
         for (0..num_shards) |s| {

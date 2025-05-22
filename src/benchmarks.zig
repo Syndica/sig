@@ -375,8 +375,8 @@ pub fn benchmark(
 
     const functions = comptime blk: {
         var res: []const Decl = &[_]Decl{};
-        for (@typeInfo(B).Struct.decls) |decl| {
-            if (@typeInfo(@TypeOf(@field(B, decl.name))) != .Fn)
+        for (@typeInfo(B).@"struct".decls) |decl| {
+            if (@typeInfo(@TypeOf(@field(B, decl.name))) != .@"fn")
                 continue;
             res = res ++ [_]Decl{decl};
         }
@@ -436,7 +436,7 @@ pub fn benchmark(
                 // NOTE: to know if we should pass in the time unit we
                 // check the input params of the function, so any multi-return
                 // function NEEDS to have the time unit as the first parameter
-                const info = @typeInfo(@TypeOf(benchFunction)).Fn;
+                const info = @typeInfo(@TypeOf(benchFunction)).@"fn";
                 const has_time_unit = info.params.len > 0 and info.params[0].type.? == BenchTimeUnit;
                 const time_arg = if (has_time_unit) .{time_unit} else .{};
                 const other_arg = if (@TypeOf(arg) != void) .{arg} else .{};
@@ -466,7 +466,7 @@ pub fn benchmark(
             var sum: u64 = 0;
 
             // NOTE: these are set to valid values on first iteration
-            const runtime_info = @typeInfo(RuntimeType).Struct;
+            const runtime_info = @typeInfo(RuntimeType).@"struct";
             var sum_s: RuntimeType = undefined;
             var min_s: RuntimeType = undefined;
             var max_s: RuntimeType = undefined;
@@ -601,7 +601,7 @@ pub fn benchmark(
                         const f_sum = @field(sum_s, field.name);
                         const T = @TypeOf(f_sum);
                         const n_iters = switch (@typeInfo(T)) {
-                            .Float => @as(T, @floatFromInt(iter_count)),
+                            .float => @as(T, @floatFromInt(iter_count)),
                             else => iter_count,
                         };
                         const f_mean = f_sum / n_iters;
@@ -611,7 +611,7 @@ pub fn benchmark(
                         for (runtimes.items(x)) |f_runtime| {
                             const d = if (f_runtime > f_mean) f_runtime - f_mean else f_mean - f_runtime;
                             switch (@typeInfo(T)) {
-                                .Float => f_variance = d * d,
+                                .float => f_variance = d * d,
                                 else => f_variance +|= d *| d,
                             }
                         }
@@ -633,7 +633,7 @@ pub fn benchmark(
                             const value = switch (@typeInfo(T)) {
                                 // in the float case we retain the last two decimal points by
                                 // multiplying by 100 and converting to an integer
-                                .Float => @as(u64, @intFromFloat(f_max * 100)),
+                                .float => @as(u64, @intFromFloat(f_max * 100)),
                                 else => f_max,
                             };
                             const metric = Metric{
@@ -676,7 +676,7 @@ pub fn benchmark(
                 // NOTE: to know if we should pass in the time unit we
                 // check the input params of the function, so any multi-return
                 // function NEEDS to have the time unit as the first parameter
-                const info = @typeInfo(@TypeOf(benchFunction)).Fn;
+                const info = @typeInfo(@TypeOf(benchFunction)).@"fn";
                 const has_time_unit = info.params.len > 0 and info.params[0].type.? == BenchTimeUnit;
                 const time_arg = if (has_time_unit) .{time_unit} else .{};
                 const other_arg = if (@TypeOf(args[0]) != void) .{args[0]} else .{};
@@ -695,7 +695,7 @@ pub fn benchmark(
                     },
                 }
             };
-            const runtime_info = @typeInfo(RuntimeType).Struct;
+            const runtime_info = @typeInfo(RuntimeType).@"struct";
 
             // organize the data into a table:
             // field_name,              field_name2

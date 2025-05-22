@@ -27,9 +27,9 @@ pub const FuzzFilter = enum {
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
 
     var std_logger = try ChannelPrintLogger.init(.{
         .allocator = std.heap.c_allocator,
@@ -47,8 +47,8 @@ pub fn main() !void {
 
     logger.info().logf("metrics port: {d}", .{metrics_port});
     const metrics_thread = try std.Thread
-    // TODO: use the GPA here, the server is just leaking because we're losing the handle
-    // to it and never deiniting.
+        // TODO: use the GPA here, the server is just leaking because we're losing the handle
+        // to it and never deiniting.
         .spawn(.{}, servePrometheus, .{ std.heap.c_allocator, globalRegistry(), 12355 });
     metrics_thread.detach();
 

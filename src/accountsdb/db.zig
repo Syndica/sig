@@ -2612,7 +2612,7 @@ pub fn writeSnapshotTarWithFields(
         try snapgen.writeAccountFileHeader(archive_writer_counted, file_slot, file_info);
 
         try account_file.file.seekTo(0);
-        var fifo = std.fifo.LinearFifo(u8, .{ .Static = std.mem.page_size }).init();
+        var fifo = std.fifo.LinearFifo(u8, .{ .Static = std.heap.page_size_min }).init();
         try fifo.pump(account_file.file.reader(), archive_writer_counted);
 
         try snapgen.writeAccountFilePadding(archive_writer_counted, account_file.file_size);
@@ -2958,7 +2958,7 @@ test "write and read an account" {
     defer accounts_db.deinit();
     defer full_inc_manifest.deinit(allocator);
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const pubkey = Pubkey.initRandom(prng.random());
     var data = [_]u8{ 1, 2, 3 };
     const test_account = Account{
@@ -3125,7 +3125,7 @@ test "load clock sysvar" {
 }
 
 test "load other sysvars" {
-    var gpa_state: std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 64 }) = .{};
+    var gpa_state: std.heap.DebugAllocator(.{ .stack_trace_frames = 64 }) = .init;
     defer _ = gpa_state.deinit();
     const allocator = gpa_state.allocator();
 
@@ -3180,7 +3180,7 @@ test "generate snapshot & update gossip snapshot hashes" {
         .data_allocator = allocator,
     });
     defer push_msg_queue_mux.private.v.queue.deinit();
-    const my_keypair = try KeyPair.create(null);
+    const my_keypair = KeyPair.generate();
 
     var accounts_db = try AccountsDB.init(.{
         .allocator = allocator,
@@ -3696,7 +3696,7 @@ pub const BenchmarkAccountsDB = struct {
                                 @sizeOf(u64),
                             );
                         }
-                        const aligned_size = std.mem.alignForward(usize, size, std.mem.page_size);
+                        const aligned_size = std.mem.alignForward(usize, size, std.heap.page_size_min);
 
                         const filepath_bounded = sig.utils.fmt.boundedFmt("slot{d}.bin", .{s});
                         const filepath = filepath_bounded.constSlice();

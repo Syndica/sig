@@ -22,7 +22,7 @@ pub const Counter = struct {
 
     pub fn add(self: *Self, value: anytype) void {
         switch (@typeInfo(@TypeOf(value))) {
-            .Int, .Float, .ComptimeInt, .ComptimeFloat => {},
+            .int, .float, .comptime_int, .comptime_float => {},
             else => @compileError("can't add a non-number"),
         }
 

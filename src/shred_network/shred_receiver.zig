@@ -186,7 +186,7 @@ test "handlePing" {
 
     const shred_metrics = try metrics_registry.initStruct(ShredReceiverMetrics);
 
-    const my_keypair = try sig.identity.KeyPair.create(.{1} ** 32);
+    const my_keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
     const ping = try Ping.init(.{1} ** 32, &my_keypair);
     const pong = try Pong.init(&ping, &my_keypair);
 
@@ -203,7 +203,7 @@ test "handlePing" {
 
     try std.testing.expectEqual(expected_pong_packet, actual_pong_packet);
 
-    const evil_keypair = try sig.identity.KeyPair.create(.{64} ** 32);
+    const evil_keypair = try sig.identity.KeyPair.generateDeterministic(.{64} ** 32);
     var evil_ping = ping;
     evil_ping.from = sig.core.Pubkey.fromPublicKey(&evil_keypair.public_key);
     const evil_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = evil_ping });

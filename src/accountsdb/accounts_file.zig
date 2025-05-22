@@ -10,6 +10,7 @@ const Epoch = sig.core.time.Epoch;
 const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.time.Slot;
+const bincode = sig.bincode;
 
 const writeIntLittleMem = sig.core.account.writeIntLittleMem;
 
@@ -21,7 +22,7 @@ pub const FileId = enum(Int) {
 
     pub const Int = u32;
 
-    pub const BincodeConfig = .{
+    pub const BincodeConfig: bincode.FieldConfig(FileId) = .{
         .serializer = serialize,
         .deserializer = deserialize,
     };
@@ -185,11 +186,11 @@ pub const AccountInFile = struct {
         }
 
         const valid_lamports = self.account_info.lamports != 0 or (
-        // ie, is default account
+            // ie, is default account
             self.data.len() == 0 and
-            self.owner().isZeroed() and
-            self.executable().* == false and
-            self.rent_epoch().* == 0);
+                self.owner().isZeroed() and
+                self.executable().* == false and
+                self.rent_epoch().* == 0);
         if (!valid_lamports) {
             return error.InvalidLamports;
         }
@@ -227,10 +228,6 @@ pub const AccountInFile = struct {
 
     pub inline fn rent_epoch(self: *const Self) *const Epoch {
         return &self.account_info.rent_epoch;
-    }
-
-    pub inline fn hash(self: *const Self) *const Hash {
-        return &self.hash;
     }
 
     pub fn writeToBuf(self: *const Self, buf: []u8) usize {
