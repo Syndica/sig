@@ -3,7 +3,7 @@ const sig = @import("../../../sig.zig");
 
 const nonce = sig.runtime.nonce;
 const pubkey_utils = sig.runtime.pubkey_utils;
-const system_program = sig.runtime.program.system_program;
+const system_program = sig.runtime.program.system;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;

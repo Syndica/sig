@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const vote_program = sig.runtime.program.vote_program;
+const vote_program = sig.runtime.program.vote;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const vote_instruction = vote_program.vote_instruction;
 
@@ -1428,7 +1428,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const PriorVote = sig.runtime.program.vote_program.state.PriorVote;
+    const PriorVote = sig.runtime.program.vote.state.PriorVote;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -2944,7 +2944,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 }
 
 test "vote_program: widthdraw all and close account with active vote account" {
-    const EpochCredit = sig.runtime.program.vote_program.state.EpochCredit;
+    const EpochCredit = sig.runtime.program.vote.state.EpochCredit;
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
     // TODO use constant in other tests.

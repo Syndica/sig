@@ -14,7 +14,7 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 
 const Region = vm.memory.Region;
 
-const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system_program.MAX_PERMITTED_DATA_LENGTH;
+const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
 
 const INPUT_START = sig.vm.memory.INPUT_START;
 
@@ -203,7 +203,7 @@ pub fn serializeParameters(
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
-        break :blk program_account.account.owner.equals(&program.bpf_loader_program.v1.ID);
+        break :blk program_account.account.owner.equals(&program.bpf_loader.v1.ID);
     };
 
     var accounts = std.ArrayList(SerializedAccount).initCapacity(
@@ -493,7 +493,7 @@ pub fn deserializeParameters(
     const is_loader_v1 = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
-        break :blk program_account.account.owner.equals(&program.bpf_loader_program.v1.ID);
+        break :blk program_account.account.owner.equals(&program.bpf_loader.v1.ID);
     };
 
     var account_lengths =
@@ -736,9 +736,9 @@ test "serializeParameters" {
     var prng = std.rand.DefaultPrng.init(0);
 
     for ([_]Pubkey{
-        program.bpf_loader_program.v1.ID,
-        program.bpf_loader_program.v2.ID,
-        program.bpf_loader_program.v3.ID,
+        program.bpf_loader.v1.ID,
+        program.bpf_loader.v2.ID,
+        program.bpf_loader.v3.ID,
     }) |loader_id| {
         for ([_]bool{
             false,

@@ -3,8 +3,8 @@ const builtin = @import("builtin");
 const sig = @import("../../sig.zig");
 
 const ids = sig.runtime.ids;
-const bpf_loader_program = sig.runtime.program.bpf_loader_program;
-const system_program = sig.runtime.program.system_program;
+const bpf_loader_program = sig.runtime.program.bpf_loader;
+const system_program = sig.runtime.program.system;
 const features = sig.runtime.features;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
@@ -21,7 +21,7 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
-const PRECOMPILES = sig.runtime.program.precompile_programs.PRECOMPILES;
+const PRECOMPILES = sig.runtime.program.precompiles.PRECOMPILES;
 
 const SyscallError = sig.vm.syscalls.Error;
 const RegisterMap = sig.vm.interpreter.RegisterMap;

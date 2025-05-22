@@ -28,6 +28,12 @@ pub const FeatureSet = struct {
             return slot >= activated_slot;
         return false;
     }
+
+    pub fn allEnabled(allocator: std.mem.Allocator) !FeatureSet {
+        var feature_set = FeatureSet.EMPTY;
+        for (FEATURES) |feature| try feature_set.active.put(allocator, feature, 0);
+        return feature_set;
+    }
 };
 
 pub const DEPRECATE_REWARDS_SYSVAR =
