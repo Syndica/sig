@@ -202,7 +202,11 @@ pub const ThreadPool = struct {
             batch: Batch = .{},
             allocator: std.mem.Allocator,
 
-            pub fn init(allocator: std.mem.Allocator, thread_pool: *ThreadPool, count: usize) !Runner {
+            pub fn init(
+                allocator: std.mem.Allocator,
+                thread_pool: *ThreadPool,
+                count: usize,
+            ) !Runner {
                 return Runner{
                     .allocator = allocator,
                     .thread_pool = thread_pool,
@@ -458,7 +462,8 @@ pub const ThreadPool = struct {
 
                 // We signaled to spawn a new thread
                 if (can_wake and sync.spawned < self.max_threads) {
-                    const thread = std.Thread.spawn(.{}, Thread.run, .{self}) catch return self.unregister(null);
+                    const thread = std.Thread.spawn(.{}, Thread.run, .{self}) catch
+                        return self.unregister(null);
                     // if (self.name.len > 0) thread.setName(self.name) catch {};
                     return thread.detach();
                 }
@@ -907,7 +912,8 @@ pub const ThreadPool = struct {
                     if (stack & IS_CONSUMING != 0)
                         return error.Contended; // The queue already has a consumer.
                     if (stack & (HAS_CACHE | PTR_MASK) == 0)
-                        return error.Empty; // The queue is empty when there's nothing cached and nothing in the stack.
+                        // The queue is empty when there's nothing cached and nothing in the stack.
+                        return error.Empty;
 
                     // When we acquire the consumer, also consume the pushed stack if the cache is empty.
                     var new_stack = stack | HAS_CACHE | IS_CONSUMING;
@@ -973,7 +979,8 @@ pub const ThreadPool = struct {
             array: [capacity]Atomic(*Node) = undefined,
 
             const Index = u32;
-            const capacity = 256; // Appears to be a pretty good trade-off in space vs contended throughput
+            // Appears to be a pretty good trade-off in space vs contended throughput
+            const capacity = 256;
             comptime {
                 assert(std.math.maxInt(Index) >= capacity);
                 assert(std.math.isPowerOfTwo(capacity));
@@ -1041,7 +1048,8 @@ pub const ThreadPool = struct {
 
             fn pop(self: *Buffer) ?*Node {
                 var head = self.head.load(.monotonic);
-                const tail = self.tail.load(.acquire); // we're the only thread that can change this
+                // we're the only thread that can change this
+                const tail = self.tail.load(.acquire);
 
                 while (true) {
                     // Quick sanity check and return null when not empty
@@ -1072,7 +1080,8 @@ pub const ThreadPool = struct {
                 defer queue.releaseConsumer(consumer);
 
                 const head = self.head.load(.monotonic);
-                const tail = self.tail.load(.acquire); // we're the only thread that can change this
+                // we're the only thread that can change this
+                const tail = self.tail.load(.acquire);
 
                 const size = tail -% head;
                 assert(size <= capacity);
@@ -1105,7 +1114,8 @@ pub const ThreadPool = struct {
 
             fn steal(noalias self: *Buffer, noalias buffer: *Buffer) ?Stole {
                 const head = self.head.load(.monotonic);
-                const tail = self.tail.load(.acquire); // we're the only thread that can change this
+                // we're the only thread that can change this
+                const tail = self.tail.load(.acquire);
 
                 const size = tail -% head;
                 assert(size <= capacity);
