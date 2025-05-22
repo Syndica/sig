@@ -21,8 +21,11 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
-const SyscallError = sig.vm.syscalls.Error;
 const PRECOMPILES = sig.runtime.program.precompile_programs.PRECOMPILES;
+
+const SyscallError = sig.vm.syscalls.Error;
+const RegisterMap = sig.vm.interpreter.RegisterMap;
+const Error = sig.vm.ExecutionError;
 
 const VmSlice = memory.VmSlice;
 const MemoryMap = memory.MemoryMap;
@@ -150,14 +153,14 @@ fn VmValue(comptime T: type) type {
             memory_map: *const MemoryMap,
             check_aligned: bool,
         },
-        translated: *T,
+        translated_addr: usize,
 
         pub fn get(self: Self, comptime state: memory.MemoryState) !(switch (state) {
             .constant => *align(1) const T,
             .mutable => *align(1) T,
         }) {
             switch (self) {
-                .translated => |ptr| return ptr,
+                .translated_addr => |ptr| return @ptrFromInt(ptr),
                 .vm_address => |vma| {
                     return vma.memory_map.translateType(T, state, vma.vm_addr, vma.check_aligned);
                 },
@@ -174,7 +177,8 @@ fn checkAccountInfoPtr(
     field: []const u8,
 ) !void {
     if (vm_addr != expected_vm_addr) {
-        try ic.tc.log("Invalid account info pointer `{s}`: {x} != {x}", .{
+        // Intentional ' instead of ` to match logs.
+        try ic.tc.log("Invalid account info pointer `{s}': 0x{x} != 0x{x}", .{
             field,
             vm_addr,
             expected_vm_addr,
@@ -323,12 +327,11 @@ const CallerAccount = struct {
                     .check_aligned = ic.getCheckAligned(),
                 } };
             } else r2l: {
-                const translated: *u64 = @ptrFromInt(try memory_map.translate(
+                break :r2l VmValue(u64){ .translated_addr = try memory_map.translate(
                     .constant,
                     data_ptr +| @sizeOf(u64),
-                    8,
-                ));
-                break :r2l VmValue(u64){ .translated = translated };
+                    @sizeOf(u64),
+                ) };
             };
 
             const vm_data_addr = data.ptr;
@@ -453,11 +456,11 @@ const CallerAccount = struct {
                 .check_aligned = ic.getCheckAligned(),
             } }
         else
-            VmValue(u64){ .translated = @ptrFromInt(try memory_map.translate(
+            VmValue(u64){ .translated_addr = try memory_map.translate(
                 .mutable,
                 data_len_vm_addr,
                 @sizeOf(u64),
-            )) };
+            ) };
 
         return .{
             .lamports = lamports,
@@ -590,7 +593,7 @@ fn translateAccounts(
     // this pointer to a specific address but we don't want it to be inside accounts, or
     // callees might be able to write to the pointed memory.
     if (direct_mapping and
-        (account_infos_addr +| (account_infos_len *| @sizeOf(u64))) >= MM_INPUT_START)
+        (account_infos_addr +| (account_infos_len *| @sizeOf(AccountInfoType))) >= MM_INPUT_START)
     {
         return SyscallError.InvalidPointer;
     }
@@ -623,6 +626,20 @@ fn translateAccounts(
         }
     }
 
+    // translate keys upfront before inner loop below.
+    var account_info_keys: std.BoundedArray(
+        *align(1) const Pubkey,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ) = .{};
+    for (account_infos) |account_info| {
+        account_info_keys.appendAssumeCapacity(try memory_map.translateType(
+            Pubkey,
+            .constant,
+            account_info.key_addr,
+            ic.getCheckAligned(),
+        ));
+    }
+
     // translate_and_update_accounts():
 
     var accounts: TranslatedAccounts = .{};
@@ -636,6 +653,13 @@ fn translateAccounts(
 
         var callee_account = try ic.borrowInstructionAccount(meta.index_in_caller);
         defer callee_account.release();
+
+        const account_key = blk: {
+            const account_meta = ic.ixn_info.getAccountMetaAtIndex(
+                meta.index_in_transaction,
+            ) orelse return InstructionError.NotEnoughAccountKeys;
+            break :blk account_meta.pubkey;
+        };
 
         if (callee_account.account.executable) {
             // Use the known account
@@ -652,22 +676,16 @@ fn translateAccounts(
             continue;
         }
 
-        const account_key = ic.getAccountKeyByIndexUnchecked(meta.index_in_caller);
-        const caller_account_index = for (account_infos, 0..) |info, idx| {
-            const info_key = try memory_map.translateType(
-                Pubkey,
-                .constant,
-                info.key_addr,
-                ic.getCheckAligned(),
-            );
-            if (info_key.equals(&account_key)) break idx;
+        const caller_account_index = for (account_info_keys.constSlice(), 0..) |key, idx| {
+            if (key.equals(&account_key)) break idx;
         } else {
             try ic.tc.log("Instruction references an unknown account {}", .{account_key});
             return InstructionError.MissingAccount;
         };
 
-        const serialized_metadata = if (meta.index_in_caller < ic.ixn_info.account_metas.len) blk: {
-            break :blk &ic.tc.serialized_accounts.slice()[meta.index_in_caller];
+        const serialized_account_metas = ic.tc.serialized_accounts.slice();
+        const serialized_metadata = if (meta.index_in_caller < serialized_account_metas.len) blk: {
+            break :blk &serialized_account_metas[meta.index_in_caller];
         } else {
             try ic.tc.log("Internal error: index mismatch for account {}", .{account_key});
             return InstructionError.MissingAccount;
@@ -872,7 +890,7 @@ fn translateSigners(
         );
 
         if (untranslated_seeds.len > MAX_SIGNERS) {
-            return SyscallError.TooManySigners;
+            return SyscallError.MaxSeedLengthExceeded;
         }
 
         var seeds: std.BoundedArray([]const u8, MAX_SIGNERS) = .{};
@@ -886,11 +904,12 @@ fn translateSigners(
             ));
         }
 
-        signers.appendAssumeCapacity(pubkey_utils.createProgramAddress(
+        const key = pubkey_utils.createProgramAddress(
             seeds.slice(),
             &.{}, // no bump seeds AFAIK
             program_id,
-        ) catch return SyscallError.BadSeeds);
+        ) catch return SyscallError.BadSeeds;
+        signers.appendAssumeCapacity(key);
     }
 
     return signers;
@@ -1179,7 +1198,7 @@ fn updateCallerAccount(
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1054
-pub fn cpiCommon(
+fn cpiCommon(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     memory_map: *MemoryMap,
@@ -1189,7 +1208,7 @@ pub fn cpiCommon(
     account_infos_len: u64,
     signers_seeds_addr: u64,
     signers_seeds_len: u64,
-) !void {
+) Error!void {
     try ic.tc.consumeCompute(ic.tc.compute_budget.invoke_units);
 
     // TODO: timings
@@ -1331,6 +1350,53 @@ pub fn cpiCommon(
     }
 }
 
+fn invokeSigned(
+    comptime AccountInfoType: type,
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    const instruction_addr = registers.get(.r1);
+    const account_infos_addr = registers.get(.r2);
+    const account_infos_len = registers.get(.r3);
+    const signers_seeds_addr = registers.get(.r4);
+    const signers_seeds_len = registers.get(.r5);
+
+    const caller_ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+
+    return cpiCommon(
+        tc.allocator,
+        caller_ic,
+        memory_map,
+        AccountInfoType,
+        instruction_addr,
+        account_infos_addr,
+        account_infos_len,
+        signers_seeds_addr,
+        signers_seeds_len,
+    );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L608-L630
+pub fn invokeSignedC(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    return invokeSigned(AccountInfoC, tc, memory_map, registers);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/cpi.rs#L399-L421
+pub fn invokeSignedRust(
+    tc: *TransactionContext,
+    memory_map: *MemoryMap,
+    registers: *RegisterMap,
+) Error!void {
+    return invokeSigned(AccountInfoRust, tc, memory_map, registers);
+}
+
+// CPI Tests
+
 const testing = sig.runtime.testing;
 
 const TestContext = struct {
@@ -1343,7 +1409,6 @@ const TestContext = struct {
         const tc = try allocator.create(TransactionContext);
         errdefer allocator.destroy(tc);
 
-        const program_id = Pubkey.initRandom(prng);
         const account_key = Pubkey.initRandom(prng);
 
         tc.* = try testing.createTransactionContext(allocator, prng, .{
@@ -1351,35 +1416,32 @@ const TestContext = struct {
                 .{
                     .pubkey = account_key,
                     .data = account_data,
-                    .owner = program_id,
+                    .owner = system_program.ID,
                     .lamports = prng.uintAtMost(u64, 1000),
                 },
                 .{
-                    .pubkey = program_id,
+                    .pubkey = system_program.ID,
                     .owner = ids.NATIVE_LOADER_ID,
+                    .executable = true,
                 },
             },
+            .compute_meter = std.math.maxInt(u64),
         });
         errdefer testing.deinitTransactionContext(allocator, tc.*);
 
-        const ic = InstructionContext{
-            .depth = 0,
-            .tc = tc,
-            .ixn_info = try testing.createInstructionInfo(
-                tc,
-                program_id,
-                system_program.Instruction{ .assign = .{ .owner = account_key } }, // whatever.
-                &.{
-                    .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                    .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
-                },
-            ),
-        };
-        errdefer ic.deinit(allocator);
+        try sig.runtime.executor.pushInstruction(tc, try testing.createInstructionInfo(
+            tc,
+            system_program.ID,
+            "", // empty instruction data.
+            &.{
+                .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+                .{ .is_signer = true, .is_writable = false, .index_in_transaction = 1 },
+            },
+        ));
 
         return .{
             .tc = tc,
-            .ic = ic,
+            .ic = (try tc.getCurrentInstructionContext()).*,
         };
     }
 
@@ -1420,12 +1482,13 @@ const TestAccount = struct {
     executable: bool,
 
     // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
-    fn intoAccountInfoRust(
+    fn intoAccountInfo(
         self: *const TestAccount,
         allocator: std.mem.Allocator,
+        comptime AccountInfoType: type,
         vm_addr: u64,
     ) !struct { []u8, SerializedAccountMetadata } {
-        const size = @sizeOf(AccountInfoRust) +
+        const size = @sizeOf(AccountInfoType) +
             @sizeOf(Pubkey) * 2 +
             @sizeOf(RcBox(RefCell(*u64))) +
             @sizeOf(u64) +
@@ -1435,7 +1498,7 @@ const TestAccount = struct {
         const buffer = try allocator.alloc(u8, size);
         errdefer allocator.free(buffer);
 
-        const key_addr = vm_addr + @sizeOf(AccountInfoRust);
+        const key_addr = vm_addr + @sizeOf(AccountInfoType);
         const lamports_cell_addr = key_addr + @sizeOf(Pubkey);
         const lamports_addr = lamports_cell_addr + @sizeOf(RcBox(RefCell(*u64)));
         const owner_addr = lamports_addr + @sizeOf(u64);
@@ -1443,20 +1506,34 @@ const TestAccount = struct {
         const data_addr = data_cell_addr + @sizeOf(RcBox(RefCell([]u8)));
         const data_len = self.data.len;
 
-        buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
-            .key_addr = key_addr,
-            .is_signer = @intFromBool(self.is_signer),
-            .is_writable = @intFromBool(self.is_writable),
-            .lamports_addr = Rc(RefCell(u64)).fromRaw(
-                @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
-            ),
-            .data = Rc(RefCell([]u8)).fromRaw(
-                @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
-            ),
-            .owner_addr = owner_addr,
-            .executable = @intFromBool(self.executable),
-            .rent_epoch = self.rent_epoch,
-        });
+        switch (AccountInfoType) {
+            AccountInfoRust => buffer[0..@sizeOf(AccountInfoRust)].* = @bitCast(AccountInfoRust{
+                .key_addr = key_addr,
+                .is_signer = @intFromBool(self.is_signer),
+                .is_writable = @intFromBool(self.is_writable),
+                .lamports_addr = Rc(RefCell(u64)).fromRaw(
+                    @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
+                ),
+                .data = Rc(RefCell([]u8)).fromRaw(
+                    @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
+                ),
+                .owner_addr = owner_addr,
+                .executable = @intFromBool(self.executable),
+                .rent_epoch = self.rent_epoch,
+            }),
+            AccountInfoC => buffer[0..@sizeOf(AccountInfoC)].* = @bitCast(AccountInfoC{
+                .key_addr = key_addr,
+                .is_signer = @intFromBool(self.is_signer),
+                .is_writable = @intFromBool(self.is_writable),
+                .lamports_addr = lamports_addr,
+                .data_addr = data_addr,
+                .data_len = data_len,
+                .owner_addr = owner_addr,
+                .executable = @intFromBool(self.executable),
+                .rent_epoch = self.rent_epoch,
+            }),
+            else => @compileError("invalid AccountInfo type"),
+        }
 
         buffer[key_addr - vm_addr ..][0..@sizeOf(Pubkey)].* = @bitCast(self.key);
         buffer[lamports_cell_addr - vm_addr ..][0..@sizeOf(RcBox(RefCell(*u64)))].* = @bitCast(
@@ -1481,7 +1558,7 @@ const TestAccount = struct {
     }
 };
 
-test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
+test "CallerAccount.fromAccountInfoRust" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1491,7 +1568,8 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
     const account = ctx.getAccount();
     const vm_addr = MM_INPUT_START;
 
-    const buffer, const serialized_metadata = try account.intoAccountInfoRust(allocator, vm_addr);
+    const buffer, const serialized_metadata =
+        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -1534,7 +1612,7 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoRust" {
     );
 }
 
-test "vm.syscalls.cpi: CallerAccount.fromAccountInfoC" {
+test "CallerAccount.fromAccountInfoC" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1620,7 +1698,7 @@ test "vm.syscalls.cpi: CallerAccount.fromAccountInfoC" {
     );
 }
 
-test "vm.syscalls.cpi: translateAccounts" {
+test "translateAccounts" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1630,7 +1708,8 @@ test "vm.syscalls.cpi: translateAccounts" {
     const account = ctx.getAccount();
     const vm_addr = MM_INPUT_START;
 
-    const buffer, const serialized_metadata = try account.intoAccountInfoRust(allocator, vm_addr);
+    const buffer, const serialized_metadata =
+        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr);
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -1685,26 +1764,19 @@ test "vm.syscalls.cpi: translateAccounts" {
     try std.testing.expectEqual(caller_account.original_data_len, account.data.len);
 }
 
-fn testTranslateInstruction(comptime AccountInfoType: type) !void {
+fn intoStableInstruction(
+    allocator: std.mem.Allocator,
+    comptime AccountInfoType: type,
+    vm_addr: u64,
+    data: []const u8,
+    program_id: Pubkey,
+    accounts: []const InstructionAccount,
+) ![]u8 {
     const InstructionType, const AccountMetaType = switch (AccountInfoType) {
         AccountInfoRust => .{ StableInstructionRust, AccountMetaRust },
         AccountInfoC => .{ StableInstructionC, AccountMetaC },
         else => @compileError("invalid AccountInfo type"),
     };
-
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(5083);
-
-    var ctx = try TestContext.init(allocator, prng.random(), "foo");
-    defer ctx.deinit(allocator);
-
-    const data = "ins data";
-    const program_id = Pubkey.initRandom(prng.random());
-    const accounts = [_]InstructionAccount{.{
-        .pubkey = Pubkey.initRandom(prng.random()),
-        .is_signer = true,
-        .is_writable = false,
-    }};
 
     const accounts_len = @sizeOf(AccountMetaType) * accounts.len;
     var total_size = @sizeOf(InstructionType) + accounts_len + data.len;
@@ -1715,21 +1787,7 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
     }
 
     const buffer = try allocator.alloc(u8, total_size);
-    defer allocator.free(buffer);
-
-    const vm_addr = MM_INPUT_START;
-    const memory_map = try MemoryMap.init(
-        allocator,
-        &.{
-            memory.Region.init(.constant, &.{}, memory.RODATA_START),
-            memory.Region.init(.mutable, &.{}, memory.STACK_START),
-            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
-            memory.Region.init(.mutable, buffer, memory.INPUT_START),
-        },
-        .v3,
-        .{ .aligned_memory_mapping = false },
-    );
-    defer memory_map.deinit(allocator);
+    errdefer allocator.free(buffer);
 
     const ins: InstructionType = switch (InstructionType) {
         StableInstructionRust => .{
@@ -1777,6 +1835,48 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
         for (accounts) |a| try buf.writer().writeAll(std.mem.asBytes(&a.pubkey));
     }
 
+    return buffer;
+}
+
+fn testTranslateInstruction(comptime AccountInfoType: type) !void {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "foo");
+    defer ctx.deinit(allocator);
+
+    const data = "ins data";
+    const program_id = Pubkey.initRandom(prng.random());
+    const accounts = [_]InstructionAccount{.{
+        .pubkey = Pubkey.initRandom(prng.random()),
+        .is_signer = true,
+        .is_writable = false,
+    }};
+
+    const vm_addr = MM_INPUT_START;
+    const buffer = try intoStableInstruction(
+        allocator,
+        AccountInfoType,
+        vm_addr,
+        data,
+        program_id,
+        &accounts,
+    );
+    defer allocator.free(buffer);
+
+    const memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.mutable, &.{}, memory.HEAP_START),
+            memory.Region.init(.mutable, buffer, vm_addr),
+        },
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
     const translated_instruction = try translateInstruction(
         allocator,
         &ctx.ic,
@@ -1797,15 +1897,15 @@ fn testTranslateInstruction(comptime AccountInfoType: type) !void {
     }
 }
 
-test "vm.syscalls.cpi: translateInstructionRust" {
+test "translateInstructionRust" {
     try testTranslateInstruction(AccountInfoRust);
 }
 
-test "vm.syscalls.cpi: translateInstructionC" {
+test "translateInstructionC" {
     try testTranslateInstruction(AccountInfoC);
 }
 
-test "vm.syscalls.cpi: translateSigners" {
+test "translateSigners" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -1964,14 +2064,14 @@ const TestCallerAccount = struct {
             .original_data_len = self.len,
             .serialized_data = if (self.direct_mapping) &.{} else data,
             .vm_data_addr = self.vm_addr + @sizeOf(u64),
-            .ref_to_len_in_vm = .{ .translated = &self.len },
+            .ref_to_len_in_vm = .{ .translated_addr = @intFromPtr(&self.len) },
         };
     }
 };
 
 // test CalleeAccount (BorrowedAccount) updates.
 
-test "vm.syscalls.cpi: updateCalleeAccount: lamports owner" {
+test "updateCalleeAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2009,7 +2109,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: lamports owner" {
     try std.testing.expect(callee_account.account.owner.equals(caller_account.owner));
 }
 
-test "vm.syscalls.cpi: updateCalleeAccount: data" {
+test "updateCalleeAccount: data" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2072,7 +2172,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: data" {
     }
 }
 
-test "vm.syscalls.cpi: updateCalleeAccount: data readonly" {
+test "updateCalleeAccount: data readonly" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2129,7 +2229,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: data readonly" {
     );
 }
 
-test "vm.syscalls.cpi: updateCalleeAccount: data direct mapping" {
+test "updateCalleeAccount: data direct mapping" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2198,7 +2298,7 @@ test "vm.syscalls.cpi: updateCalleeAccount: data direct mapping" {
 
 // test CallerAccount updates
 
-test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
+test "updateCallerAccount: lamports owner" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2236,7 +2336,7 @@ test "vm.syscalls.cpi: updateCallerAccount: lamports owner" {
     try std.testing.expect(caller_account.owner.equals(&callee_account.account.owner));
 }
 
-test "vm.syscalls.cpi: updateCallerAccount: data" {
+test "updateCallerAccount: data" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2350,7 +2450,7 @@ test "vm.syscalls.cpi: updateCallerAccount: data" {
     try std.testing.expectEqual(callee_account.account.data.len, 0);
 }
 
-test "vm.syscalls.cpi: updateCallerAccount: data direct mapping" {
+test "updateCallerAccount: data direct mapping" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2501,7 +2601,7 @@ test "vm.syscalls.cpi: updateCallerAccount: data direct mapping" {
     }
 }
 
-test "vm.syscalls.cpi: updateCallerAccount: data capacity direct mapping" {
+test "updateCallerAccount: data capacity direct mapping" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
 
@@ -2556,4 +2656,82 @@ test "vm.syscalls.cpi: updateCallerAccount: data capacity direct mapping" {
             true,
         ),
     ));
+}
+
+test "cpiCommon (invokeSignedRust)" {
+    try testCpiCommon(AccountInfoRust);
+}
+
+test "cpiCommon (invokeSignedC)" {
+    try testCpiCommon(AccountInfoC);
+}
+
+fn testCpiCommon(comptime AccountInfoType: type) !void {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+
+    var ctx = try TestContext.init(allocator, prng.random(), "");
+    defer ctx.deinit(allocator);
+    const account = ctx.getAccount();
+
+    // the CPI program to execute.
+    const program_id = system_program.ID;
+    const data = try sig.bincode.writeAlloc(
+        allocator,
+        system_program.Instruction{ .assign = .{ .owner = Pubkey.initRandom(prng.random()) } },
+        .{},
+    );
+    defer allocator.free(data);
+    const accounts = [_]InstructionAccount{.{
+        .pubkey = account.key,
+        .is_signer = true,
+        .is_writable = true,
+    }};
+
+    // setting up CPI structs in memory
+    const instruction_addr = memory.HEAP_START;
+    const heap_buffer = try intoStableInstruction(
+        allocator,
+        AccountInfoType,
+        instruction_addr,
+        data,
+        program_id,
+        &accounts,
+    );
+    defer allocator.free(heap_buffer);
+
+    const account_info_addr = memory.INPUT_START;
+    const input_buffer, const serialized_metadata =
+        try account.intoAccountInfo(allocator, AccountInfoType, account_info_addr);
+    defer allocator.free(input_buffer);
+
+    ctx.tc.serialized_accounts.appendAssumeCapacity(serialized_metadata);
+
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &.{}, memory.RODATA_START),
+            memory.Region.init(.mutable, &.{}, memory.STACK_START),
+            memory.Region.init(.constant, heap_buffer, instruction_addr),
+            memory.Region.init(.mutable, input_buffer, account_info_addr),
+        },
+        .v3,
+        .{ .aligned_memory_mapping = false },
+    );
+    defer memory_map.deinit(allocator);
+
+    // invoke CPI
+
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r1, instruction_addr);
+    registers.set(.r2, account_info_addr);
+    registers.set(.r3, 1); // account_infos_len
+    registers.set(.r4, 0); // null signers_addr
+    registers.set(.r5, 0); // zero signers_len
+
+    switch (AccountInfoType) {
+        AccountInfoRust => try invokeSignedRust(ctx.tc, &memory_map, &registers),
+        AccountInfoC => try invokeSignedC(ctx.tc, &memory_map, &registers),
+        else => @compileError("invalid AccountInfo type"),
+    }
 }
