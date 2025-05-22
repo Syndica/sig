@@ -214,7 +214,8 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                 if (record.buf.len >= n) { // allocation is possible
                     if (record.is_free) {
                         record.is_free = false;
-                        const buf = record.buf[0..n]; // local copy because next line will likely change the record pointer
+                        // local copy because next line will likely change the record pointer
+                        const buf = record.buf[0..n];
                         _ = self.tryRecycleUnusedSpaceWithRecordUnsafe(record, n);
                         return .{ buf, global_index };
                     } else {
@@ -268,7 +269,11 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             @panic("attempt to recycle invalid buf");
         }
 
-        fn tryRecycleUnusedSpaceWithRecordUnsafe(self: *Self, record: *Record, used_len: u64) bool {
+        fn tryRecycleUnusedSpaceWithRecordUnsafe(
+            self: *Self,
+            record: *Record,
+            used_len: u64,
+        ) bool {
             const unused_len = record.buf.len -| used_len;
             if (unused_len > config.min_split_size) {
                 // update the state of the record
@@ -379,7 +384,12 @@ pub fn RecycleFBA(config: struct {
         }
 
         /// creates a new file with size aligned to page_size and returns a pointer to it
-        pub fn alloc(ctx: *anyopaque, n: usize, alignment: std.mem.Alignment, return_address: usize) ?[*]u8 {
+        pub fn alloc(
+            ctx: *anyopaque,
+            n: usize,
+            alignment: std.mem.Alignment,
+            return_address: usize,
+        ) ?[*]u8 {
             const self: *Self = @ptrCast(@alignCast(ctx));
 
             if (config.thread_safe) self.mux.lock();
@@ -407,13 +417,18 @@ pub fn RecycleFBA(config: struct {
 
             // TODO(PERF, x19): allocate len+1 and store is_free at index 0, `free` could then be O(1)
             // otherwise, allocate a new one
-            const buf = self.fba_allocator.allocator().rawAlloc(n, alignment, return_address) orelse {
+            const buf = self.fba_allocator.allocator().rawAlloc(
+                n,
+                alignment,
+                return_address,
+            ) orelse {
                 if (!is_possible_to_recycle) {
                     // not enough memory to allocate and no possible recycles will be perma stuck
                     // TODO(x19): loop this and have a comptime limit?
                     self.tryCollapse();
                     if (!self.isPossibleToAllocate(n, alignment)) {
-                        @panic("RecycleFBA.alloc: no possible recycles and not enough memory to allocate");
+                        @panic("RecycleFBA.alloc: no possible recycles " ++
+                            "and not enough memory to allocate");
                     }
 
                     // try again : TODO(x19): remove the extra lock/unlock
@@ -432,7 +447,12 @@ pub fn RecycleFBA(config: struct {
             return buf;
         }
 
-        pub fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, return_address: usize) void {
+        pub fn free(
+            ctx: *anyopaque,
+            buf: []u8,
+            alignment: std.mem.Alignment,
+            return_address: usize,
+        ) void {
             _ = alignment;
             _ = return_address;
             const self: *Self = @ptrCast(@alignCast(ctx));
@@ -487,7 +507,13 @@ pub fn RecycleFBA(config: struct {
             new_len: usize,
             return_address: usize,
         ) ?[*]u8 {
-            return if (resize(context, memory, alignment, new_len, return_address)) memory.ptr else null;
+            return if (resize(
+                context,
+                memory,
+                alignment,
+                new_len,
+                return_address,
+            )) memory.ptr else null;
         }
 
         pub fn isPossibleToAllocate(self: *Self, n: u64, alignment: std.mem.Alignment) bool {
@@ -565,7 +591,12 @@ pub const BatchAllocator = struct {
 
         /// allocates the full size, which includes extra space at the end for the batch,
         /// and writes the batch pointer in the extra space.
-        fn alloc(batch: *Batch, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        fn alloc(
+            batch: *Batch,
+            len: usize,
+            alignment: std.mem.Alignment,
+            ret_addr: usize,
+        ) ?[*]u8 {
             // allocate the full slice including space for the *Batch
             const full_ptr = batch.fba.threadSafeAllocator()
                 .rawAlloc(len + @sizeOf(*Batch), alignment, ret_addr) orelse
@@ -614,7 +645,12 @@ pub const BatchAllocator = struct {
         };
     }
 
-    fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+    fn alloc(
+        ctx: *anyopaque,
+        len: usize,
+        log2_ptr_align: std.mem.Alignment,
+        ret_addr: usize,
+    ) ?[*]u8 {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
 
         while (true) {
@@ -630,7 +666,12 @@ pub const BatchAllocator = struct {
         }
     }
 
-    fn tryAllocOldBatch(self: *Self, len: usize, log2_ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+    fn tryAllocOldBatch(
+        self: *Self,
+        len: usize,
+        log2_ptr_align: std.mem.Alignment,
+        ret_addr: usize,
+    ) ?[*]u8 {
         self.new_batch_lock.lockShared();
         defer self.new_batch_lock.unlockShared();
 
@@ -693,7 +734,12 @@ pub const BatchAllocator = struct {
         return ptr;
     }
 
-    fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: std.mem.Alignment, return_address: usize) void {
+    fn free(
+        ctx: *anyopaque,
+        buf: []u8,
+        log2_buf_align: std.mem.Alignment,
+        return_address: usize,
+    ) void {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
 
         const batch = Batch.free(buf, log2_buf_align, return_address);
@@ -774,7 +820,10 @@ pub const DiskMemoryAllocator = struct {
         const file_name_bounded = fileNameBounded(file_index);
         const file_name = file_name_bounded.constSlice();
 
-        const file = self.dir.createFile(file_name, .{ .read = true, .truncate = true }) catch |err| {
+        const file = self.dir.createFile(file_name, .{
+            .read = true,
+            .truncate = true,
+        }) catch |err| {
             self.logFailure(err, file_name);
             return null;
         };
@@ -872,7 +921,13 @@ pub const DiskMemoryAllocator = struct {
         new_len: usize,
         return_address: usize,
     ) ?[*]u8 {
-        return if (resize(context, memory, alignment, new_len, return_address)) memory.ptr else null;
+        return if (resize(
+            context,
+            memory,
+            alignment,
+            new_len,
+            return_address,
+        )) memory.ptr else null;
     }
 
     /// unmaps the memory and deletes the associated file.
@@ -1208,7 +1263,10 @@ test "disk allocator on arraylists" {
     const dma = dma_state.allocator();
 
     {
-        try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_0", .{})); // this should not exist
+        try std.testing.expectError(
+            error.FileNotFound,
+            tmp_dir.access("bin_0", .{}),
+        ); // this should not exist
 
         var disk_account_refs = try std.ArrayList(u8).initCapacity(dma, 1);
         defer disk_account_refs.deinit();
@@ -1223,7 +1281,10 @@ test "disk allocator on arraylists" {
         try std.testing.expectEqual(21, disk_account_refs.items[1]);
 
         try tmp_dir.access("bin_0", .{}); // this should exist
-        try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_1", .{})); // this should not exist
+        try std.testing.expectError(
+            error.FileNotFound,
+            tmp_dir.access("bin_1", .{}),
+        ); // this should not exist
 
         const array_ptr = try dma.create([4096]u8);
         defer dma.destroy(array_ptr);
@@ -1274,7 +1335,10 @@ test "fuzzDiskMemoryAllocator - past failures" {
     for (test_cases) |case| {
         const seed, const mmap_ratio, const iterations = case;
         var rng = std.Random.DefaultPrng.init(seed);
-        if (debug) std.debug.print("\n>>> Test Case: {}, {}, {}\n", .{ seed, mmap_ratio, iterations });
+        if (debug) std.debug.print(
+            "\n>>> Test Case: {}, {}, {}\n",
+            .{ seed, mmap_ratio, iterations },
+        );
         try fuzzDiskMemoryAllocator(.{
             .allocator = std.testing.allocator,
             .random = rng.random(),
@@ -1448,7 +1512,10 @@ fn fuzzAllocator(
     var item_id_sequence: usize = 0;
     for (0..params.iterations) |_| {
         const Options = enum { alloc, realloc, free };
-        const choice = if (allocations.items.len == 0) .alloc else params.random.enumValue(Options);
+        const choice = if (allocations.items.len == 0)
+            .alloc
+        else
+            params.random.enumValue(Options);
         switch (choice) {
             .alloc => {
                 const size = randomLog2(params.random, usize, 20);

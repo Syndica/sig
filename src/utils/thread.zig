@@ -46,7 +46,8 @@ pub fn spawnThreadTasks(
     comptime taskFn: anytype,
     config: SpawnThreadTasksParams(@TypeOf(taskFn)),
 ) !void {
-    const chunk_size, const n_threads = chunkSizeAndThreadCount(config.data_len, config.max_threads);
+    const chunk_size, const n_threads =
+        chunkSizeAndThreadCount(config.data_len, config.max_threads);
 
     const S = struct {
         task_params: TaskParams,
@@ -66,7 +67,10 @@ pub fn spawnThreadTasks(
 
     var start_index: usize = 0;
     for (0..n_threads) |thread_id| {
-        const end_index = if (thread_id == n_threads - 1) config.data_len else (start_index + chunk_size);
+        const end_index = if (thread_id == n_threads - 1)
+            config.data_len
+        else
+            (start_index + chunk_size);
         try thread_pool.schedule(allocator, .{
             .task_params = .{
                 .start_index = start_index,
