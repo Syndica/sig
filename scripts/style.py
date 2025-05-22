@@ -126,7 +126,6 @@ def unused_imports(args, files_to_check):
     return total_lines_removed
 
 files_excluded_from_line_length_check = [
-    "src/accountsdb/bank.zig",
     "src/accountsdb/db.zig",
     "src/accountsdb/download.zig",
     "src/accountsdb/fuzz_snapshot.zig",
