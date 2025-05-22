@@ -1,5 +1,6 @@
 pub const arraylist = @import("arraylist.zig");
 pub const hashmap = @import("hashmap.zig");
+pub const bounded_array = @import("bounded_array.zig");
 pub const int = @import("int.zig");
 pub const list = @import("list.zig");
 pub const optional = @import("optional.zig");
@@ -14,6 +15,7 @@ const testing = std.testing;
 
 const arrayListInfo = sig.utils.types.arrayListInfo;
 const hashMapInfo = sig.utils.types.hashMapInfo;
+const boundedArrayInfo = sig.utils.types.boundedArrayInfo;
 
 const bincode = @This();
 
@@ -635,6 +637,8 @@ pub fn getConfig(comptime T: type) ?FieldConfig(T) {
         hashmap.hashMapFieldConfig(T, .{})
     else if (comptime arrayListInfo(T) != null)
         arraylist.standardConfig(T)
+    else if (comptime boundedArrayInfo(T) != null)
+        bounded_array.standardConfig(T)
     else if (T == u8)
         int.U8Config()
     else if (T == []const u8)
