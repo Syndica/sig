@@ -176,7 +176,6 @@ files_excluded_from_line_length_check = [
     "src/shred_network/repair_message.zig",
     "src/shred_network/repair_service.zig",
     "src/sync/thread_pool.zig",
-    "src/time/time.zig",
     "src/transaction_sender/mock_transfer_generator.zig",
     "src/transaction_sender/service.zig",
     "src/transaction_sender/transaction_pool.zig",

@@ -1,29 +1,28 @@
-//  Source: https://github.com/nektro/zig-time/commit/ca9c0e6b644d74c1d549cc2c1ee22113aa021bd8
-//
-//  MIT License
-//
-//  Copyright (c) 2021 Meghan Denny
-//
-//  Permission is hereby granted, free of charge, to any person obtaining a copy of
-//  this software and associated documentation files (the "Software"), to deal in
-//  the Software without restriction, including without limitation the rights to
-//  use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-//  the Software, and to permit persons to whom the Software is furnished to do so,
-//  subject to the following conditions:
-//
-//  The above copyright notice and this permission notice shall be included in all
-//  copies or substantial portions of the Software.
-//
-//  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-//  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-//  FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-//  COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-//  IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-//  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//! Source: https://github.com/nektro/zig-time/commit/ca9c0e6b644d74c1d549cc2c1ee22113aa021bd8
+//!
+//! MIT License
+//!
+//! Copyright (c) 2021 Meghan Denny
+//!
+//! Permission is hereby granted, free of charge, to any person obtaining a copy of
+//! this software and associated documentation files (the "Software"), to deal in
+//! the Software without restriction, including without limitation the rights to
+//! use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+//! the Software, and to permit persons to whom the Software is furnished to do so,
+//! subject to the following conditions:
+//!
+//! The above copyright notice and this permission notice shall be included in all
+//! copies or substantial portions of the Software.
+//!
+//! THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+//! IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+//! FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+//! COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+//! IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+//! CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const string = []const u8;
 const time = @This();
 
 pub const DateTime = struct {
@@ -240,7 +239,12 @@ pub const DateTime = struct {
     }
 
     /// fmt is based on https://momentjs.com/docs/#/displaying/format/
-    pub fn format(self: Self, comptime fmt: string, options: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
         _ = options;
 
         if (fmt.len == 0) @compileError("DateTime: format string can't be empty");
@@ -263,8 +267,14 @@ pub const DateTime = struct {
                     .MM => try writer.print("{:0>2}", .{self.months + 1}),
                     .M => try writer.print("{}", .{self.months + 1}),
                     .Mo => try printOrdinal(writer, self.months + 1),
-                    .MMM => try printLongName(writer, self.months, &[_]string{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }),
-                    .MMMM => try printLongName(writer, self.months, &[_]string{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" }),
+                    .MMM => try printLongName(writer, self.months, &.{
+                        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+                    }),
+                    .MMMM => try printLongName(writer, self.months, &.{
+                        "January", "February", "March",     "April",   "May",      "June",
+                        "July",    "August",   "September", "October", "November", "December",
+                    }),
 
                     .Q => try writer.print("{}", .{self.months / 3 + 1}),
                     .Qo => try printOrdinal(writer, self.months / 3 + 1),
@@ -281,7 +291,12 @@ pub const DateTime = struct {
                     .do => try printOrdinal(writer, @intFromEnum(self.weekday)),
                     .dd => try writer.writeAll(@tagName(self.weekday)[0..2]),
                     .ddd => try writer.writeAll(@tagName(self.weekday)),
-                    .dddd => try printLongName(writer, @intFromEnum(self.weekday), &[_]string{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" }),
+                    .dddd => try printLongName(writer, @intFromEnum(self.weekday), &.{
+                        "Sunday",   "Monday",
+                        "Tuesday",  "Wednesday",
+                        "Thursday", "Friday",
+                        "Saturday",
+                    }),
                     .e => try writer.print("{}", .{@intFromEnum(self.weekday)}),
                     .E => try writer.print("{}", .{@intFromEnum(self.weekday) + 1}),
 
@@ -297,8 +312,8 @@ pub const DateTime = struct {
                     .N => try writer.writeAll(@tagName(self.era)),
                     .NN => try writer.writeAll("Anno Domini"),
 
-                    .A => try printLongName(writer, self.hours / 12, &[_]string{ "AM", "PM" }),
-                    .a => try printLongName(writer, self.hours / 12, &[_]string{ "am", "pm" }),
+                    .A => try printLongName(writer, self.hours / 12, &[_][]const u8{ "AM", "PM" }),
+                    .a => try printLongName(writer, self.hours / 12, &[_][]const u8{ "am", "pm" }),
 
                     .H => try writer.print("{}", .{self.hours}),
                     .HH => try writer.print("{:0>2}", .{self.hours}),
@@ -346,7 +361,11 @@ pub const DateTime = struct {
         }
     }
 
-    pub fn formatAlloc(self: Self, alloc: std.mem.Allocator, comptime fmt: string) !string {
+    pub fn formatAlloc(
+        self: Self,
+        alloc: std.mem.Allocator,
+        comptime fmt: []const u8,
+    ) ![]const u8 {
         var list = std.ArrayList(u8).init(alloc);
         defer list.deinit();
 
@@ -484,7 +503,7 @@ fn printOrdinal(writer: anytype, num: u16) !void {
     });
 }
 
-fn printLongName(writer: anytype, index: u16, names: []const string) !void {
+fn printLongName(writer: anytype, index: u16, names: []const []const u8) !void {
     try writer.writeAll(names[index]);
 }
 
@@ -576,7 +595,12 @@ pub const Duration = struct {
         return .{ .ns = self.ns / divisor };
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(
+        self: @This(),
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
         return writer.print("{s}", .{std.fmt.fmtDuration(self.ns)}) catch unreachable;
     }
 };
@@ -617,12 +641,20 @@ pub const Instant = struct {
         }
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return try writer.print("{s}", .{std.fmt.fmtDuration(switch (@TypeOf(self.inner.timestamp)) {
+    pub fn format(
+        self: @This(),
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        const a: u64 = switch (@TypeOf(self.inner.timestamp)) {
             u64 => self.inner.timestamp,
-            std.posix.timespec => @intCast(self.inner.timestamp.sec * 1_000_000_000 + self.inner.timestamp.nsec),
+            std.posix.timespec => @intCast(
+                self.inner.timestamp.tv_sec * 1_000_000_000 + self.inner.timestamp.tv_nsec,
+            ),
             else => @compileError("Instant: unknown timestamp type"),
-        })});
+        };
+        return try writer.print("{s}", .{std.fmt.fmtDuration(a)});
     }
 };
 
