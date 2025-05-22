@@ -88,6 +88,8 @@ pub const AddressLookupTable = struct {
     meta: LookupTableMeta,
     addresses: []const Pubkey,
 
+    pub const MAX_SERIALIZED_SIZE = LOOKUP_TABLE_META_SIZE + LOOKUP_TABLE_MAX_ADDRESSES * 32;
+
     pub fn overwriteMetaData(
         data: []u8,
         meta: LookupTableMeta,
@@ -101,12 +103,11 @@ pub const AddressLookupTable = struct {
 
     // [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L224
     pub fn deserialize(
-        allocator: std.mem.Allocator,
         data: []const u8,
     ) (error{OutOfMemory} || InstructionError)!AddressLookupTable {
-        const state = sig.bincode.readFromSlice(allocator, ProgramState, data, .{}) catch
+        const noalloc = sig.utils.allocators.NoAlloc.allocator;
+        const state = sig.bincode.readFromSlice(noalloc, ProgramState, data, .{}) catch
             return error.InvalidAccountData;
-        errdefer sig.bincode.free(allocator, state);
 
         if (state == .Uninitialized) return error.UninitializedAccount;
 
