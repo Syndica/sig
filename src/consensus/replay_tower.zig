@@ -3247,24 +3247,22 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     // Continue building on 5
     //
     // Build fork structure:
-    //      slot 5
-    //        |
-    //      slot 6
-    //        |
-    //      slot 7
-    //        |
-    //      slot 8
-    //        |
-    //      slot 9
-    //        |
-    //      slot 10
+    //         slot 5
+    //           |
+    //         slot 6
+    //         /    \
+    //    slot 7     slot 10
+    //      |
+    //    slot 8
+    //      |
+    //    slot 9
     var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
     trees.appendSliceAssumeCapacity(&[5]TreeNode{
         .{ hash6, hash5 },
         .{ hash7, hash6 },
         .{ hash8, hash7 },
         .{ hash9, hash8 },
-        .{ hash10, hash9 },
+        .{ hash10, hash6 },
     });
 
     try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees });
