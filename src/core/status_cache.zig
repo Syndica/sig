@@ -33,8 +33,8 @@ pub const StatusCache = struct {
     const KeyStatusMap = HashMap(Hash, HighestFork);
     const SlotDeltaMap = HashMap(Slot, StatusKv);
 
-    fn default(allocator: std.mem.Allocator) error{OutOfMemory}!StatusCache {
-        const roots = try HashMap(Slot, void).init(allocator, 0, &.{});
+    pub fn default(allocator: std.mem.Allocator) error{OutOfMemory}!StatusCache {
+        const roots = try HashMap(Slot, void).init(allocator, &.{}, &.{});
 
         return .{
             .cache = .{},
@@ -49,14 +49,14 @@ pub const StatusCache = struct {
         tx_blockhash: *const Hash,
         ancestors: *const Ancestors,
     ) ?Fork {
-        const map = self.cache.get(tx_blockhash) orelse return null;
+        const map = self.cache.get(tx_blockhash.*) orelse return null;
 
         const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
         const index = @min(map.index, max_key_index);
 
-        const key_slice: *[CACHED_KEY_SIZE]u8 = key[index..][0..CACHED_KEY_SIZE];
+        const lookup_key: [CACHED_KEY_SIZE]u8 = key[index..][0..CACHED_KEY_SIZE].*;
 
-        const stored_forks: ArrayList(Fork) = map.key_map.get(key_slice) orelse return null;
+        const stored_forks: ArrayList(Fork) = map.key_map.get(lookup_key) orelse return null;
         return for (stored_forks.items) |fork| {
             if (ancestors.ancestors.contains(fork.slot) or self.roots.contains(fork.slot)) {
                 break fork;
@@ -67,5 +67,5 @@ pub const StatusCache = struct {
 
 pub const Ancestors = struct {
     // agave uses a "RollingBitField" which seems to be just an optimisation for a set
-    ancestors: HashMap(Slot, void),
+    ancestors: HashMap(Slot, void) = .{},
 };

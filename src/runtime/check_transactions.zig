@@ -2,11 +2,12 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
-const Ancestors = sig.core.bank.Ancestors;
+const Ancestors = sig.core.status_cache.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 
-const TransactionError = sig.runtime.transaction_error.TransactionError;
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
@@ -23,8 +24,9 @@ pub fn checkStatusCache(
     ancestors: *const Ancestors,
     status_cache: *const sig.core.StatusCache,
 ) ?TransactionError {
-    return isTransactionAlreadyProcessed(msg_hash, recent_blockhash, ancestors, status_cache) catch
-        return .{.AlreadyProcessed};
+    if (isTransactionAlreadyProcessed(msg_hash, recent_blockhash, ancestors, status_cache))
+        return .AlreadyProcessed;
+    return null;
 }
 
 pub fn checkAge(
@@ -61,7 +63,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     next_lamports_per_signature: u64,
     batch_account_cache: *BatchAccountCache,
 ) ?struct { CachedAccount, u64 } {
-    const nonce_is_advanceable = transaction.recent_blockhash != next_durable_nonce;
+    const nonce_is_advanceable = !transaction.recent_blockhash.eql(next_durable_nonce.*);
     if (!nonce_is_advanceable) return null;
 
     const cached_account, const nonce_data = loadMessageNonceAccount(
@@ -74,7 +76,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         .Current = NonceState{
             .Initialized = .{
                 .authority = nonce_data.authority,
-                .durable_nonce = next_durable_nonce,
+                .durable_nonce = next_durable_nonce.*,
                 .lamports_per_signature = next_lamports_per_signature,
             },
         },
@@ -96,17 +98,18 @@ fn loadMessageNonceAccount(
 ) ?struct { CachedAccount, NonceData } {
     const nonce_address = getDurableNonce(transaction) orelse
         return null;
-    const nonce_account = batch_account_cache.account_cache.get(nonce_address) orelse
+    const nonce_account = batch_account_cache.account_cache.getPtr(nonce_address) orelse
         return null;
-    const nonce_data = verifyNonceAccount(nonce_account, transaction.recent_blockhash) orelse
+    const nonce_data = verifyNonceAccount(nonce_account.*, &transaction.recent_blockhash) orelse
         return null;
 
     const signers = transaction.instruction_infos[
         NONCED_TX_MARKER_IX_INDEX
     ].getSigners();
 
+    // check nonce is authorised
     for (signers.slice()) |signer| {
-        if (signer.equals(&nonce_data.authority)) break true;
+        if (signer.equals(&nonce_data.authority)) break;
     } else return null;
 
     return .{
@@ -134,11 +137,11 @@ const NonceVersions = union(enum) {
         self: *const NonceVersions,
         recent_blockhash: *const Hash,
     ) ?*const NonceData {
-        return switch (self) {
+        return switch (self.*) {
             .Legacy => null,
             .Current => |state| switch (state) {
                 .Uninitialized => null,
-                .Initialized => |data| if (recent_blockhash == data.durable_nonce)
+                .Initialized => |*data| if (recent_blockhash.eql(data.durable_nonce))
                     data
                 else
                     null,
@@ -157,7 +160,10 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
     const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account.data, .{}) catch
         return null;
 
-    return nonce.verifyRecentBlockHash(recent_blockhash).*;
+    const nonce_data = nonce.verifyRecentBlockHash(recent_blockhash) orelse
+        return null;
+
+    return nonce_data.*;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L84
@@ -183,12 +189,12 @@ fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
         std.mem.nativeToLittle(u32, 4),
     );
 
-    if (instruction.instruction_data[0..4] != serialized_advance_nonce_account) return null;
+    if (instruction.instruction_data[0..4] != &serialized_advance_nonce_account) return null;
     if (!instruction.account_metas.get(0).is_writable) return null;
 
     const nonce_meta = instruction.account_metas.get(0);
     if (!nonce_meta.is_writable) return null;
-    if (nonce_meta.index_in_transaction >= account_keys) return null;
+    if (nonce_meta.index_in_transaction >= account_keys.len) return null;
     return account_keys[nonce_meta.index_in_transaction];
 }
 
@@ -196,7 +202,7 @@ fn isTransactionAlreadyProcessed(
     msg_hash: *const Hash,
     recent_blockhash: *const Hash,
     ancestors: *const sig.core.status_cache.Ancestors,
-    status_cache: *sig.core.StatusCache,
+    status_cache: *const sig.core.StatusCache,
 ) bool {
-    return status_cache.getStatus(msg_hash, recent_blockhash, ancestors) != null;
+    return status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors) != null;
 }

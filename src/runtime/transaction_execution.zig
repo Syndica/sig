@@ -21,13 +21,14 @@ const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionTrace = TransactionContext.InstructionTrace;
 const LogCollector = sig.runtime.LogCollector;
-const Ancestors = sig.core.bank.Ancestors;
+const Ancestors = sig.core.status_cache.Ancestors;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const EpochStakes = sig.core.stake.EpochStakes;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
+const StatusCache = sig.core.StatusCache;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -45,8 +46,6 @@ const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 //
 // Once the accounts have been loaded, the transaction is commitable, even if its
 // execution fails.
-
-pub const StatusCache = struct {};
 
 pub const RuntimeTransaction = struct {
     pub const Accounts = std.MultiArrayList(sig.core.instruction.InstructionAccount);
@@ -178,7 +177,6 @@ pub fn loadAndExecuteTransaction(
     const check_age_result = checkAge(
         transaction,
         batch_account_cache,
-        environment.ancestors,
         environment.blockhash_queue,
         environment.max_age,
         &environment.last_blockhash,
@@ -217,7 +215,7 @@ pub fn loadAndExecuteTransaction(
         transaction.signature_count,
         batch_account_cache,
         &compute_budget_limits,
-        &maybe_nonce_info,
+        maybe_nonce_info,
         environment.rent_collector,
         environment.feature_set,
         environment.lamports_per_signature,
@@ -383,8 +381,8 @@ pub fn checkStatusCache(
     return sig.runtime.check_transactions.checkStatusCache(
         msg_hash,
         recent_blockhash,
-        status_cache,
         ancestors,
+        status_cache,
     );
 }
 
@@ -394,7 +392,7 @@ pub fn checkFeePayer(
     signature_count: u64,
     batch_account_cache: *BatchAccountCache,
     compute_budget_limits: *const ComputeBudgetLimits,
-    nonce_account: ?*const CachedAccount,
+    nonce_account: ?CachedAccount,
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
     lamports_per_signature: u64,
@@ -423,7 +421,7 @@ test "transaction_execution" {
 
     const ancestors: Ancestors = .{};
     const feature_set: FeatureSet = FeatureSet.EMPTY;
-    const status_cache: StatusCache = .{};
+    const status_cache = try StatusCache.default(std.testing.allocator);
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
@@ -468,182 +466,3 @@ test "transaction_execution" {
 
     _ = result;
 }
-
-// example of usage
-fn loadAndExecuteBatchExample(
-    allocator: std.mem.Allocator,
-    transaction: *const RuntimeTransaction,
-    batch_account_cache: *const BatchAccountCache,
-    compute_budget_limits: *const ComputeBudgetLimits,
-    feature_set: *const FeatureSet,
-    rent_collector: *const RentCollector,
-) TransactionResult(LoadedTransactionAccounts) {
-    return batch_account_cache.loadTransactionAccounts(
-        allocator,
-        transaction,
-        rent_collector,
-        feature_set,
-        compute_budget_limits,
-    );
-}
-
-// TODO: Test cases to reimplement once validation components are integrated
-// test {
-//     std.testing.refAllDecls(@This());
-
-//     const allocator = std.testing.allocator;
-
-//     var bank = account_loader.MockedAccountsDb{ .allocator = allocator };
-//     defer bank.accounts.deinit(allocator);
-//     try bank.accounts.put(allocator, sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID, .{
-//         .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-//         .executable = true,
-//         .data = .{ .empty = .{ .len = 0 } },
-//         .lamports = 1,
-//         .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
-//     });
-//     try bank.accounts.put(allocator, sig.runtime.program.vote_program.ID, .{
-//         .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-//         .executable = true,
-//         .data = .{ .empty = .{ .len = 0 } },
-//         .lamports = 1,
-//         .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
-//     });
-
-//     // empty
-//     const tx1 = sig.core.Transaction.EMPTY;
-
-//     // zero instructions
-//     const tx2: sig.core.Transaction = .{
-//         .signatures = &.{},
-//         .version = .legacy,
-//         .msg = .{
-//             .signature_count = 0,
-//             .readonly_signed_count = 0,
-//             .readonly_unsigned_count = 0,
-//             .account_keys = &.{sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID},
-//             .recent_blockhash = .{ .data = [_]u8{0x00} ** sig.core.Hash.SIZE },
-//             .instructions = &.{},
-//             .address_lookups = &.{},
-//         },
-//     };
-//     const Ed25519 = std.crypto.sign.Ed25519;
-
-//     const keypair = try Ed25519.KeyPair.create(null);
-//     const ed25519_instruction = try sig.runtime.program.precompile_programs.ed25519.newInstruction(
-//         std.testing.allocator,
-//         keypair,
-//         "hello!",
-//     );
-//     defer std.testing.allocator.free(ed25519_instruction.data);
-
-//     // a precompile instruction (slightly different codepath) - impl
-//     // const tx3: sig.core.Transaction = .{
-//     //     .msg = .{
-//     //         .account_keys = &.{sig.runtime.ids.PRECOMPILE_ED25519_PROGRAM_ID},
-//     //         .instructions = &.{
-//     //             .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
-//     //         },
-//     //         .signature_count = 1,
-//     //         .readonly_signed_count = 1,
-//     //         .readonly_unsigned_count = 0,
-//     //         .recent_blockhash = sig.core.Hash.ZEROES,
-//     //     },
-//     //     .version = .legacy,
-//     //     .signatures = &.{},
-//     // };
-
-//     // program not found
-//     const tx4 = sig.core.Transaction{
-//         .msg = .{
-//             .account_keys = &.{Pubkey.ZEROES},
-//             .instructions = &.{
-//                 .{ .program_index = 0, .account_indexes = &.{0}, .data = "" },
-//             },
-//             .signature_count = 1,
-//             .readonly_signed_count = 1,
-//             .readonly_unsigned_count = 0,
-//             .recent_blockhash = sig.core.Hash.ZEROES,
-//         },
-//         .version = .legacy,
-//         .signatures = &.{},
-//     };
-
-//     // program that should fail
-//     const tx5 = sig.core.Transaction{
-//         .msg = .{
-//             .account_keys = &.{sig.runtime.program.vote_program.ID},
-//             .instructions = &.{
-//                 .{ .program_index = 0, .account_indexes = &.{0}, .data = "" },
-//             },
-//             .signature_count = 1,
-//             .readonly_signed_count = 1,
-//             .readonly_unsigned_count = 0,
-//             .recent_blockhash = sig.core.Hash.ZEROES,
-//         },
-//         .version = .legacy,
-//         .signatures = &.{},
-//     };
-
-//     const transactions: []const sig.core.Transaction = &.{ tx1, tx2, tx4, tx5 };
-
-//     var loader = try AccountLoader(.Mocked).newWithCacheCapacity(allocator, allocator, bank, 100);
-//     defer loader.deinit();
-
-//     const batch_loadedaccounts = try allocator.alloc(LoadedTransactionAccounts, transactions.len);
-//     defer allocator.free(batch_loadedaccounts);
-
-//     const batch_budgetlimits = try allocator.alloc(
-//         compute_budget.Error!compute_budget.ComputeBudgetLimits,
-//         transactions.len,
-//     );
-//     defer allocator.free(batch_budgetlimits);
-
-//     for (transactions, batch_budgetlimits) |*tx, *tx_budgetlimits| {
-//         tx_budgetlimits.* = compute_budget.execute(tx);
-//     }
-
-//     for (
-//         transactions,
-//         batch_loadedaccounts,
-//         batch_budgetlimits,
-//     ) |*tx, *tx_loaded_account, tx_budgetlimit| {
-//         const max_account_bytes = (try tx_budgetlimit).loaded_accounts_bytes;
-
-//         const loaded = try account_loader.loadTransactionAccounts(
-//             .Mocked,
-//             allocator,
-//             tx,
-//             max_account_bytes,
-//             &loader,
-//             &sig.runtime.FeatureSet.EMPTY,
-//             &sig.core.rent_collector.defaultCollector(0),
-//         );
-
-//         tx_loaded_account.* = loaded;
-//     }
-
-//     const env = ProcessingEnv.testingDefault();
-
-//     for (transactions, batch_budgetlimits, 0..) |*tx, tx_budgetlimit, tx_idx| {
-//         const loaded = &batch_loadedaccounts[tx_idx];
-
-//         const err: ?anyerror = if (loaded.load_failure) |failure|
-//             failure.err
-//         else exec_err: {
-//             const output = try executeTransaction(allocator, tx, env, try tx_budgetlimit, loaded);
-//             defer output.deinit(allocator);
-
-//             break :exec_err output.err;
-//         };
-
-//         const expected_err: ?anyerror = switch (tx_idx) {
-//             0, 1 => null,
-//             2 => error.ProgramAccountNotFound,
-//             3 => error.InvalidAccountOwner,
-//             else => unreachable,
-//         };
-
-//         try std.testing.expectEqual(expected_err, err);
-//     }
-// }
