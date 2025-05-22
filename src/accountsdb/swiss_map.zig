@@ -46,7 +46,11 @@ pub fn SwissMap(
         }
 
         pub fn ensureTotalCapacity(self: *Self, n: usize) std.mem.Allocator.Error!void {
-            return @call(.always_inline, Unmanaged.ensureTotalCapacity, .{ &self.unmanaged, self.allocator, n });
+            return @call(
+                .always_inline,
+                Unmanaged.ensureTotalCapacity,
+                .{ &self.unmanaged, self.allocator, n },
+            );
         }
 
         pub fn deinit(self: *Self) void {
@@ -85,11 +89,19 @@ pub fn SwissMap(
         /// note: this assumes the key is not already in the index, if it is, then
         /// the map might contain two keys, and the behavior is undefined
         pub fn putAssumeCapacity(self: *Self, key: Key, value: Value) void {
-            return @call(.always_inline, Unmanaged.putAssumeCapacity, .{ &self.unmanaged, key, value });
+            return @call(
+                .always_inline,
+                Unmanaged.putAssumeCapacity,
+                .{ &self.unmanaged, key, value },
+            );
         }
 
         pub fn getOrPutAssumeCapacity(self: *Self, key: Key) GetOrPutResult {
-            return @call(.always_inline, Unmanaged.getOrPutAssumeCapacity, .{ &self.unmanaged, key });
+            return @call(
+                .always_inline,
+                Unmanaged.getOrPutAssumeCapacity,
+                .{ &self.unmanaged, key },
+            );
         }
     };
 }
@@ -165,12 +177,14 @@ pub fn SwissMapUnmanaged(
 
             // from ensureTotalCapacity:
             // memory.len === n_groups * (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State))
-            const n_groups = memory.len / (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State));
+            const n_groups =
+                memory.len / (@sizeOf([GROUP_SIZE]KeyValue) + @sizeOf([GROUP_SIZE]State));
 
             const group_size = n_groups * @sizeOf([GROUP_SIZE]KeyValue);
             const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
             const groups = group_ptr[0..n_groups];
-            const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
+            const states_ptr: [*]@Vector(GROUP_SIZE, u8) =
+                @alignCast(@ptrCast(memory.ptr + group_size));
             const states = states_ptr[0..n_groups];
 
             self._capacity = n_groups * GROUP_SIZE;
@@ -193,7 +207,11 @@ pub fn SwissMapUnmanaged(
             return self;
         }
 
-        pub fn ensureTotalCapacity(self: *Self, allocator: std.mem.Allocator, n: usize) std.mem.Allocator.Error!void {
+        pub fn ensureTotalCapacity(
+            self: *Self,
+            allocator: std.mem.Allocator,
+            n: usize,
+        ) std.mem.Allocator.Error!void {
             if (n <= self._capacity) {
                 return;
             }
@@ -210,7 +228,8 @@ pub fn SwissMapUnmanaged(
 
                 const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
                 const groups = group_ptr[0..n_groups];
-                const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
+                const states_ptr: [*]@Vector(GROUP_SIZE, u8) =
+                    @alignCast(@ptrCast(memory.ptr + group_size));
                 const states = states_ptr[0..n_groups];
 
                 self._capacity = n_groups * GROUP_SIZE;
@@ -233,7 +252,8 @@ pub fn SwissMapUnmanaged(
 
                 const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
                 const groups = group_ptr[0..n_groups];
-                const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
+                const states_ptr: [*]@Vector(GROUP_SIZE, u8) =
+                    @alignCast(@ptrCast(memory.ptr + group_size));
                 const states = states_ptr[0..n_groups];
 
                 var new_self = Self{
@@ -352,7 +372,10 @@ pub fn SwissMapUnmanaged(
                             // which if we changed this state to empty would cause the search to early exit,
                             // so we need to change this state to 'deleted'.
                             //
-                            const new_state = if (reduceOrWorkaround(EMPTY_STATE_VEC == state_vec)) EMPTY_STATE else DELETED_STATE;
+                            const new_state = if (reduceOrWorkaround(EMPTY_STATE_VEC == state_vec))
+                                EMPTY_STATE
+                            else
+                                DELETED_STATE;
                             self.states[group_index][j] = @bitCast(new_state);
                             self._count -= 1;
                             return result;
@@ -472,7 +495,11 @@ pub fn SwissMapUnmanaged(
             is_free_vec: @Vector(GROUP_SIZE, bool),
         ) usize {
             const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(GROUP_SIZE);
-            const indices = selectWorkaround(is_free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
+            const indices = selectWorkaround(
+                is_free_vec,
+                std.simd.iota(u8, GROUP_SIZE),
+                invalid_state,
+            );
             const index = reduceMinWorkaround(indices);
 
             self.groups[group_index][index] = .{

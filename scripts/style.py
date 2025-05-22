@@ -131,12 +131,6 @@ def unused_imports(args, files_to_check):
 
 
 files_excluded_from_line_length_check = [
-    "src/accountsdb/db.zig",
-    "src/accountsdb/download.zig",
-    "src/accountsdb/fuzz_snapshot.zig",
-    "src/accountsdb/index.zig",
-    "src/accountsdb/snapshots.zig",
-    "src/accountsdb/swiss_map.zig",
     "src/bincode/arraylist.zig",
     "src/bincode/bincode.zig",
     "src/bincode/int.zig",
