@@ -153,14 +153,14 @@ fn VmValue(comptime T: type) type {
             memory_map: *const MemoryMap,
             check_aligned: bool,
         },
-        translated_ptr: usize,
+        translated_addr: usize,
 
         pub fn get(self: Self, comptime state: memory.MemoryState) !(switch (state) {
             .constant => *align(1) const T,
             .mutable => *align(1) T,
         }) {
             switch (self) {
-                .translated_ptr => |ptr| return @ptrFromInt(ptr),
+                .translated_addr => |ptr| return @ptrFromInt(ptr),
                 .vm_address => |vma| {
                     return vma.memory_map.translateType(T, state, vma.vm_addr, vma.check_aligned);
                 },
@@ -327,7 +327,7 @@ const CallerAccount = struct {
                     .check_aligned = ic.getCheckAligned(),
                 } };
             } else r2l: {
-                break :r2l VmValue(u64){ .translated_ptr = try memory_map.translate(
+                break :r2l VmValue(u64){ .translated_addr = try memory_map.translate(
                     .constant,
                     data_ptr +| @sizeOf(u64),
                     @sizeOf(u64),
@@ -456,7 +456,7 @@ const CallerAccount = struct {
                 .check_aligned = ic.getCheckAligned(),
             } }
         else
-            VmValue(u64){ .translated_ptr = try memory_map.translate(
+            VmValue(u64){ .translated_addr = try memory_map.translate(
                 .mutable,
                 data_len_vm_addr,
                 @sizeOf(u64),
@@ -626,11 +626,10 @@ fn translateAccounts(
         }
     }
 
-    var account_info_keys = std.ArrayList(*const Pubkey).init(allocator);
-    defer account_info_keys.deinit();
-
-    for (account_infos) |account_info| { // translate keys upfront before inner loop below.
-        try account_info_keys.append(try memory_map.translateType(
+    // translate keys upfront before inner loop below.
+    var account_info_keys: std.BoundedArray(*align(1) const Pubkey, InstructionInfo.MAX_ACCOUNT_METAS) = .{};
+    for (account_infos) |account_info| {
+        account_info_keys.appendAssumeCapacity(try memory_map.translateType(
             Pubkey,
             .constant,
             account_info.key_addr,
@@ -674,7 +673,7 @@ fn translateAccounts(
             continue;
         }
 
-        const caller_account_index = for (account_info_keys.items, 0..) |key, idx| {
+        const caller_account_index = for (account_info_keys.constSlice(), 0..) |key, idx| {
             if (key.equals(&account_key)) break idx;
         } else {
             try ic.tc.log("Instruction references an unknown account {}", .{account_key});
@@ -2062,7 +2061,7 @@ const TestCallerAccount = struct {
             .original_data_len = self.len,
             .serialized_data = if (self.direct_mapping) &.{} else data,
             .vm_data_addr = self.vm_addr + @sizeOf(u64),
-            .ref_to_len_in_vm = .{ .translated_ptr = @intFromPtr(&self.len) },
+            .ref_to_len_in_vm = .{ .translated_addr = @intFromPtr(&self.len) },
         };
     }
 };
