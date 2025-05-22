@@ -627,7 +627,10 @@ fn translateAccounts(
     }
 
     // translate keys upfront before inner loop below.
-    var account_info_keys: std.BoundedArray(*align(1) const Pubkey, InstructionInfo.MAX_ACCOUNT_METAS) = .{};
+    var account_info_keys: std.BoundedArray(
+        *align(1) const Pubkey,
+        InstructionInfo.MAX_ACCOUNT_METAS,
+    ) = .{};
     for (account_infos) |account_info| {
         account_info_keys.appendAssumeCapacity(try memory_map.translateType(
             Pubkey,
