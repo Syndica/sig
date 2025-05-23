@@ -464,7 +464,7 @@ const CompiledKeyMeta = struct {
         .is_nonce = false,
     };
 
-    pub fn singerWritableFlags(self: CompiledKeyMeta) SignerWritableFlags {
+    pub fn signerWritableFlags(self: CompiledKeyMeta) SignerWritableFlags {
         if (self.is_signer and self.is_writable) return .signer_writable;
         if (self.is_signer) return .signer;
         if (self.is_writable) return .writable;
@@ -608,8 +608,8 @@ fn sortCompiledKeys(
             }
 
             const flags_order = MetaMapKeyAndSignerWritableFlags.order(
-                .{ .key = a_key, .flags = a_value.singerWritableFlags() },
-                .{ .key = b_key, .flags = b_value.singerWritableFlags() },
+                .{ .key = a_key, .flags = a_value.signerWritableFlags() },
+                .{ .key = b_key, .flags = b_value.signerWritableFlags() },
             );
             return flags_order != .lt;
         }
@@ -625,7 +625,7 @@ fn sortCompiledKeys(
 
 const MetaMapKeyAndSignerWritableFlags = struct {
     key: Pubkey,
-    /// From the associated `CompiledKeyMeta.singerWritableFlags(value)`.
+    /// From the associated `CompiledKeyMeta.signerWritableFlags(value)`.
     flags: CompiledKeyMeta.SignerWritableFlags,
 
     fn order(
