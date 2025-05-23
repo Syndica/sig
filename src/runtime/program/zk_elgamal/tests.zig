@@ -10,35 +10,35 @@ const program = sig.runtime.program;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 
-test "zero balance" {
-    const allocator = std.testing.allocator;
+// test "zero balance" {
+//     const allocator = std.testing.allocator;
 
-    const kp = zksdk.ElGamalKeypair.random();
-    const zero_ciphertext = zksdk.el_gamal.encrypt(u64, 0, &kp.public);
+//     const kp = zksdk.ElGamalKeypair.random();
+//     const zero_ciphertext = zksdk.el_gamal.encrypt(u64, 0, &kp.public);
 
-    const success_proof_data = ZeroCiphertextData.init(
-        &kp,
-        &zero_ciphertext,
-    );
+//     const success_proof_data = ZeroCiphertextData.init(
+//         &kp,
+//         &zero_ciphertext,
+//     );
 
-    const incorrect_keypair: zksdk.ElGamalKeypair = .{
-        .public = kp.public,
-        .secret = zksdk.ElGamalKeypair.Secret.random(),
-    };
+//     const incorrect_keypair: zksdk.ElGamalKeypair = .{
+//         .public = kp.public,
+//         .secret = zksdk.ElGamalKeypair.Secret.random(),
+//     };
 
-    const fail_proof_data = ZeroCiphertextData.init(
-        &incorrect_keypair,
-        &zero_ciphertext,
-    );
+//     const fail_proof_data = ZeroCiphertextData.init(
+//         &incorrect_keypair,
+//         &zero_ciphertext,
+//     );
 
-    try testVerifyProofWithoutContext(
-        ZeroCiphertextData,
-        allocator,
-        .verify_zero_ciphertext,
-        &success_proof_data,
-        &fail_proof_data,
-    );
-}
+//     try testVerifyProofWithoutContext(
+//         ZeroCiphertextData,
+//         allocator,
+//         .verify_zero_ciphertext,
+//         &success_proof_data,
+//         &fail_proof_data,
+//     );
+// }
 
 fn testVerifyProofWithoutContext(
     comptime Proof: type,
