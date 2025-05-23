@@ -569,9 +569,10 @@ fn getNoncePubkey(instructions: []const sig.core.Instruction) ?Pubkey {
     return first.pubkey;
 }
 
-/// Sorts the map so that entries are ordered first by their `is_signer` and `is_writable` flags, resulting in
-/// four groups `[signer & writable, signer, writable, neither]`, and then within each of the four groups, entries
-/// will be sorted by their pubkeys, resulting in an absolute and deterministic ordering.
+/// Sorts the map so that entries are ordered first by their `is_signer` and `is_writable` flags,
+/// resulting in four groups `[signer & writable, signer, writable, neither]`, and then within each
+/// of the four groups, entries will be sorted by their pubkeys, resulting in an absolute and
+/// deterministic ordering.
 fn sortCompiledKeys(
     key_meta_map: *KeyMetaMap,
     /// This is a pubkey asserted to be in the map, and will be sorted as the first entry.
