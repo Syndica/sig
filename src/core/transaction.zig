@@ -289,16 +289,19 @@ pub const TransactionMessage = struct {
         instructions: []const sig.core.Instruction,
         payer: ?Pubkey,
         recent_blockhash: Hash,
-    ) TransactionInstruction.CompileFromError!TransactionMessage {
-        var compiled_keys: KeyMetaMap = .{};
-        defer compiled_keys.deinit(allocator);
-        try compileKeys(allocator, &compiled_keys, payer, instructions);
-        sortCompiledKeys(&compiled_keys, payer);
+    ) LegacyCompileFromError!TransactionMessage {
+        const account_keys: []const Pubkey, const counts: AccountKindCounts = blk: {
+            var compiled_keys = try compileKeys(allocator, payer, instructions);
+            defer compiled_keys.deinit(allocator);
 
-        const counts = CompiledKeyMeta.countAccountKinds(compiled_keys.values()) orelse
-            return error.TooManyKeys;
+            const counts = AccountKindCounts.count(compiled_keys.values()) orelse
+                return error.TooManyKeys;
 
-        const account_keys = try allocator.dupe(Pubkey, compiled_keys.keys());
+            const account_keys = try allocator.dupe(Pubkey, compiled_keys.keys());
+            errdefer allocator.free(account_keys);
+
+            break :blk .{ account_keys, counts };
+        };
         errdefer allocator.free(account_keys);
 
         const tx_instructions = try allocator.alloc(TransactionInstruction, instructions.len);
@@ -449,53 +452,62 @@ pub const TransactionMessage = struct {
     }
 };
 
-const KeyMetaMap = std.AutoArrayHashMapUnmanaged(Pubkey, CompiledKeyMeta);
+const KeyMetaMap = std.AutoArrayHashMapUnmanaged(Pubkey, SignerWritableFlags);
 
-const CompiledKeyMeta = struct {
-    is_signer: bool,
-    is_writable: bool,
-    is_invoked: bool,
-    is_nonce: bool,
+const SignerWritableFlags = packed struct(u2) {
+    writable: bool,
+    signer: bool,
 
-    pub const ALL_FALSE: CompiledKeyMeta = .{
-        .is_signer = false,
-        .is_writable = false,
-        .is_invoked = false,
-        .is_nonce = false,
+    pub const UNSIGNED_READONLY: SignerWritableFlags = .{
+        .signer = false,
+        .writable = false,
     };
 
-    pub fn signerWritableFlags(self: CompiledKeyMeta) SignerWritableFlags {
-        if (self.is_signer and self.is_writable) return .signer_writable;
-        if (self.is_signer) return .signer;
-        if (self.is_writable) return .writable;
-        return .none;
+    /// Orders such that a list of these flags is ordered like so:
+    /// ```
+    /// {
+    ///      signer and  writable,
+    ///      signer and !writable,
+    ///     !signer and  writable,
+    ///     !signer and !writable
+    /// }
+    /// ```
+    pub fn order(self: SignerWritableFlags, other: SignerWritableFlags) std.math.Order {
+        const a: u2 = @bitCast(self);
+        const b: u2 = @bitCast(other);
+        return std.math.order(a, b).invert();
     }
+    comptime {
+        std.debug.assert(order(
+            .{ .writable = true, .signer = true },
+            .{ .writable = false, .signer = true },
+        ) == .lt);
+        std.debug.assert(order(
+            .{ .writable = false, .signer = true },
+            .{ .writable = true, .signer = false },
+        ) == .lt);
+        std.debug.assert(order(
+            .{ .writable = true, .signer = false },
+            .{ .writable = false, .signer = false },
+        ) == .lt);
+    }
+};
 
-    pub const SignerWritableFlags = enum(u2) {
-        signer_writable = 3,
-        signer = 2,
-        writable = 1,
-        none = 0,
+const AccountKindCounts = struct {
+    signature_count: u8,
+    readonly_signed_count: u8,
+    readonly_unsigned_count: u8,
 
-        pub fn order(self: SignerWritableFlags, other: SignerWritableFlags) std.math.Order {
-            return std.math.order(@intFromEnum(self), @intFromEnum(other));
-        }
-    };
-
-    /// Returns null on overflow
-    pub fn countAccountKinds(compiled_meta: []const CompiledKeyMeta) ?struct {
-        signature_count: u8,
-        readonly_signed_count: u8,
-        readonly_unsigned_count: u8,
-    } {
+    /// Returns null on overflow.
+    pub fn count(compiled_meta: []const SignerWritableFlags) ?AccountKindCounts {
         var required_signed: usize = 0;
         var readonly_signed: usize = 0;
         var readonly_unsigned: usize = 0;
 
         for (compiled_meta) |meta| {
-            required_signed += @intFromBool(meta.is_signer);
-            readonly_signed += @intFromBool(meta.is_signer and !meta.is_writable);
-            readonly_unsigned += @intFromBool(!meta.is_signer and !meta.is_writable);
+            required_signed += @intFromBool(meta.signer);
+            readonly_signed += @intFromBool(meta.signer and !meta.writable);
+            readonly_unsigned += @intFromBool(!meta.signer and !meta.writable);
         }
 
         return .{
@@ -506,14 +518,16 @@ const CompiledKeyMeta = struct {
     }
 };
 
-/// Clears the map, fills it with all of the keys in `instructions`, and `maybe_payer`.
+/// Returns a map with all of the keys in `instructions`, and `maybe_payer`.
+/// Sorted with `sortCompiledKeys` - see its doc comment for commentary on
+/// the ordering of the keys.
 fn compileKeys(
     allocator: std.mem.Allocator,
-    key_meta_map: *KeyMetaMap,
     maybe_payer: ?Pubkey,
     instructions: []const sig.core.Instruction,
-) !void {
-    key_meta_map.clearRetainingCapacity();
+) std.mem.Allocator.Error!KeyMetaMap {
+    var key_meta_map: KeyMetaMap = .{};
+    defer key_meta_map.deinit(allocator);
 
     for (instructions) |ix| {
         try key_meta_map.ensureUnusedCapacity(allocator, 1 + ix.accounts.len);
@@ -521,52 +535,28 @@ fn compileKeys(
         {
             const gop = key_meta_map.getOrPutAssumeCapacity(ix.program_id);
             const meta = gop.value_ptr;
-            if (!gop.found_existing) meta.* = CompiledKeyMeta.ALL_FALSE;
-            meta.is_invoked = true;
+            if (!gop.found_existing) meta.* = SignerWritableFlags.UNSIGNED_READONLY;
         }
 
         for (ix.accounts) |account_meta| {
             const gop = key_meta_map.getOrPutAssumeCapacity(account_meta.pubkey);
             const meta = gop.value_ptr;
-            if (!gop.found_existing) meta.* = CompiledKeyMeta.ALL_FALSE;
-            meta.is_signer = meta.is_signer or account_meta.is_signer;
-            meta.is_writable = meta.is_writable or account_meta.is_writable;
+            if (!gop.found_existing) meta.* = SignerWritableFlags.UNSIGNED_READONLY;
+            meta.signer = meta.signer or account_meta.is_signer;
+            meta.writable = meta.writable or account_meta.is_writable;
         }
-    }
-
-    if (getNoncePubkey(instructions)) |nonce_pubkey| {
-        const gop = try key_meta_map.getOrPut(allocator, nonce_pubkey);
-        const meta = gop.value_ptr;
-        if (!gop.found_existing) meta.* = CompiledKeyMeta.ALL_FALSE;
-        meta.is_nonce = true;
     }
 
     if (maybe_payer) |payer| {
         const gop = try key_meta_map.getOrPut(allocator, payer);
         const meta = gop.value_ptr;
-        if (!gop.found_existing) meta.* = CompiledKeyMeta.ALL_FALSE;
-        meta.is_signer = true;
-        meta.is_writable = true;
-    }
-}
-
-fn getNoncePubkey(instructions: []const sig.core.Instruction) ?Pubkey {
-    const NONCED_TX_MARKER_IX_INDEX: usize = 0;
-    const ADVANCE_NONCE_PREFIX: [4]u8 = .{ 4, 0, 0, 0 };
-
-    if (NONCED_TX_MARKER_IX_INDEX >= instructions.len) return null;
-    const ix = instructions[NONCED_TX_MARKER_IX_INDEX];
-    if (!ix.program_id.equals(&sig.runtime.program.system.ID)) {
-        return null;
+        if (!gop.found_existing) meta.* = SignerWritableFlags.UNSIGNED_READONLY;
+        meta.signer = true;
+        meta.writable = true;
     }
 
-    if (ix.data.len < 4) return null;
-    const nonce_prefix = ix.data[0..4];
-    if (!std.mem.eql(u8, nonce_prefix, &ADVANCE_NONCE_PREFIX)) return null;
-
-    if (ix.accounts.len == 0) return null;
-    const first = ix.accounts[0];
-    return first.pubkey;
+    sortCompiledKeys(&key_meta_map, maybe_payer);
+    return key_meta_map.move();
 }
 
 /// Sorts the map so that entries are ordered first by their `is_signer` and `is_writable` flags,
@@ -607,11 +597,8 @@ fn sortCompiledKeys(
                 if (b_is_payer) return false;
             }
 
-            const flags_order = MetaMapKeyAndSignerWritableFlags.order(
-                .{ .key = a_key, .flags = a_value.signerWritableFlags() },
-                .{ .key = b_key, .flags = b_value.signerWritableFlags() },
-            );
-            return flags_order != .lt;
+            const ab_order = a_value.order(b_value).differ() orelse a_key.order(b_key);
+            return ab_order == .lt;
         }
     };
 
@@ -622,22 +609,6 @@ fn sortCompiledKeys(
 
     key_meta_map.sort(sort_ctx);
 }
-
-const MetaMapKeyAndSignerWritableFlags = struct {
-    key: Pubkey,
-    /// From the associated `CompiledKeyMeta.signerWritableFlags(value)`.
-    flags: CompiledKeyMeta.SignerWritableFlags,
-
-    fn order(
-        self: MetaMapKeyAndSignerWritableFlags,
-        other: MetaMapKeyAndSignerWritableFlags,
-    ) std.math.Order {
-        return switch (self.flags.order(other.flags)) {
-            .lt, .gt => |lt_or_gt| lt_or_gt,
-            .eq => self.key.order(other.key),
-        };
-    }
-};
 
 pub const TransactionInstruction = struct {
     /// Index into the transactions account_keys array
