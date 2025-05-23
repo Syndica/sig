@@ -481,8 +481,8 @@ test "basic correctness" {
     defer b.deinit(allocator);
 
     for (0..n) |_| {
-        try a.append(allocator, ONE);
-        try b.append(allocator, ONE);
+        try a.append(allocator, Scalar.random());
+        try b.append(allocator, Scalar.random());
     }
     const c = innerProduct(a.items, b.items);
 
@@ -490,7 +490,7 @@ test "basic correctness" {
     defer allocator.free(G_factors);
     @memset(G_factors, ONE);
 
-    const y_inv = ONE;
+    const y_inv = Scalar.random();
     const H_factors = try genPowers(allocator, y_inv, n);
     defer allocator.free(H_factors);
 
