@@ -76,7 +76,8 @@ pub fn parallelUntarToFileSystem(
 
     logger.info().logf("using {d} threads to unpack snapshot", .{n_threads});
 
-    var pool = try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
+    var pool =
+        try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
     defer pool.deinit(allocator);
 
     var timer = try sig.time.Timer.start();
@@ -88,7 +89,10 @@ pub fn parallelUntarToFileSystem(
         switch (try reader.readAtLeast(&header_buf, 512)) {
             0 => break,
             512 => {},
-            else => |actual_size| std.debug.panic("Actual file size ({d}) too small for header (< 512).", .{actual_size}),
+            else => |actual_size| std.debug.panic(
+                "Actual file size ({d}) too small for header (< 512).",
+                .{actual_size},
+            ),
         }
 
         const header: TarHeaderMinimal = .{ .bytes = header_buf[0..512] };
@@ -112,7 +116,10 @@ pub fn parallelUntarToFileSystem(
                     break :loop; // tar EOF
                 }
 
-                const file_name_stripped = try stripComponents(unstripped_file_name, strip_components);
+                const file_name_stripped = try stripComponents(
+                    unstripped_file_name,
+                    strip_components,
+                );
                 if (std.fs.path.dirname(file_name_stripped)) |dir_name| {
                     try dir.makePath(dir_name);
                 }
@@ -137,7 +144,10 @@ pub fn parallelUntarToFileSystem(
 
                 const actual_contents_len = try reader.readAtLeast(contents, file_size);
                 if (actual_contents_len != file_size) {
-                    std.debug.panic("Reported file ({d}) size does not match actual file size ({d})", .{ contents.len, actual_contents_len });
+                    std.debug.panic(
+                        "Reported file ({d}) size does not match actual file size ({d})",
+                        .{ contents.len, actual_contents_len },
+                    );
                 }
 
                 try reader.skipBytes(pad_len, .{});
@@ -302,7 +312,11 @@ const TarOutputHeader = extern struct {
 
         // add as much to prefix as you can, must split at /
         const prefix_remaining = max_prefix - prefix_pos;
-        if (std.mem.lastIndexOf(u8, sub_path[0..@min(prefix_remaining, sub_path.len)], &.{'/'})) |sep_pos| {
+        if (std.mem.lastIndexOfScalar(
+            u8,
+            sub_path[0..@min(prefix_remaining, sub_path.len)],
+            '/',
+        )) |sep_pos| {
             @memcpy(self.prefix[prefix_pos..][0..sep_pos], sub_path[0..sep_pos]);
             if ((sub_path.len - sep_pos - 1) > max_name) return error.NameTooLong;
             @memcpy(self.name[0..][0 .. sub_path.len - sep_pos - 1], sub_path[sep_pos + 1 ..]);

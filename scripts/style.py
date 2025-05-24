@@ -182,11 +182,6 @@ files_excluded_from_line_length_check = [
     "src/transaction_sender/mock_transfer_generator.zig",
     "src/transaction_sender/service.zig",
     "src/transaction_sender/transaction_pool.zig",
-    "src/utils/allocators.zig",
-    "src/utils/fmt.zig",
-    "src/utils/tar.zig",
-    "src/utils/thread.zig",
-    "src/utils/types.zig",
 ]
 
 
