@@ -276,14 +276,17 @@ pub const BenchmarkLedger = struct {
         var writer = try state.writer();
         var rng = std.Random.DefaultPrng.init(100);
 
-        var signatures: std.ArrayList(Signature) = try std.ArrayList(Signature).initCapacity(state.allocator, 64);
+        var signatures: std.ArrayList(Signature) =
+            try std.ArrayList(Signature).initCapacity(state.allocator, 64);
         defer signatures.deinit();
-        var writable_keys = try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
+        var writable_keys =
+            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
         defer {
             for (writable_keys.items) |l| l.deinit();
             writable_keys.deinit();
         }
-        var readonly_keys = try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
+        var readonly_keys =
+            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
         defer {
             for (readonly_keys.items) |l| l.deinit();
             readonly_keys.deinit();
