@@ -18,7 +18,7 @@ pub const Config = struct {
     has_side_effects: bool,
     enable_tracy: bool,
     use_llvm: bool,
-    pic: bool,
+    force_pic: bool,
 
     pub fn fromBuild(b: *Build) !Config {
         var self = Config{
@@ -90,9 +90,9 @@ pub const Config = struct {
                 "use_llvm",
                 "If disabled, uses experimental self-hosted backend. Only works for x86_64-linux",
             ) orelse true,
-            .pic = b.option(
+            .force_pic = b.option(
                 bool,
-                "pic",
+                "force_pic",
                 "Builds linked dependencies with PIC enabled",
             ) orelse false,
         };
@@ -153,7 +153,7 @@ pub fn build(b: *Build) !void {
     const secp256k1_mod = b.dependency("secp256k1", .{
         .target = config.target,
         .optimize = config.optimize,
-        .pic = config.pic,
+        .force_pic = config.force_pic,
     }).module("secp256k1");
 
     const tracy_mod = b.dependency("tracy", .{
