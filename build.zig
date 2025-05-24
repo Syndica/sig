@@ -138,6 +138,9 @@ pub fn build(b: *Build) !void {
     const poseidon_dep = b.dependency("poseidon", dep_opts);
     const poseidon_mod = poseidon_dep.module("poseidon");
 
+    const ff_dep = b.dependency("ff", dep_opts);
+    const ff_mod = ff_dep.module("ff");
+
     const rocksdb_dep = b.dependency("rocksdb", dep_opts);
     const rocksdb_mod = rocksdb_dep.module("bindings");
 
@@ -180,6 +183,7 @@ pub fn build(b: *Build) !void {
     sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
     sig_mod.addImport("poseidon", poseidon_mod);
+    sig_mod.addImport("ff", ff_mod);
     sig_mod.addImport("tracy", tracy_mod);
 
     switch (config.blockstore_db) {
@@ -254,6 +258,7 @@ pub fn build(b: *Build) !void {
     unit_tests_exe.root_module.addImport("zig-network", zig_network_mod);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     unit_tests_exe.root_module.addImport("poseidon", poseidon_mod);
+    unit_tests_exe.root_module.addImport("ff", ff_mod);
     unit_tests_exe.root_module.addImport("secp256k1", secp256k1_mod);
     unit_tests_exe.root_module.addImport("tracy", tracy_mod);
 

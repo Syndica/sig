@@ -53,5 +53,9 @@
             .url = "git+https://github.com/Rexicon226/zig-tracy/#c338e84ea281141c57d23dc715bff7b463b264de",
             .hash = "zig_tracy-0.0.4-4TLLRzJxAABiGlxsT2KVLY54IRX1TbIZ_YJUFUXV9Ky4",
         },
+        .ff = .{
+            .url = "git+https://github.com/Syndica/zig-ff#ad8e4d798ae5db70cfdf7796b8d4598808fc4a67",
+            .hash = "12207cfd498eb9465eb823aefb5301ab7dce437ad500dec04e8da857cf78bfda49b9",
+        },
     },
 }
