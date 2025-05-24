@@ -382,7 +382,9 @@ pub const GeyserReader = struct {
 
         var total_bytes_read: u64 = 0;
         while (total_bytes_read < expected_n_bytes) {
-            const n_bytes_read = self.file.read(self.io_buf[total_bytes_read..expected_n_bytes]) catch |err| {
+            const n_bytes_read = self.file.read(
+                self.io_buf[total_bytes_read..expected_n_bytes],
+            ) catch |err| {
                 if (err == std.posix.ReadError.WouldBlock) {
                     if (self.exit != null and self.exit.?.load(.acquire)) {
                         return error.PipeBlockedWithExitSignaled;
