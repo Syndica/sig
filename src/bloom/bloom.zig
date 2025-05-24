@@ -18,7 +18,7 @@ pub const Bloom = struct {
 
     pub const @"!bincode-config:bits" = BitVecConfig(u64);
 
-    pub fn init(alloc: std.mem.Allocator, n_bits: u64, keys: ?ArrayList(u64)) Bloom {
+    pub fn init(alloc: std.mem.Allocator, n_bits: u64, keys: ?ArrayList(u64)) !Bloom {
         // note: we do this to match the rust deserialization
         // needs to be power of 2 < 64
         const bitset_bits = blk: {
@@ -34,7 +34,7 @@ pub const Bloom = struct {
 
         return .{
             .keys = keys orelse ArrayList(u64).init(alloc),
-            .bits = DynamicArrayBitSet(u64).initEmpty(alloc, bitset_bits) catch unreachable,
+            .bits = try DynamicArrayBitSet(u64).initEmpty(alloc, bitset_bits),
             .num_bits_set = 0,
         };
     }
@@ -134,7 +134,7 @@ test "helper methods match rust" {
 }
 
 test "serializes/deserializes correctly" {
-    const bloom = Bloom.init(testing.allocator, 0, null);
+    const bloom = try Bloom.init(testing.allocator, 0, null);
 
     var buf: [10000]u8 = undefined;
     const out = try bincode.writeToSlice(buf[0..], bloom, .{});
@@ -148,7 +148,7 @@ test "serializes/deserializes correctly" {
 }
 
 test "serializes/deserializes correctly with set bits" {
-    var bloom = Bloom.init(testing.allocator, 128, null);
+    var bloom = try Bloom.init(testing.allocator, 128, null);
     try bloom.addKey(10);
     // required for memory leaks
     defer bloom.deinit();
@@ -164,7 +164,7 @@ test "serializes/deserializes correctly with set bits" {
 
 test "serialized bytes equal rust (one key)" {
     // note: need to init with len 2^i
-    var bloom = Bloom.init(testing.allocator, 128, null);
+    var bloom = try Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
     try bloom.addKey(1);
 
@@ -184,7 +184,7 @@ test "serialized bytes equal rust (one key)" {
 }
 
 test "serialized bytes equal rust (multiple keys)" {
-    var bloom = Bloom.init(testing.allocator, 128, null);
+    var bloom = try Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
 
     try bloom.addKey(1);

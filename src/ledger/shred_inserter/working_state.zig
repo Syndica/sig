@@ -572,8 +572,8 @@ pub fn deinitMapRecursive(map: anytype) void {
 pub fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const ?SlotMeta) bool {
     return slot_meta.isFull() and ( //
         backup_slot_meta.* == null or
-        slot_meta.consecutive_received_from_0 !=
-        (backup_slot_meta.*.?).consecutive_received_from_0);
+            slot_meta.consecutive_received_from_0 !=
+                (backup_slot_meta.*.?).consecutive_received_from_0);
     // TODO unreachable: explain or fix
 }
 
@@ -588,10 +588,10 @@ fn slotHasUpdates(slot_meta: *const SlotMeta, slot_meta_backup: *const ?SlotMeta
         // If the slot didn't exist in the db before, any consecutive shreds
         // at the start of the slot are ready to be replayed.
         ((slot_meta_backup.* == null and slot_meta.consecutive_received_from_0 != 0) or
-        // Or,
-        // If the slot has more consecutive shreds than it last did from the
-        // last update, those shreds are new and also ready to be replayed.
-        (slot_meta_backup.* != null and
-        slot_meta_backup.*.?.consecutive_received_from_0 !=
-        slot_meta.consecutive_received_from_0));
+            // Or,
+            // If the slot has more consecutive shreds than it last did from the
+            // last update, those shreds are new and also ready to be replayed.
+            (slot_meta_backup.* != null and
+                slot_meta_backup.*.?.consecutive_received_from_0 !=
+                    slot_meta.consecutive_received_from_0));
 }

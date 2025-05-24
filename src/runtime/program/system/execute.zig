@@ -1011,7 +1011,7 @@ test "executeAdvanceNonceAccount" {
     defer allocator.free(final_nonce_state_bytes);
 
     // Create Sysvar Recent Blockhashes
-    const recent_blockhashes = .{
+    const recent_blockhashes: RecentBlockhashes = .{
         .entries = &.{.{
             .blockhash = Hash.initRandom(prng.random()),
             .fee_calculator = .{ .lamports_per_signature = 0 }, // Irrelevant
@@ -1190,7 +1190,7 @@ test "executeInitializeNonceAccount" {
     defer allocator.free(nonce_state_bytes);
 
     // Create Sysvar Recent Blockhashes
-    const recent_blockhashes = .{
+    const recent_blockhashes: RecentBlockhashes = .{
         .entries = &.{.{
             .blockhash = Hash.initRandom(prng.random()),
             .fee_calculator = .{ .lamports_per_signature = 0 }, // Irrelevant

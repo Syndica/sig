@@ -32,8 +32,8 @@ pub fn SpawnThreadTasksParams(comptime TaskFn: type) type {
         max_threads: usize,
         params: Params,
 
-        pub const Params = std.meta.ArgsTuple(@Type(.{ .Fn = blk: {
-            var info = @typeInfo(TaskFn).Fn;
+        pub const Params = std.meta.ArgsTuple(@Type(.{ .@"fn" = blk: {
+            var info = @typeInfo(TaskFn).@"fn";
             info.params = info.params[0 .. info.params.len - 1];
             break :blk info;
         } }));
@@ -52,7 +52,7 @@ pub fn spawnThreadTasks(
         task_params: TaskParams,
         fcn_params: @TypeOf(config).Params,
 
-        fn run(self: *const @This()) @typeInfo(@TypeOf(taskFn)).Fn.return_type.? {
+        fn run(self: *const @This()) @typeInfo(@TypeOf(taskFn)).@"fn".return_type.? {
             return @call(.auto, taskFn, self.fcn_params ++ .{self.task_params});
         }
     };
@@ -94,7 +94,7 @@ pub fn spawnThreadTasks(
 /// This will require changes the underlying ThreadPool implementation.
 pub fn HomogeneousThreadPool(comptime TaskType: type) type {
     // the task's return type
-    const TaskResult = @typeInfo(@TypeOf(TaskType.run)).Fn.return_type.?;
+    const TaskResult = @typeInfo(@TypeOf(TaskType.run)).@"fn".return_type.?;
 
     // compatibility layer between user-defined TaskType and ThreadPool's Task type,
     const TaskAdapter = struct {

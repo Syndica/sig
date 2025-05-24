@@ -100,6 +100,8 @@ pub const AccountInfoC = extern struct {
     executable: u8,
 };
 
+const RC_VALUE_OFFSET = @sizeOf(usize) * 2;
+
 /// [rust] https://doc.rust-lang.org/src/alloc/rc.rs.html#281-289
 /// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2971
 fn RcBox(comptime T: type) type {
@@ -107,8 +109,6 @@ fn RcBox(comptime T: type) type {
         strong: usize = 0,
         weak: usize = 0,
         value: T,
-
-        const VALUE_OFFSET = @sizeOf(usize) * 2;
     };
 }
 
@@ -1247,22 +1247,22 @@ fn cpiCommon(
         bpf_loader_program.v1.ID.equals(&instruction.program_id) or
         bpf_loader_program.v2.ID.equals(&instruction.program_id) or
         (bpf_loader_program.v3.ID.equals(&instruction.program_id) and !(blk: {
-        // Check valid upgradable instruction
-        const v3_instruction = try info.deserializeInstruction(
-            allocator,
-            bpf_loader_program.v3.Instruction,
-        );
-        defer sig.bincode.free(allocator, v3_instruction);
-        break :blk switch (v3_instruction) {
-            .close => true,
-            .upgrade => true,
-            .set_authority => true,
-            .set_authority_checked => ic.tc.feature_set.active.contains(
-                features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
-            ),
-            else => false,
-        };
-    })) or (blk: {
+            // Check valid upgradable instruction
+            const v3_instruction = try info.deserializeInstruction(
+                allocator,
+                bpf_loader_program.v3.Instruction,
+            );
+            defer sig.bincode.free(allocator, v3_instruction);
+            break :blk switch (v3_instruction) {
+                .close => true,
+                .upgrade => true,
+                .set_authority => true,
+                .set_authority_checked => ic.tc.feature_set.active.contains(
+                    features.ENABLE_BPF_LOADER_SET_AUTHORITY_CHECKED_IX,
+                ),
+                else => false,
+            };
+        })) or (blk: {
         for (PRECOMPILES) |p| if (p.program_id.equals(&instruction.program_id)) break :blk true;
         break :blk false;
     })) {
@@ -1512,10 +1512,10 @@ const TestAccount = struct {
                 .is_signer = @intFromBool(self.is_signer),
                 .is_writable = @intFromBool(self.is_writable),
                 .lamports_addr = Rc(RefCell(u64)).fromRaw(
-                    @ptrFromInt(lamports_cell_addr + RcBox(*u64).VALUE_OFFSET),
+                    @ptrFromInt(lamports_cell_addr + RC_VALUE_OFFSET),
                 ),
                 .data = Rc(RefCell([]u8)).fromRaw(
-                    @ptrFromInt(data_cell_addr + RcBox([]u8).VALUE_OFFSET),
+                    @ptrFromInt(data_cell_addr + RC_VALUE_OFFSET),
                 ),
                 .owner_addr = owner_addr,
                 .executable = @intFromBool(self.executable),

@@ -599,7 +599,7 @@ pub const UnusedAccounts = struct {
         };
         errdefer self.deinit(allocator);
 
-        inline for (@typeInfo(UnusedAccounts).Struct.fields) |field| {
+        inline for (@typeInfo(UnusedAccounts).@"struct".fields) |field| {
             const hm_info = sig.utils.types.hashMapInfo(field.type).?;
 
             const ptr = &@field(self, field.name);

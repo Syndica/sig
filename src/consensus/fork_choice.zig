@@ -679,7 +679,7 @@ pub const ForkChoice = struct {
 
             if (child_weight > maybe_heaviest_child_weight or
                 (maybe_heaviest_child_weight == child_weight and
-                child.order(maybe_heaviest_child.*) == .lt))
+                    child.order(maybe_heaviest_child.*) == .lt))
             {
                 return false;
             }
@@ -821,7 +821,7 @@ pub const ForkChoice = struct {
 
         var reachable_set = SortedMap(SlotAndHash, void).init(self.allocator);
 
-        while (pending_keys.popOrNull()) |current_key| {
+        while (pending_keys.pop()) |current_key| {
             if (current_key.equals(root2.*)) {
                 continue;
             }
@@ -993,9 +993,9 @@ pub const ForkChoice = struct {
                 // Update the heaviest child if the child is a candidate and meets the conditions
                 if (child_fork_info.isCandidate() and
                     (heaviest_child_slot_key.equals(slot_hash_key) or
-                    child_stake_for_subtree > heaviest_child_stake_for_subtree or
-                    (child_stake_for_subtree == heaviest_child_stake_for_subtree and
-                    child_key.order(heaviest_child_slot_key) == .lt)))
+                        child_stake_for_subtree > heaviest_child_stake_for_subtree or
+                        (child_stake_for_subtree == heaviest_child_stake_for_subtree and
+                            child_key.order(heaviest_child_slot_key) == .lt)))
                 {
                     heaviest_child_stake_for_subtree = child_stake_for_subtree;
                     heaviest_child_slot_key = child_key;
@@ -1013,8 +1013,8 @@ pub const ForkChoice = struct {
                     is_deeper_child or
                     (child_height == deepest_child_height and is_heavier_child) or
                     (child_height == deepest_child_height and
-                    child_stake_for_subtree == deepest_child_stake_for_subtree and
-                    is_earlier_child))
+                        child_stake_for_subtree == deepest_child_stake_for_subtree and
+                        is_earlier_child))
                 {
                     deepest_child_height = child_height;
                     deepest_child_stake_for_subtree = child_stake_for_subtree;
@@ -1870,7 +1870,7 @@ test "HeaviestSubtreeForkChoice.isHeaviestChild" {
 
 // [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1871
 test "HeaviestSubtreeForkChoice.addNewLeafSlot_duplicate" {
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
     const duplicate_fork = try setupDuplicateForks();
     defer test_allocator.destroy(duplicate_fork.fork_choice);
@@ -2334,7 +2334,7 @@ pub fn setupDuplicateForks() !struct {
     //             │   └── (10)
     //             ├── (10)
     //             └── (10)
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
     // Build fork structure
     var fork_choice = try test_allocator.create(ForkChoice);

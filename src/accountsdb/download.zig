@@ -241,7 +241,7 @@ pub fn downloadSnapshotsFromGossip(
 
             var write_buf: [512]u8 = undefined;
             var i: usize = 0;
-            inline for (@typeInfo(PeerSearchResult).Struct.fields) |field| {
+            inline for (@typeInfo(PeerSearchResult).@"struct".fields) |field| {
                 if (@field(result, field.name) != 0) {
                     const r = try std.fmt.bufPrint(write_buf[i..], "{s}: {d} ", .{ field.name, @field(result, field.name) });
                     i += r.len;
@@ -637,7 +637,7 @@ test "accounts_db.download: test remove untrusted peers" {
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
     const my_shred_version: usize = 19;
@@ -660,7 +660,7 @@ test "accounts_db.download: test remove untrusted peers" {
     defer trusted_validators.deinit();
 
     for (contact_infos) |ci| {
-        const kp = try KeyPair.create(null);
+        const kp = KeyPair.generate();
         var snapshot_hashes = sig.gossip.data.SnapshotHashes.initRandom(random);
         snapshot_hashes.from = ci.pubkey;
         const data = SignedGossipData.initSigned(&kp, .{ .SnapshotHashes = snapshot_hashes });
@@ -713,7 +713,7 @@ test "accounts_db.download: test finding peers" {
     var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
     const my_shred_version: usize = 19;
@@ -752,7 +752,7 @@ test "accounts_db.download: test finding peers" {
     try std.testing.expect(result.no_snapshot_hashes_count == 10);
 
     for (contact_infos) |*ci| {
-        const kp = try KeyPair.create(null);
+        const kp = KeyPair.generate();
         var snapshot_hashes = sig.gossip.data.SnapshotHashes.initRandom(random);
         snapshot_hashes.from = ci.pubkey;
         const data = SignedGossipData.initSigned(&kp, .{ .SnapshotHashes = snapshot_hashes });

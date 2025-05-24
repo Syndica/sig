@@ -8,7 +8,7 @@ const socket_utils = sig.net.socket_utils;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicU64 = std.atomic.Value(u64);
 const EndPoint = net.EndPoint;
-const Random = std.rand.Random;
+const Random = std.Random;
 const UdpSocket = net.Socket;
 
 const Channel = sig.sync.Channel;
@@ -37,14 +37,7 @@ const DEDUPER_FALSE_POSITIVE_RATE: f64 = 0.001;
 const DEDUPER_RESET_CYCLE: Duration = Duration.fromSecs(5 * 60);
 const DEDUPER_NUM_BITS: u64 = 637_534_199;
 
-/// Retransmit Service
-/// The retransmit service receives verified shreds from the shred network and retransmits them to the network.
-/// The retransmit service is broken down into two main components:
-/// 1. receiveShreds: runs on a single thread and receives shreds from the shred network, deduplicates them, and then packages them
-///    into RetransmitShredInfo's which are sent to a channel for further processing.
-/// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel, computes the children to retransmit to
-///    and then constructs and sends packets to the network.
-pub fn runShredRetransmitter(params: struct {
+pub const ShredRetransmitterParams = struct {
     allocator: std.mem.Allocator,
     my_contact_info: ThreadSafeContactInfo,
     epoch_context_mgr: *EpochContextManager,
@@ -55,7 +48,16 @@ pub fn runShredRetransmitter(params: struct {
     exit: *AtomicBool,
     rand: Random,
     logger: Logger,
-}) !void {
+};
+
+/// Retransmit Service
+/// The retransmit service receives verified shreds from the shred network and retransmits them to the network.
+/// The retransmit service is broken down into two main components:
+/// 1. receiveShreds: runs on a single thread and receives shreds from the shred network, deduplicates them, and then packages them
+///    into RetransmitShredInfo's which are sent to a channel for further processing.
+/// 2. retransmitShreds: runs on N threads and receives RetransmitShredInfo's from the channel, computes the children to retransmit to
+///    and then constructs and sends packets to the network.
+pub fn runShredRetransmitter(params: ShredRetransmitterParams) !void {
     errdefer {
         params.logger.info().log("retransmit service failed");
         params.exit.store(false, .monotonic);

@@ -261,13 +261,13 @@ fn serializeParametersUnaligned(
             .account => |index_and_account| {
                 _, const borrowed_account = index_and_account;
                 size += @sizeOf(u8) // is_signer
-                + @sizeOf(u8) // is_writable
-                + @sizeOf(Pubkey) // key
-                + @sizeOf(u64) // lamports
-                + @sizeOf(u64) // data len
-                + @sizeOf(Pubkey) // owner
-                + @sizeOf(u8) // executable
-                + @sizeOf(u64); // rent_epoch
+                    + @sizeOf(u8) // is_writable
+                    + @sizeOf(Pubkey) // key
+                    + @sizeOf(u64) // lamports
+                    + @sizeOf(u64) // data len
+                    + @sizeOf(Pubkey) // owner
+                    + @sizeOf(u8) // executable
+                    + @sizeOf(u64); // rent_epoch
                 if (copy_account_data) {
                     size += borrowed_account.constAccountData().len;
                 }
@@ -276,8 +276,8 @@ fn serializeParametersUnaligned(
         }
     }
     size += @sizeOf(u64) // instruction data len
-    + instruction_data.len // instruction data
-    + @sizeOf(Pubkey); // program id
+        + instruction_data.len // instruction data
+        + @sizeOf(Pubkey); // program id
 
     var serializer = try Serializer.init(
         allocator,
@@ -373,15 +373,15 @@ fn serializeParametersAligned(
             .account => |index_and_account| {
                 _, const borrowed_account = index_and_account;
                 size += @sizeOf(u8) // is_signer
-                + @sizeOf(u8) // is_writable
-                + @sizeOf(u8) // executable
-                + @sizeOf(u32) // original data len
-                + @sizeOf(Pubkey) // key
-                + @sizeOf(Pubkey) // owner
-                + @sizeOf(u64) // lamports
-                + @sizeOf(u64) // data len
-                + MAX_PERMITTED_DATA_INCREASE //
-                + @sizeOf(u64); // rent_epoch
+                    + @sizeOf(u8) // is_writable
+                    + @sizeOf(u8) // executable
+                    + @sizeOf(u32) // original data len
+                    + @sizeOf(Pubkey) // key
+                    + @sizeOf(Pubkey) // owner
+                    + @sizeOf(u64) // lamports
+                    + @sizeOf(u64) // data len
+                    + MAX_PERMITTED_DATA_INCREASE //
+                    + @sizeOf(u64); // rent_epoch
 
                 if (copy_account_data) {
                     const data_len = borrowed_account.constAccountData().len;
@@ -399,8 +399,8 @@ fn serializeParametersAligned(
         }
     }
     size += @sizeOf(u64) // instruction data len
-    + instruction_data.len // instruction data
-    + @sizeOf(Pubkey); // program id
+        + instruction_data.len // instruction data
+        + @sizeOf(Pubkey); // program id
 
     var serializer = try Serializer.init(
         allocator,
@@ -542,8 +542,8 @@ fn deserializeParametersUnaligned(
             defer borrowed_account.release();
 
             start += @sizeOf(u8) // is_signer
-            + @sizeOf(u8) // is_writable
-            + @sizeOf(Pubkey); // key
+                + @sizeOf(u8) // is_writable
+                + @sizeOf(Pubkey); // key
 
             // read and update Lamports
             if (start + @sizeOf(u64) > memory.len) return InstructionError.InvalidArgument;
@@ -564,9 +564,9 @@ fn deserializeParametersUnaligned(
                 const data = memory[start .. start + pre_len];
                 const can_data_be_resized =
                     borrowed_account.checkCanSetDataLength(
-                    ic.tc.accounts_resize_delta,
-                    pre_len,
-                );
+                        ic.tc.accounts_resize_delta,
+                        pre_len,
+                    );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataFromSlice(
@@ -584,8 +584,8 @@ fn deserializeParametersUnaligned(
         }
 
         start += @sizeOf(Pubkey) // owner
-        + @sizeOf(u8) // executable
-        + @sizeOf(u64); // rent_epoch
+            + @sizeOf(u8) // executable
+            + @sizeOf(u64); // rent_epoch
     }
 }
 
@@ -612,10 +612,10 @@ fn deserializeParametersAligned(
             defer borrowed_account.release();
 
             start += @sizeOf(u8) // is_signer
-            + @sizeOf(u8) // is_writable
-            + @sizeOf(u8) // executable
-            + @sizeOf(u32) // original data len
-            + @sizeOf(Pubkey); // key
+                + @sizeOf(u8) // is_writable
+                + @sizeOf(u8) // executable
+                + @sizeOf(u32) // original data len
+                + @sizeOf(Pubkey); // key
 
             // read owner
             if (start + @sizeOf(Pubkey) > memory.len) return InstructionError.InvalidArgument;
@@ -658,9 +658,9 @@ fn deserializeParametersAligned(
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
                     borrowed_account.checkCanSetDataLength(
-                    ic.tc.accounts_resize_delta,
-                    post_len,
-                );
+                        ic.tc.accounts_resize_delta,
+                        post_len,
+                    );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataFromSlice(
@@ -680,9 +680,9 @@ fn deserializeParametersAligned(
                 const data = memory[start .. start + post_len];
                 const can_data_be_resized =
                     borrowed_account.checkCanSetDataLength(
-                    ic.tc.accounts_resize_delta,
-                    post_len,
-                );
+                        ic.tc.accounts_resize_delta,
+                        post_len,
+                    );
                 const can_data_be_mutated = borrowed_account.checkDataIsMutable();
                 if (can_data_be_resized == null and can_data_be_mutated == null) {
                     try borrowed_account.setDataLength(
@@ -733,7 +733,7 @@ test "serializeParameters" {
 
     // const allocator = std.testing.allocator;
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     for ([_]Pubkey{
         program.bpf_loader.v1.ID,

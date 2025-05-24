@@ -606,7 +606,7 @@ pub const Assembler = struct {
                         },
                         .load_reg => .{
                             .opcode = if (version.moveMemoryInstructionClasses())
-                                @enumFromInt(bind.secondary)
+                                @enumFromInt(bind.alt)
                             else
                                 @enumFromInt(bind.opc),
                             .dst = operands[0].register,
@@ -616,7 +616,7 @@ pub const Assembler = struct {
                         },
                         .store_reg => .{
                             .opcode = if (version.moveMemoryInstructionClasses())
-                                @enumFromInt(bind.secondary)
+                                @enumFromInt(bind.alt)
                             else
                                 @enumFromInt(bind.opc),
                             .dst = operands[0].memory.base,
@@ -626,7 +626,7 @@ pub const Assembler = struct {
                         },
                         .store_imm => .{
                             .opcode = if (version.moveMemoryInstructionClasses())
-                                @enumFromInt(bind.secondary)
+                                @enumFromInt(bind.alt)
                             else
                                 @enumFromInt(bind.opc),
                             .dst = operands[0].memory.base,

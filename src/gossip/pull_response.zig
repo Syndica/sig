@@ -84,9 +84,9 @@ test "gossip.pull_response: test filtering values works" {
     }
 
     // insert a some value
-    const kp = try KeyPair.create([_]u8{1} ** 32);
+    const kp = try KeyPair.generateDeterministic([_]u8{1} ** 32);
 
-    var prng = std.rand.DefaultPrng.init(18);
+    var prng = std.Random.DefaultPrng.init(18);
     const random = prng.random();
 
     var lg = gossip_table_rw.write();

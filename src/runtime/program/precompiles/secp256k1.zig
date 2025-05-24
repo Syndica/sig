@@ -424,7 +424,7 @@ test "secp256k1 count is zero but sig data exists" {
 test "secp256k1" {
     const allocator = std.testing.allocator;
 
-    const keypair = try Ecdsa.KeyPair.create(null);
+    const keypair = Ecdsa.KeyPair.generate();
 
     const instruction = try newSecp256k1Instruction(allocator, &keypair, "hello");
     defer allocator.free(instruction.data);
@@ -488,7 +488,7 @@ test "secp256k1" {
 test "flipped signature" {
     const seed: [32]u8 = .{ 50, 83 } ++ .{0} ** 30;
 
-    const keypair = try Ecdsa.KeyPair.create(seed);
+    const keypair = try Ecdsa.KeyPair.generateDeterministic(seed);
     const eth_address = constructEthAddress(&keypair.public_key);
 
     const message = "hello";
@@ -582,7 +582,7 @@ test "flipped signature" {
 test "secp256 malleability" {
     const allocator = std.testing.allocator;
 
-    const keypair = try Ecdsa.KeyPair.create(null);
+    const keypair = Ecdsa.KeyPair.generate();
     const eth_address = constructEthAddress(&keypair.public_key);
     const message = "hello";
 

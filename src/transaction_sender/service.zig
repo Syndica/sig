@@ -94,7 +94,7 @@ pub const Service = struct {
                 self.allocator,
                 self.send_channel,
                 self.logger.unscoped(),
-                .{ .unordered = self.exit },
+                sig.sync.ExitCondition{ .unordered = self.exit },
             },
         );
 

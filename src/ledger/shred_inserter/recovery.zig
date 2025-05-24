@@ -353,8 +353,8 @@ fn verifyErasureBatch(
             expect.variant.chained == actual.variant.chained and
             expect.variant.resigned == actual.variant.resigned and
             (shred == .data or
-            code.num_data_shreds == shred.code.custom.num_data_shreds and
-            code.num_code_shreds == shred.code.custom.num_code_shreds)))
+                code.num_data_shreds == shred.code.custom.num_data_shreds and
+                    code.num_code_shreds == shred.code.custom.num_code_shreds)))
         {
             return false;
         }

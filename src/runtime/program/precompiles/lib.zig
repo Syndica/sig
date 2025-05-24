@@ -7,6 +7,7 @@ pub const secp256r1 = @import("secp256r1.zig");
 
 const Pubkey = sig.core.Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
+const TransactionInstruction = sig.core.transaction.TransactionInstruction;
 
 /// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
 /// Cluster averaged compute unit to micro-sec conversion rate
@@ -131,7 +132,7 @@ test "verify ed25519" {
     const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
         .msg = .{
             .account_keys = &.{ed25519.ID},
-            .instructions = &.{
+            .instructions = &[_]TransactionInstruction{
                 .{
                     .program_index = 0,
                     .account_indexes = &.{0},
@@ -147,7 +148,7 @@ test "verify ed25519" {
         verifyPrecompiles(std.testing.allocator, bad_ed25519_tx, sig.runtime.FeatureSet.EMPTY),
     );
 
-    const keypair = try Ed25519.KeyPair.create(null);
+    const keypair = Ed25519.KeyPair.generate();
     const ed25519_instruction = try ed25519.newInstruction(
         std.testing.allocator,
         keypair,
@@ -174,7 +175,7 @@ test "verify ed25519" {
 }
 
 test "verify cost" {
-    const keypair = try Ed25519.KeyPair.create(null);
+    const keypair = Ed25519.KeyPair.generate();
     const ed25519_instruction = try ed25519.newInstruction(
         std.testing.allocator,
         keypair,
@@ -209,7 +210,7 @@ test "verify secp256k1" {
     const bad_secp256k1_tx = std.mem.zeroInit(sig.core.Transaction, .{
         .msg = .{
             .account_keys = &.{secp256k1.ID},
-            .instructions = &.{
+            .instructions = &[_]TransactionInstruction{
                 .{
                     .program_index = 0,
                     .account_indexes = &.{0},

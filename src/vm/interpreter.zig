@@ -607,7 +607,7 @@ pub const Vm = struct {
                         return false;
                     }
                     self.depth -= 1;
-                    const frame = self.call_frames.pop();
+                    const frame = self.call_frames.pop().?;
                     self.registers.set(.r10, frame.fp);
                     @memcpy(self.registers.values[6..][0..4], &frame.caller_saved_regs);
                     next_pc = frame.return_pc;
@@ -717,14 +717,14 @@ pub const Vm = struct {
     fn rem(comptime T: type, numerator: T, denominator: T) !T {
         @setRuntimeSafety(false);
         try checkDivByZero(T, denominator);
-        if (@typeInfo(T).Int.signedness == .signed) try checkDivOverflow(T, numerator, denominator);
+        if (@typeInfo(T).int.signedness == .signed) try checkDivOverflow(T, numerator, denominator);
         return @rem(numerator, denominator);
     }
 
     fn divTrunc(comptime T: type, numerator: T, denominator: T) !T {
         @setRuntimeSafety(false);
         try checkDivByZero(T, denominator);
-        if (@typeInfo(T).Int.signedness == .signed) try checkDivOverflow(T, numerator, denominator);
+        if (@typeInfo(T).int.signedness == .signed) try checkDivOverflow(T, numerator, denominator);
         if (denominator == 0) return error.DivisionByZero;
         return @divTrunc(numerator, denominator);
     }
@@ -754,6 +754,6 @@ pub const Result = union(enum) {
     /// Helper function for creating the `Result` from an inline value.
     pub fn fromValue(val: anytype) Result {
         if (!@import("builtin").is_test) @compileError("only used in tests");
-        return @unionInit(Result, if (@typeInfo(@TypeOf(val)) == .ErrorSet) "err" else "ok", val);
+        return @unionInit(Result, if (@typeInfo(@TypeOf(val)) == .error_set) "err" else "ok", val);
     }
 };

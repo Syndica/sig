@@ -79,7 +79,7 @@ pub fn RecyclingList(
 /// This is accomplished by storing a struct of lists, with one list
 /// for each union variant, instead of storing a list of the union.
 pub fn SplitUnionList(TaggedUnion: type) type {
-    const Tag = @typeInfo(TaggedUnion).Union.tag_type.?;
+    const Tag = @typeInfo(TaggedUnion).@"union".tag_type.?;
 
     return struct {
         lists: sig.utils.types.EnumStruct(Tag, List),
@@ -96,7 +96,7 @@ pub fn SplitUnionList(TaggedUnion: type) type {
         }
 
         fn FieldType(tag: Tag) type {
-            inline for (@typeInfo(TaggedUnion).Union.fields) |field| {
+            inline for (@typeInfo(TaggedUnion).@"union".fields) |field| {
                 if (std.mem.eql(u8, field.name, @tagName(tag))) {
                     return field.type;
                 }
@@ -105,14 +105,14 @@ pub fn SplitUnionList(TaggedUnion: type) type {
 
         pub fn init() Self {
             var lists: sig.utils.types.EnumStruct(Tag, List) = undefined;
-            inline for (@typeInfo(Tag).Enum.fields) |f| {
+            inline for (@typeInfo(Tag).@"enum".fields) |f| {
                 @field(lists, f.name) = .{};
             }
             return .{ .lists = lists };
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
-            inline for (@typeInfo(Tag).Enum.fields) |f| {
+            inline for (@typeInfo(Tag).@"enum".fields) |f| {
                 @field(self.lists, f.name).deinit(allocator);
             }
         }
@@ -590,19 +590,19 @@ pub fn order(a: anytype, b: anytype) std.math.Order {
     if (T != @TypeOf(b)) @compileError("types do not match");
     const info = @typeInfo(T);
     switch (info) {
-        .Int, .Float => return std.math.order(a, b),
-        .Struct, .Enum, .Union, .Opaque => {
+        .int, .float => return std.math.order(a, b),
+        .@"struct", .@"enum", .@"union", .@"opaque" => {
             if (@hasDecl(T, "order") and
                 (@TypeOf(T.order) == fn (a: T, b: T) std.math.Order or
-                @TypeOf(T.order) == fn (a: anytype, b: anytype) std.math.Order))
+                    @TypeOf(T.order) == fn (a: anytype, b: anytype) std.math.Order))
             {
                 return T.order(a, b);
             }
         },
-        .Pointer => {
-            const child = @typeInfo(info.Pointer.child);
-            if (info.Pointer.size == .Slice and (child == .Int or child == .Float)) {
-                return orderSlices(info.Pointer.child, std.math.order, a, b);
+        .pointer => {
+            const child = @typeInfo(info.pointer.child);
+            if (info.pointer.size == .slice and (child == .int or child == .float)) {
+                return orderSlices(info.pointer.child, std.math.order, a, b);
             }
         },
         else => {},

@@ -12,8 +12,8 @@ const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 pub fn SwissMap(
     comptime Key: type,
     comptime Value: type,
-    comptime hash_fn: fn (Key) callconv(.Inline) u64,
-    comptime eq_fn: fn (Key, Key) callconv(.Inline) bool,
+    comptime hash_fn: fn (Key) callconv(.@"inline") u64,
+    comptime eq_fn: fn (Key, Key) callconv(.@"inline") bool,
 ) type {
     return struct {
         allocator: std.mem.Allocator,
@@ -97,8 +97,8 @@ pub fn SwissMap(
 pub fn SwissMapUnmanaged(
     comptime Key: type,
     comptime Value: type,
-    comptime hash_fn: fn (Key) callconv(.Inline) u64,
-    comptime eq_fn: fn (Key, Key) callconv(.Inline) bool,
+    comptime hash_fn: fn (Key) callconv(.@"inline") u64,
+    comptime eq_fn: fn (Key, Key) callconv(.@"inline") bool,
 ) type {
     return struct {
         groups: [][GROUP_SIZE]KeyValue,
@@ -283,7 +283,7 @@ pub fn SwissMapUnmanaged(
                     const state_vec = self.states[it.group_index];
 
                     const occupied_states = state_vec & OCCUPIED_STATE_VEC;
-                    if (@reduce(.Or, occupied_states) != 0) {
+                    if (reduceOrWorkaround(occupied_states) != 0) {
                         for (it.position..GROUP_SIZE) |j| {
                             defer it.position += 1;
                             if (occupied_states[j] != 0) {
@@ -336,7 +336,7 @@ pub fn SwissMapUnmanaged(
                 const state_vec = self.states[group_index];
 
                 const match_vec = key_vec == state_vec;
-                if (@reduce(.Or, match_vec)) {
+                if (reduceOrWorkaround(match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
                         // remove here
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
@@ -352,7 +352,7 @@ pub fn SwissMapUnmanaged(
                             // which if we changed this state to empty would cause the search to early exit,
                             // so we need to change this state to 'deleted'.
                             //
-                            const new_state = if (@reduce(.Or, EMPTY_STATE_VEC == state_vec)) EMPTY_STATE else DELETED_STATE;
+                            const new_state = if (reduceOrWorkaround(EMPTY_STATE_VEC == state_vec)) EMPTY_STATE else DELETED_STATE;
                             self.states[group_index][j] = @bitCast(new_state);
                             self._count -= 1;
                             return result;
@@ -362,7 +362,7 @@ pub fn SwissMapUnmanaged(
 
                 // if theres a free state, then the key DNE
                 const is_empty_vec = EMPTY_STATE_VEC == state_vec;
-                if (@reduce(.Or, is_empty_vec)) {
+                if (reduceOrWorkaround(is_empty_vec)) {
                     return error.KeyNotFound;
                 }
 
@@ -401,7 +401,7 @@ pub fn SwissMapUnmanaged(
 
                 // PERF: SIMD eq check: search for a match
                 const match_vec = key_vec == state_vec;
-                if (@reduce(.Or, match_vec)) {
+                if (reduceOrWorkaround(match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
                         // PERF: SIMD eq check across pubkeys
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
@@ -412,7 +412,7 @@ pub fn SwissMapUnmanaged(
 
                 // PERF: SIMD eq check: if theres a free state, then the key DNE
                 const is_empty_vec = EMPTY_STATE_VEC == state_vec;
-                if (@reduce(.Or, is_empty_vec)) {
+                if (reduceOrWorkaround(is_empty_vec)) {
                     return null;
                 }
 
@@ -444,7 +444,7 @@ pub fn SwissMapUnmanaged(
                 // note: if theres atleast on empty state, then there wont be any deleted states
                 // due to how remove works, so we dont need to prioritize deleted over empty
                 const is_free_vec = ~state_vec & OCCUPIED_STATE_VEC;
-                if (@reduce(.Or, is_free_vec) != 0) {
+                if (reduceOrWorkaround(is_free_vec) != 0) {
                     _ = self.fill(
                         key,
                         value,
@@ -472,8 +472,8 @@ pub fn SwissMapUnmanaged(
             is_free_vec: @Vector(GROUP_SIZE, bool),
         ) usize {
             const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(GROUP_SIZE);
-            const indices = @select(u8, is_free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
-            const index = @reduce(.Min, indices);
+            const indices = selectWorkaround(is_free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
+            const index = reduceMinWorkaround(indices);
 
             self.groups[group_index][index] = .{
                 .key = key,
@@ -504,7 +504,7 @@ pub fn SwissMapUnmanaged(
 
                 // SIMD eq search for a match (get)
                 const match_vec = key_vec == state_vec;
-                if (@reduce(.Or, match_vec)) {
+                if (reduceOrWorkaround(match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
                             return .{
@@ -519,7 +519,7 @@ pub fn SwissMapUnmanaged(
                 // the value of the `get` part of this function - and
                 // because the key might exist in another group
                 const is_empty_vec = EMPTY_STATE_VEC == state_vec;
-                if (@reduce(.Or, is_empty_vec)) {
+                if (reduceOrWorkaround(is_empty_vec)) {
                     const index = self.fill(
                         key,
                         undefined,
@@ -539,6 +539,49 @@ pub fn SwissMapUnmanaged(
             unreachable;
         }
     };
+}
+
+// helper functions for using the experimental x86_64 self-hosted backend
+// it doesn't implement a couple of builtin functions, so here they're
+// manually reimplemented. NOTE: has no effect on LLVM based builds.
+
+fn reduceOrWorkaround(v: anytype) std.meta.Child(@TypeOf(v)) {
+    if (builtin.zig_backend != .stage2_x86_64) return @reduce(.Or, v);
+
+    const Child = std.meta.Child(@TypeOf(v));
+    if (Child == bool) {
+        var acc: bool = false;
+        for (0..16) |i| acc = acc or v[i];
+        return acc;
+    }
+
+    var acc: u8 = 0;
+    for (0..16) |i| acc |= v[i];
+    return acc;
+}
+
+fn reduceMinWorkaround(v: @Vector(16, u8)) u8 {
+    if (builtin.zig_backend != .stage2_x86_64) return @reduce(.Min, v);
+
+    var min: u8 = v[0];
+    for (1..16) |i| {
+        min = @min(min, v[i]);
+    }
+    return min;
+}
+
+fn selectWorkaround(
+    pred: @Vector(16, bool),
+    a: @Vector(16, u8),
+    b: @Vector(16, u8),
+) @Vector(16, u8) {
+    if (builtin.zig_backend != .stage2_x86_64) return @select(u8, pred, a, b);
+
+    var output: @Vector(16, u8) = undefined;
+    for (0..16) |i| {
+        output[i] = if (pred[i]) a[i] else b[i];
+    }
+    return output;
 }
 
 test "swissmap load from memory" {

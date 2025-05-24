@@ -42,7 +42,7 @@ pub fn Mux(comptime T: type) type {
                 assert(self.valid == true);
                 switch (@typeInfo(T)) {
                     // if value is a pointer, we will return pointer itself
-                    .Pointer => |_| {
+                    .pointer => |_| {
                         return self.private.v;
                     },
                     else => {
@@ -56,7 +56,7 @@ pub fn Mux(comptime T: type) type {
                 assert(self.valid == true);
                 switch (@typeInfo(T)) {
                     // if value is a pointer, we will return pointer itself
-                    .Pointer => |_| {
+                    .pointer => |_| {
                         return self.private.v;
                     },
                     else => {
@@ -163,7 +163,7 @@ pub fn RwMux(comptime T: type) type {
                 assert(self.valid == true);
                 switch (@typeInfo(T)) {
                     // if value is a pointer, we will return pointer itself instead of `*const *T`
-                    .Pointer => |_| {
+                    .pointer => |_| {
                         return self.private.v;
                     },
                     else => {
@@ -201,7 +201,7 @@ pub fn RwMux(comptime T: type) type {
                 assert(self.valid == true);
                 switch (@typeInfo(T)) {
                     // if value is a pointer, we will return pointer itself instead of `*const *T`
-                    .Pointer => |_| {
+                    .pointer => |_| {
                         return self.private.v;
                     },
                     else => {
@@ -215,7 +215,7 @@ pub fn RwMux(comptime T: type) type {
                 assert(self.valid == true);
                 switch (@typeInfo(T)) {
                     // if value is a pointer, we will return pointer itself instead of `*const *T`
-                    .Pointer => |_| {
+                    .pointer => |_| {
                         return self.private.v;
                     },
                     else => {
@@ -326,11 +326,11 @@ pub fn RwMux(comptime T: type) type {
 /// avoid `@TypeOf()` return type.
 pub fn Const(comptime T: type) type {
     return switch (@typeInfo(T)) {
-        .Pointer => |info| blk: {
-            if (info.size == .C) @compileError("C pointers not supported");
+        .pointer => |info| blk: {
+            if (info.size == .c) @compileError("C pointers not supported");
             var new_info = info;
             new_info.is_const = true;
-            break :blk @Type(.{ .Pointer = new_info });
+            break :blk @Type(.{ .pointer = new_info });
         },
         else => *const T,
     };
@@ -360,7 +360,7 @@ pub fn Const(comptime T: type) type {
 /// avoid `@TypeOf()` return type or block statements.
 pub fn Mutable(comptime T: type) type {
     return switch (@typeInfo(T)) {
-        .Pointer => T,
+        .pointer => T,
         else => *T,
     };
 }

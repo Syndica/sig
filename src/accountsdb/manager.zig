@@ -777,9 +777,9 @@ fn shrinkAccountFiles(
 
                 const ref_parent, var ref_lg =
                     db.account_index.getReferenceParent(pubkey, slot) catch |err| switch (err) {
-                    // SAFE: we know the pubkey exists in the index because its alive
-                    error.SlotNotFound, error.PubkeyNotFound => unreachable,
-                };
+                        // SAFE: we know the pubkey exists in the index because its alive
+                        error.SlotNotFound, error.PubkeyNotFound => unreachable,
+                    };
                 defer ref_lg.unlock();
                 const ptr_to_ref_field = switch (ref_parent) {
                     .head => |head| &head.ref_ptr,
@@ -924,7 +924,7 @@ test "flushing slots works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -985,7 +985,7 @@ test "purge accounts in cache works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -1055,7 +1055,7 @@ test "clean to shrink account file works with zero-lamports" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 10;
 
@@ -1142,7 +1142,7 @@ test "clean to shrink account file works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 10;
 
@@ -1221,7 +1221,7 @@ test "full clean account file works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const n_accounts = 3;
 
@@ -1336,7 +1336,7 @@ test "shrink account file works" {
     });
     defer accounts_db.deinit();
 
-    var prng = std.rand.DefaultPrng.init(19);
+    var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
 
     const n_accounts = 10;

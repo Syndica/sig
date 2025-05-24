@@ -78,7 +78,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
         /// Every field must be a supported metric type.
         pub fn initStruct(self: *Self, comptime Struct: type) GetMetricError!Struct {
             var metrics_struct: Struct = undefined;
-            inline for (@typeInfo(Struct).Struct.fields) |field| {
+            inline for (@typeInfo(Struct).@"struct".fields) |field| {
                 try self.initMetric(Struct, &@field(metrics_struct, field.name), field.name);
             }
             return metrics_struct;
@@ -93,14 +93,18 @@ pub fn Registry(comptime options: RegistryOptions) type {
             /// Mutable pointer to a struct containing metrics.
             metrics_struct: anytype,
         ) GetMetricError!usize {
-            const Struct = @typeInfo(@TypeOf(metrics_struct)).Pointer.child;
-            const fields = @typeInfo(Struct).Struct.fields;
+            const Struct = @typeInfo(@TypeOf(metrics_struct)).pointer.child;
+            const fields = @typeInfo(Struct).@"struct".fields;
             var num_fields_skipped: usize = fields.len;
-            inline for (@typeInfo(Struct).Struct.fields) |field| {
-                if (@typeInfo(field.type) == .Pointer) {
-                    const MetricType = @typeInfo(field.type).Pointer.child;
+            inline for (@typeInfo(Struct).@"struct".fields) |field| {
+                if (@typeInfo(field.type) == .pointer) {
+                    const MetricType = @typeInfo(field.type).pointer.child;
                     if (@hasDecl(MetricType, "metric_type")) {
-                        try self.initMetric(Struct, &@field(metrics_struct, field.name), field.name);
+                        try self.initMetric(
+                            Struct,
+                            &@field(metrics_struct, field.name),
+                            field.name,
+                        );
                         num_fields_skipped -= 1;
                     }
                 }
@@ -125,7 +129,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
             metric: anytype,
             comptime local_name: []const u8,
         ) GetMetricError!void {
-            const MetricType = @typeInfo(@typeInfo(@TypeOf(metric)).Pointer.child).Pointer.child;
+            const MetricType = @typeInfo(@typeInfo(@TypeOf(metric)).pointer.child).pointer.child;
             const prefix = if (@hasDecl(Config, "prefix")) Config.prefix ++ "_" else "";
             const name = prefix ++ local_name;
             metric.* = switch (MetricType.metric_type) {
@@ -155,10 +159,10 @@ pub fn Registry(comptime options: RegistryOptions) type {
                 return Config.histogram_buckets[0..];
             } else if (has_fn) {
                 const info = @typeInfo(@TypeOf(Config.histogramBucketsForField));
-                comptime if (info != .Fn or
-                    info.Fn.params.len != 1 or
-                    info.Fn.params[0].type != []const u8 or
-                    !isSlicable(info.Fn.return_type.?, f64))
+                comptime if (info != .@"fn" or
+                    info.@"fn".params.len != 1 or
+                    info.@"fn".params[0].type != []const u8 or
+                    !isSlicable(info.@"fn".return_type.?, f64))
                 {
                     @compileError(@typeName(Config) ++
                         ".histogramBucketsForField should take one param `[]const u8` and " ++
@@ -177,9 +181,9 @@ pub fn Registry(comptime options: RegistryOptions) type {
 
         fn isSlicable(comptime T: type, comptime DesiredChild: type) bool {
             return switch (@typeInfo(T)) {
-                .Array => |a| a.child == DesiredChild,
-                .Pointer => |p| p.size != .One and p.child == DesiredChild or
-                    p.size == .One and isSlicable(p.child, DesiredChild),
+                .array => |a| a.child == DesiredChild,
+                .pointer => |p| p.size != .one and p.child == DesiredChild or
+                    p.size == .one and isSlicable(p.child, DesiredChild),
                 else => false,
             };
         }
@@ -190,11 +194,15 @@ pub fn Registry(comptime options: RegistryOptions) type {
         }
 
         pub fn getOrCreateCounter(self: *Self, name: []const u8) GetMetricError!*Counter {
-            return self.getOrCreateMetric(name, Counter, .{});
+            return self.getOrCreateMetric(name, Counter, Counter{});
         }
 
-        pub fn getOrCreateGauge(self: *Self, name: []const u8, comptime T: type) GetMetricError!*Gauge(T) {
-            return self.getOrCreateMetric(name, Gauge(T), .{});
+        pub fn getOrCreateGauge(
+            self: *Self,
+            name: []const u8,
+            comptime T: type,
+        ) GetMetricError!*Gauge(T) {
+            return self.getOrCreateMetric(name, Gauge(T), Gauge(T){});
         }
 
         pub fn getOrCreateGaugeFn(
@@ -223,7 +231,11 @@ pub fn Registry(comptime options: RegistryOptions) type {
             name: []const u8,
             ErrorSet: type,
         ) GetMetricError!*VariantCounter(ErrorSet) {
-            return self.getOrCreateMetric(name, VariantCounter(ErrorSet), .{});
+            return self.getOrCreateMetric(
+                name,
+                VariantCounter(ErrorSet),
+                VariantCounter(ErrorSet){},
+            );
         }
 
         /// MetricType must be initializable in one of these ways:
@@ -250,7 +262,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
             if (!gop.found_existing) {
                 var real_metric = try allocator.create(MetricType);
                 if (@hasDecl(MetricType, "init")) {
-                    const params = @typeInfo(@TypeOf(MetricType.init)).Fn.params;
+                    const params = @typeInfo(@TypeOf(MetricType.init)).@"fn".params;
                     if (params.len != 0 and params[0].type.? == mem.Allocator) {
                         real_metric.* = try @call(.auto, MetricType.init, .{allocator} ++ args);
                     } else {

@@ -79,9 +79,9 @@ pub const ExecutionError = SyscallError ||
     EbpfError ||
     InstructionError ||
     error{
-    OutOfMemory,
-    Overflow,
-};
+        OutOfMemory,
+        Overflow,
+    };
 
 pub fn getExecutionErrorKind(err: ExecutionError) ExecutionErrorKind {
     return convertExecutionError(err)[1];

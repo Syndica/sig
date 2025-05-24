@@ -878,7 +878,7 @@ pub const CommonHeader = struct {
 
     pub const @"!bincode-config:variant" = ShredVariantConfig;
 
-    const ZEROED_FOR_TEST = .{
+    const ZEROED_FOR_TEST: CommonHeader = .{
         .leader_signature = Signature{ .data = .{0} ** Signature.SIZE },
         .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
         .slot = 0,
@@ -997,29 +997,29 @@ pub const ShredVariant = struct {
             if (self.shred_type == .code and
             self.chained == false and
             self.resigned == false)
-            0x40
-        else if (self.shred_type == .code and
+                0x40
+            else if (self.shred_type == .code and
             self.chained == true and
             self.resigned == false)
-            0x60
-        else if (self.shred_type == .code and
+                0x60
+            else if (self.shred_type == .code and
             self.chained == true and
             self.resigned == true)
-            0x70
-        else if (self.shred_type == .data and
+                0x70
+            else if (self.shred_type == .data and
             self.chained == false and
             self.resigned == false)
-            0x80
-        else if (self.shred_type == .data and
+                0x80
+            else if (self.shred_type == .data and
             self.chained == true and
             self.resigned == false)
-            0x90
-        else if (self.shred_type == .data and
+                0x90
+            else if (self.shred_type == .data and
             self.chained == true and
             self.resigned == true)
-            0xb0
-        else
-            return error.UnknownShredVariant;
+                0xb0
+            else
+                return error.UnknownShredVariant;
         return big_end | self.proof_size;
     }
 
@@ -1062,7 +1062,7 @@ pub const ShredFlags = BitFlags(enum(u8) {
         std.testing.expect(
             @intFromEnum(ShredFlags.Flag.data_complete_shred) ==
                 @intFromEnum(ShredFlags.Flag.last_shred_in_slot) &
-                @intFromEnum(ShredFlags.Flag.data_complete_shred),
+                    @intFromEnum(ShredFlags.Flag.data_complete_shred),
         ) catch unreachable;
     }
 });

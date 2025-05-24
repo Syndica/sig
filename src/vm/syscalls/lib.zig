@@ -1335,11 +1335,11 @@ test getProcessedSiblingInstruction {
             tc.instruction_stack.appendAssumeCapacity(.{
                 .tc = &tc,
                 .ixn_info = info,
-                .depth = tc.instruction_stack.len,
+                .depth = @intCast(tc.instruction_stack.len),
             });
             tc.instruction_trace.appendAssumeCapacity(.{
                 .ixn_info = info,
-                .depth = tc.instruction_stack.len,
+                .depth = @intCast(tc.instruction_stack.len),
             });
         }
     }

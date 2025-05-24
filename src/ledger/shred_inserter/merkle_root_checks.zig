@@ -52,7 +52,7 @@ pub const MerkleRootValidator = struct {
         const new_merkle_root = shred.merkleRoot() catch null;
         if (new_merkle_root == null and merkle_root_meta.merkle_root == null or
             new_merkle_root != null and merkle_root_meta.merkle_root != null and
-            std.mem.eql(u8, &merkle_root_meta.merkle_root.?.data, &new_merkle_root.?.data))
+                std.mem.eql(u8, &merkle_root_meta.merkle_root.?.data, &new_merkle_root.?.data))
         {
             // No conflict, either both merkle shreds with same merkle root
             // or both legacy shreds with merkle_root `None`

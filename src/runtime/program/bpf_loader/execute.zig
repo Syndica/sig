@@ -2894,9 +2894,9 @@ fn createValidProgramData(
 
     const program_data =
         try allocator.alloc(
-        u8,
-        state_size + elf_bytes.len + additional_bytes,
-    );
+            u8,
+            state_size + elf_bytes.len + additional_bytes,
+        );
     errdefer allocator.free(program_data);
     @memset(program_data, 0);
 

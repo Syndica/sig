@@ -358,7 +358,7 @@ fn computeBudgetInstructionInfo(
 }
 
 fn emptyInstructionInfo(
-    random: std.rand.Random,
+    random: std.Random,
 ) InstructionInfo {
     if (!builtin.is_test) @compileError("emptyInstructionInfo is for testing only");
     return InstructionInfo{
@@ -372,7 +372,7 @@ fn emptyInstructionInfo(
 test execute {
     const allocator = std.testing.allocator;
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     // Units
     try testComputeBudgetLimits(

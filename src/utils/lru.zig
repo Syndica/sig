@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const TailQueue = std.TailQueue;
+const DoublyLinkedList = std.DoublyLinkedList;
 const testing = std.testing;
 const Mutex = std.Thread.Mutex;
 
@@ -42,7 +42,7 @@ pub fn LruCacheCustom(
             std.StringArrayHashMap(*Node)
         else
             std.AutoArrayHashMap(K, *Node),
-        dbl_link_list: TailQueue(LruEntry),
+        dbl_link_list: DoublyLinkedList(LruEntry),
         max_items: usize,
         len: usize = 0,
         deinit_context: DeinitContext,
@@ -63,7 +63,7 @@ pub fn LruCacheCustom(
             }
         };
 
-        const Node = TailQueue(LruEntry).Node;
+        const Node = DoublyLinkedList(LruEntry).Node;
 
         fn initNode(self: *Self, key: K, val: V) error{OutOfMemory}!*Node {
             self.len += 1;
@@ -96,7 +96,7 @@ pub fn LruCacheCustom(
             var self = Self{
                 .allocator = allocator,
                 .hashmap = hashmap,
-                .dbl_link_list = TailQueue(LruEntry){},
+                .dbl_link_list = DoublyLinkedList(LruEntry){},
                 .max_items = max_items,
                 .mux = if (kind == .locking) Mutex{} else undefined,
                 .deinit_context = deinit_context,

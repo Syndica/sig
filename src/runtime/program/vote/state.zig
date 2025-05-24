@@ -163,18 +163,18 @@ pub fn serializeCompactVoteStateUpdate(
     }
 
     // Serialize in compact format
-    try writer.writeInt(Slot, data.root orelse 0, std.builtin.Endian.little);
+    try writer.writeInt(Slot, data.root orelse 0, .little);
     try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
     for (lockouts.constSlice()) |lockout| {
         try sig.bincode.varint.serializeShortU16(writer, @intCast(lockout[0]));
-        try writer.writeInt(u8, @intCast(lockout[1]), std.builtin.Endian.little);
+        try writer.writeInt(u8, @intCast(lockout[1]), .little);
     }
     try writer.writeAll(&data.hash.data);
     if (data.timestamp) |timestamp| {
-        try writer.writeInt(u8, 1, std.builtin.Endian.little);
-        try writer.writeInt(i64, timestamp, std.builtin.Endian.little);
+        try writer.writeInt(u8, 1, .little);
+        try writer.writeInt(i64, timestamp, .little);
     } else {
-        try writer.writeInt(u8, 0, std.builtin.Endian.little);
+        try writer.writeInt(u8, 0, .little);
     }
 }
 
@@ -183,7 +183,7 @@ pub fn deserializeCompactVoteStateUpdate(
     reader: anytype,
     _: sig.bincode.Params,
 ) anyerror!VoteStateUpdate {
-    var root = try reader.readInt(Slot, std.builtin.Endian.little);
+    var root = try reader.readInt(Slot, .little);
     root = if (root == std.math.maxInt(Slot)) 0 else root;
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
@@ -196,7 +196,7 @@ pub fn deserializeCompactVoteStateUpdate(
             reader,
             .{},
         );
-        const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
+        const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
     }
@@ -204,9 +204,9 @@ pub fn deserializeCompactVoteStateUpdate(
     var hash = Hash.ZEROES;
     if (try reader.readAll(&hash.data) != Hash.SIZE) return error.NoBytesLeft;
 
-    const timestamp = switch (try reader.readInt(u8, std.builtin.Endian.little)) {
+    const timestamp = switch (try reader.readInt(u8, .little)) {
         0 => null,
-        1 => try reader.readInt(i64, std.builtin.Endian.little),
+        1 => try reader.readInt(i64, .little),
         else => return error.InvalidOptionalTimestamp,
     };
 
@@ -262,7 +262,7 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
     }
 
     // Serialize in compact format
-    try writer.writeInt(Slot, data.root orelse 0, std.builtin.Endian.little);
+    try writer.writeInt(Slot, data.root orelse 0, .little);
     try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
     for (lockouts.constSlice()) |lockout| {
         try sig.bincode.varint.var_int_config_u64.serializer.?(
@@ -270,14 +270,14 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
             lockout[0],
             .{},
         );
-        try writer.writeInt(u8, lockout[1], std.builtin.Endian.little);
+        try writer.writeInt(u8, lockout[1], .little);
     }
     try writer.writeAll(&data.hash.data);
     if (data.timestamp) |timestamp| {
-        try writer.writeInt(u8, 1, std.builtin.Endian.little);
-        try writer.writeInt(i64, timestamp, std.builtin.Endian.little);
+        try writer.writeInt(u8, 1, .little);
+        try writer.writeInt(i64, timestamp, .little);
     } else {
-        try writer.writeInt(u8, 0, std.builtin.Endian.little);
+        try writer.writeInt(u8, 0, .little);
     }
     try writer.writeAll(&data.block_id.data);
 }
@@ -287,7 +287,7 @@ pub fn deserializeTowerSync(
     reader: anytype,
     _: sig.bincode.Params,
 ) anyerror!TowerSync {
-    const root = try reader.readInt(Slot, std.builtin.Endian.little);
+    const root = try reader.readInt(Slot, .little);
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
     const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
@@ -299,7 +299,7 @@ pub fn deserializeTowerSync(
             reader,
             .{},
         );
-        const confirmation_count = try reader.readInt(u8, std.builtin.Endian.little);
+        const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
     }
@@ -307,9 +307,9 @@ pub fn deserializeTowerSync(
     var hash = Hash.ZEROES;
     if (try reader.readAll(&hash.data) != Hash.SIZE) return error.NoBytesLeft;
 
-    const timestamp = switch (try reader.readInt(u8, std.builtin.Endian.little)) {
+    const timestamp = switch (try reader.readInt(u8, .little)) {
         0 => null,
-        1 => try reader.readInt(i64, std.builtin.Endian.little),
+        1 => try reader.readInt(i64, .little),
         else => return error.InvalidOptionalTimestamp,
     };
 
@@ -467,8 +467,8 @@ pub const AuthorizedVoters = struct {
         };
         errdefer authorized_voters.deinit();
 
-        for (try reader.readInt(usize, std.builtin.Endian.little)) |_| {
-            const epoch = try reader.readInt(u64, std.builtin.Endian.little);
+        for (0..try reader.readInt(usize, .little)) |_| {
+            const epoch = try reader.readInt(u64, .little);
             var pubkey = Pubkey.ZEROES;
             const bytes_read = try reader.readAll(&pubkey.data);
             if (bytes_read != Pubkey.SIZE) return error.NoBytesLeft;
@@ -480,10 +480,10 @@ pub const AuthorizedVoters = struct {
 
     pub fn serialize(writer: anytype, data: anytype, _: sig.bincode.Params) !void {
         var authorized_voters: AuthorizedVoters = data;
-        try writer.writeInt(usize, authorized_voters.len(), std.builtin.Endian.little);
+        try writer.writeInt(usize, authorized_voters.len(), .little);
         const items = authorized_voters.voters.items();
         for (items[0], items[1]) |k, v| {
-            try writer.writeInt(u64, k, std.builtin.Endian.little);
+            try writer.writeInt(u64, k, .little);
             try writer.writeAll(&v.data);
         }
     }
@@ -1038,9 +1038,9 @@ pub const VoteState = struct {
             // vote slot `s` to be processed must be newer than last voted slot
             const less_than_last_voted_slot =
                 if (self.lastVotedSlot()) |last_voted_slot|
-                recent_vote_slots[i] <= last_voted_slot
-            else
-                false;
+                    recent_vote_slots[i] <= last_voted_slot
+                else
+                    false;
 
             if (less_than_last_voted_slot) {
                 i = std.math.add(usize, i, 1) catch
@@ -1051,9 +1051,10 @@ pub const VoteState = struct {
             // 2) Find the hash for this slot `s`.
             if (recent_vote_slots[i] !=
                 slot_hashes.entries[
-                std.math.sub(usize, j, 1) catch
-                    return InstructionError.ProgramArithmeticOverflow
-            ][0]) {
+                    std.math.sub(usize, j, 1) catch
+                        return InstructionError.ProgramArithmeticOverflow
+                ][0])
+            {
                 // Decrement `j` to find newer slots
                 j = std.math.sub(usize, j, 1) catch
                     return InstructionError.ProgramArithmeticOverflow;
@@ -1134,7 +1135,7 @@ pub const VoteState = struct {
     ) void {
         while (self.lastLockout()) |vote| {
             if (!vote.isLockedOutAtSlot(next_vote_slot)) {
-                _ = self.votes.popOrNull();
+                _ = self.votes.pop();
             } else {
                 break;
             }
@@ -1167,8 +1168,8 @@ pub const VoteState = struct {
 
         if (slot < self.last_timestamp.slot or timestamp < self.last_timestamp.timestamp or
             (slot == self.last_timestamp.slot and
-            !std.meta.eql(new_timestamp, self.last_timestamp) and
-            self.last_timestamp.slot != 0))
+                !std.meta.eql(new_timestamp, self.last_timestamp) and
+                self.last_timestamp.slot != 0))
         {
             return VoteError.timestamp_too_old;
         }
@@ -1248,8 +1249,7 @@ pub const VoteState = struct {
         return @min(current_slot -| voted_for_slot, std.math.maxInt(u8));
     }
 
-    fn compareFn(context: void, key: Slot, mid_item: LandedVote) std.math.Order {
-        _ = context;
+    fn compareFn(key: Slot, mid_item: LandedVote) std.math.Order {
         return std.math.order(key, mid_item.lockout.slot);
     }
 
@@ -1259,9 +1259,8 @@ pub const VoteState = struct {
     pub fn containsSlot(self: *const VoteState, candidate_slot: Slot) bool {
         return std.sort.binarySearch(
             LandedVote,
-            candidate_slot,
             self.votes.items,
-            {},
+            candidate_slot,
             compareFn,
         ) != null;
     }
@@ -1444,9 +1443,10 @@ pub const VoteState = struct {
             if (root_to_check == null and
                 proposed_lockouts_index > 0 and
                 proposed_vote_slot <= proposed_lockouts.*.items[
-                std.math.sub(usize, proposed_lockouts_index, 1) catch
-                    return InstructionError.ProgramArithmeticOverflow
-            ].slot) {
+                    std.math.sub(usize, proposed_lockouts_index, 1) catch
+                        return InstructionError.ProgramArithmeticOverflow
+                ].slot)
+            {
                 return VoteError.slots_not_ordered;
             }
             const ancestor_slot = slot_hashes.entries[
