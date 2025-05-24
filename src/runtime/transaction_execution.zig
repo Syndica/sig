@@ -20,13 +20,14 @@ const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionTrace = TransactionContext.InstructionTrace;
 const LogCollector = sig.runtime.LogCollector;
-const Ancestors = sig.core.bank.Ancestors;
+const Ancestors = sig.core.status_cache.Ancestors;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const EpochStakes = sig.core.stake.EpochStakes;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
+const StatusCache = sig.core.StatusCache;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -44,8 +45,6 @@ const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 //
 // Once the accounts have been loaded, the transaction is commitable, even if its
 // execution fails.
-
-pub const StatusCache = struct {};
 
 pub const RuntimeTransaction = struct {
     pub const Accounts = std.MultiArrayList(sig.core.instruction.InstructionAccount);
@@ -177,7 +176,6 @@ pub fn loadAndExecuteTransaction(
     const check_age_result = checkAge(
         transaction,
         batch_account_cache,
-        environment.ancestors,
         environment.blockhash_queue,
         environment.max_age,
         &environment.last_blockhash,
@@ -216,7 +214,7 @@ pub fn loadAndExecuteTransaction(
         transaction.signature_count,
         batch_account_cache,
         &compute_budget_limits,
-        &maybe_nonce_info,
+        maybe_nonce_info,
         environment.rent_collector,
         environment.feature_set,
         environment.lamports_per_signature,
@@ -355,22 +353,21 @@ pub fn executeTransaction(
 pub fn checkAge(
     transaction: *const RuntimeTransaction,
     batch_account_cache: *BatchAccountCache,
-    ancestors: *const Ancestors,
     blockhash_queue: *const BlockhashQueue,
     max_age: u64,
     last_blockhash: *const Hash,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-) TransactionResult(CachedAccount) {
-    _ = transaction;
-    _ = ancestors;
-    _ = batch_account_cache;
-    _ = blockhash_queue;
-    _ = max_age;
-    _ = last_blockhash;
-    _ = next_durable_nonce;
-    _ = next_lamports_per_signature;
-    @panic("not implemented");
+) TransactionResult(?CachedAccount) {
+    return sig.runtime.check_transactions.checkAge(
+        transaction,
+        batch_account_cache,
+        blockhash_queue,
+        max_age,
+        last_blockhash,
+        next_durable_nonce,
+        next_lamports_per_signature,
+    );
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
@@ -380,11 +377,12 @@ pub fn checkStatusCache(
     ancestors: *const Ancestors,
     status_cache: *const StatusCache,
 ) ?TransactionError {
-    _ = msg_hash;
-    _ = recent_blockhash;
-    _ = status_cache;
-    _ = ancestors;
-    @panic("not implemented");
+    return sig.runtime.check_transactions.checkStatusCache(
+        msg_hash,
+        recent_blockhash,
+        ancestors,
+        status_cache,
+    );
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L557
@@ -393,7 +391,7 @@ pub fn checkFeePayer(
     signature_count: u64,
     batch_account_cache: *BatchAccountCache,
     compute_budget_limits: *const ComputeBudgetLimits,
-    nonce_account: ?*const CachedAccount,
+    nonce_account: ?CachedAccount,
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
     lamports_per_signature: u64,
@@ -422,7 +420,7 @@ test "transaction_execution" {
 
     const ancestors: Ancestors = .{};
     const feature_set: FeatureSet = FeatureSet.EMPTY;
-    const status_cache: StatusCache = .{};
+    const status_cache = try StatusCache.default(std.testing.allocator);
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
