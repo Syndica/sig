@@ -141,7 +141,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         ) anyerror!?BytesRef {
             const key_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
             defer self.fast_allocator.free(key_bytes);
-            var map = self.maps[cf.find(column_families)];
+            const map = &self.maps[cf.find(column_families)];
 
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
@@ -160,7 +160,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
             const key_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
             defer self.fast_allocator.free(key_bytes);
-            var map = self.maps[cf.find(column_families)];
+            const map = &self.maps[cf.find(column_families)];
 
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
