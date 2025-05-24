@@ -15,16 +15,14 @@ pub const VoteTransaction = union(enum) {
     compact_vote_state_update: VoteStateUpdate,
     tower_sync: TowerSync,
 
-    pub fn default(allocator: std.mem.Allocator) !VoteTransaction {
-        return VoteTransaction{ .tower_sync = try TowerSync.zeroes(allocator) };
-    }
+    pub const DEFAULT: VoteTransaction = .{ .tower_sync = TowerSync.ZEROES };
 
-    pub fn deinit(self: *VoteTransaction, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .vote => |_| {},
-            .vote_state_update => |*args| args.lockouts.deinit(allocator),
-            .compact_vote_state_update => |*args| args.lockouts.deinit(allocator),
-            .tower_sync => |*args| args.lockouts.deinit(allocator),
+    pub fn deinit(self: VoteTransaction, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .vote => |args| args.deinit(allocator),
+            .vote_state_update => |args| args.deinit(allocator),
+            .compact_vote_state_update => |args| args.deinit(allocator),
+            .tower_sync => |args| args.deinit(allocator),
         }
     }
 
@@ -39,19 +37,12 @@ pub const VoteTransaction = union(enum) {
 
     pub fn lastVotedSlot(self: *const VoteTransaction) ?Slot {
         return switch (self.*) {
-            .vote => |args| if (args.slots.len == 0)
-                null
-            else
-                args.slots[args.slots.len - 1],
-            .vote_state_update => |args| if (args.lockouts.items.len == 0)
-                null
-            else
-                args.lockouts.items[args.lockouts.items.len - 1].slot,
-            .compact_vote_state_update => |args| if (args.lockouts.items.len == 0)
-                null
-            else
-                args.lockouts.items[args.lockouts.items.len - 1].slot,
-            .tower_sync => |args| if (args.lockouts.items.len == 0)
+            .vote => |args| if (args.slots.len == 0) null else args.slots[args.slots.len - 1],
+            inline //
+            .vote_state_update,
+            .compact_vote_state_update,
+            .tower_sync,
+            => |args| if (args.lockouts.items.len == 0)
                 null
             else
                 args.lockouts.items[args.lockouts.items.len - 1].slot,
@@ -146,11 +137,11 @@ pub const VoteTransaction = union(enum) {
 
 const Lockout = sig.runtime.program.vote.state.Lockout;
 test "vote_transaction.VoteTransaction - default initialization" {
-    var vote_transaction = try VoteTransaction.default(std.testing.allocator);
+    var vote_transaction = VoteTransaction.DEFAULT;
     defer vote_transaction.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(
-        VoteTransaction{ .tower_sync = try TowerSync.zeroes(std.testing.allocator) },
+        VoteTransaction{ .tower_sync = TowerSync.ZEROES },
         vote_transaction,
     );
 }
