@@ -33,11 +33,15 @@ const assert = std.debug.assert;
 /// Metadata with its index. Each hashmap entry's index is the same as the index
 /// of the item in the metadata list.
 pub const GossipMap = struct {
-    key_to_index: std.AutoArrayHashMapUnmanaged(GossipKey, SplitUnionList(GossipData).Index) = .{},
-    gossip_data: SplitUnionList(GossipData) = SplitUnionList(GossipData).INIT,
-    metadata: std.ArrayListUnmanaged(Metadata) = .{},
+    key_to_index: std.AutoArrayHashMapUnmanaged(GossipKey, usize),
+    gossip_data: SplitUnionList(GossipData),
+    metadata: std.ArrayListUnmanaged(GossipMetadata),
 
-    pub const Metadata = GossipMetadata; // TODO eliminate redundant alias
+    pub const INIT: GossipMap = .{
+        .key_to_index = .{},
+        .gossip_data = SplitUnionList(GossipData).INIT,
+        .metadata = .{},
+    };
 
     pub fn deinit(self: *GossipMap, allocator: Allocator) void {
         self.key_to_index.deinit(allocator);
@@ -57,7 +61,7 @@ pub const GossipMap = struct {
     /// Get only a GossipData without the GossipMetadata
     pub fn getData(self: *const GossipMap, key: GossipKey) ?GossipData {
         const index = self.key_to_index.get(key) orelse return null;
-        return self.gossip_data.get(index);
+        return self.gossip_data.get(.{ .tag = key, .index = index });
     }
 
     /// Get only a GossipMetaData without the GossipData
@@ -71,7 +75,7 @@ pub const GossipMap = struct {
             .metadata = self.metadata.items[index],
             .data = self.gossip_data.get(.{
                 .tag = self.key_to_index.keys()[index],
-                .index = self.key_to_index.values()[index].index,
+                .index = self.key_to_index.values()[index],
             }),
         };
     }
@@ -87,7 +91,7 @@ pub const GossipMap = struct {
             .metadata_ptr = &self.metadata.items[index],
             .gossip_data_entry = self.gossip_data.getEntry(.{
                 .tag = self.key_to_index.keys()[index],
-                .index = self.key_to_index.values()[index].index,
+                .index = self.key_to_index.values()[index],
             }),
             .index = index,
         };
@@ -111,16 +115,19 @@ pub const GossipMap = struct {
         comptime tag: GossipDataTag,
         index: usize,
     ) *const tag.Value() {
-        return self.gossip_data.getTypedConst(tag, self.key_to_index.values()[index].index);
+        return self.gossip_data.getTypedConst(tag, self.key_to_index.values()[index]);
     }
 
     pub fn tagOfIndex(self: *const GossipMap, index: usize) GossipDataTag {
-        return self.key_to_index.values()[index].tag;
+        return self.key_to_index.keys()[index];
     }
 
     pub fn swapRemove(self: *GossipMap, key: GossipKey) bool {
         const index = self.key_to_index.getIndex(key) orelse return false;
-        const tagged_index = self.key_to_index.values()[index];
+        const tagged_index: SplitUnionList(GossipData).Index = .{
+            .tag = self.key_to_index.keys()[index],
+            .index = self.key_to_index.values()[index],
+        };
 
         self.key_to_index.swapRemoveAt(index);
         _ = self.gossip_data.swapRemove(tagged_index);
@@ -132,7 +139,7 @@ pub const GossipMap = struct {
         if (tagged_index.index < tag_len) {
             const newly_swapped = self.gossip_data.get(tagged_index);
             const index_entry = self.key_to_index.getEntry(newly_swapped.label()).?;
-            index_entry.value_ptr.* = tagged_index;
+            index_entry.value_ptr.* = tagged_index.index;
         }
 
         return true;
@@ -142,14 +149,18 @@ pub const GossipMap = struct {
         const key_gop = try self.key_to_index.getOrPut(allocator, key);
 
         const metadata_ptr, const list_entry = if (key_gop.found_existing) .{
-            &self.metadata.items[key_gop.index], self.gossip_data.getEntry(key_gop.value_ptr.*), //
+            &self.metadata.items[key_gop.index],
+            self.gossip_data.getEntry(.{
+                .tag = key_gop.key_ptr.*,
+                .index = key_gop.value_ptr.*,
+            }), //
         } else blk: {
             const metadata_ptr = try self.metadata.addOne(allocator);
             errdefer _ = self.metadata.pop();
             assert(key_gop.index == self.metadata.items.len - 1);
 
             const list_entry = try self.gossip_data.addOne(allocator, key);
-            key_gop.value_ptr.* = list_entry.index;
+            key_gop.value_ptr.* = list_entry.index.index;
 
             break :blk .{ metadata_ptr, list_entry };
         };
@@ -182,9 +193,9 @@ pub const GossipMap = struct {
 
     pub const Iterator = struct {
         keys: []GossipKey,
-        indices: []SplitUnionList(GossipData).Index,
+        indices: []const usize,
         gossip_data: *const SplitUnionList(GossipData),
-        metadata: []Metadata,
+        metadata: []GossipMetadata,
         cursor: usize = 0,
 
         pub fn next(self: *Iterator) ?Entry {
@@ -192,7 +203,10 @@ pub const GossipMap = struct {
             return if (self.cursor < self.keys.len) .{
                 .key_ptr = &self.keys[self.cursor],
                 .metadata_ptr = &self.metadata[self.cursor],
-                .gossip_data_entry = self.gossip_data.getEntry(self.indices[self.cursor]),
+                .gossip_data_entry = self.gossip_data.getEntry(.{
+                    .tag = self.keys[self.cursor],
+                    .index = self.indices[self.cursor],
+                }),
                 .index = self.cursor,
             } else null;
         }
@@ -201,7 +215,7 @@ pub const GossipMap = struct {
 
 pub const Entry = struct {
     key_ptr: *GossipKey,
-    metadata_ptr: *GossipMap.Metadata,
+    metadata_ptr: *GossipMetadata,
     gossip_data_entry: SplitUnionList(GossipData).Entry,
     index: usize,
 
@@ -241,7 +255,7 @@ test "put and get" {
     const keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic([_]u8{1} ** 32);
     var prng = std.Random.DefaultPrng.init(91);
 
-    var map = GossipMap{};
+    var map = GossipMap.INIT;
     defer map.deinit(std.testing.allocator);
 
     const value = gossip.SignedGossipData.initSigned(
@@ -272,7 +286,7 @@ test "put, remove, and get" {
     const keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic([_]u8{1} ** 32);
     var prng = std.Random.DefaultPrng.init(91);
 
-    var map = GossipMap{};
+    var map = GossipMap.INIT;
     defer map.deinit(std.testing.allocator);
 
     var keys: [4]GossipKey = undefined;
@@ -318,7 +332,7 @@ test "repeat add+remove" {
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
-    var map = GossipMap{};
+    var map = GossipMap.INIT;
     defer map.deinit(std.testing.allocator);
 
     var keys = std.ArrayList(GossipKey).init(std.testing.allocator);
