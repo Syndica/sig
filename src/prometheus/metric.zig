@@ -9,18 +9,19 @@ const HistogramSnapshot = prometheus.histogram.HistogramSnapshot;
 const VariantCounts = prometheus.variant_counter.VariantCounts;
 
 pub const Metric = struct {
-    pub const Error = error{OutOfMemory} || std.posix.WriteError || std.http.Server.Response.WriteError;
+    pub const Error =
+        std.mem.Allocator.Error ||
+        std.posix.WriteError ||
+        std.http.Server.Response.WriteError;
 
     pub const Result = union(enum) {
-        const Self = @This();
-
         counter: u64,
         gauge: f64,
         gauge_int: u64,
         histogram: HistogramSnapshot,
         variant_counter: VariantCounts,
 
-        pub fn deinit(self: Self, allocator: mem.Allocator) void {
+        pub fn deinit(self: Result, allocator: mem.Allocator) void {
             switch (self) {
                 .histogram => |v| {
                     allocator.free(v.buckets);
@@ -32,7 +33,12 @@ pub const Metric = struct {
 
     getResultFn: *const fn (self: *Metric, allocator: mem.Allocator) Error!Result,
 
-    pub fn write(self: *Metric, allocator: mem.Allocator, writer: anytype, name: []const u8) (@TypeOf(writer).Error || Error)!void {
+    pub fn write(
+        self: *Metric,
+        allocator: mem.Allocator,
+        writer: anytype,
+        name: []const u8,
+    ) (@TypeOf(writer).Error || Error)!void {
         const result = try self.getResultFn(self, allocator);
         defer result.deinit(allocator);
 

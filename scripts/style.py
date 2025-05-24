@@ -169,8 +169,6 @@ files_excluded_from_line_length_check = [
     "src/ledger/test_shreds.zig",
     "src/net/echo.zig",
     "src/net/net.zig",
-    "src/prometheus/histogram.zig",
-    "src/prometheus/metric.zig",
     "src/rand/rand.zig",
     "src/rpc/client.zig",
     "src/rpc/request.zig",
