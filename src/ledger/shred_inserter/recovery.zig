@@ -315,7 +315,7 @@ fn setMerkleProofs(
             tree.items,
         ) orelse return error.InvalidMerkleProof;
         defer proof.deinit(allocator);
-        if (proof.len != @as(usize, @intCast(meta.common_header.variant.proof_size))) {
+        if (proof.len != meta.common_header.variant.proof_size) {
             return error.InvalidMerkleProof;
         }
         if (was_present) {
@@ -329,7 +329,7 @@ fn setMerkleProofs(
                 }
             }
         } else {
-            try sig.ledger.shred.setMerkleProof(shred.payloadMut(), proof);
+            try sig.ledger.shred.setMerkleProof(shred.mutablePayload(), proof);
             std.debug.assert(!std.meta.isError(shred.sanitize())); // TODO error somewhere else
             // TODO: Assert that shred payload is fully populated.
         }

@@ -40,7 +40,7 @@ const RepairMessage = shred_network.repair_message.RepairMessage;
 
 const serializeRepairRequest = shred_network.repair_message.serializeRepairRequest;
 
-const MAX_DATA_SHREDS_PER_SLOT = sig.ledger.shred.data_shred_constants.max_per_slot;
+const MAX_DATA_SHREDS_PER_SLOT = sig.ledger.shred.DataShred.constants.max_per_slot;
 
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.

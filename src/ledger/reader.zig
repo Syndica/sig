@@ -1,4 +1,5 @@
 pub const std = @import("std");
+const builtin = @import("builtin");
 pub const sig = @import("../sig.zig");
 pub const ledger = @import("lib.zig");
 
@@ -2034,6 +2035,9 @@ test "lowestSlot" {
 }
 
 test "isShredDuplicate" {
+    // It seems a LLVM 19 miscompilation causes this test to deadlock in the MacOS CI.
+    if (builtin.os.tag == .macos and builtin.cpu.arch == .aarch64) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(allocator);
@@ -2060,7 +2064,7 @@ test "isShredDuplicate" {
     const shred_payload = try allocator.alloc(u8, size);
     defer allocator.free(shred_payload);
 
-    var shred = Shred{ .data = try DataShred.zeroedForTest(allocator) };
+    var shred: Shred = .{ .data = try DataShred.zeroedForTest(allocator) };
     defer shred.deinit();
     shred.data.common.slot = shred_slot;
     shred.data.common.index = shred_index;

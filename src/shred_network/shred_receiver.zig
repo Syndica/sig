@@ -231,13 +231,13 @@ fn validateShred(
     if (slot > max_slot) return error.slot_too_new;
     switch (variant.shred_type) {
         .code => {
-            if (index >= sig.ledger.shred.code_shred_constants.max_per_slot) {
+            if (index >= sig.ledger.shred.CodeShred.constants.max_per_slot) {
                 return error.code_index_too_high;
             }
             if (slot <= root) return error.rooted_slot;
         },
         .data => {
-            if (index >= sig.ledger.shred.data_shred_constants.max_per_slot) {
+            if (index >= sig.ledger.shred.DataShred.constants.max_per_slot) {
                 return error.data_index_too_high;
             }
             const parent_slot_offset = layout.getParentSlotOffset(shred) orelse {
