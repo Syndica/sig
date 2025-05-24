@@ -46,7 +46,7 @@ pub const Transaction = struct {
         .serializer = serialize,
     };
 
-    pub const EMPTY = Transaction{
+    pub const EMPTY: Transaction = .{
         .signatures = &.{},
         .version = .legacy,
         .msg = .{
@@ -61,7 +61,8 @@ pub const Transaction = struct {
     };
 
     pub fn deinit(self: Transaction, allocator: std.mem.Allocator) void {
-        sig.bincode.free(allocator, self);
+        allocator.free(self.signatures);
+        self.msg.deinit(allocator);
     }
 
     pub fn clone(self: Transaction, allocator: std.mem.Allocator) !Transaction {
@@ -71,6 +72,40 @@ pub const Transaction = struct {
             .signatures = signatures,
             .version = self.version,
             .msg = try self.msg.clone(allocator),
+        };
+    }
+
+    pub const InitOwnedMsgWithSigningKeypairsError = error{
+        /// Failed to serialize the provided message.
+        BadMessage,
+        /// Failed to sign the message with one of the keypairs.
+        SigningError,
+    } || std.mem.Allocator.Error;
+
+    /// Takes ownership of the passed in `msg`, and signs it with all of the given keypairs.
+    /// Assumes `msg` was allocated using the given `allocator`, since that will also be used
+    /// to allocate space for the signatures.
+    pub fn initOwnedMsgWithSigningKeypairs(
+        allocator: std.mem.Allocator,
+        version: TransactionVersion,
+        msg: TransactionMessage,
+        keypairs: []const sig.identity.KeyPair,
+    ) InitOwnedMsgWithSigningKeypairsError!Transaction {
+        const msg_bytes_bounded = msg.serializeBounded(version) catch return error.BadMessage;
+        const msg_bytes = msg_bytes_bounded.constSlice();
+
+        const signatures = try allocator.alloc(Signature, keypairs.len);
+        errdefer allocator.free(signatures);
+
+        for (signatures, keypairs) |*signature, keypair| {
+            const msg_signature = keypair.sign(msg_bytes, null) catch return error.SigningError;
+            signature.* = .{ .data = msg_signature.toBytes() };
+        }
+
+        return .{
+            .signatures = signatures,
+            .version = version,
+            .msg = msg,
         };
     }
 
@@ -213,7 +248,13 @@ pub const TransactionMessage = struct {
     address_lookups: []const TransactionAddressLookup = &.{},
 
     pub fn deinit(self: TransactionMessage, allocator: std.mem.Allocator) void {
-        sig.bincode.free(allocator, self);
+        allocator.free(self.account_keys);
+
+        for (self.instructions) |inst| inst.deinit(allocator);
+        allocator.free(self.instructions);
+
+        for (self.address_lookups) |addr_lookup| addr_lookup.deinit(allocator);
+        allocator.free(self.address_lookups);
     }
 
     pub fn clone(self: TransactionMessage, allocator: std.mem.Allocator) !TransactionMessage {
@@ -225,7 +266,8 @@ pub const TransactionMessage = struct {
         for (self.instructions, 0..) |instr, i|
             instructions[i] = try instr.clone(allocator);
 
-        const address_lookups = try allocator.alloc(TransactionAddressLookup, self.address_lookups.len);
+        const address_lookups =
+            try allocator.alloc(TransactionAddressLookup, self.address_lookups.len);
         errdefer sig.bincode.free(allocator, address_lookups);
         for (address_lookups, 0..) |*alt, i|
             alt.* = try self.address_lookups[i].clone(allocator);
@@ -238,6 +280,51 @@ pub const TransactionMessage = struct {
             .recent_blockhash = self.recent_blockhash,
             .instructions = instructions,
             .address_lookups = address_lookups,
+        };
+    }
+
+    pub const LegacyCompileFromError = TransactionInstruction.CompileFromError;
+    pub fn legacyCompileFrom(
+        allocator: std.mem.Allocator,
+        instructions: []const sig.core.Instruction,
+        payer: ?Pubkey,
+        recent_blockhash: Hash,
+    ) LegacyCompileFromError!TransactionMessage {
+        const account_keys: []const Pubkey, const counts: AccountKindCounts = blk: {
+            var compiled_keys = try compileKeys(allocator, payer, instructions);
+            defer compiled_keys.deinit(allocator);
+
+            const counts = AccountKindCounts.count(compiled_keys.values()) orelse
+                return error.TooManyKeys;
+
+            const account_keys = try allocator.dupe(Pubkey, compiled_keys.keys());
+            errdefer allocator.free(account_keys);
+
+            break :blk .{ account_keys, counts };
+        };
+        errdefer allocator.free(account_keys);
+
+        const tx_instructions = try allocator.alloc(TransactionInstruction, instructions.len);
+        errdefer allocator.free(tx_instructions);
+
+        var tx_instructions_list =
+            std.ArrayListUnmanaged(TransactionInstruction).initBuffer(tx_instructions);
+        errdefer for (tx_instructions_list.items) |tx_inst| tx_inst.deinit(allocator);
+        try TransactionInstruction.compileListFrom(
+            allocator,
+            &tx_instructions_list,
+            instructions,
+            account_keys,
+        );
+        std.debug.assert(tx_instructions_list.items.len == tx_instructions.len);
+
+        return .{
+            .signature_count = counts.signature_count,
+            .readonly_signed_count = counts.readonly_signed_count,
+            .readonly_unsigned_count = counts.readonly_unsigned_count,
+            .account_keys = account_keys,
+            .recent_blockhash = recent_blockhash,
+            .instructions = tx_instructions,
         };
     }
 
@@ -356,7 +443,172 @@ pub const TransactionMessage = struct {
         hasher.final(&the_hash.data);
         return the_hash;
     }
+
+    pub fn getSigningKeypairPosition(self: TransactionMessage, pubkey: Pubkey) ?usize {
+        const signed_keys = self.account_keys[0..self.signature_count];
+        return for (signed_keys, 0..) |signed_key, i| {
+            if (pubkey.equals(&signed_key)) break i;
+        } else null;
+    }
 };
+
+const KeyMetaMap = std.AutoArrayHashMapUnmanaged(Pubkey, SignerWritableFlags);
+
+const SignerWritableFlags = packed struct(u2) {
+    writable: bool,
+    signer: bool,
+
+    pub const UNSIGNED_READONLY: SignerWritableFlags = .{
+        .signer = false,
+        .writable = false,
+    };
+
+    /// Orders such that a list of these flags is ordered like so:
+    /// ```
+    /// {
+    ///      signer and  writable,
+    ///      signer and !writable,
+    ///     !signer and  writable,
+    ///     !signer and !writable
+    /// }
+    /// ```
+    pub fn order(self: SignerWritableFlags, other: SignerWritableFlags) std.math.Order {
+        const a: u2 = @bitCast(self);
+        const b: u2 = @bitCast(other);
+        return std.math.order(a, b).invert();
+    }
+    comptime {
+        std.debug.assert(order(
+            .{ .writable = true, .signer = true },
+            .{ .writable = false, .signer = true },
+        ) == .lt);
+        std.debug.assert(order(
+            .{ .writable = false, .signer = true },
+            .{ .writable = true, .signer = false },
+        ) == .lt);
+        std.debug.assert(order(
+            .{ .writable = true, .signer = false },
+            .{ .writable = false, .signer = false },
+        ) == .lt);
+    }
+};
+
+const AccountKindCounts = struct {
+    signature_count: u8,
+    readonly_signed_count: u8,
+    readonly_unsigned_count: u8,
+
+    /// Returns null on overflow.
+    pub fn count(compiled_meta: []const SignerWritableFlags) ?AccountKindCounts {
+        var required_signed: usize = 0;
+        var readonly_signed: usize = 0;
+        var readonly_unsigned: usize = 0;
+
+        for (compiled_meta) |meta| {
+            required_signed += @intFromBool(meta.signer);
+            readonly_signed += @intFromBool(meta.signer and !meta.writable);
+            readonly_unsigned += @intFromBool(!meta.signer and !meta.writable);
+        }
+
+        return .{
+            .signature_count = std.math.cast(u8, required_signed) orelse return null,
+            .readonly_signed_count = std.math.cast(u8, readonly_signed) orelse return null,
+            .readonly_unsigned_count = std.math.cast(u8, readonly_unsigned) orelse return null,
+        };
+    }
+};
+
+/// Returns a map with all of the keys in `instructions`, and `maybe_payer`.
+/// Sorted with `sortCompiledKeys` - see its doc comment for commentary on
+/// the ordering of the keys.
+fn compileKeys(
+    allocator: std.mem.Allocator,
+    maybe_payer: ?Pubkey,
+    instructions: []const sig.core.Instruction,
+) std.mem.Allocator.Error!KeyMetaMap {
+    var key_meta_map: KeyMetaMap = .{};
+    defer key_meta_map.deinit(allocator);
+
+    for (instructions) |ix| {
+        try key_meta_map.ensureUnusedCapacity(allocator, 1 + ix.accounts.len);
+
+        {
+            const gop = key_meta_map.getOrPutAssumeCapacity(ix.program_id);
+            const meta = gop.value_ptr;
+            if (!gop.found_existing) meta.* = SignerWritableFlags.UNSIGNED_READONLY;
+        }
+
+        for (ix.accounts) |account_meta| {
+            const gop = key_meta_map.getOrPutAssumeCapacity(account_meta.pubkey);
+            const meta = gop.value_ptr;
+            if (!gop.found_existing) meta.* = SignerWritableFlags.UNSIGNED_READONLY;
+            meta.signer = meta.signer or account_meta.is_signer;
+            meta.writable = meta.writable or account_meta.is_writable;
+        }
+    }
+
+    if (maybe_payer) |payer| {
+        const gop = try key_meta_map.getOrPut(allocator, payer);
+        const meta = gop.value_ptr;
+        if (!gop.found_existing) meta.* = SignerWritableFlags.UNSIGNED_READONLY;
+        meta.signer = true;
+        meta.writable = true;
+    }
+
+    sortCompiledKeys(&key_meta_map, maybe_payer);
+    return key_meta_map.move();
+}
+
+/// Sorts the map so that entries are ordered first by their `is_signer` and `is_writable` flags,
+/// resulting in four groups `[signer & writable, signer, writable, neither]`, and then within each
+/// of the four groups, entries will be sorted by their pubkeys, resulting in an absolute and
+/// deterministic ordering.
+fn sortCompiledKeys(
+    key_meta_map: *KeyMetaMap,
+    /// This is a pubkey asserted to be in the map, and will be sorted as the first entry.
+    maybe_payer: ?Pubkey,
+) void {
+    if (maybe_payer) |payer| {
+        std.debug.assert(key_meta_map.contains(payer));
+    }
+
+    const SortCtx = struct {
+        key_meta_map: *const KeyMetaMap,
+        payer: ?Pubkey,
+
+        pub fn lessThan(
+            ctx: @This(),
+            a_index: usize,
+            b_index: usize,
+        ) bool {
+            const a_key = ctx.key_meta_map.keys()[a_index];
+            const a_value = ctx.key_meta_map.values()[a_index];
+
+            const b_key = ctx.key_meta_map.keys()[b_index];
+            const b_value = ctx.key_meta_map.values()[b_index];
+
+            if (ctx.payer) |payer| {
+                const a_is_payer = payer.equals(&a_key);
+                const b_is_payer = payer.equals(&b_key);
+                if (a_is_payer or b_is_payer) {
+                    std.debug.assert(a_is_payer != b_is_payer); // weird sort bug?
+                }
+                if (a_is_payer) return true;
+                if (b_is_payer) return false;
+            }
+
+            const ab_order = a_value.order(b_value).differ() orelse a_key.order(b_key);
+            return ab_order == .lt;
+        }
+    };
+
+    const sort_ctx: SortCtx = .{
+        .key_meta_map = key_meta_map,
+        .payer = maybe_payer,
+    };
+
+    key_meta_map.sort(sort_ctx);
+}
 
 pub const TransactionInstruction = struct {
     /// Index into the transactions account_keys array
@@ -371,7 +623,8 @@ pub const TransactionInstruction = struct {
     pub const @"!bincode-config:data" = shortVecConfig([]const u8);
 
     pub fn deinit(self: TransactionInstruction, allocator: std.mem.Allocator) void {
-        sig.bincode.free(allocator, self);
+        allocator.free(self.account_indexes);
+        allocator.free(self.data);
     }
 
     pub fn clone(self: *const TransactionInstruction, allocator: std.mem.Allocator) !TransactionInstruction {
@@ -382,6 +635,55 @@ pub const TransactionInstruction = struct {
             .account_indexes = account_indexes,
             .data = try allocator.dupe(u8, self.data),
         };
+    }
+
+    pub const CompileFromError = error{
+        MissingProgramIndex,
+        MissingKeys,
+        TooManyKeys,
+    } || std.mem.Allocator.Error;
+
+    pub fn compileFrom(
+        allocator: std.mem.Allocator,
+        inst: sig.core.Instruction,
+        keys: []const Pubkey,
+    ) CompileFromError!TransactionInstruction {
+        const program_index = blk: {
+            const index = inst.program_id.indexIn(keys) orelse return error.MissingProgramIndex;
+            break :blk std.math.cast(u8, index) orelse return error.TooManyKeys;
+        };
+
+        const data = try allocator.dupe(u8, inst.data);
+        errdefer allocator.free(data);
+
+        const account_indexes = try allocator.alloc(u8, inst.accounts.len);
+        errdefer allocator.free(account_indexes);
+        for (account_indexes, inst.accounts) |*account_idx, account| {
+            const key_pos = account.pubkey.indexIn(keys) orelse return error.MissingKeys;
+            account_idx.* = std.math.cast(u8, key_pos) orelse return error.TooManyKeys;
+        }
+
+        return .{
+            .program_index = program_index,
+            .account_indexes = account_indexes,
+            .data = data,
+        };
+    }
+
+    /// Asserts that `result.unusedCapacitySlice()` is large enough to hold the same number of instructions as `instructions.len`.
+    /// `result` is not re-allocated, the caller may pass in a pointer-locked arraylist.
+    /// Its elements, including the newly appended ones, must all be freed by the caller (including on error return).
+    pub fn compileListFrom(
+        allocator: std.mem.Allocator,
+        result: *std.ArrayListUnmanaged(TransactionInstruction),
+        instructions: []const sig.core.Instruction,
+        keys: []const Pubkey,
+    ) CompileFromError!void {
+        std.debug.assert(result.unusedCapacitySlice().len >= instructions.len);
+        for (instructions) |inst| {
+            const compiled = try compileFrom(allocator, inst, keys);
+            result.appendAssumeCapacity(compiled);
+        }
     }
 };
 
@@ -397,7 +699,8 @@ pub const TransactionAddressLookup = struct {
     pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]const u8);
 
     pub fn deinit(self: TransactionAddressLookup, allocator: std.mem.Allocator) void {
-        sig.bincode.free(allocator, self);
+        allocator.free(self.writable_indexes);
+        allocator.free(self.readonly_indexes);
     }
 
     pub fn clone(self: *const TransactionAddressLookup, allocator: std.mem.Allocator) !TransactionAddressLookup {
