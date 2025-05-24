@@ -1186,8 +1186,8 @@ fn getInt(
 
 pub fn overwriteShredForTest(allocator: Allocator, shred: *Shred, data: []const u8) !void {
     const constants = switch (shred.*) {
-        .code => DataShred.constants,
-        .data => CodeShred.constants,
+        .code => CodeShred.constants,
+        .data => DataShred.constants,
     };
 
     if (shred.payload().len < constants.payload_size) {
