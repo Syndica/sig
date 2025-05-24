@@ -14,6 +14,8 @@ pub const MAX_SEEDS: usize = 16;
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L32
 const PDA_MARKER = "ProgramDerivedAddress";
 
+pub const BoundedSeed = std.BoundedArray(u8, MAX_SEED_LEN);
+
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L35
 pub const PubkeyError = error{
     MaxSeedLenExceeded,
@@ -34,19 +36,15 @@ pub fn mapError(err: PubkeyError) u8 {
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L200
 pub fn createWithSeed(
     base: Pubkey,
-    seed: []const u8,
+    seed: BoundedSeed,
     owner: Pubkey,
 ) PubkeyError!Pubkey {
-    if (seed.len > MAX_SEED_LEN) {
-        return PubkeyError.MaxSeedLenExceeded;
-    }
-
     const offset = owner.data.len - PDA_MARKER.len;
     if (std.mem.eql(u8, owner.data[offset..], PDA_MARKER))
         return PubkeyError.IllegalOwner;
 
     return .{
-        .data = sig.core.Hash.generateSha256(.{ &base.data, seed, &owner.data }).data,
+        .data = sig.core.Hash.generateSha256(.{ &base.data, seed.constSlice(), &owner.data }).data,
     };
 }
 

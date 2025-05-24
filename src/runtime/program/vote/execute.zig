@@ -368,7 +368,7 @@ fn executeAuthorizeWithSeed(
     new_account: Pubkey,
     authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
-    current_authority_derived_key_seed: []const u8,
+    current_authority_derived_key_seed: pubkey_utils.BoundedSeed,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(3);
 
@@ -395,7 +395,7 @@ fn authorizeWithSeed(
     new_authority: Pubkey,
     authorization_type: VoteAuthorize,
     owner: Pubkey,
-    seed: []const u8,
+    seed: pubkey_utils.BoundedSeed,
     signer_index: u8,
     clock_index: u8,
 ) (error{OutOfMemory} || InstructionError)!void {
@@ -434,7 +434,7 @@ fn executeAuthorizeCheckedWithSeed(
     vote_account: *BorrowedAccount,
     authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
-    current_authority_derived_key_seed: []const u8,
+    current_authority_derived_key_seed: pubkey_utils.BoundedSeed,
 ) (error{OutOfMemory} || InstructionError)!void {
     try ic.ixn_info.checkNumberOfAccounts(4);
 
@@ -1566,7 +1566,8 @@ test "vote_program: authorizeWithSeed withdrawer" {
     const vote_account = Pubkey.initRandom(prng.random());
     const base = Pubkey.initRandom(prng.random());
     const current_withdrawer_owner = Pubkey.initRandom(prng.random());
-    const current_withdrawer_seed = &[_]u8{0x10} ** 32;
+    const current_withdrawer_seed =
+        comptime std.BoundedArray(u8, 32).fromSlice(&[_]u8{0x10} ** 32) catch unreachable;
 
     const authorized_withdrawer = try pubkey_utils.createWithSeed(
         base,
@@ -1679,7 +1680,8 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
     const vote_account = Pubkey.initRandom(prng.random());
     const base = Pubkey.initRandom(prng.random());
     const current_withdrawer_owner = Pubkey.initRandom(prng.random());
-    const current_withdrawer_seed = &[_]u8{0x10} ** 32;
+    const current_withdrawer_seed =
+        comptime std.BoundedArray(u8, 32).fromSlice(&[_]u8{0x10} ** 32) catch unreachable;
 
     const authorized_withdrawer = try pubkey_utils.createWithSeed(
         base,
