@@ -46,8 +46,8 @@
             .hash = "poseidon-0.2.0-2qOpv8d5DQAVHu1nbVXPZReqb3Erf-rTPNJiYWl4opqT",
         },
         .secp256k1 = .{
-            .url = "git+https://github.com/Syndica/secp256k1-zig#d62f9bc41dcdea614a247e901263d3691484eb9a",
-            .hash = "secp256k1-0.5.0-pj6jrE4HAAB0y8p6xIW3P5gqihGVXvV2CTQ9iJe-RGg6",
+            .url = "git+https://github.com/Syndica/secp256k1-zig#c0a6abf275b6ab8eee7f706f972928d79a9d5de6",
+            .hash = "secp256k1-0.5.0-AAAAAP0GAADG2Mba0yTtLlhjK8IripV_-4Hj9c3N2CQd",
         },
         .tracy = .{
             .url = "git+https://github.com/Rexicon226/zig-tracy/#c338e84ea281141c57d23dc715bff7b463b264de",

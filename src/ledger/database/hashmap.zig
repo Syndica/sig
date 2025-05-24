@@ -145,6 +145,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
+
             map.lock.lockShared();
             defer map.lock.unlockShared();
 
@@ -463,7 +464,7 @@ const SharedHashMap = struct {
     /// must be the same as SharedHashmapDB.storage_allocator
     allocator: Allocator,
     map: SortedMap([]const u8, RcSlice(u8)),
-    lock: RwLock = .{},
+    lock: RwLock,
 
     const Self = @This();
 
@@ -471,6 +472,7 @@ const SharedHashMap = struct {
         return .{
             .allocator = allocator,
             .map = SortedMap([]const u8, RcSlice(u8)).init(allocator),
+            .lock = .{},
         };
     }
 

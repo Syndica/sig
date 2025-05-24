@@ -28,9 +28,9 @@ jobs:
         uses: actions/configure-pages@v5
                  
       - name: setup-zig
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
         with:
-          version: 0.13.0
+          version: 0.14.1
 
       - name: build-docs
         run: zig build docs
