@@ -57,7 +57,12 @@ pub const GossipTableShards = struct {
     }
 
     /// see filterGossipVersionedDatas for more readable (but inefficient) version  of what this fcn is doing
-    pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) error{OutOfMemory}!std.ArrayList(usize) {
+    pub fn find(
+        self: *const Self,
+        alloc: std.mem.Allocator,
+        mask: u64,
+        mask_bits: u32,
+    ) error{OutOfMemory}!std.ArrayList(usize) {
         const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
         const match_mask = mask | ones;
 
@@ -120,7 +125,10 @@ test "GossipTableShards" {
 }
 
 // test helper fcns
-fn newTestGossipVersionedData(random: std.Random, gossip_table: *GossipTable) !GossipVersionedData {
+fn newTestGossipVersionedData(
+    random: std.Random,
+    gossip_table: *GossipTable,
+) !GossipVersionedData {
     const keypair = KeyPair.generate();
     const value = SignedGossipData.initRandom(random, &keypair);
     _ = try gossip_table.insert(value, 0);
@@ -171,7 +179,12 @@ test "gossip.gossip_shards: test shard find" {
     for (0..10) |_| {
         const mask = random.int(u64);
         for (0..12) |mask_bits| {
-            var set = try filterGossipVersionedDatas(std.testing.allocator, values.items, mask, @intCast(mask_bits));
+            var set = try filterGossipVersionedDatas(
+                std.testing.allocator,
+                values.items,
+                mask,
+                @intCast(mask_bits),
+            );
             defer set.deinit();
 
             var indexs = try gossip_shards.find(std.testing.allocator, mask, @intCast(mask_bits));
