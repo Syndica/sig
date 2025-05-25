@@ -1160,7 +1160,7 @@ pub const ReplayTower = struct {
             break :blk SwitchForkDecision.same_fork;
         } else blk: {
             // Record the failed switch attempt with details
-            const failure_detail = .{
+            const failure_detail = HeaviestForkFailures{
                 .FailedSwitchThreshold = .{
                     .slot = heaviest_slot,
                     .observed_stake = switch_proof_stake,
@@ -3065,7 +3065,7 @@ const splitOff = sig.consensus.fork_choice.splitOff;
 test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
     const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };

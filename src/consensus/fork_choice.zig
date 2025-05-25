@@ -2479,7 +2479,7 @@ pub fn splitOff(
 
     try to_visit.append(slot_hash_key);
 
-    while (to_visit.popOrNull()) |cuurent_slot_hash_key| {
+    while (to_visit.pop()) |cuurent_slot_hash_key| {
         var current_fork_info = fork_choice.fork_infos.fetchRemove(cuurent_slot_hash_key) orelse
             return error.NodeNotFound;
 
