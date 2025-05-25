@@ -1,6 +1,4 @@
 const std = @import("std");
-
-const Allocator = std.mem.Allocator;
 const Build = std.Build;
 
 pub const Config = struct {
@@ -20,16 +18,13 @@ pub const Config = struct {
     use_llvm: bool,
     force_pic: bool,
 
-    pub fn fromBuild(b: *Build) !Config {
-        var self = Config{
+    pub fn fromBuild(b: *Build) Config {
+        var self: Config = .{
             .target = b.standardTargetOptions(.{}),
             .optimize = b.standardOptimizeOption(.{}),
-            .filters = b.option(
-                []const []const u8,
-                "filter",
-                "List of filters, used for example" ++
-                    " to filter unit tests by name. specified as a series like `-Dfilter='filter1' " ++
-                    "-Dfilter='filter2'`",
+            .filters = b.option([]const []const u8, "filter",
+                \\List of filters, used for example to filter unit tests by name.
+                \\Specified as a series like `-Dfilter='filter1' -Dfilter='filter2'`.
             ),
             .enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite"),
             .blockstore_db = b.option(
@@ -37,12 +32,9 @@ pub const Config = struct {
                 "blockstore",
                 "Blockstore database backend",
             ) orelse .rocksdb,
-            .run = !(b.option(
-                bool,
-                "no-run",
+            .run = !(b.option(bool, "no-run",
                 \\Don't run any of the executables implied by the specified steps, only install them.
                 \\Use in conjunction with 'no-bin' to avoid installation as well.
-                ,
             ) orelse false),
             .install = !(b.option(
                 bool,
@@ -98,17 +90,17 @@ pub const Config = struct {
         };
 
         if (self.ssh_host) |host| {
-            self.target = try ssh.getHostTarget(b, host);
+            self.target = ssh.getHostTarget(b, host) catch |e| std.debug.panic("{}", .{e});
         }
 
         return self;
     }
 };
 
-pub fn build(b: *Build) !void {
+pub fn build(b: *Build) void {
     defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
 
-    const config = try Config.fromBuild(b);
+    const config = Config.fromBuild(b);
 
     const build_options = b.addOptions();
     build_options.addOption(BlockstoreDB, "blockstore_db", config.blockstore_db);
@@ -220,7 +212,7 @@ pub fn build(b: *Build) !void {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-    try addInstallAndRun(b, sig_step, sig_exe, config);
+    addInstallAndRun(b, sig_step, sig_exe, config);
 
     const unit_tests_exe = b.addTest(.{
         .root_module = b.createModule(.{
@@ -238,7 +230,7 @@ pub fn build(b: *Build) !void {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-    try addInstallAndRun(b, test_step, unit_tests_exe, config);
+    addInstallAndRun(b, test_step, unit_tests_exe, config);
 
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
@@ -256,7 +248,7 @@ pub fn build(b: *Build) !void {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-    try addInstallAndRun(b, fuzz_step, fuzz_exe, config);
+    addInstallAndRun(b, fuzz_step, fuzz_exe, config);
 
     const benchmark_exe = b.addExecutable(.{
         .name = "benchmark",
@@ -277,7 +269,7 @@ pub fn build(b: *Build) !void {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
-    try addInstallAndRun(b, benchmark_step, benchmark_exe, config);
+    addInstallAndRun(b, benchmark_step, benchmark_exe, config);
 
     const geyser_reader_exe = b.addExecutable(.{
         .name = "geyser",
@@ -291,7 +283,7 @@ pub fn build(b: *Build) !void {
 
     geyser_reader_exe.root_module.addImport("sig", sig_mod);
     geyser_reader_exe.root_module.addImport("cli", cli_mod);
-    try addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
+    addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
 
     const vm_exe = b.addExecutable(.{
         .name = "vm",
@@ -302,7 +294,7 @@ pub fn build(b: *Build) !void {
     });
     vm_exe.root_module.addImport("sig", sig_mod);
     vm_exe.root_module.addImport("cli", cli_mod);
-    try addInstallAndRun(b, vm_step, vm_exe, config);
+    addInstallAndRun(b, vm_step, vm_exe, config);
 
     // docs for the Sig library
     const install_sig_docs = b.addInstallDirectory(.{
@@ -320,8 +312,10 @@ fn addInstallAndRun(
     step: *Build.Step,
     exe: *Build.Step.Compile,
     config: Config,
-) !void {
+) void {
     var send_step: ?*Build.Step = null;
+
+    step.dependOn(&exe.step);
 
     if (config.install or (config.ssh_host != null and config.run)) {
         const install = b.addInstallArtifact(exe, .{});
@@ -330,12 +324,10 @@ fn addInstallAndRun(
 
         if (config.ssh_host) |host| {
             const install_dir = if (config.ssh_install_dir[0] == '/')
-                try b.allocator.dupe(u8, config.ssh_install_dir)
+                b.dupe(config.ssh_install_dir)
             else
                 b.fmt("{s}/{s}", .{ config.ssh_workdir, config.ssh_install_dir });
-            defer b.allocator.free(install_dir);
-
-            const send = try ssh.addSendArtifact(b, install, host, install_dir);
+            const send = ssh.addSendArtifact(b, install, host, install_dir);
             send.step.dependOn(&install.step);
             step.dependOn(&send.step);
             send_step = &send.step;
@@ -345,9 +337,7 @@ fn addInstallAndRun(
     if (config.run) {
         if (config.ssh_host) |host| {
             const exe_path = b.fmt("{s}/{s}", .{ config.ssh_install_dir, exe.name });
-            defer b.allocator.free(exe_path);
-
-            const run = try ssh.addRemoteCommand(b, host, config.ssh_workdir, exe_path);
+            const run = ssh.addRemoteCommand(b, host, config.ssh_workdir, exe_path);
             run.step.dependOn(send_step.?);
             step.dependOn(&run.step);
         } else {
@@ -366,9 +356,10 @@ const BlockstoreDB = enum {
 
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
 fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
-    const zls_is_build_runner = b.option(bool, "zls-is-build-runner", "" ++
-        "Option passed by zls to indicate that it's the one running this build script (configured in the local zls.json). " ++
-        "This should not be specified on the command line nor as a dependency argument.") orelse false;
+    const zls_is_build_runner = b.option(bool, "zls-is-build-runner",
+        \\Option passed by zls to indicate that it's the one running this build script (configured in the local zls.build.json).
+        \\This should not be specified on the command line nor as a dependency argument.
+    ) orelse false;
     if (!zls_is_build_runner) return;
 
     for (b.install_tls.step.dependencies.items) |*install_step_dep| {
@@ -440,21 +431,30 @@ const ssh = struct {
         install: *Build.Step.InstallArtifact,
         host: []const u8,
         remote_dir: []const u8,
-    ) !*Build.Step.Run {
+    ) *Build.Step.Run {
         const local_path = b.getInstallPath(install.dest_dir.?, install.dest_sub_path);
-        const remote_path = b.fmt("{s}/{s}", .{ remote_dir, install.dest_sub_path });
+        const remote_path = b.pathJoin(&.{ remote_dir, local_path });
+        const exe = sendFileExe(b);
+        const run = b.addRunArtifact(exe);
+        run.addArgs(&.{ local_path, host, remote_path });
+        return run;
+    }
 
+    /// Returns the executable for the `send-file` script, compiled
+    /// exactly once regardless of how many times this is called.
+    fn sendFileExe(b: *Build) *Build.Step.Compile {
+        const static = struct {
+            var exe: ?*Build.Step.Compile = null;
+        };
+        if (static.exe) |exe| return exe;
         const exe = b.addExecutable(.{
             .name = "send-file",
             .root_source_file = b.path("scripts/send-file.zig"),
             .target = b.graph.host,
             .link_libc = true,
         });
-
-        const run = b.addRunArtifact(exe);
-        run.addArgs(&.{ local_path, host, remote_path });
-
-        return run;
+        static.exe = exe;
+        return exe;
     }
 
     /// add a build step to run a command on a remote host using ssh.
@@ -463,21 +463,19 @@ const ssh = struct {
         host: []const u8,
         workdir: []const u8,
         executable_path: []const u8,
-    ) !*Build.Step.Run {
-        const cd_exe = b.fmt("cd {s}; {s}", .{ workdir, executable_path });
-        defer b.allocator.free(cd_exe);
+    ) *Build.Step.Run {
+        var ssh_cd_exe: std.ArrayListUnmanaged([]const u8) = .empty;
 
-        const cmd_size = 4;
-        const ssh_cd_exe = &[cmd_size][]const u8{ "ssh", "-t", host, cd_exe };
+        ssh_cd_exe.appendSlice(
+            b.graph.arena,
+            &.{ "ssh", "-t", host, b.fmt("cd {s}; {s}", .{ workdir, executable_path }) },
+        ) catch |e| std.debug.panic("{}", .{e});
 
-        const full_command = if (b.args) |args| cmd: {
-            const cmd = try b.allocator.alloc([]const u8, cmd_size + args.len);
-            @memcpy(cmd[0..cmd_size], ssh_cd_exe[0..cmd_size]);
-            @memcpy(cmd[cmd_size..], args);
-            break :cmd cmd;
-        } else ssh_cd_exe;
-        defer b.allocator.free(full_command);
+        if (b.args) |args| ssh_cd_exe.appendSlice(
+            b.graph.arena,
+            args,
+        ) catch |e| std.debug.panic("{}", .{e});
 
-        return b.addSystemCommand(full_command);
+        return b.addSystemCommand(ssh_cd_exe.items);
     }
 };
