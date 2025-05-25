@@ -26,17 +26,13 @@ const ShredWorkingStore = shred_inserter.working_state.ShredWorkingStore;
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 pub const MerkleRootValidator = struct {
-    allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: ScopedLogger(@typeName(MerkleRootValidator)),
     shreds: ShredWorkingStore,
     duplicate_shreds: DuplicateShredsWorkingStore,
 
-    const Self = @This();
-
-    pub fn init(pending_state: *PendingInsertShredsState) Self {
+    pub fn init(pending_state: *PendingInsertShredsState) MerkleRootValidator {
         return .{
-            .allocator = pending_state.allocator,
-            .logger = pending_state.logger.withScope(@typeName(Self)),
+            .logger = pending_state.logger.withScope(@typeName(MerkleRootValidator)),
             .shreds = pending_state.shreds(),
             .duplicate_shreds = pending_state.duplicateShreds(),
         };
@@ -44,7 +40,8 @@ pub const MerkleRootValidator = struct {
 
     /// agave: check_merkle_root_consistency
     pub fn checkConsistency(
-        self: Self,
+        self: MerkleRootValidator,
+        allocator: std.mem.Allocator,
         slot: Slot,
         merkle_root_meta: *const ledger.meta.MerkleRootMeta,
         shred: *const Shred,
@@ -83,7 +80,7 @@ pub const MerkleRootValidator = struct {
                 defer conflicting_shred.deinit();
                 const original = try shred.clone();
                 errdefer original.deinit();
-                const conflict = try conflicting_shred.clone(self.allocator);
+                const conflict = try conflicting_shred.clone(allocator);
                 errdefer conflict.deinit();
                 try self.duplicate_shreds.append(.{
                     .MerkleRootConflict = .{ .original = original, .conflict = conflict },
@@ -113,7 +110,7 @@ pub const MerkleRootValidator = struct {
     ///
     /// agave: check_forward_chained_merkle_root_consistency
     pub fn checkForwardChaining(
-        self: Self,
+        self: MerkleRootValidator,
         shred: CodeShred,
         erasure_meta: ErasureMeta,
         merkle_root_metas: MerkleRootMetaWorkingStore,
@@ -142,7 +139,7 @@ pub const MerkleRootValidator = struct {
             .shred_type = next_merkle_root_meta.first_received_shred_type,
         };
 
-        return self.checkAndReportChaining(.forward, .{ .code = shred }, next_shred_id);
+        return self.checkAndReportChaining(allocator, .forward, .{ .code = shred }, next_shred_id);
     }
 
     /// Returns true if there is no chaining conflict between
@@ -157,7 +154,8 @@ pub const MerkleRootValidator = struct {
     ///
     /// agave: check_backwards_chained_merkle_root_consistency
     pub fn checkBackwardChaining(
-        self: Self,
+        self: MerkleRootValidator,
+        allocator: std.mem.Allocator,
         shred: Shred,
         erasure_metas: ErasureMetaWorkingStore,
     ) !bool {
@@ -190,13 +188,14 @@ pub const MerkleRootValidator = struct {
             .shred_type = .code,
         };
 
-        return self.checkAndReportChaining(.backward, shred, prev_shred_id);
+        return self.checkAndReportChaining(allocator, .backward, shred, prev_shred_id);
     }
 
     /// The input shreds must be from adjacent erasure sets in the same slot,
     /// or this function will not work correctly.
     fn checkAndReportChaining(
-        self: Self,
+        self: MerkleRootValidator,
+        allocator: std.mem.Allocator,
         direction: enum { forward, backward },
         shred: Shred,
         other_shred_id: ShredId,
@@ -254,7 +253,7 @@ pub const MerkleRootValidator = struct {
         if (!try self.duplicate_shreds.contains(slot)) {
             const original = try shred.clone();
             errdefer original.deinit();
-            const conflict = try other_shred.clone(self.allocator);
+            const conflict = try other_shred.clone(allocator);
             errdefer conflict.deinit();
             try self.duplicate_shreds.append(.{
                 .ChainedMerkleRootConflict = .{ .original = original, .conflict = conflict },

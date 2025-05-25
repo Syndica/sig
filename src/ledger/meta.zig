@@ -33,7 +33,7 @@ pub const SlotMeta = struct {
     parent_slot: ?Slot,
     /// The list of slots, each of which contains a block that derives
     /// from this one.
-    child_slots: std.ArrayList(Slot),
+    child_slots: std.ArrayListUnmanaged(Slot),
     /// Connected status flags of this slot
     connected_flags: ConnectedFlags,
     /// Shreds indices which are marked data complete.  That is, those that have the
@@ -42,13 +42,10 @@ pub const SlotMeta = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, slot: Slot, parent_slot: ?Slot) Self {
-        const connected_flags = if (slot == 0)
-            // Slot 0 is the start, mark it as having its' parent connected
-            // such that slot 0 becoming full will be updated as connected
-            ConnectedFlags.from(.parent_connected)
-        else
-            ConnectedFlags{};
+    pub fn init(slot: Slot, parent_slot: ?Slot) Self {
+        // Slot 0 is the start, mark it as having its' parent connected
+        // such that slot 0 becoming full will be updated as connected
+        const connected_flags: ConnectedFlags = if (slot == 0) .from(.parent_connected) else .{};
         return .{
             .slot = slot,
             .parent_slot = parent_slot,
@@ -57,14 +54,14 @@ pub const SlotMeta = struct {
             .received = 0,
             .first_shred_timestamp_milli = 0,
             .last_index = null,
-            .child_slots = std.ArrayList(Slot).init(allocator),
-            .completed_data_indexes = SortedSet(u32).init(allocator),
+            .child_slots = .empty,
+            .completed_data_indexes = .EMPTY,
         };
     }
 
-    pub fn deinit(self: Self) void {
-        self.child_slots.deinit();
-        self.completed_data_indexes.deinit();
+    pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+        self.child_slots.deinit(allocator);
+        self.completed_data_indexes.deinit(allocator);
     }
 
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
@@ -267,17 +264,9 @@ pub const Index = struct {
     data_index: ShredIndex,
     code_index: ShredIndex,
 
-    pub fn init(allocator: std.mem.Allocator, slot: Slot) Index {
-        return .{
-            .slot = slot,
-            .data_index = ShredIndex.init(allocator),
-            .code_index = ShredIndex.init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Index) void {
-        self.data_index.deinit();
-        self.code_index.deinit();
+    pub fn deinit(self: *Index, allocator: std.mem.Allocator) void {
+        self.data_index.deinit(allocator);
+        self.code_index.deinit(allocator);
     }
 };
 

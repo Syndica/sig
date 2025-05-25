@@ -52,18 +52,21 @@ test "put/get data consistency for merkle root" {
 
 // Analogous to [test_get_rooted_block](https://github.com/anza-xyz/agave/blob/a72f981370c3f566fc1becf024f3178da041547a/ledger/src/blockstore.rs#L8271)
 test "insert shreds and transaction statuses then get blocks" {
-    var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+    const allocator = std.testing.allocator;
+    var test_logger = DirectPrintLogger.init(
+        allocator,
+        Logger.TEST_DEFAULT_LEVEL,
+    );
 
     const logger = test_logger.logger();
 
-    var state = try TestState.init(std.testing.allocator, @src(), logger);
-    const result = try insertDataForBlockTest(state);
+    var state = try TestState.init(allocator, @src(), logger);
+    defer state.deinit();
+
+    const result = try insertDataForBlockTest(allocator, &state);
     defer result.deinit();
 
     const blockhash = result.entries[result.entries.len - 1].hash;
-
-    defer state.deinit();
-    const allocator = state.allocator;
 
     var db = state.db;
     var reader = try state.reader();
@@ -192,16 +195,17 @@ pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred
     defer file.close();
 
     const reader = file.reader();
-    var shreds = std.ArrayList(Shred).init(allocator);
+    var shreds: std.ArrayListUnmanaged(Shred) = .empty;
     errdefer {
-        for (shreds.items) |shred| shred.deinit();
-        shreds.deinit();
+        for (shreds.items) |shred| shred.deinit(allocator);
+        shreds.deinit(allocator);
     }
     while (try readChunk(allocator, reader)) |chunk| {
         defer allocator.free(chunk);
-        try shreds.append(try Shred.fromPayload(allocator, chunk));
+        try shreds.append(allocator, try Shred.fromPayload(allocator, chunk));
     }
-    return shreds.toOwnedSlice();
+
+    return shreds.toOwnedSlice(allocator);
 }
 
 pub fn saveShredsToFile(path: []const u8, shreds: []const Shred) !void {
@@ -210,22 +214,19 @@ pub fn saveShredsToFile(path: []const u8, shreds: []const Shred) !void {
 }
 
 fn readChunk(allocator: Allocator, reader: anytype) !?[]const u8 {
-    var size_bytes: [8]u8 = undefined;
-    const num_size_bytes_read = try reader.readAll(&size_bytes);
-    if (num_size_bytes_read == 0) {
-        return null;
-    }
-    if (num_size_bytes_read != 8) {
-        return error.IncompleteSize;
-    }
-    const size = std.mem.readInt(u64, &size_bytes, .little);
+    var size_buffer: [8]u8 = undefined;
 
-    const chunk = try allocator.alloc(u8, @intCast(size));
+    const num_size_bytes_read = try reader.readAll(&size_buffer);
+    if (num_size_bytes_read == 0) return null;
+    if (num_size_bytes_read != 8) return error.IncompleteSize;
+
+    const size = std.mem.readInt(u64, &size_buffer, .little);
+
+    const chunk = try allocator.alloc(u8, size);
     errdefer allocator.free(chunk);
+
     const num_bytes_read = try reader.readAll(chunk);
-    if (num_bytes_read != size) {
-        return error.IncompleteChunk;
-    }
+    if (num_bytes_read != size) return error.IncompleteChunk;
 
     return chunk;
 }
@@ -238,7 +239,7 @@ fn writeChunk(writer: anytype, chunk: []const u8) !void {
 }
 
 pub fn deinitShreds(allocator: Allocator, shreds: []const Shred) void {
-    for (shreds) |shred| shred.deinit();
+    for (shreds) |shred| shred.deinit(allocator);
     allocator.free(shreds);
 }
 
@@ -276,35 +277,36 @@ pub const TestState = struct {
     registry: sig.prometheus.Registry(.{}),
     lowest_cleanup_slot: sig.sync.RwMux(Slot),
     max_root: std.atomic.Value(Slot),
-    allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
-
-    const Self = @This();
 
     pub fn init(
         allocator: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
         logger: sig.trace.Logger,
-    ) !*Self {
-        const self = try allocator.create(Self);
-        self.* = .{
-            .allocator = allocator,
+    ) !TestState {
+        return .{
             .db = try TestDB.initCustom(allocator, test_src),
             .registry = sig.prometheus.Registry(.{}).init(allocator),
             .lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0),
             .max_root = std.atomic.Value(Slot).init(0),
             .logger = logger,
         };
-        return self;
     }
 
-    pub fn shredInserter(self: *Self) !ledger.ShredInserter {
-        return ledger.ShredInserter.init(self.allocator, self.logger, &self.registry, self.db);
+    pub fn shredInserter(
+        self: *TestState,
+        allocator: std.mem.Allocator,
+    ) !ledger.ShredInserter {
+        return .init(
+            allocator,
+            self.logger,
+            &self.registry,
+            self.db,
+        );
     }
 
-    pub fn writer(self: *Self) !ledger.LedgerResultWriter {
+    pub fn writer(self: *TestState) !ledger.LedgerResultWriter {
         return try ledger.LedgerResultWriter.init(
-            self.allocator,
             self.logger,
             self.db,
             &self.registry,
@@ -313,7 +315,7 @@ pub const TestState = struct {
         );
     }
 
-    pub fn reader(self: *Self) !ledger.BlockstoreReader {
+    pub fn reader(self: *TestState) !ledger.BlockstoreReader {
         return try ledger.BlockstoreReader.init(
             self.allocator,
             self.logger,
@@ -324,10 +326,9 @@ pub const TestState = struct {
         );
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *TestState) void {
         self.db.deinit();
         self.registry.deinit();
-        self.allocator.destroy(self);
     }
 };
 
@@ -371,11 +372,9 @@ const InsertDataForBlockResult = struct {
     }
 };
 
-pub fn insertDataForBlockTest(state: *TestState) !InsertDataForBlockResult {
-    const allocator = state.allocator;
-
+pub fn insertDataForBlockTest(allocator: std.mem.Allocator, state: *TestState) !InsertDataForBlockResult {
     var db = state.db;
-    var inserter = try state.shredInserter();
+    var inserter = try state.shredInserter(allocator);
     var writer = try state.writer();
 
     const slot = 10;

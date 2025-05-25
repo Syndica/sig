@@ -276,12 +276,10 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator) Self {
-            return .{ .map = SortedMapCustom(T, void, config).init(allocator) };
-        }
+        pub const EMPTY: Self = .{ .map = .EMPTY };
 
-        pub fn deinit(self: Self) void {
-            self.map.deinit();
+        pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+            self.map.deinit(allocator);
         }
 
         pub fn clone(self: Self) !Self {
@@ -292,8 +290,8 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
             return self.map.eql(&other.map);
         }
 
-        pub fn put(self: *Self, item: T) !void {
-            try self.map.put(item, {});
+        pub fn put(self: *Self, allocator: std.mem.Allocator, item: T) !void {
+            try self.map.put(allocator, item, {});
         }
 
         pub fn orderedRemove(self: *Self, item: T) bool {
@@ -343,27 +341,26 @@ pub fn SortedMapCustom(
 ) type {
     return struct {
         inner: Inner,
-        max: ?K = null,
-        is_sorted: bool = true,
+        max: ?K,
+        is_sorted: bool,
 
-        const Inner = std.ArrayHashMap(K, V, config.Context, config.store_hash);
-
+        const Inner = std.ArrayHashMapUnmanaged(K, V, config.Context, config.store_hash);
         const Self = @This();
 
-        pub fn init(allocator: Allocator) Self {
-            return .{
-                .inner = Inner.init(allocator),
-            };
+        pub const EMPTY: Self = .{
+            .inner = .{},
+            .max = null,
+            .is_sorted = true,
+        };
+
+        pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+            var copy = self;
+            copy.inner.deinit(allocator);
         }
 
-        pub fn deinit(self: Self) void {
-            var self_mut = self;
-            self_mut.inner.deinit();
-        }
-
-        pub fn clone(self: Self) !Self {
+        pub fn clone(self: Self, allocator: std.mem.Allocator) !Self {
             return .{
-                .inner = try self.inner.clone(),
+                .inner = try self.inner.clone(allocator),
                 .max = self.max,
                 .is_sorted = self.is_sorted,
             };
@@ -408,8 +405,8 @@ pub fn SortedMapCustom(
             return was_removed;
         }
 
-        pub fn getOrPut(self: *Self, key: K) !std.AutoArrayHashMap(K, V).GetOrPutResult {
-            const result = try self.inner.getOrPut(key);
+        pub fn getOrPut(self: *Self, allocator: std.mem.Allocator, key: K) !std.AutoArrayHashMap(K, V).GetOrPutResult {
+            const result = try self.inner.getOrPut(allocator, key);
             if (self.max == null or order(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
@@ -418,8 +415,8 @@ pub fn SortedMapCustom(
             return result;
         }
 
-        pub fn put(self: *Self, key: K, value: V) !void {
-            try self.inner.put(key, value);
+        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) !void {
+            try self.inner.put(allocator, key, value);
             if (self.max == null or order(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
@@ -547,11 +544,11 @@ pub fn SortedMapCustom(
         pub fn sort(self: *Self) void {
             if (self.is_sorted) return;
             self.inner.sort(struct {
-                items: std.MultiArrayList(Inner.Unmanaged.Data).Slice,
+                items: std.MultiArrayList(Inner.Data).Slice,
                 pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
                     return order(ctx.items.get(a_index).key, ctx.items.get(b_index).key) == .lt;
                 }
-            }{ .items = self.inner.unmanaged.entries.slice() });
+            }{ .items = self.inner.entries.slice() });
             self.is_sorted = true;
         }
     };
@@ -841,24 +838,25 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
 
 test SortedSet {
-    var set = SortedSet(u64).init(std.testing.allocator);
-    defer set.deinit();
+    const allocator = std.testing.allocator;
+    var set: SortedSet(u64) = .EMPTY;
+    defer set.deinit(allocator);
 
     // add/contains
     try expect(!set.contains(3));
-    try set.put(3);
+    try set.put(allocator, 3);
     try expect(set.contains(3));
-    try set.put(0);
-    try set.put(2);
-    try set.put(1);
-    try set.put(4);
-    try set.put(5);
+    try set.put(allocator, 0);
+    try set.put(allocator, 2);
+    try set.put(allocator, 1);
+    try set.put(allocator, 4);
+    try set.put(allocator, 5);
 
     // remove
     try expect(set.orderedRemove(5));
     try expect(!set.contains(5));
     try expect(!set.orderedRemove(5));
-    try set.put(5);
+    try set.put(allocator, 5);
     try expect(set.contains(5));
 
     // ordering
@@ -868,13 +866,14 @@ test SortedSet {
 }
 
 test "SortedSet range" {
-    var set = SortedSet(u8).init(std.testing.allocator);
-    defer set.deinit();
+    const allocator = std.testing.allocator;
+    var set: SortedSet(u8) = .EMPTY;
+    defer set.deinit(allocator);
 
-    try set.put(5);
-    try set.put(3);
-    try set.put(1);
-    try set.put(3);
+    try set.put(allocator, 5);
+    try set.put(allocator, 3);
+    try set.put(allocator, 1);
+    try set.put(allocator, 3);
 
     try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(null, null));
     try expectEqualSlices(u8, &.{}, set.range(0, 0));
@@ -946,12 +945,13 @@ test "order slices" {
 }
 
 test "sorted set slice range" {
-    var set = SortedSet([]const u8).init(std.testing.allocator);
-    defer set.deinit();
-    try set.put(&.{ 0, 0, 10 });
-    try set.put(&.{ 0, 0, 20 });
-    try set.put(&.{ 0, 0, 30 });
-    try set.put(&.{ 0, 0, 40 });
+    const allocator = std.testing.allocator;
+    var set: SortedSet([]const u8) = .EMPTY;
+    defer set.deinit(allocator);
+    try set.put(allocator, &.{ 0, 0, 10 });
+    try set.put(allocator, &.{ 0, 0, 20 });
+    try set.put(allocator, &.{ 0, 0, 30 });
+    try set.put(allocator, &.{ 0, 0, 40 });
 
     const range = set.rangeCustom(null, .{ .inclusive = &.{ 0, 0, 40 } });
 
@@ -1104,14 +1104,15 @@ test "Window realigns" {
 }
 
 test "SortedMap" {
-    var map = SortedMap(u64, u64).init(std.testing.allocator);
-    defer map.deinit();
+    const allocator = std.testing.allocator;
+    var map: SortedMap(u64, u64) = .EMPTY;
+    defer map.deinit(allocator);
 
-    try map.put(3, 30);
-    try map.put(1, 10);
-    try map.put(2, 20);
-    try map.put(4, 40);
-    try map.put(5, 50);
+    try map.put(allocator, 3, 30);
+    try map.put(allocator, 1, 10);
+    try map.put(allocator, 2, 20);
+    try map.put(allocator, 4, 40);
+    try map.put(allocator, 5, 50);
 
     // Get the keys and values
     const items = map.items();

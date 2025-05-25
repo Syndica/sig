@@ -30,7 +30,6 @@ const schema = ledger.schema.schema;
 /// Persist the results of executing a transaction, executing a block,
 /// or reaching consensus on a block.
 pub const LedgerResultWriter = struct {
-    allocator: Allocator,
     logger: ScopedLogger(@typeName(Self)),
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
@@ -41,7 +40,6 @@ pub const LedgerResultWriter = struct {
     const Self = @This();
 
     pub fn init(
-        allocator: Allocator,
         logger: Logger,
         db: BlockstoreDB,
         registry: *sig.prometheus.Registry(.{}),
@@ -49,7 +47,6 @@ pub const LedgerResultWriter = struct {
         max_root: *std.atomic.Value(Slot),
     ) !LedgerResultWriter {
         return .{
-            .allocator = allocator,
             .logger = logger.withScope(@typeName(Self)),
             .db = db,
             .lowest_cleanup_slot = lowest_cleanup_slot,
@@ -328,8 +325,7 @@ test "setRoots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
@@ -357,8 +353,7 @@ test "scanAndFixRoots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
@@ -400,8 +395,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
@@ -473,8 +467,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
@@ -488,11 +481,13 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const roots: [3]Slot = .{ 1, 2, 3 };
     try writer.setRoots(&roots);
 
-    var slot_meta_1 = SlotMeta.init(allocator, 1, null);
-    defer slot_meta_1.deinit();
+    var slot_meta_1 = SlotMeta.init(1, null);
+    defer slot_meta_1.deinit(allocator);
+
     slot_meta_1.last_index = 1;
     slot_meta_1.consecutive_received_from_0 = 1 + 1;
     try slot_meta_1.child_slots.append(2);
+
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
 
     // 2 is not full

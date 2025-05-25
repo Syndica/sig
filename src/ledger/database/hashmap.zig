@@ -36,11 +36,13 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         const Self = @This();
 
+        const Error = error{} || Allocator.Error;
+
         pub fn open(
             allocator: Allocator,
             logger: Logger,
             path: []const u8,
-        ) anyerror!Self {
+        ) Error!Self {
             logger.info().log("Initializing SharedHashMapDB");
             const actual_path = try std.fmt.allocPrint(allocator, "{s}/hashmapdb", .{path});
             defer allocator.free(actual_path);
@@ -89,7 +91,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self.fast_allocator.destroy(self.disk_allocator_state);
         }
 
-        pub fn count(self: *Self, comptime cf: ColumnFamily) anyerror!u64 {
+        pub fn count(self: *Self, comptime cf: ColumnFamily) Error!u64 {
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
 
@@ -101,7 +103,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             key: cf.Key,
             value: cf.Value,
-        ) anyerror!void {
+        ) Error!void {
             const key_bytes = try key_serializer.serializeAlloc(self.storage_allocator, key);
             errdefer self.storage_allocator.free(key_bytes);
 
@@ -119,7 +121,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             allocator: Allocator,
             comptime cf: ColumnFamily,
             key: cf.Key,
-        ) anyerror!?cf.Value {
+        ) Error!?cf.Value {
             const key_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
             defer self.fast_allocator.free(key_bytes);
             const map = &self.maps[cf.find(column_families)];
@@ -138,7 +140,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self: *Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
-        ) anyerror!?BytesRef {
+        ) Error!?BytesRef {
             const key_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
             defer self.fast_allocator.free(key_bytes);
             const map = &self.maps[cf.find(column_families)];
@@ -157,7 +159,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
+        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) Error!bool {
             const key_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
             defer self.fast_allocator.free(key_bytes);
             const map = &self.maps[cf.find(column_families)];
@@ -174,7 +176,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self: *Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
-        ) anyerror!void {
+        ) Error!void {
             const key_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
             defer self.fast_allocator.free(key_bytes);
             self.transaction_lock.lockShared();
@@ -187,7 +189,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             start: cf.Key,
             end: cf.Key,
-        ) anyerror!void {
+        ) Error!void {
             _ = self;
             _ = start;
             _ = end;
@@ -282,7 +284,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 comptime cf: ColumnFamily,
                 key: cf.Key,
                 value: cf.Value,
-            ) anyerror!void {
+            ) Error!void {
                 std.debug.assert(!self.executed.*);
                 const k_bytes = try key_serializer.serializeAlloc(self.storage_allocator, key);
                 errdefer self.storage_allocator.free(k_bytes);
@@ -298,7 +300,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 self: *WriteBatch,
                 comptime cf: ColumnFamily,
                 key: cf.Key,
-            ) anyerror!void {
+            ) Error!void {
                 std.debug.assert(!self.executed.*);
                 const k_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
                 errdefer self.fast_allocator.free(k_bytes);
@@ -313,7 +315,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 comptime cf: ColumnFamily,
                 start: cf.Key,
                 end: cf.Key,
-            ) anyerror!void {
+            ) Error!void {
                 std.debug.assert(!self.executed.*);
                 const start_bytes = try key_serializer.serializeAlloc(self.fast_allocator, start);
                 errdefer self.fast_allocator.free(start_bytes);
@@ -332,7 +334,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
-        ) anyerror!Iterator(cf, direction) {
+        ) Error!Iterator(cf, direction) {
             const shared_map = &self.maps[cf.find(column_families)];
             const map = &shared_map.map;
 
@@ -398,7 +400,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                     self.storage_allocator.free(self.vals);
                 }
 
-                pub fn next(self: *@This()) anyerror!?cf.Entry() {
+                pub fn next(self: *@This()) Error!?cf.Entry() {
                     const index = self.nextIndex() orelse return null;
                     return .{
                         try key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]),
@@ -410,12 +412,12 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                     };
                 }
 
-                pub fn nextKey(self: *@This()) anyerror!?cf.Key {
+                pub fn nextKey(self: *@This()) Error!?cf.Key {
                     const index = self.nextIndex() orelse return null;
                     return try key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]);
                 }
 
-                pub fn nextValue(self: *@This()) anyerror!?cf.Value {
+                pub fn nextValue(self: *@This()) Error!?cf.Value {
                     const index = self.nextIndex() orelse return null;
                     return try value_serializer.deserialize(
                         cf.Value,
@@ -447,7 +449,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn flush(_: *Self, comptime _: ColumnFamily) anyerror!void {}
+        pub fn flush(_: *Self, comptime _: ColumnFamily) Error!void {}
     };
 }
 

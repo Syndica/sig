@@ -334,14 +334,14 @@ pub const AuthorizedVoters = struct {
         .serializer = serialize,
     };
 
-    pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) !AuthorizedVoters {
-        var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
-        try authorized_voters.put(epoch, pubkey);
+    pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) error{OutOfMemory}!AuthorizedVoters {
+        var authorized_voters: SortedMap(Epoch, Pubkey) = .EMPTY;
+        try authorized_voters.put(allocator, epoch, pubkey);
         return AuthorizedVoters{ .voters = authorized_voters };
     }
 
-    pub fn deinit(self: AuthorizedVoters) void {
-        self.voters.deinit();
+    pub fn deinit(self: AuthorizedVoters, allocator: std.mem.Allocator) void {
+        self.voters.deinit(allocator);
     }
 
     pub fn count(self: *const AuthorizedVoters) usize {
@@ -361,11 +361,15 @@ pub const AuthorizedVoters = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L27
-    pub fn getAndCacheAuthorizedVoterForEpoch(self: *AuthorizedVoters, epoch: Epoch) !?Pubkey {
+    pub fn getAndCacheAuthorizedVoterForEpoch(
+        self: *AuthorizedVoters,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+    ) !?Pubkey {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
             const pubkey, const existed = entry;
             if (!existed) {
-                try self.voters.put(epoch, pubkey);
+                try self.voters.put(allocator, epoch, pubkey);
             }
             return pubkey;
         } else {
@@ -373,8 +377,13 @@ pub const AuthorizedVoters = struct {
         }
     }
 
-    pub fn insert(self: *AuthorizedVoters, epoch: Epoch, authorized_voter: Pubkey) !void {
-        try self.voters.put(epoch, authorized_voter);
+    pub fn insert(
+        self: *AuthorizedVoters,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+        authorized_voter: Pubkey,
+    ) !void {
+        try self.voters.put(allocator, epoch, authorized_voter);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L42
@@ -462,17 +471,15 @@ pub const AuthorizedVoters = struct {
         reader: anytype,
         _: sig.bincode.Params,
     ) !AuthorizedVoters {
-        var authorized_voters = AuthorizedVoters{
-            .voters = SortedMap(Epoch, Pubkey).init(allocator),
-        };
-        errdefer authorized_voters.deinit();
+        var authorized_voters: AuthorizedVoters = .{ .voters = .EMPTY };
+        errdefer authorized_voters.deinit(allocator);
 
         for (0..try reader.readInt(usize, .little)) |_| {
             const epoch = try reader.readInt(u64, .little);
             var pubkey = Pubkey.ZEROES;
             const bytes_read = try reader.readAll(&pubkey.data);
             if (bytes_read != Pubkey.SIZE) return error.NoBytesLeft;
-            try authorized_voters.voters.put(epoch, pubkey);
+            try authorized_voters.voters.put(allocator, epoch, pubkey);
         }
 
         return authorized_voters;
@@ -546,26 +553,26 @@ pub const VoteStateVersions = union(enum) {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L80
     fn landedVotesFromLockouts(
         allocator: std.mem.Allocator,
-        lockouts: std.ArrayList(Lockout),
-    ) !std.ArrayList(LandedVote) {
-        var landed_votes = std.ArrayList(LandedVote).init(allocator);
-        errdefer landed_votes.deinit();
+        lockouts: []const Lockout,
+    ) ![]LandedVote {
+        const landed_votes = try allocator.alloc(LandedVote, lockouts.len);
+        errdefer allocator.free(landed_votes);
 
-        for (lockouts.items) |lockout| {
-            try landed_votes.append(LandedVote{
+        for (landed_votes, lockouts) |*vote, lockout| {
+            vote.* = .{
                 .latency = 0,
                 .lockout = lockout,
-            });
+            };
         }
 
         return landed_votes;
     }
 
-    pub fn deinit(self: VoteStateVersions) void {
+    pub fn deinit(self: VoteStateVersions, allocator: std.mem.Allocator) void {
         switch (self) {
-            .v0_23_5 => |vote_state| vote_state.deinit(),
-            .v1_14_11 => |vote_state| vote_state.deinit(),
-            .current => |vote_state| vote_state.deinit(),
+            .v0_23_5 => |vote_state| vote_state.deinit(allocator),
+            .v1_14_11 => |vote_state| vote_state.deinit(allocator),
+            .current => |vote_state| vote_state.deinit(allocator),
         }
     }
 
@@ -578,11 +585,16 @@ pub const VoteStateVersions = union(enum) {
                     state.voter_epoch,
                     state.voter,
                 );
-                return VoteState{
+                return .{
                     .node_pubkey = state.node_pubkey,
                     .withdrawer = state.withdrawer,
                     .commission = state.commission,
-                    .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
+                    .votes = .fromOwnedSlice(
+                        try VoteStateVersions.landedVotesFromLockouts(
+                            allocator,
+                            state.votes.items,
+                        ),
+                    ),
                     .root_slot = state.root_slot,
                     .voters = authorized_voters,
                     .prior_voters = CircBufV1.init(),
@@ -590,11 +602,16 @@ pub const VoteStateVersions = union(enum) {
                     .last_timestamp = state.last_timestamp,
                 };
             },
-            .v1_14_11 => |state| return VoteState{
+            .v1_14_11 => |state| return .{
                 .node_pubkey = state.node_pubkey,
                 .withdrawer = state.withdrawer,
                 .commission = state.commission,
-                .votes = try VoteStateVersions.landedVotesFromLockouts(allocator, state.votes),
+                .votes = .fromOwnedSlice(
+                    try VoteStateVersions.landedVotesFromLockouts(
+                        allocator,
+                        state.votes.items,
+                    ),
+                ),
                 .root_slot = state.root_slot,
                 .voters = state.voters,
                 .prior_voters = state.prior_voters,
@@ -638,19 +655,18 @@ pub const VoteState0_23_5 = struct {
     commission: u8,
 
     // TODO this should be a double ended queue.
-    votes: std.ArrayList(Lockout),
+    votes: std.ArrayListUnmanaged(Lockout),
 
     root_slot: ?Slot,
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
-    epoch_credits: std.ArrayList(EpochCredit),
+    epoch_credits: std.ArrayListUnmanaged(EpochCredit),
 
     /// most recent timestamp submitted with a vote
     last_timestamp: BlockTimestamp,
 
     pub fn init(
-        allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
         authorized_voter: Pubkey,
         withdrawer: Pubkey,
@@ -664,16 +680,17 @@ pub const VoteState0_23_5 = struct {
             .prior_voters = CircBufV0.init(),
             .withdrawer = withdrawer,
             .commission = commission,
-            .votes = std.ArrayList(Lockout).init(allocator),
+            .votes = .empty,
             .root_slot = null,
-            .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
-            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+            .epoch_credits = .empty,
+            .last_timestamp = .{ .slot = 0, .timestamp = 0 },
         };
     }
 
-    pub fn deinit(self: VoteState0_23_5) void {
-        self.votes.deinit();
-        self.epoch_credits.deinit();
+    pub fn deinit(self: VoteState0_23_5, allocator: std.mem.Allocator) void {
+        var copy = self;
+        copy.votes.deinit(allocator);
+        copy.epoch_credits.deinit(allocator);
     }
 };
 
@@ -689,7 +706,7 @@ pub const VoteState1_14_11 = struct {
     commission: u8,
 
     // TODO this should be a double ended queue.
-    votes: std.ArrayList(Lockout),
+    votes: std.ArrayListUnmanaged(Lockout),
 
     // This usually the last Lockout which was popped from self.votes.
     // However, it can be arbitrary slot, when being used inside Tower
@@ -705,7 +722,7 @@ pub const VoteState1_14_11 = struct {
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
-    epoch_credits: std.ArrayList(EpochCredit),
+    epoch_credits: std.ArrayListUnmanaged(EpochCredit),
 
     /// most recent timestamp submitted with a vote
     last_timestamp: BlockTimestamp,
@@ -732,19 +749,20 @@ pub const VoteState1_14_11 = struct {
             .node_pubkey = node_pubkey,
             .withdrawer = withdrawer,
             .commission = commission,
-            .votes = std.ArrayList(Lockout).init(allocator),
+            .votes = .empty,
             .root_slot = null,
             .voters = authorized_voters,
             .prior_voters = CircBufV1.init(),
-            .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
-            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+            .epoch_credits = .empty,
+            .last_timestamp = .{ .slot = 0, .timestamp = 0 },
         };
     }
 
-    pub fn deinit(self: VoteState1_14_11) void {
-        self.votes.deinit();
-        self.voters.deinit();
-        self.epoch_credits.deinit();
+    pub fn deinit(self: VoteState1_14_11, allocator: std.mem.Allocator) void {
+        var copy = self;
+        copy.votes.deinit(allocator);
+        copy.voters.deinit(allocator);
+        copy.epoch_credits.deinit(allocator);
     }
 };
 
@@ -759,7 +777,7 @@ pub const VoteState = struct {
     ///  payout should be given to this VoteAccount
     commission: u8,
 
-    votes: std.ArrayList(LandedVote),
+    votes: std.ArrayListUnmanaged(LandedVote),
 
     // This usually the last Lockout which was popped from self.votes.
     // However, it can be arbitrary slot, when being used inside Tower
@@ -775,7 +793,7 @@ pub const VoteState = struct {
 
     /// history of how many credits earned by the end of each epoch
     ///  each tuple is (Epoch, credits, prev_credits)
-    epoch_credits: std.ArrayList(EpochCredit),
+    epoch_credits: std.ArrayListUnmanaged(EpochCredit),
 
     /// most recent timestamp submitted with a vote
     last_timestamp: BlockTimestamp,
@@ -784,21 +802,17 @@ pub const VoteState = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
 
-    pub fn default(allocator: std.mem.Allocator) VoteState {
-        return .{
-            .node_pubkey = Pubkey.ZEROES,
-            .withdrawer = Pubkey.ZEROES,
-            .commission = 0,
-            .votes = std.ArrayList(LandedVote).init(allocator),
-            .root_slot = null,
-            .voters = AuthorizedVoters{
-                .voters = SortedMap(Epoch, Pubkey).init(allocator),
-            },
-            .prior_voters = CircBufV1.init(),
-            .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
-            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
-        };
-    }
+    pub const DEFAULT: VoteState = .{
+        .node_pubkey = Pubkey.ZEROES,
+        .withdrawer = Pubkey.ZEROES,
+        .commission = 0,
+        .votes = .empty,
+        .root_slot = null,
+        .voters = .{ .voters = .EMPTY },
+        .prior_voters = CircBufV1.init(),
+        .epoch_credits = .empty,
+        .last_timestamp = .{ .slot = 0, .timestamp = 0 },
+    };
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -807,32 +821,30 @@ pub const VoteState = struct {
         withdrawer: Pubkey,
         commission: u8,
         clock: Clock,
-    ) !VoteState {
-        const authorized_voters = AuthorizedVoters.init(
+    ) error{OutOfMemory}!VoteState {
+        const authorized_voters = try AuthorizedVoters.init(
             allocator,
             clock.epoch,
             authorized_voter,
-        ) catch {
-            return InstructionError.Custom;
-        };
-
+        );
         return .{
             .node_pubkey = node_pubkey,
             .voters = authorized_voters,
             .withdrawer = withdrawer,
             .commission = commission,
-            .votes = std.ArrayList(LandedVote).init(allocator),
+            .votes = .empty,
             .root_slot = null,
             .prior_voters = CircBufV1.init(),
-            .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
-            .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+            .epoch_credits = .empty,
+            .last_timestamp = .{ .slot = 0, .timestamp = 0 },
         };
     }
 
-    pub fn deinit(self: VoteState) void {
-        self.votes.deinit();
-        self.voters.deinit();
-        self.epoch_credits.deinit();
+    pub fn deinit(self: VoteState, allocator: std.mem.Allocator) void {
+        var copy = self;
+        copy.votes.deinit(allocator);
+        copy.voters.deinit(allocator);
+        copy.epoch_credits.deinit(allocator);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
@@ -843,6 +855,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
     pub fn setNewAuthorizedVoter(
         self: *VoteState,
+        allocator: std.mem.Allocator,
         new_authorized_voter: Pubkey,
         target_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
@@ -877,7 +890,7 @@ pub const VoteState = struct {
             });
         }
 
-        try self.voters.insert(target_epoch, new_authorized_voter);
+        try self.voters.insert(allocator, target_epoch, new_authorized_voter);
         // Success, return null.
         return null;
     }
@@ -888,8 +901,10 @@ pub const VoteState = struct {
         allocator: std.mem.Allocator,
         current_epoch: Epoch,
     ) (error{OutOfMemory} || InstructionError)!Pubkey {
-        const maybe_pubkey = self.voters
-            .getAndCacheAuthorizedVoterForEpoch(current_epoch) catch return error.OutOfMemory;
+        const maybe_pubkey = self.voters.getAndCacheAuthorizedVoterForEpoch(
+            allocator,
+            current_epoch,
+        ) catch return error.OutOfMemory;
         const pubkey = maybe_pubkey orelse return InstructionError.InvalidAccountData;
 
         _ = try self.voters.purgeAuthorizedVoters(allocator, current_epoch);
@@ -959,6 +974,7 @@ pub const VoteState = struct {
     /// increment credits, record credits for last epoch if new epoch
     pub fn incrementCredits(
         self: *VoteState,
+        allocator: std.mem.Allocator,
         epoch: Epoch,
         credits: u64,
     ) error{OutOfMemory}!void {
@@ -966,6 +982,7 @@ pub const VoteState = struct {
         // never seen a credit
         if (self.epoch_credits.items.len == 0) {
             try self.epoch_credits.append(
+                allocator,
                 .{ .epoch = epoch, .credits = 0, .prev_credits = 0 },
             );
         } else if (epoch != self.epoch_credits.getLast().epoch) {
@@ -977,7 +994,8 @@ pub const VoteState = struct {
                 // if credits were earned previous epoch
                 // append entry at end of list for the new epoch
                 try self.epoch_credits.append(
-                    EpochCredit{
+                    allocator,
+                    .{
                         .epoch = epoch,
                         .credits = last_credits,
                         .prev_credits = last_credits,
@@ -985,9 +1003,9 @@ pub const VoteState = struct {
                 );
             } else {
                 // else just move the current epoch
-                const last_epoch_credit =
-                    &self.epoch_credits.items[self.epoch_credits.items.len - 1];
-                last_epoch_credit.*.epoch = epoch;
+                const last_idx = self.epoch_credits.items.len - 1;
+                const last_epoch_credit = &self.epoch_credits.items[last_idx];
+                last_epoch_credit.epoch = epoch;
             }
 
             // Remove too old epoch_credits
@@ -999,7 +1017,7 @@ pub const VoteState = struct {
         // Saturating add for the credits
         {
             const last_epoch_credit = &self.epoch_credits.items[self.epoch_credits.items.len - 1];
-            last_epoch_credit.*.credits = last_epoch_credit.credits +| credits;
+            last_epoch_credit.credits = last_epoch_credit.credits +| credits;
         }
     }
 
@@ -1093,6 +1111,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L709
     pub fn processNextVoteSlot(
         self: *VoteState,
+        allocator: std.mem.Allocator,
         next_vote_slot: Slot,
         epoch: Epoch,
         current_slot: Slot,
@@ -1116,10 +1135,10 @@ pub const VoteState = struct {
             const credits = self.creditsForVoteAtIndex(0);
             const popped_vote = self.votes.orderedRemove(0);
             self.root_slot = popped_vote.lockout.slot;
-            try self.incrementCredits(epoch, credits);
+            try self.incrementCredits(allocator, epoch, credits);
         }
 
-        try self.votes.append(landed_vote);
+        try self.votes.append(allocator, landed_vote);
         try self.doubleLockouts();
     }
 
@@ -1210,6 +1229,7 @@ pub const VoteState = struct {
         }
 
         return self.processVoteUnfiltered(
+            allocator,
             recent_vote_slots.items,
             vote,
             &slot_hashes,
@@ -1221,6 +1241,7 @@ pub const VoteState = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L603
     pub fn processVoteUnfiltered(
         self: *VoteState,
+        allocator: std.mem.Allocator,
         recent_vote_slots: []const Slot,
         vote: *const Vote,
         slot_hashes: *const SlotHashes,
@@ -1236,7 +1257,12 @@ pub const VoteState = struct {
         }
 
         for (recent_vote_slots) |recent_vote_slot| {
-            try self.processNextVoteSlot(recent_vote_slot, epoch, current_slot);
+            try self.processNextVoteSlot(
+                allocator,
+                recent_vote_slot,
+                epoch,
+                current_slot,
+            );
         }
 
         return null;
@@ -1246,7 +1272,7 @@ pub const VoteState = struct {
     ///
     /// Computes the vote latency for vote on voted_for_slot where the vote itself landed in current_slot
     pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
-        return @min(current_slot -| voted_for_slot, std.math.maxInt(u8));
+        return std.math.lossyCast(u8, current_slot -| voted_for_slot);
     }
 
     fn compareFn(key: Slot, mid_item: LandedVote) std.math.Order {
@@ -1283,19 +1309,18 @@ pub const VoteState = struct {
             return err;
         }
 
-        var lockouts = try std.ArrayList(LandedVote).initCapacity(
-            allocator,
-            tower_sync.lockouts.items.len,
-        );
-        defer lockouts.deinit();
-        for (tower_sync.lockouts.items) |lockout| {
-            try lockouts.append(
-                LandedVote{ .latency = 0, .lockout = lockout },
-            );
+        const landed_votes = try allocator.alloc(LandedVote, tower_sync.lockouts.items.len);
+        defer allocator.free(landed_votes);
+        for (landed_votes, tower_sync.lockouts.items) |*vote, lockout| {
+            vote.* = .{
+                .latency = 0,
+                .lockout = lockout,
+            };
         }
 
         return try self.processNewVoteState(
-            &lockouts,
+            allocator,
+            landed_votes,
             tower_sync.root,
             tower_sync.timestamp,
             epoch,
@@ -1321,19 +1346,18 @@ pub const VoteState = struct {
             return err;
         }
 
-        var lockouts = try std.ArrayList(LandedVote).initCapacity(
-            allocator,
-            vote_state_update.lockouts.items.len,
-        );
-        defer lockouts.deinit();
-        for (vote_state_update.lockouts.items) |lockout| {
-            try lockouts.append(
-                LandedVote{ .latency = 0, .lockout = lockout },
-            );
+        const landed_votes = try allocator.alloc(LandedVote, vote_state_update.lockouts.items.len);
+        defer allocator.free(landed_votes);
+        for (landed_votes, vote_state_update.lockouts.items) |*vote, lockout| {
+            vote.* = .{
+                .latency = 0,
+                .lockout = lockout,
+            };
         }
 
         return try self.processNewVoteState(
-            &lockouts,
+            allocator,
+            landed_votes,
             vote_state_update.root,
             vote_state_update.timestamp,
             epoch,
@@ -1635,15 +1659,16 @@ pub const VoteState = struct {
     /// popped off.
     pub fn processNewVoteState(
         self: *VoteState,
-        new_state: *std.ArrayList(LandedVote),
+        allocator: std.mem.Allocator,
+        new_state: []LandedVote,
         new_root: ?Slot,
         timestamp: ?i64,
         epoch: Epoch,
         current_slot: Slot,
     ) (error{OutOfMemory} || InstructionError)!?VoteError {
-        std.debug.assert(new_state.items.len != 0);
+        std.debug.assert(new_state.len != 0);
 
-        if (new_state.items.len > MAX_LOCKOUT_HISTORY) {
+        if (new_state.len > MAX_LOCKOUT_HISTORY) {
             return VoteError.too_many_votes;
         }
 
@@ -1661,41 +1686,42 @@ pub const VoteState = struct {
             }
         }
 
-        var maybe_previous_vote: ?*const LandedVote = null;
-
-        // Check that all the votes in the new proposed state are:
-        // 1) Strictly sorted from oldest to newest vote
-        // 2) The confirmations are strictly decreasing
-        // 3) Not zero confirmation votes
-        for (new_state.items) |*vote| {
-            if (vote.lockout.confirmation_count == 0) {
-                return VoteError.zero_confirmations;
-            } else if (vote.lockout.confirmation_count > MAX_LOCKOUT_HISTORY) {
-                return VoteError.confirmation_too_large;
-            } else if (new_root) |proposed_new_root| {
-                if (vote.lockout.slot <= proposed_new_root and
-                    // This check is necessary because
-                    // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L120
-                    // always sets a root for even empty towers, which is then hard unwrapped here
-                    // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L776
-                    new_root != 0)
-                {
-                    return VoteError.slot_smaller_than_root;
+        {
+            var maybe_previous_vote: ?*const LandedVote = null;
+            // Check that all the votes in the new proposed state are:
+            // 1) Strictly sorted from oldest to newest vote
+            // 2) The confirmations are strictly decreasing
+            // 3) Not zero confirmation votes
+            for (new_state) |*vote| {
+                if (vote.lockout.confirmation_count == 0) {
+                    return VoteError.zero_confirmations;
+                } else if (vote.lockout.confirmation_count > MAX_LOCKOUT_HISTORY) {
+                    return VoteError.confirmation_too_large;
+                } else if (new_root) |proposed_new_root| {
+                    if (vote.lockout.slot <= proposed_new_root and
+                        // This check is necessary because
+                        // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L120
+                        // always sets a root for even empty towers, which is then hard unwrapped here
+                        // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L776
+                        new_root != 0)
+                    {
+                        return VoteError.slot_smaller_than_root;
+                    }
                 }
-            }
 
-            if (maybe_previous_vote) |previous_vote| {
-                if (previous_vote.lockout.slot >= vote.lockout.slot) {
-                    return VoteError.slots_not_ordered;
-                } else if (previous_vote.lockout.confirmation_count <=
-                    vote.lockout.confirmation_count)
-                {
-                    return VoteError.confirmations_not_ordered;
-                } else if (vote.lockout.slot > previous_vote.lockout.lastLockedOutSlot()) {
-                    return VoteError.new_vote_state_lockout_mismatch;
+                if (maybe_previous_vote) |previous_vote| {
+                    if (previous_vote.lockout.slot >= vote.lockout.slot) {
+                        return VoteError.slots_not_ordered;
+                    } else if (previous_vote.lockout.confirmation_count <=
+                        vote.lockout.confirmation_count)
+                    {
+                        return VoteError.confirmations_not_ordered;
+                    } else if (vote.lockout.slot > previous_vote.lockout.lastLockedOutSlot()) {
+                        return VoteError.new_vote_state_lockout_mismatch;
+                    }
                 }
+                maybe_previous_vote = vote;
             }
-            maybe_previous_vote = vote;
         }
 
         // Find the first vote in the current vote state for a slot greater
@@ -1744,10 +1770,10 @@ pub const VoteState = struct {
         // All the votes in our current vote state that are missing from the new vote state
         // must have been expired by later votes. Check that the lockouts match this assumption.
         while (current_vote_state_index < self.votes.items.len and
-            new_vote_state_index < new_state.items.len)
+            new_vote_state_index < new_state.len)
         {
             const current_vote = &self.votes.items[current_vote_state_index];
-            const new_vote = &new_state.items[new_vote_state_index];
+            const new_vote = &new_state[new_vote_state_index];
 
             // If the current slot is less than the new proposed slot, then the
             // new slot must have popped off the old slot, so check that the
@@ -1796,7 +1822,7 @@ pub const VoteState = struct {
 
         // Now set the vote latencies on new slots not in the current state.  New slots not in the current vote state will
         // have had their latency initialized to 0 by the above loop.  Those will now be updated to their actual latency.
-        for (new_state.items) |*new_vote| {
+        for (new_state) |*new_vote| {
             if (new_vote.latency == 0) {
                 new_vote.latency = VoteState.computeVoteLatency(
                     new_vote.lockout.slot,
@@ -1809,10 +1835,10 @@ pub const VoteState = struct {
             // Award vote credits based on the number of slots that were voted on and have reached finality
             // For each finalized slot, there was one voted-on slot in the new vote state that was responsible for
             // finalizing it. Each of those votes is awarded 1 credit.
-            try self.incrementCredits(epoch, earned_credits);
+            try self.incrementCredits(allocator, epoch, earned_credits);
         }
         if (timestamp) |tstamp| {
-            const last_slot = new_state.getLast().lockout.slot;
+            const last_slot = new_state[new_state.len - 1].lockout.slot;
             if (self.processTimestamp(last_slot, tstamp)) |err| {
                 return err;
             }
@@ -1820,7 +1846,7 @@ pub const VoteState = struct {
 
         self.root_slot = new_root;
         self.votes.clearRetainingCapacity();
-        try self.votes.appendSlice(new_state.items);
+        try self.votes.appendSlice(allocator, new_state);
         // Everything is fine.
         return null;
     }
@@ -1844,19 +1870,17 @@ pub fn createTestVoteState(
 
     return .{
         .node_pubkey = node_pubkey,
-        .voters = if (authorized_voter) |authorized_voter_|
-            try AuthorizedVoters.init(allocator, 0, authorized_voter_)
+        .voters = if (authorized_voter) |voter|
+            try AuthorizedVoters.init(allocator, 0, voter)
         else
-            AuthorizedVoters{
-                .voters = SortedMap(Epoch, Pubkey).init(allocator),
-            },
+            .{ .voters = .EMPTY },
         .withdrawer = withdrawer,
         .commission = commission,
-        .votes = std.ArrayList(LandedVote).init(allocator),
+        .votes = .empty,
         .root_slot = null,
         .prior_voters = CircBufV1.init(),
-        .epoch_credits = std.ArrayList(EpochCredit).init(allocator),
-        .last_timestamp = BlockTimestamp{ .slot = 0, .timestamp = 0 },
+        .epoch_credits = .empty,
+        .last_timestamp = .{ .slot = 0, .timestamp = 0 },
     };
 }
 
@@ -1918,7 +1942,7 @@ test "AuthorizeVoters.serialize" {
         agave_bytes,
         .{},
     );
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
 
     const sig_bytes = try sig.bincode.writeAlloc(allocator, authorized_voters, .{});
     defer allocator.free(sig_bytes);
@@ -2047,8 +2071,7 @@ test "state.VoteState.convertToCurrent" {
     const allocator = std.testing.allocator;
     // VoteState0_23_5 -> Current
     {
-        const vote_state_0_23_5 = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
-            allocator,
+        const vote_state_0_23_5: VoteStateVersions = .{ .v0_23_5 = try .init(
             Pubkey.ZEROES,
             Pubkey.ZEROES,
             Pubkey.ZEROES,
@@ -2062,7 +2085,7 @@ test "state.VoteState.convertToCurrent" {
             },
         ) };
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_0_23_5, allocator);
-        defer vote_state.deinit();
+        defer vote_state.deinit(allocator);
         try std.testing.expectEqual(1, vote_state.voters.count());
         var authorized_voter = vote_state.voters;
         try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
@@ -2092,7 +2115,7 @@ test "state.VoteState.convertToCurrent" {
             },
         ) };
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
-        defer vote_state.deinit();
+        defer vote_state.deinit(allocator);
         try std.testing.expectEqual(1, vote_state.voters.count());
         var authorized_voter = vote_state.voters;
         try std.testing.expect(authorized_voter.getAuthorizedVoter(0).?.equals(&Pubkey.ZEROES));
@@ -2125,7 +2148,7 @@ test "state.VoteState.convertToCurrent" {
 
         const vote_state_1_14_1 = VoteStateVersions{ .current = expected };
         const vote_state = try VoteStateVersions.convertToCurrent(vote_state_1_14_1, allocator);
-        defer vote_state.deinit();
+        defer vote_state.deinit(allocator);
         try std.testing.expectEqual(
             expected.voters.count(),
             vote_state.voters.count(),
@@ -2184,10 +2207,10 @@ test "state.VoteState.setNewAuthorizedVoter: success" {
         commission,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     const target_epoch: Epoch = 5;
-    _ = try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
+    _ = try vote_state.setNewAuthorizedVoter(allocator, new_voter, target_epoch);
 
     const retrived_voter = vote_state.voters.getAuthorizedVoter(target_epoch).?;
     try std.testing.expectEqual(new_voter, retrived_voter);
@@ -2218,11 +2241,15 @@ test "state.VoteState.setNewAuthorizedVoter: too soon to reauthorize" {
         commission,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Same as initial epoch
     const target_epoch: Epoch = 0;
-    const err = try vote_state.setNewAuthorizedVoter(new_voter, target_epoch);
+    const err = try vote_state.setNewAuthorizedVoter(
+        allocator,
+        new_voter,
+        target_epoch,
+    );
     try std.testing.expectEqual(
         VoteError.too_soon_to_reauthorize,
         err.?,
@@ -2255,12 +2282,12 @@ test "state.VoteState.setNewAuthorizedVoter: invalid account data" {
         commission,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     const target_epoch: Epoch = 1;
     try std.testing.expectError(
         InstructionError.InvalidAccountData,
-        vote_state.setNewAuthorizedVoter(new_voter, target_epoch),
+        vote_state.setNewAuthorizedVoter(allocator, new_voter, target_epoch),
     );
 }
 
@@ -2281,19 +2308,18 @@ test "state.VoteState.isUninitialized: VoteState0_23_5 invalid account data" {
         .unix_timestamp = 0,
     };
 
-    var vote_state = VoteStateVersions{ .v0_23_5 = try VoteState0_23_5.init(
-        allocator,
+    var vote_state: VoteStateVersions = .{ .v0_23_5 = try .init(
         node_publey,
         authorized_voter,
         withdrawer,
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     try std.testing.expect(!vote_state.isUninitialized());
 
-    const uninitialized_state = VoteStateVersions{
+    const uninitialized_state: VoteStateVersions = .{
         .current = try createTestVoteState(
             allocator,
             node_publey,
@@ -2331,7 +2357,7 @@ test "state.VoteState.isUninitialized: VoteStatev1_14_11 invalid account data" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     try std.testing.expect(!vote_state.isUninitialized());
 
@@ -2365,7 +2391,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
         .unix_timestamp = 0,
     };
 
-    var vote_state = VoteStateVersions{ .current = try VoteState.init(
+    var vote_state: VoteStateVersions = .{ .current = try VoteState.init(
         allocator,
         node_publey,
         authorized_voter,
@@ -2373,11 +2399,11 @@ test "state.VoteState.isUninitialized: current invalid account data" {
         commission,
         clock,
     ) };
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     try std.testing.expect(!vote_state.isUninitialized());
 
-    const uninitialized_state = VoteStateVersions{
+    const uninitialized_state: VoteStateVersions = .{
         .current = try createTestVoteState(
             allocator,
             node_publey,
@@ -2386,6 +2412,7 @@ test "state.VoteState.isUninitialized: current invalid account data" {
             commission,
         ),
     };
+    defer uninitialized_state.deinit(allocator);
 
     try std.testing.expect(uninitialized_state.isUninitialized());
 }
@@ -2395,7 +2422,7 @@ test "state.AuthorizedVoters.init" {
     var prng = std.Random.DefaultPrng.init(5083);
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 10, voter_pubkey);
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
     try std.testing.expectEqual(authorized_voters.count(), 1);
 }
 
@@ -2407,10 +2434,10 @@ test "state.AuthorizedVoters.getAuthorizedVoter" {
     const new_pubkey = Pubkey.initRandom(prng.random());
 
     var authorized_voters = try AuthorizedVoters.init(allocator, 10, voter_pubkey);
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
 
     const epoch: Epoch = 15;
-    try authorized_voters.insert(epoch, new_pubkey);
+    try authorized_voters.insert(allocator, epoch, new_pubkey);
     try std.testing.expectEqual(new_pubkey, authorized_voters.getAuthorizedVoter(epoch).?);
 }
 
@@ -2420,10 +2447,10 @@ test "state.AuthorizedVoters.purgeAuthorizedVoters" {
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
 
-    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
-    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(allocator, 10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(allocator, 15, Pubkey.initRandom(prng.random()));
 
     try std.testing.expectEqual(authorized_voters.count(), 3);
     _ = try authorized_voters.purgeAuthorizedVoters(allocator, 12);
@@ -2437,10 +2464,10 @@ test "state.AuthorizedVoters.first" {
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
 
-    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
-    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(allocator, 10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(allocator, 15, Pubkey.initRandom(prng.random()));
 
     const epoch, const pubkey = authorized_voters.first().?;
     try std.testing.expectEqual(5, epoch);
@@ -2457,10 +2484,10 @@ test "state.AuthorizedVoters.last" {
         5,
         Pubkey.initRandom(prng.random()),
     );
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
 
-    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
-    try authorized_voters.insert(15, voter_pubkey);
+    try authorized_voters.insert(allocator, 10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(allocator, 15, voter_pubkey);
 
     const epoch, const pubkey = authorized_voters.last().?;
     try std.testing.expectEqual(15, epoch);
@@ -2476,7 +2503,7 @@ test "state.AuthorizedVoters.isEmpty" {
         5,
         Pubkey.initRandom(prng.random()),
     );
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
     try std.testing.expect(!authorized_voters.isEmpty());
 }
 
@@ -2486,12 +2513,12 @@ test "state.AuthorizedVoters.len" {
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
 
     try std.testing.expectEqual(authorized_voters.count(), 1);
 
-    try authorized_voters.insert(10, Pubkey.initRandom(prng.random()));
-    try authorized_voters.insert(15, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(allocator, 10, Pubkey.initRandom(prng.random()));
+    try authorized_voters.insert(allocator, 15, Pubkey.initRandom(prng.random()));
 
     try std.testing.expectEqual(authorized_voters.count(), 3);
 }
@@ -2502,7 +2529,7 @@ test "state.AuthorizedVoters.contains" {
 
     const voter_pubkey = Pubkey.initRandom(prng.random());
     var authorized_voters = try AuthorizedVoters.init(allocator, 5, voter_pubkey);
-    defer authorized_voters.deinit();
+    defer authorized_voters.deinit(allocator);
 
     try std.testing.expect(authorized_voters.contains(5));
     try std.testing.expect(!authorized_voters.contains(15));
@@ -2528,15 +2555,18 @@ test "state.VoteState.lastLockout" {
         0,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     try std.testing.expectEqual(null, vote_state.lastLockout());
 
     {
-        try vote_state.votes.append(LandedVote{ .latency = 0, .lockout = Lockout{
-            .slot = 1,
-            .confirmation_count = 1,
-        } });
+        try vote_state.votes.append(
+            allocator,
+            .{ .latency = 0, .lockout = Lockout{
+                .slot = 1,
+                .confirmation_count = 1,
+            } },
+        );
 
         const actual = vote_state.lastLockout().?;
         try std.testing.expectEqualDeep(
@@ -2546,10 +2576,13 @@ test "state.VoteState.lastLockout" {
     }
 
     {
-        try vote_state.votes.append(LandedVote{ .latency = 1, .lockout = Lockout{
-            .slot = 2,
-            .confirmation_count = 2,
-        } });
+        try vote_state.votes.append(
+            allocator,
+            .{ .latency = 1, .lockout = Lockout{
+                .slot = 2,
+                .confirmation_count = 2,
+            } },
+        );
 
         const actual = vote_state.lastLockout().?;
         try std.testing.expectEqualDeep(
@@ -2579,12 +2612,12 @@ test "state.VoteState.lastVotedSlot" {
         0,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     try std.testing.expectEqual(null, vote_state.lastVotedSlot());
 
     {
-        try vote_state.votes.append(LandedVote{ .latency = 0, .lockout = Lockout{
+        try vote_state.votes.append(allocator, .{ .latency = 0, .lockout = Lockout{
             .slot = 1,
             .confirmation_count = 1,
         } });
@@ -2593,7 +2626,7 @@ test "state.VoteState.lastVotedSlot" {
     }
 
     {
-        try vote_state.votes.append(LandedVote{ .latency = 1, .lockout = Lockout{
+        try vote_state.votes.append(allocator, .{ .latency = 1, .lockout = Lockout{
             .slot = 2,
             .confirmation_count = 2,
         } });
@@ -2623,10 +2656,10 @@ test "state.VoteState.lastLockout extended" {
         0,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     for (0..(MAX_LOCKOUT_HISTORY + 1)) |i| {
-        try processSlotVoteUnchecked(&vote_state, (INITIAL_LOCKOUT * i));
+        try processSlotVoteUnchecked(allocator, &vote_state, (INITIAL_LOCKOUT * i));
     }
 
     // The last vote should have been popped b/c it reached a depth of MAX_LOCKOUT_HISTORY
@@ -2640,7 +2673,7 @@ test "state.VoteState.lastLockout extended" {
     const top_vote = vote_state.votes.items[0].lockout.slot;
     const slot = vote_state.lastLockout().?.lastLockedOutSlot();
 
-    try processSlotVoteUnchecked(&vote_state, slot);
+    try processSlotVoteUnchecked(allocator, &vote_state, slot);
     try std.testing.expectEqual(top_vote, vote_state.root_slot);
 }
 
@@ -2659,27 +2692,27 @@ test "state.VoteState.lockout double lockout after expiration" {
         0,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     for (0..3) |i| {
-        try processSlotVoteUnchecked(&vote_state, (INITIAL_LOCKOUT * i));
+        try processSlotVoteUnchecked(allocator, &vote_state, (INITIAL_LOCKOUT * i));
     }
     try checkLockouts(&vote_state);
 
     // Expire the third vote (which was a vote for slot 2). The height of the
     // vote stack is unchanged, so none of the previous votes should have
     // doubled in lockout
-    try processSlotVoteUnchecked(&vote_state, (2 + INITIAL_LOCKOUT + 1));
+    try processSlotVoteUnchecked(allocator, &vote_state, (2 + INITIAL_LOCKOUT + 1));
     try checkLockouts(&vote_state);
 
     // Vote again, this time the vote stack depth increases, so the votes should
     // double for everybody
-    try processSlotVoteUnchecked(&vote_state, (2 + INITIAL_LOCKOUT + 2));
+    try processSlotVoteUnchecked(allocator, &vote_state, (2 + INITIAL_LOCKOUT + 2));
     try checkLockouts(&vote_state);
 
     // Vote again, this time the vote stack depth increases, so the votes should
     // double for everybody
-    try processSlotVoteUnchecked(&vote_state, (2 + INITIAL_LOCKOUT + 3));
+    try processSlotVoteUnchecked(allocator, &vote_state, (2 + INITIAL_LOCKOUT + 3));
     try checkLockouts(&vote_state);
 }
 
@@ -2698,10 +2731,10 @@ test "state.VoteState.lockout expire multiple votes" {
         0,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     for (0..3) |i| {
-        try processSlotVoteUnchecked(&vote_state, (INITIAL_LOCKOUT * i));
+        try processSlotVoteUnchecked(allocator, &vote_state, (INITIAL_LOCKOUT * i));
     }
 
     try std.testing.expectEqual(3, vote_state.votes.items[0].lockout.confirmation_count);
@@ -2711,7 +2744,7 @@ test "state.VoteState.lockout expire multiple votes" {
         vote_state.votes.items[1].lockout.slot +
         (vote_state.votes.items[1].lockout.lockout()) +
         1;
-    try processSlotVoteUnchecked(&vote_state, expire_slot);
+    try processSlotVoteUnchecked(allocator, &vote_state, expire_slot);
     try std.testing.expectEqual(2, vote_state.votes.items.len);
 
     // Check that the old votes expired
@@ -2719,7 +2752,7 @@ test "state.VoteState.lockout expire multiple votes" {
     try std.testing.expectEqual(expire_slot, vote_state.votes.items[1].lockout.slot);
 
     // Process one more vote
-    try processSlotVoteUnchecked(&vote_state, expire_slot + 1);
+    try processSlotVoteUnchecked(allocator, &vote_state, expire_slot + 1);
 
     // Confirmation count for the older first vote should remain unchanged
     try std.testing.expectEqual(3, vote_state.votes.items[0].lockout.confirmation_count);
@@ -2744,19 +2777,19 @@ test "state.VoteState.getCredits" {
         0,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     for (0..MAX_LOCKOUT_HISTORY) |i| {
-        try processSlotVoteUnchecked(&vote_state, i);
+        try processSlotVoteUnchecked(allocator, &vote_state, i);
     }
 
     try std.testing.expectEqual(0, vote_state.getCredits());
 
-    try processSlotVoteUnchecked(&vote_state, (MAX_LOCKOUT_HISTORY + 1));
+    try processSlotVoteUnchecked(allocator, &vote_state, (MAX_LOCKOUT_HISTORY + 1));
     try std.testing.expectEqual(1, vote_state.getCredits());
-    try processSlotVoteUnchecked(&vote_state, (MAX_LOCKOUT_HISTORY + 2));
+    try processSlotVoteUnchecked(allocator, &vote_state, (MAX_LOCKOUT_HISTORY + 2));
     try std.testing.expectEqual(2, vote_state.getCredits());
-    try processSlotVoteUnchecked(&vote_state, (MAX_LOCKOUT_HISTORY + 3));
+    try processSlotVoteUnchecked(allocator, &vote_state, (MAX_LOCKOUT_HISTORY + 3));
     try std.testing.expectEqual(3, vote_state.getCredits());
 }
 
@@ -2775,11 +2808,11 @@ test "state.VoteState duplicate vote" {
         0,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
-    try processSlotVoteUnchecked(&vote_state, 0);
-    try processSlotVoteUnchecked(&vote_state, 1);
-    try processSlotVoteUnchecked(&vote_state, 0);
+    try processSlotVoteUnchecked(allocator, &vote_state, 0);
+    try processSlotVoteUnchecked(allocator, &vote_state, 1);
+    try processSlotVoteUnchecked(allocator, &vote_state, 0);
 
     try std.testing.expectEqual(1, nthRecentLockout(&vote_state, 0).?.slot);
     try std.testing.expectEqual(0, nthRecentLockout(&vote_state, 1).?.slot);
@@ -2801,10 +2834,10 @@ test "state.VoteState nth recent lockout" {
         0,
         clock,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     for (0..MAX_LOCKOUT_HISTORY) |i| {
-        try processSlotVoteUnchecked(&vote_state, i);
+        try processSlotVoteUnchecked(allocator, &vote_state, i);
     }
 
     for (0..(MAX_LOCKOUT_HISTORY - 1)) |i| {
@@ -2832,7 +2865,7 @@ test "state.VoteState.processVote process missed votes" {
         account_a,
         0,
     );
-    defer vote_state_a.deinit();
+    defer vote_state_a.deinit(allocator);
 
     const account_b = Pubkey.initRandom(prng.random());
     var vote_state_b = try createTestVoteState(
@@ -2842,11 +2875,11 @@ test "state.VoteState.processVote process missed votes" {
         account_b,
         0,
     );
-    defer vote_state_b.deinit();
+    defer vote_state_b.deinit(allocator);
 
     // process some votes on account a
     for (0..5) |i| {
-        try processSlotVoteUnchecked(&vote_state_a, i);
+        try processSlotVoteUnchecked(allocator, &vote_state_a, i);
     }
 
     {
@@ -2920,8 +2953,8 @@ test "state.VoteState.processVote process missed votes" {
 test "state.VoteState.processVote skips old vote" {
     const allocator = std.testing.allocator;
 
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
 
@@ -2951,8 +2984,8 @@ test "state.VoteState filter old votes" {
     const allocator = std.testing.allocator;
     const old_vote_slot = 1;
 
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{old_vote_slot};
 
@@ -3001,9 +3034,8 @@ test "state.VoteState filter old votes" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1677
 test "state.VoteState.processVote empty slot hashes" {
     const allocator = std.testing.allocator;
-
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
 
@@ -3024,13 +3056,12 @@ test "state.VoteState.processVote empty slot hashes" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1688
 test "state.VoteState.checkSlotsAreValid new vote" {
     const allocator = std.testing.allocator;
-
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
 
-    const vote = Vote{
+    const vote: Vote = .{
         .slots = &slots,
         .hash = Hash.ZEROES,
         .timestamp = null,
@@ -3050,9 +3081,8 @@ test "state.VoteState.checkSlotsAreValid new vote" {
 
 test "state.VoteState.checkSlotsAreValid bad timestamp" {
     const allocator = std.testing.allocator;
-
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
 
@@ -3077,9 +3107,8 @@ test "state.VoteState.checkSlotsAreValid bad timestamp" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1700
 test "state.VoteState.checkSlotsAreValid bad hash" {
     const allocator = std.testing.allocator;
-
-    const vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    const vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
 
@@ -3102,9 +3131,8 @@ test "state.VoteState.checkSlotsAreValid bad hash" {
 // [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1712
 test "state.VoteState.checkSlotsAreValid bad slot" {
     const allocator = std.testing.allocator;
-
-    const vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    const vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{1};
 
@@ -3128,8 +3156,8 @@ test "state.VoteState.checkSlotsAreValid bad slot" {
 test "state.VoteState.checkSlotsAreValid duplicate vote" {
     const allocator = std.testing.allocator;
 
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
 
@@ -3155,8 +3183,8 @@ test "state.VoteState.checkSlotsAreValid duplicate vote" {
 test "state.VoteState.checkSlotsAreValid next vote" {
     const allocator = std.testing.allocator;
 
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
 
@@ -3202,8 +3230,8 @@ test "state.VoteState.checkSlotsAreValid next vote" {
 test "state.VoteState.checkSlotsAreValid next vote only" {
     const allocator = std.testing.allocator;
 
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var slots = [_]u64{0};
 
@@ -3249,8 +3277,8 @@ test "state.VoteState.checkSlotsAreValid next vote only" {
 test "state.VoteState.processVote empty slots" {
     const allocator = std.testing.allocator;
 
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     const vote = Vote{
         .slots = &[_]u64{},
@@ -3280,15 +3308,22 @@ test "state.VoteState.computeVoteLatency" {
 
 test "state.VoteState.contains_slot" {
     const allocator = std.testing.allocator;
-
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     try vote_state.votes.append(
-        LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 1, .confirmation_count = 1 } },
+        allocator,
+        .{
+            .latency = 1,
+            .lockout = .{ .slot = 1, .confirmation_count = 1 },
+        },
     );
     try vote_state.votes.append(
-        LandedVote{ .latency = 1, .lockout = Lockout{ .slot = 2, .confirmation_count = 2 } },
+        allocator,
+        .{
+            .latency = 1,
+            .lockout = .{ .slot = 2, .confirmation_count = 2 },
+        },
     );
 
     try std.testing.expect(vote_state.containsSlot(1));
@@ -3301,8 +3336,8 @@ test "state.VoteState.contains_slot" {
 test "state.VoteState process new vote too many votes" {
     const allocator = std.testing.allocator;
 
-    var vote_state = VoteState.default(allocator);
-    defer vote_state.deinit();
+    var vote_state: VoteState = .DEFAULT;
+    defer vote_state.deinit(allocator);
 
     var bad_votes = std.ArrayList(Lockout).init(allocator);
     defer bad_votes.deinit();
@@ -3331,26 +3366,27 @@ test "state.VoteState process new vote too many votes" {
 test "state.VoteState process new vote state root rollback" {
     const allocator = std.testing.allocator;
 
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
 
     for (0..MAX_LOCKOUT_HISTORY + 2) |i| {
-        try processSlotVoteUnchecked(&vote_state1, @as(Slot, i));
+        try processSlotVoteUnchecked(allocator, &vote_state1, @as(Slot, i));
     }
 
     try std.testing.expectEqual(1, vote_state1.root_slot);
     // Update vote_state2 with a higher slot so that `process_new_vote_state`
     // doesn't panic.
     var vote_state2 = try cloneVoteState(allocator, &vote_state1);
-    defer vote_state2.deinit();
-    try processSlotVoteUnchecked(&vote_state2, @intCast((MAX_LOCKOUT_HISTORY + 3)));
+    defer vote_state2.deinit(allocator);
+    try processSlotVoteUnchecked(allocator, &vote_state2, @intCast((MAX_LOCKOUT_HISTORY + 3)));
 
     // Trying to set a lesser root should error
     const lesser_root: ?Slot = 0;
 
     const current_epoch = currentEpoch(&vote_state2);
     const maybe_error = try vote_state1.processNewVoteState(
-        &vote_state2.votes,
+        allocator,
+        vote_state2.votes.items,
         lesser_root,
         null,
         current_epoch,
@@ -3363,8 +3399,8 @@ test "state.VoteState process new vote state root rollback" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2295
 test "state.VoteState process new vote state zero confirmations" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
 
     const current_epoch = currentEpoch(&vote_state1);
 
@@ -3404,8 +3440,8 @@ test "state.VoteState process new vote state zero confirmations" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2337
 test "state.VoteState process new vote state confirmations too large" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
     const current_epoch = currentEpoch(&vote_state1);
 
     var good_votes = [_]Lockout{
@@ -3423,7 +3459,7 @@ test "state.VoteState process new vote state confirmations too large" {
 
     try std.testing.expectEqual(null, maybe_error);
 
-    var another_vote_state1 = VoteState.default(allocator);
+    var another_vote_state1: VoteState = .DEFAULT;
     var bad_votes = [_]Lockout{
         Lockout{
             .slot = 0,
@@ -3446,7 +3482,7 @@ test "state.VoteState process new vote state confirmations too large" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2379
 test "state.VoteState process new vote state slot smaller than root" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
+    var vote_state1: VoteState = .DEFAULT;
     const current_epoch = currentEpoch(&vote_state1);
 
     const root_slot: u64 = 5;
@@ -3487,7 +3523,7 @@ test "state.VoteState process new vote state slot smaller than root" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2422
 test "state.VoteState process new vote state slots not ordered" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
+    var vote_state1: VoteState = .DEFAULT;
     const current_epoch = currentEpoch(&vote_state1);
 
     var bad_votes = [_]Lockout{
@@ -3526,7 +3562,7 @@ test "state.VoteState process new vote state slots not ordered" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2464
 test "state.VoteState process new vote state confirmations not ordered" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
+    var vote_state1: VoteState = .DEFAULT;
     const current_epoch = currentEpoch(&vote_state1);
 
     var bad_votes = [_]Lockout{
@@ -3571,7 +3607,7 @@ test "state.VoteState process new vote state confirmations not ordered" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2506
 test "state.VoteState process new vote state lockout mismatch" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
+    var vote_state1: VoteState = .DEFAULT;
     const current_epoch = currentEpoch(&vote_state1);
 
     var bad_votes = [_]Lockout{
@@ -3598,8 +3634,8 @@ test "state.VoteState process new vote state lockout mismatch" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2532
 test "state.VoteState process new vote state confirmation rollback" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
     const current_epoch = currentEpoch(&vote_state1);
 
     var votes = [_]Lockout{
@@ -3643,16 +3679,16 @@ test "state.VoteState process new vote state confirmation rollback" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2575
 test "state.VoteState process new vote state root progress" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
 
     for (0..MAX_LOCKOUT_HISTORY) |i| {
-        try processSlotVoteUnchecked(&vote_state1, @as(Slot, i));
+        try processSlotVoteUnchecked(allocator, &vote_state1, @as(Slot, i));
     }
 
     try std.testing.expectEqual(null, vote_state1.root_slot);
     var vote_state2 = try cloneVoteState(allocator, &vote_state1);
-    defer vote_state2.deinit();
+    defer vote_state2.deinit(allocator);
 
     // 1) Try to update `vote_state1` with no root,
     // to `vote_state2`, which has a new root, should succeed.
@@ -3661,15 +3697,16 @@ test "state.VoteState process new vote state root progress" {
     // to `vote_state2`, which has a newer root, which
     // should succeed.
     for (MAX_LOCKOUT_HISTORY + 1..MAX_LOCKOUT_HISTORY + 3) |new_vote| {
-        try processSlotVoteUnchecked(&vote_state2, new_vote);
+        try processSlotVoteUnchecked(allocator, &vote_state2, new_vote);
         try std.testing.expect(
             !std.meta.eql(vote_state1.root_slot, vote_state2.root_slot),
         );
 
-        var cloned_votes = try vote_state2.votes.clone();
-        defer cloned_votes.deinit();
+        var cloned_votes = try vote_state2.votes.clone(allocator);
+        defer cloned_votes.deinit(allocator);
         const maybe_error = try vote_state1.processNewVoteState(
-            &cloned_votes,
+            allocator,
+            cloned_votes.items,
             vote_state2.root_slot,
             null,
             currentEpoch(&vote_state2),
@@ -3690,6 +3727,8 @@ test "state.VoteState process new vote state root progress" {
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2610
 test "state.VoteState process new vote state same slot but not common ancestor" {
+    const allocator = std.testing.allocator;
+
     // It might be possible that during the switch from old vote instructions
     // to new vote instructions, new_state contains votes for slots LESS
     // than the current state, for instance:
@@ -3708,11 +3747,10 @@ test "state.VoteState process new vote state same slot but not common ancestor" 
     // will immediately pop off 2.
 
     // Construct on-chain vote state
-    const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
     var slots = [_]Slot{ 1, 2, 5 };
-    try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+    try processSlotVotesUnchecked(allocator, &vote_state1, slots[0..]);
 
     const expected_slots = [_]u64{ 1, 5 };
     var actual_slots: [2]u64 = undefined;
@@ -3722,11 +3760,11 @@ test "state.VoteState process new vote state same slot but not common ancestor" 
     try std.testing.expect(std.mem.eql(u64, &expected_slots, &actual_slots));
 
     // Construct local tower state
-    var vote_state2 = VoteState.default(allocator);
-    defer vote_state2.deinit();
+    var vote_state2: VoteState = .DEFAULT;
+    defer vote_state2.deinit(allocator);
 
     var another_slots = [_]Slot{ 1, 2, 3, 5, 7 };
-    try processSlotVotesUnchecked(&vote_state2, another_slots[0..]);
+    try processSlotVotesUnchecked(allocator, &vote_state2, another_slots[0..]);
 
     const another_expected_slots = [_]u64{ 1, 2, 3, 5, 7 };
     var another_actual_slots: [5]u64 = undefined;
@@ -3736,10 +3774,12 @@ test "state.VoteState process new vote state same slot but not common ancestor" 
     try std.testing.expect(std.mem.eql(u64, &another_expected_slots, &another_actual_slots));
 
     // See that on-chain vote state can update properly
-    var cloned_votes = try vote_state2.votes.clone();
-    defer cloned_votes.deinit();
+    var cloned_votes = try vote_state2.votes.clone(allocator);
+    defer cloned_votes.deinit(allocator);
+
     const maybe_error = try vote_state1.processNewVoteState(
-        &cloned_votes,
+        allocator,
+        cloned_votes.items,
         vote_state2.root_slot,
         null,
         currentEpoch(&vote_state2),
@@ -3752,14 +3792,14 @@ test "state.VoteState process new vote state same slot but not common ancestor" 
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2668
 test "state.VoteState process new vote state lockout violation" {
-    // Construct on-chain vote state
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    // Construct on-chain vote state
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
 
     {
         var slots = [_]Slot{ 1, 2, 4, 5 };
-        try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+        try processSlotVotesUnchecked(allocator, &vote_state1, slots[0..]);
 
         var actual_slots: [4]u64 = undefined;
         for (vote_state1.votes.items[0..4], 0..) |vote, i| {
@@ -3770,11 +3810,11 @@ test "state.VoteState process new vote state lockout violation" {
 
     // Construct conflicting tower state. Vote 4 is missing,
     // but 5 should not have popped off vote 4.
-    var vote_state2 = VoteState.default(allocator);
-    defer vote_state2.deinit();
+    var vote_state2: VoteState = .DEFAULT;
+    defer vote_state2.deinit(allocator);
     {
         var slots = [_]Slot{ 1, 2, 3, 5, 7 };
-        try processSlotVotesUnchecked(&vote_state2, slots[0..]);
+        try processSlotVotesUnchecked(allocator, &vote_state2, slots[0..]);
 
         var actual_slots: [5]u64 = undefined;
         for (vote_state2.votes.items[0..5], 0..) |vote, i| {
@@ -3783,10 +3823,11 @@ test "state.VoteState process new vote state lockout violation" {
         try std.testing.expect(std.mem.eql(u64, &slots, &actual_slots));
     }
 
-    var cloned_votes = try vote_state2.votes.clone();
-    defer cloned_votes.deinit();
+    var cloned_votes = try vote_state2.votes.clone(allocator);
+    defer cloned_votes.deinit(allocator);
     const maybe_error = try vote_state1.processNewVoteState(
-        &cloned_votes,
+        allocator,
+        cloned_votes.items,
         vote_state2.root_slot,
         null,
         currentEpoch(&vote_state2),
@@ -3798,14 +3839,14 @@ test "state.VoteState process new vote state lockout violation" {
 
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2710
 test "state.VoteState process new vote state lockout violation2" {
-    // Construct on-chain vote state
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    // Construct on-chain vote state
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
 
     {
         var slots = [_]Slot{ 1, 2, 5, 6, 7 };
-        try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+        try processSlotVotesUnchecked(allocator, &vote_state1, slots[0..]);
 
         var actual_slots: [4]u64 = undefined;
         for (vote_state1.votes.items[0..4], 0..) |vote, i| {
@@ -3817,11 +3858,11 @@ test "state.VoteState process new vote state lockout violation2" {
 
     // Construct a new vote state. Violates on-chain state because 8
     // should not have popped off 7
-    var vote_state2 = VoteState.default(allocator);
-    defer vote_state2.deinit();
+    var vote_state2: VoteState = .DEFAULT;
+    defer vote_state2.deinit(allocator);
     {
         var slots = [_]Slot{ 1, 2, 3, 5, 6, 8 };
-        try processSlotVotesUnchecked(&vote_state2, slots[0..]);
+        try processSlotVotesUnchecked(allocator, &vote_state2, slots[0..]);
 
         var actual_slots: [6]u64 = undefined;
         for (vote_state2.votes.items[0..6], 0..) |vote, i| {
@@ -3832,10 +3873,11 @@ test "state.VoteState process new vote state lockout violation2" {
 
     // Both vote states contain `5`, but `5` is not part of the common prefix
     // of both vote states. However, the violation should still be detected.
-    var cloned_votes = try vote_state2.votes.clone();
-    defer cloned_votes.deinit();
+    var cloned_votes = try vote_state2.votes.clone(allocator);
+    defer cloned_votes.deinit(allocator);
     const maybe_error = try vote_state1.processNewVoteState(
-        &cloned_votes,
+        allocator,
+        cloned_votes.items,
         vote_state2.root_slot,
         null,
         currentEpoch(&vote_state2),
@@ -3849,12 +3891,12 @@ test "state.VoteState process new vote state lockout violation2" {
 test "state.VoteState process new vote state expired ancestor not removed" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
 
     {
         var slots = [_]Slot{ 1, 2, 3, 9 };
-        try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+        try processSlotVotesUnchecked(allocator, &vote_state1, slots[0..]);
 
         var actual_slots: [2]u64 = undefined;
         for (vote_state1.votes.items[0..2], 0..) |vote, i| {
@@ -3867,9 +3909,9 @@ test "state.VoteState process new vote state expired ancestor not removed" {
     // Example: {1: lockout 8, 9: lockout 2}, vote on 10 will not pop off 1
     // because 9 is not popped off yet
     var vote_state2 = try cloneVoteState(allocator, &vote_state1);
-    defer vote_state2.deinit();
+    defer vote_state2.deinit(allocator);
 
-    try processSlotVoteUnchecked(&vote_state2, 10);
+    try processSlotVoteUnchecked(allocator, &vote_state2, 10);
 
     // Slot 1 has been expired by 10, but is kept alive by its descendant
     // 9 which has not been expired yet.
@@ -3885,10 +3927,11 @@ test "state.VoteState process new vote state expired ancestor not removed" {
     }
 
     // Should be able to update vote_state1
-    var cloned_votes = try vote_state2.votes.clone();
-    defer cloned_votes.deinit();
+    var cloned_votes = try vote_state2.votes.clone(allocator);
+    defer cloned_votes.deinit(allocator);
     const maybe_error = try vote_state1.processNewVoteState(
-        &cloned_votes,
+        allocator,
+        cloned_votes.items,
         vote_state2.root_slot,
         null,
         currentEpoch(&vote_state2),
@@ -3903,12 +3946,12 @@ test "state.VoteState process new vote state expired ancestor not removed" {
 // [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2799
 test "state.VoteState process new vote current state contains bigger slots" {
     const allocator = std.testing.allocator;
-    var vote_state1 = VoteState.default(allocator);
-    defer vote_state1.deinit();
+    var vote_state1: VoteState = .DEFAULT;
+    defer vote_state1.deinit(allocator);
 
     {
         var slots = [_]Slot{ 6, 7, 8 };
-        try processSlotVotesUnchecked(&vote_state1, slots[0..]);
+        try processSlotVotesUnchecked(allocator, &vote_state1, slots[0..]);
 
         var actual_slots: [3]u64 = undefined;
         for (vote_state1.votes.items[0..3], 0..) |vote, i| {
@@ -3951,14 +3994,14 @@ test "state.VoteState process new vote current state contains bigger slots" {
             },
         };
 
-        var good_votes = std.ArrayList(LandedVote).init(allocator);
-        defer good_votes.deinit();
-        try good_votes.appendSlice(&good_votes_arr);
+        const good_state = try allocator.dupe(LandedVote, &good_votes_arr);
+        defer allocator.free(good_state);
 
         const another_current_epoch = currentEpoch(&vote_state1);
 
         const maybe_error = try vote_state1.processNewVoteState(
-            &good_votes,
+            allocator,
+            good_state,
             root,
             null,
             another_current_epoch,
@@ -4037,7 +4080,7 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
         &[_]Slot{ 1, 2, 3, latest_vote },
         slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     {
         // Test with a vote for a slot less than the latest vote in the vote_state,
@@ -4281,7 +4324,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
         &[_]Slot{1},
         slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     const vote_slot = 3;
     const vote_slot_hash = blk: {
@@ -4352,7 +4395,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
         &[_]Slot{ 1, 2, 3, 4 },
         init_slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where there:
     // 1) Exists a slot less than `earliest_slot_in_history`
@@ -4431,7 +4474,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
         &[_]Slot{4},
         init_slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where there:
     // 1) Exists a slot less than `earliest_slot_in_history`
@@ -4511,7 +4554,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
         &[_]Slot{6},
         init_slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where there exists both a slot:
     // 1) Less than `earliest_slot_in_history`
@@ -4599,7 +4642,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
         &[_]Slot{ 2, 4, 6 },
         slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where there:
     // 1) Exists a slot not in the slot hashes history
@@ -4676,7 +4719,7 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
         &[_]Slot{ 2, 4, 6 },
         slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where:
     // 1) The root is not present in slot hashes history
@@ -4730,7 +4773,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
         &[_]Slot{ 2, 4, 6 },
         slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where there:
     // 1) The last slot in the update is a slot not in the slot hashes history
@@ -4773,7 +4816,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
         &[_]Slot{ 2, 4, 6 },
         slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where every slot in the history is
     // in the update
@@ -4847,7 +4890,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
         &[_]Slot{6},
         slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where only some slots in the history are
     // in the update, and others slots in the history are missing.
@@ -4920,7 +4963,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
         &[_]Slot{ 2, 4, 6 },
         slot_hashes.items,
     );
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
 
     // Test with a `TowerSync` where the hash is mismatched
 
@@ -4952,24 +4995,23 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
 }
 
 fn processSlotVoteUnchecked(
+    allocator: std.mem.Allocator,
     vote_state: *VoteState,
     slot: Slot,
 ) !void {
     if (!builtin.is_test) {
         @panic("processSlotVoteUnchecked should only be called in test mode");
     }
-    var slots = [_]u64{slot};
+    var slots: [1]u64 = .{slot};
 
-    const vote = Vote{
+    const vote: Vote = .{
         .slots = &slots,
         .hash = Hash.ZEROES,
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes{
-        .entries = &.{
-            .{ vote.slots[vote.slots.len - 1], vote.hash },
-        },
+    const slot_hashes: SlotHashes = .{
+        .entries = &.{.{ vote.slots[vote.slots.len - 1], vote.hash }},
     };
     const epoch = if (vote_state.epoch_credits.items.len == 0)
         0
@@ -4977,6 +5019,7 @@ fn processSlotVoteUnchecked(
         vote_state.epoch_credits.getLast().epoch;
 
     _ = try vote_state.processVoteUnfiltered(
+        allocator,
         vote.slots,
         &vote,
         &slot_hashes,
@@ -4986,6 +5029,7 @@ fn processSlotVoteUnchecked(
 }
 
 fn processSlotVotesUnchecked(
+    allocator: std.mem.Allocator,
     vote_state: *VoteState,
     slots: []Slot,
 ) !void {
@@ -4994,7 +5038,7 @@ fn processSlotVotesUnchecked(
     }
 
     for (slots) |slot| {
-        try processSlotVoteUnchecked(vote_state, slot);
+        try processSlotVoteUnchecked(allocator, vote_state, slot);
     }
 }
 
@@ -5006,15 +5050,19 @@ fn processNewVoteStateFromLockouts(
     timestamp: ?i64,
     epoch: Epoch,
 ) !?VoteError {
-    var landed_votes = std.ArrayList(LandedVote).init(allocator);
-    defer landed_votes.deinit();
+    const landed_votes = try allocator.alloc(LandedVote, new_state.len);
+    defer allocator.free(landed_votes);
 
-    for (new_state) |lockout| {
-        try landed_votes.append(LandedVote{ .latency = 0, .lockout = lockout });
+    for (landed_votes, new_state) |*vote, lockout| {
+        vote.* = .{
+            .latency = 0,
+            .lockout = lockout,
+        };
     }
 
     return try vote_state.processNewVoteState(
-        &landed_votes,
+        allocator,
+        landed_votes,
         new_root,
         timestamp,
         epoch,
@@ -5049,7 +5097,7 @@ fn nthRecentLockout(vote_state: *const VoteState, position: usize) ?Lockout {
 
 fn currentEpoch(self: *const VoteState) u64 {
     if (!builtin.is_test) {
-        @panic("currentEpoch should only be called in test mode");
+        @compileError("currentEpoch should only be called in test mode");
     }
     return if (self.epoch_credits.items.len == 0)
         0
@@ -5062,23 +5110,25 @@ fn cloneVoteState(
     vote_state: *const VoteState,
 ) !VoteState {
     if (!builtin.is_test) {
-        @panic("cloneVoteState should only be called in test mode");
+        @compileError("cloneVoteState should only be called in test mode");
     }
-    var cloned_votes = try std.ArrayList(LandedVote).initCapacity(
+    var cloned_votes = try std.ArrayListUnmanaged(LandedVote).initCapacity(
         allocator,
         vote_state.votes.items.len,
     );
-    try cloned_votes.appendSlice(vote_state.votes.items);
+    try cloned_votes.appendSlice(allocator, vote_state.votes.items);
 
-    var cloned_epoch_credits = try std.ArrayList(EpochCredit).initCapacity(
+    var cloned_epoch_credits = try std.ArrayListUnmanaged(EpochCredit).initCapacity(
         allocator,
         vote_state.epoch_credits.items.len,
     );
-    try cloned_epoch_credits.appendSlice(vote_state.epoch_credits.items);
+    try cloned_epoch_credits.appendSlice(allocator, vote_state.epoch_credits.items);
 
-    const cloned_voters = AuthorizedVoters{ .voters = try vote_state.voters.voters.clone() };
+    const cloned_voters: AuthorizedVoters = .{
+        .voters = try vote_state.voters.voters.clone(allocator),
+    };
 
-    return VoteState{
+    return .{
         .node_pubkey = vote_state.node_pubkey,
         .withdrawer = vote_state.withdrawer,
         .commission = vote_state.commission,
@@ -5099,7 +5149,7 @@ fn buildSlotHashes(
     slots: []const Slot,
 ) !std.ArrayList(SlotHash) {
     if (!builtin.is_test) {
-        @panic("buildSlotHashes should only be called in test mode");
+        @compileError("buildSlotHashes should only be called in test mode");
     }
 
     var result = try std.ArrayList(SlotHash).initCapacity(
@@ -5125,11 +5175,10 @@ fn buildVoteState(
     slot_hashes: []const SlotHash,
 ) !VoteState {
     if (!builtin.is_test) {
-        @panic("buildVoteState should only be called in test mode");
+        @compileError("buildVoteState should only be called in test mode");
     }
 
-    var vote_state = VoteState.default(allocator);
-
+    var vote_state: VoteState = .DEFAULT;
     if (vote_slots.len > 0) {
         const last_vote_slot = vote_slots[vote_slots.len - 1];
         var vote_hash: Hash = undefined;
@@ -5148,9 +5197,10 @@ fn buildVoteState(
         };
 
         _ = try vote_state.processVoteUnfiltered(
+            allocator,
             vote.slots,
             &vote,
-            &SlotHashes{ .entries = slot_hashes },
+            &.{ .entries = slot_hashes },
             0,
             0,
         );
@@ -5228,7 +5278,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     else
         0;
 
-    for (first..(latest_slot_in_history + @as(u64, 1))) |slot| {
+    for (first..latest_slot_in_history + 1) |slot| {
         try slots.append(slot);
     }
 
@@ -5236,7 +5286,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
     defer slot_hashes.deinit();
 
     var vote_state = try buildVoteState(allocator, current_vote_state_slots, slot_hashes.items);
-    defer vote_state.deinit();
+    defer vote_state.deinit(allocator);
     vote_state.root_slot = current_vote_state_root;
 
     var j: usize = 0;

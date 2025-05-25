@@ -1798,7 +1798,7 @@ test "slotMetaIterator" {
     const roots: [3]Slot = .{ 1, 2, 3 };
     var parent_slot: ?Slot = null;
     for (roots, 0..) |slot, i| {
-        var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+        var slot_meta = SlotMeta.init(slot, parent_slot);
         // ensure isFull() is true
         slot_meta.last_index = 1;
         slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
@@ -1891,7 +1891,7 @@ test "slotRangeConnected" {
     // 1 -> 2 -> 3
     var parent_slot: ?Slot = null;
     for (roots, 0..) |slot, i| {
-        var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+        var slot_meta = SlotMeta.init(slot, parent_slot);
         defer slot_meta.deinit();
         // ensure isFull() is true
         slot_meta.last_index = 1;
@@ -1913,7 +1913,7 @@ test "slotRangeConnected" {
     try std.testing.expectEqual(true, is_connected);
 
     // insert a non-full last_slot
-    var slot_meta = SlotMeta.init(allocator, 4, parent_slot);
+    var slot_meta = SlotMeta.init(4, parent_slot);
     defer slot_meta.deinit();
     // ensure isFull() is FALSE
     slot_meta.last_index = 1;
@@ -1949,7 +1949,7 @@ test "highestSlot" {
     {
         // insert a shred
         const shred_slot = 10;
-        var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+        var slot_meta = SlotMeta.init(shred_slot, null);
         slot_meta.last_index = 21;
         slot_meta.received = 1;
 
@@ -1968,7 +1968,7 @@ test "highestSlot" {
 
     {
         // insert another shred at a higher slot
-        var slot_meta2 = SlotMeta.init(allocator, 100, null);
+        var slot_meta2 = SlotMeta.init(100, null);
         slot_meta2.last_index = 21;
         slot_meta2.received = 1;
 
@@ -2016,7 +2016,7 @@ test "lowestSlot" {
     shred.data.common.index = shred_index;
 
     // insert a shred
-    var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+    var slot_meta = SlotMeta.init(shred_slot, null);
     slot_meta.last_index = 21;
     slot_meta.received = 1;
 
@@ -2124,7 +2124,7 @@ test "findMissingDataIndexes" {
     shred.data.common.variant = variant;
     try ledger.shred.overwriteShredForTest(allocator, &shred, &(.{2} ** 100));
 
-    var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+    var slot_meta = SlotMeta.init(shred_slot, null);
     slot_meta.last_index = 4;
 
     var write_batch = try db.initWriteBatch();
