@@ -1646,7 +1646,7 @@ const AppBase = struct {
         const logger = plain_logger.withScope(LOG_SCOPE);
         errdefer logger.deinit();
 
-        const exit = try std.heap.c_allocator.create(std.atomic.Value(bool));
+        const exit = try allocator.create(std.atomic.Value(bool));
         errdefer allocator.destroy(exit);
         exit.* = std.atomic.Value(bool).init(false);
 
