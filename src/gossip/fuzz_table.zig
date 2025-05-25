@@ -136,10 +136,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         const other_insertion_time = insertion_times.items[index];
                         if (old_value) {
                             // ignored old value
-                            data.wallclockPtr().* = other_insertion_time -| random.intRangeAtMost(u64, 10, 100);
+                            data.wallclockPtr().* =
+                                other_insertion_time -| random.intRangeAtMost(u64, 10, 100);
                         } else {
                             // will be a duplicate value
-                            data.wallclockPtr().* = other_insertion_time;
+                            data.wallclockPtr().* =
+                                other_insertion_time;
                         }
                     }
 
@@ -222,17 +224,24 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             if (random.boolean()) {
                 // trim the table in half
                 const max_pubkey_capacity = size / 2;
-                const pubkeys_droppped_count = try gossip_table.attemptTrim(now, max_pubkey_capacity);
+                const pubkeys_droppped_count =
+                    try gossip_table.attemptTrim(now, max_pubkey_capacity);
                 if (pubkeys_droppped_count == 0) continue;
 
-                logger.info().logf("op(trim): table size: {} -> {}", .{ size, gossip_table.len() });
+                logger.info().logf(
+                    "op(trim): table size: {} -> {}",
+                    .{ size, gossip_table.len() },
+                );
             } else {
                 // NOTE: not completely accurate, but good enough
                 const middle_index = insertion_times.items.len / 2;
                 const middle_insert_time = insertion_times.items[middle_index];
                 _ = try gossip_table.removeOldLabels(middle_insert_time, 0);
 
-                logger.info().logf("op(remove-old-labels): table size: {} -> {}", .{ size, gossip_table.len() });
+                logger.info().logf(
+                    "op(remove-old-labels): table size: {} -> {}",
+                    .{ size, gossip_table.len() },
+                );
             }
 
             // reset the pubkey list
@@ -264,7 +273,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             if (maybe_max_actions) |max_actions| {
                 const percent_int = (total_action_count * 100) / max_actions;
-                logger.info().logf("total actions: {} / {} ({}%)", .{ total_action_count, max_actions, percent_int });
+                logger.info().logf(
+                    "total actions: {} / {} ({}%)",
+                    .{ total_action_count, max_actions, percent_int },
+                );
             }
         }
     }
