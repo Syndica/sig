@@ -129,7 +129,7 @@ pub const Proof = struct {
         transcript.appendPoint("Y_delta", .{ .p = Y_delta });
         transcript.appendPoint("Y_claimed", .{ .p = Y_claimed });
 
-        const c = transcript.challengeScalar("c");
+        const c = transcript.challengeScalar("c").toBytes();
         const c_max_proof = Edwards25519.scalar.sub(c, c_equality.toBytes());
 
         _ = transcript.challengeScalar("w");
@@ -207,7 +207,7 @@ pub const Proof = struct {
         transcript.appendPoint("Y_delta", .{ .p = Y_delta });
         transcript.appendPoint("Y_claimed", .{ .p = Y_claimed });
 
-        const c = transcript.challengeScalar("c");
+        const c = transcript.challengeScalar("c").toBytes();
         const c_equality = Scalar.fromBytes(Edwards25519.scalar.sub(c, c_max_proof.toBytes()));
 
         _ = transcript.challengeScalar("w");
@@ -260,7 +260,7 @@ pub const Proof = struct {
         const z_delta_real = self.equality_proof.z_delta;
         const z_claimed = self.equality_proof.z_claimed;
 
-        const c = transcript.challengeScalar("c");
+        const c = transcript.challengeScalar("c").toBytes();
         const c_max_proof = self.max_proof.c_max_proof;
         const c_equality = Edwards25519.scalar.sub(c, c_max_proof.toBytes());
 
@@ -269,7 +269,7 @@ pub const Proof = struct {
         transcript.appendScalar("z_delta_real", z_delta_real);
         transcript.appendScalar("z_claimed", z_claimed);
 
-        const w = Scalar.fromBytes(transcript.challengeScalar("w"));
+        const w = transcript.challengeScalar("w");
         const ww = w.mul(w);
 
         //     We store points and scalars in the following arrays:
@@ -392,8 +392,8 @@ test "above max proof" {
     const percentage_amount: u64 = 4;
     const delta: u64 = 9475; // (4 * 1000) - (55 * 555)
 
-    const transfer_commitment, const transfer_opening = pedersen.init(u64, transfer_amount);
-    const percentage_commitment, const percentage_opening = pedersen.init(u64, max_value);
+    const transfer_commitment, const transfer_opening = pedersen.initValue(u64, transfer_amount);
+    const percentage_commitment, const percentage_opening = pedersen.initValue(u64, max_value);
 
     const scalar_rate = el_gamal.scalarFromInt(u64, percentage_rate);
     const constant_scalar = el_gamal.scalarFromInt(u64, 10_000);
@@ -409,7 +409,7 @@ test "above max proof" {
         break :d .{ .scalar = Scalar.fromBytes(b).mul(scalar_rate) };
     };
 
-    const claimed_commitment, const claimed_opening = pedersen.init(u64, 0);
+    const claimed_commitment, const claimed_opening = pedersen.initValue(u64, 0);
 
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
@@ -444,8 +444,8 @@ test "below max proof" {
     const percentage_amount: u64 = 1;
     const delta: u64 = 9600;
 
-    const transfer_commitment, const transfer_opening = pedersen.init(u64, transfer_amount);
-    const percentage_commitment, const percentage_opening = pedersen.init(u64, percentage_amount);
+    const transfer_commitment, const transfer_opening = pedersen.initValue(u64, transfer_amount);
+    const percentage_commitment, const percentage_opening = pedersen.initValue(u64, percentage_amount);
 
     const scalar_rate = el_gamal.scalarFromInt(u64, percentage_rate);
     const constant_scalar = el_gamal.scalarFromInt(u64, 10_000);
@@ -462,7 +462,7 @@ test "below max proof" {
         break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
     };
 
-    const claimed_commitment, const claimed_opening = pedersen.init(u64, delta);
+    const claimed_commitment, const claimed_opening = pedersen.initValue(u64, delta);
 
     {
         const a = try el_gamal.H.mul(delta_opening.scalar.toBytes());
@@ -507,8 +507,8 @@ test "is zero" {
     const percentage_amount: u64 = 1;
     const delta: u64 = 0; // (1 * 10_000) - (100 * 100)
 
-    const transfer_commitment, const transfer_opening = pedersen.init(u64, transfer_amount);
-    const percentage_commitment, const percentage_opening = pedersen.init(u64, percentage_amount);
+    const transfer_commitment, const transfer_opening = pedersen.initValue(u64, transfer_amount);
+    const percentage_commitment, const percentage_opening = pedersen.initValue(u64, percentage_amount);
 
     const scalar_rate = el_gamal.scalarFromInt(u64, percentage_rate);
     const constant_scalar = el_gamal.scalarFromInt(u64, 10_000);
@@ -524,7 +524,7 @@ test "is zero" {
         const b = transfer_opening.scalar.mul(scalar_rate);
         break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
     };
-    const claimed_commitment, const claimed_opening = pedersen.init(u64, delta);
+    const claimed_commitment, const claimed_opening = pedersen.initValue(u64, delta);
 
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");

@@ -30,7 +30,7 @@ pub const Proof = struct {
         transcript.appendDomSep("batched-validity-proof");
         transcript.appendU64("handles", 2);
 
-        const t = Scalar.fromBytes(transcript.challengeScalar("t"));
+        const t = transcript.challengeScalar("t");
 
         const scalar_lo = el_gamal.scalarFromInt(u64, amount_lo);
         const scalar_hi = el_gamal.scalarFromInt(u64, amount_hi);
@@ -92,8 +92,8 @@ pub const Proof = struct {
         _ = transcript.challengeScalar("w");
 
         // masked message and opening
-        const z_r = Scalar.fromBytes(c).mul(r).add(y_r);
-        const z_x = Scalar.fromBytes(c).mul(x).add(y_x);
+        const z_r = c.mul(r).add(y_r);
+        const z_x = c.mul(x).add(y_x);
 
         return .{
             .Y_0 = Y_0,
@@ -132,7 +132,7 @@ pub const Proof = struct {
         const t = if (batched) t: {
             transcript.appendDomSep("batched-validity-proof");
             transcript.appendU64("handles", 2);
-            break :t Scalar.fromBytes(transcript.challengeScalar("t"));
+            break :t transcript.challengeScalar("t");
         } else void; // shouldn't be referenced
 
         transcript.appendDomSep("validity-proof");
@@ -143,11 +143,11 @@ pub const Proof = struct {
         // Y_2 can be all zero point if the second public key is all zero
         transcript.appendPoint("Y_2", self.Y_2);
 
-        const c = transcript.challengeScalar("c");
+        const c = transcript.challengeScalar("c").toBytes();
 
         transcript.appendScalar("z_r", self.z_r);
         transcript.appendScalar("z_x", self.z_x);
-        const w = Scalar.fromBytes(transcript.challengeScalar("w"));
+        const w = transcript.challengeScalar("w");
 
         const c_negated = Scalar.fromBytes(Edwards25519.scalar.neg(c));
         const w_negated = Scalar.fromBytes(Edwards25519.scalar.neg(w.toBytes()));
@@ -293,7 +293,7 @@ test "correctness" {
     const second_pubkey = second_kp.public;
 
     const amount: u64 = 55;
-    const commitment, const opening = pedersen.init(u64, amount);
+    const commitment, const opening = pedersen.initValue(u64, amount);
 
     const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &opening);
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
@@ -330,7 +330,7 @@ test "first pubkey zeroed" {
     const second_pubkey = second_kp.public;
 
     const amount: u64 = 55;
-    const commitment, const opening = pedersen.init(u64, amount);
+    const commitment, const opening = pedersen.initValue(u64, amount);
 
     const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &opening);
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &opening);
@@ -411,7 +411,7 @@ test "zeroed decryption handle" {
 
     const amount: u64 = 55;
     const zeroed_opening = try pedersen.Opening.fromBytes(.{0} ** 32);
-    const commitment = pedersen.fromValue(u64, amount, &zeroed_opening);
+    const commitment = pedersen.initOpening(u64, amount, &zeroed_opening);
 
     const first_handle = pedersen.DecryptHandle.init(&first_pubkey, &zeroed_opening);
     const second_handle = pedersen.DecryptHandle.init(&second_pubkey, &zeroed_opening);
@@ -485,8 +485,8 @@ test "batched sanity" {
     const amount_lo: u64 = 55;
     const amount_hi: u64 = 77;
 
-    const commitment_lo, const opening_lo = pedersen.init(u64, amount_lo);
-    const commitment_hi, const opening_hi = pedersen.init(u64, amount_hi);
+    const commitment_lo, const opening_lo = pedersen.initValue(u64, amount_lo);
+    const commitment_hi, const opening_hi = pedersen.initValue(u64, amount_hi);
 
     const first_handle_lo = pedersen.DecryptHandle.init(&first_pubkey, &opening_lo);
     const first_handle_hi = pedersen.DecryptHandle.init(&first_pubkey, &opening_hi);

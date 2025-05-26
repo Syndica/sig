@@ -69,9 +69,9 @@ pub const Proof = struct {
         const c = transcript.challengeScalar("c");
         _ = transcript.challengeScalar("w");
 
-        const z_s = Scalar.fromBytes(c).mul(s).add(y_s);
-        const z_x = Scalar.fromBytes(c).mul(x).add(y_x);
-        const z_r = Scalar.fromBytes(c).mul(r).add(y_r);
+        const z_s = c.mul(s).add(y_s);
+        const z_x = c.mul(x).add(y_x);
+        const z_r = c.mul(r).add(y_r);
 
         return .{
             .Y_0 = .{ .p = Y_0 },
@@ -107,13 +107,13 @@ pub const Proof = struct {
         try transcript.validateAndAppendPoint("Y_2", self.Y_2);
         try transcript.validateAndAppendPoint("Y_3", self.Y_3);
 
-        const c = transcript.challengeScalar("c");
+        const c = transcript.challengeScalar("c").toBytes();
 
         transcript.appendScalar("z_s", self.z_s);
         transcript.appendScalar("z_x", self.z_x);
         transcript.appendScalar("z_r", self.z_r);
 
-        const w = Scalar.fromBytes(transcript.challengeScalar("w")); // w used for batch verification
+        const w = transcript.challengeScalar("w"); // w used for batch verification
         const ww = w.mul(w);
         const www = ww.mul(w);
 

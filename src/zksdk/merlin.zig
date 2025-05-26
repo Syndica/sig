@@ -229,12 +229,13 @@ pub const Transcript = struct {
     pub fn challengeScalar(
         t: *Transcript,
         comptime label: []const u8,
-    ) CompressedScalar {
+    ) Scalar {
         var buffer: [64]u8 = .{0} ** 64;
         t.challengeBytes(label, &buffer);
         // Specifically need reduce64 instead of Scalar.fromBytes64, since
         // we need the Barret reduction to be done with 10 limbs, not 5.
-        return Ed25519.scalar.reduce64(buffer);
+        const compressed = Ed25519.scalar.reduce64(buffer);
+        return Scalar.fromBytes(compressed);
     }
 
     pub fn validateAndAppendPoint(

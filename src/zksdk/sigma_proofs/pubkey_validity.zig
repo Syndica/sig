@@ -33,7 +33,7 @@ pub const Proof = struct {
         transcript.appendPoint("Y", Y);
         const c = transcript.challengeScalar("c");
 
-        const z = Scalar.fromBytes(c).mul(s_inv).add(y);
+        const z = c.mul(s_inv).add(y);
 
         return .{
             .Y = Y,
@@ -62,7 +62,7 @@ pub const Proof = struct {
             pubkey.p.p,
         }, .{
             self.z.toBytes(),
-            Edwards25519.scalar.neg(c),
+            Edwards25519.scalar.neg(c.toBytes()),
         });
 
         if (!self.Y.equivalent(.{ .p = check })) {
