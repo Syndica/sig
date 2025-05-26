@@ -61,7 +61,7 @@ pub const Proof = struct {
         transcript.appendPoint("Y_1", .{ .p = Y_1 });
         transcript.appendPoint("Y_2", .{ .p = Y_2 });
 
-        const c = Scalar.fromBytes(transcript.challengeScalar("c"));
+        const c = transcript.challengeScalar("c");
         _ = transcript.challengeScalar("w");
 
         const z_s = c.mul(s).add(y_s);
@@ -96,8 +96,8 @@ pub const Proof = struct {
         try transcript.validateAndAppendPoint("Y_1", self.Y_1);
         try transcript.validateAndAppendPoint("Y_2", self.Y_2);
 
-        const c = transcript.challengeScalar("c");
-        const w = Scalar.fromBytes(transcript.challengeScalar("w"));
+        const c = transcript.challengeScalar("c").toBytes();
+        const w = transcript.challengeScalar("w");
 
         const c_negated = Scalar.fromBytes(Edwards25519.scalar.neg(c));
         const z_s_w = self.z_s.mul(w);
@@ -183,7 +183,7 @@ test "success case" {
     const message: u64 = 55;
 
     const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
-    const commitment, const opening = el_gamal.pedersen.init(u64, message);
+    const commitment, const opening = el_gamal.pedersen.initValue(u64, message);
 
     var prover_transcript = Transcript.init("Test");
     var verifier_transcript = Transcript.init("Test");
@@ -209,7 +209,7 @@ test "fail case" {
     const committed_message: u64 = 77;
 
     const ciphertext = el_gamal.encrypt(u64, encrypted_message, &kp.public);
-    const commitment, const opening = el_gamal.pedersen.init(u64, committed_message);
+    const commitment, const opening = el_gamal.pedersen.initValue(u64, committed_message);
 
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
@@ -241,7 +241,7 @@ test "public key zeroed" {
 
     const message: u64 = 55;
     const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
-    const commitment, const opening = el_gamal.pedersen.init(u64, message);
+    const commitment, const opening = el_gamal.pedersen.initValue(u64, message);
 
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
@@ -330,7 +330,7 @@ test "ciphertext zeroed" {
 
     const message: u64 = 0;
     const ciphertext = try ElGamalCiphertext.fromBytes(.{0} ** 64);
-    const commitment, const opening = el_gamal.pedersen.init(u64, message);
+    const commitment, const opening = el_gamal.pedersen.initValue(u64, message);
 
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
