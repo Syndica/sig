@@ -137,7 +137,7 @@ pub const pedersen = struct {
         }
 
         pub fn random() Opening {
-            return .{ .scalar = Scalar.random() };
+            return .{ .scalar = sig.zksdk.bulletproofs.ONE }; // TODO: random
         }
     };
 
@@ -184,27 +184,40 @@ pub const pedersen = struct {
         }
     };
 
-    pub fn init(comptime T: type, value: T) struct { Commitment, Opening } {
-        const opening = Opening.random();
-        const commitment = fromValue(T, value, &opening);
-        return .{ commitment, opening };
-    }
+    // init with a scalar and an opening
+    // init with a scalar and generate opening
+    // init with a value and an opening
+    // init with a value and generate opening
 
-    pub fn fromValue(comptime T: type, value: T, opening: *const Opening) Commitment {
-        const x = scalarFromInt(T, value);
+    pub fn init(s: Scalar, opening: *const Opening) Commitment {
         // G and H are not identities and opening.scalar cannot be zero,
         // so this function cannot return an error.
-        const result = Edwards25519.mulMulti(
+        const point = Edwards25519.mulMulti(
             2,
             .{ G.p, H.p },
-            .{ x.toBytes(), opening.scalar.toBytes() },
+            .{ s.toBytes(), opening.scalar.toBytes() },
         ) catch unreachable;
-        return .{ .point = .{ .p = result } };
+        return .{ .point = .{ .p = point } };
+    }
+
+    pub fn initScalar(s: Scalar) struct { Commitment, Opening } {
+        const opening = Opening.random();
+        return .{ init(s, &opening), opening };
+    }
+
+    pub fn initValue(comptime T: type, value: T) struct { Commitment, Opening } {
+        const opening = Opening.random();
+        return .{ initOpening(T, value, &opening), opening };
+    }
+
+    pub fn initOpening(comptime T: type, value: T, opening: *const Opening) Commitment {
+        const scalar = scalarFromInt(T, value);
+        return init(scalar, opening);
     }
 };
 
 pub fn encrypt(comptime T: type, value: T, pubkey: *const Pubkey) Ciphertext {
-    const commitment, const opening = pedersen.init(T, value);
+    const commitment, const opening = pedersen.initValue(T, value);
     const handle = pedersen.DecryptHandle.init(pubkey, &opening);
     return .{
         .commitment = commitment,
@@ -218,7 +231,7 @@ pub fn encryptWithOpening(
     pubkey: *const Pubkey,
     opening: *const pedersen.Opening,
 ) Ciphertext {
-    const commitment = pedersen.fromValue(T, value, opening);
+    const commitment = pedersen.initOpening(T, value, opening);
     const handle = pedersen.DecryptHandle.init(pubkey, opening);
     return .{
         .commitment = commitment,
@@ -243,7 +256,7 @@ const DiscreteLog = struct {
     ) ?std.math.IntFittingRange(0, max_bound) {
         comptime std.debug.assert(max_bound <= std.math.maxInt(u32));
         _ = dl;
-        @panic("TODO");
+        @compileError("TODO");
     }
 };
 

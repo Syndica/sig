@@ -43,7 +43,7 @@ pub const Proof = struct {
         _ = transcript.challengeScalar("w");
 
         // compute the masked secret key
-        const z = s.mul(Scalar.fromBytes(c)).add(y);
+        const z = s.mul(c).add(y);
 
         return .{
             .P = Y_P,
@@ -74,7 +74,7 @@ pub const Proof = struct {
         transcript.appendScalar("z", self.z);
         const w = transcript.challengeScalar("w"); // w used for batch verification
 
-        const w_negated = Edwards25519.scalar.neg(w);
+        const w_negated = Edwards25519.scalar.neg(w.toBytes());
         const Y_D = self.D;
 
         //     points  scalars
@@ -96,10 +96,10 @@ pub const Proof = struct {
             D.p,
             Y_D.p,
         }, .{
-            Edwards25519.scalar.neg(c),                                     // -c
+            Edwards25519.scalar.neg(c.toBytes()),                                     // -c
             self.z.toBytes(),                                               // z
-            Scalar.fromBytes(w_negated).mul(Scalar.fromBytes(c)).toBytes(), // -w * c
-            Scalar.fromBytes(w).mul(self.z).toBytes(),                      // w * z
+            Scalar.fromBytes(w_negated).mul(c).toBytes(), // -w * c
+            w.mul(self.z).toBytes(),                      // w * z
             w_negated,                                                      // -w
         });
         // zig fmt: on
@@ -270,7 +270,7 @@ test "edge case" {
         var prover_transcript = Transcript.init("test");
         var verifier_transcript = Transcript.init("test");
 
-        const commitment, _ = pedersen.init(u64, 0);
+        const commitment, _ = pedersen.initValue(u64, 0);
         const ciphertext: ElGamalCiphertext = .{
             .commitment = commitment,
             .handle = .{ .point = try Ristretto255.fromBytes(.{0} ** 32) },
