@@ -131,11 +131,20 @@ test "ping message serializes and deserializes correctly" {
 
     const serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
+    var deserialized = try bincode.readFromSlice(
+        testing.allocator,
+        GossipMessage,
+        serialized,
+        bincode.Params.standard,
+    );
 
     try testing.expect(original.PingMessage.from.equals(&deserialized.PingMessage.from));
     try testing.expect(original.PingMessage.signature.eql(&deserialized.PingMessage.signature));
-    try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
+    try testing.expectEqualSlices(
+        u8,
+        &original.PingMessage.token,
+        &deserialized.PingMessage.token,
+    );
 }
 
 test "test ping pong sig verify" {
@@ -151,7 +160,28 @@ test "test ping pong sig verify" {
 }
 
 test "pull request serializes and deserializes" {
-    var rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 190, 193, 13, 216, 175, 227, 117, 168, 246, 219, 213, 39, 67, 249, 88, 3, 238, 151, 144, 15, 23, 142, 153, 198, 47, 221, 117, 132, 218, 28, 29, 115, 248, 253, 211, 101, 137, 19, 174, 112, 43, 57, 251, 110, 173, 14, 71, 0, 186, 24, 36, 61, 75, 241, 119, 73, 86, 93, 136, 249, 167, 40, 134, 14, 0, 0, 0, 0, 25, 117, 21, 11, 61, 170, 38, 18, 67, 196, 242, 219, 50, 154, 4, 254, 79, 227, 253, 229, 188, 230, 121, 12, 227, 248, 199, 156, 253, 144, 175, 67, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var rust_bytes = [_]u8{
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   255, 255, 255, 255, 255, 255, 255, 255, 0,   0,
+        0,   0,   190, 193, 13,  216, 175, 227, 117, 168, 246, 219, 213,
+        39,  67,  249, 88,  3,   238, 151, 144, 15,  23,  142, 153, 198,
+        47,  221, 117, 132, 218, 28,  29,  115, 248, 253, 211, 101, 137,
+        19,  174, 112, 43,  57,  251, 110, 173, 14,  71,  0,   186, 24,
+        36,  61,  75,  241, 119, 73,  86,  93,  136, 249, 167, 40,  134,
+        14,  0,   0,   0,   0,   25,  117, 21,  11,  61,  170, 38,  18,
+        67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188,
+        230, 121, 12,  227, 248, 199, 156, 253, 144, 175, 67,  0,   0,
+        0,   0,   127, 0,   0,   1,   210, 4,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,
+    };
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
         115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
@@ -191,7 +221,12 @@ test "pull request serializes and deserializes" {
     const serialized = try bincode.writeToSlice(buf[0..], pull, bincode.Params.standard);
     try testing.expectEqualSlices(u8, rust_bytes[0..], serialized);
 
-    const deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
+    const deserialized = try bincode.readFromSlice(
+        testing.allocator,
+        GossipMessage,
+        serialized,
+        bincode.Params.standard,
+    );
     try std.testing.expectEqualDeep(pull, deserialized);
 }
 
