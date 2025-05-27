@@ -30,7 +30,6 @@ const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnD
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
 const InstructionTrace = TransactionContext.InstructionTrace;
-const LoadedTransactionAccount = BatchAccountCache.LoadedTransactionAccount;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -250,7 +249,7 @@ pub fn loadAndExecuteTransaction(
         .err => |err| return .{ .err = err },
     };
 
-    const check_fee_payer_result = try checkFeePayer(
+    const check_fee_payer_result = try sig.runtime.check_transactions.checkFeePayer(
         allocator,
         transaction,
         batch_account_cache,
@@ -383,33 +382,6 @@ pub fn executeTransaction(
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
     };
-}
-
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L557
-pub fn checkFeePayer(
-    allocator: std.mem.Allocator,
-    transaction: *const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
-    compute_budget_limits: *const ComputeBudgetLimits,
-    nonce_account: ?CachedAccount,
-    rent_collector: *const RentCollector,
-    feature_set: *const FeatureSet,
-    lamports_per_signature: u64,
-) error{OutOfMemory}!TransactionResult(struct {
-    TransactionFees,
-    TransactionRollbacks,
-    LoadedTransactionAccount,
-}) {
-    return sig.runtime.check_transactions.checkFeePayer(
-        allocator,
-        transaction,
-        batch_account_cache,
-        compute_budget_limits,
-        nonce_account,
-        rent_collector,
-        feature_set,
-        lamports_per_signature,
-    );
 }
 
 test "loadAndExecuteTransactions: no transactions" {
