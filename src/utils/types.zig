@@ -255,7 +255,12 @@ pub fn hashMapInfo(comptime T: type) ?HashMapInfo {
             };
         },
         u64 => {
-            if (T == HashMapFn(Key, Value, Context, std.hash_map.default_max_load_percentage)) return .{
+            if (T == HashMapFn(
+                Key,
+                Value,
+                Context,
+                std.hash_map.default_max_load_percentage,
+            )) return .{
                 .Key = Key,
                 .Value = Value,
                 .Context = Context,
@@ -505,7 +510,9 @@ fn eqlBytes(a: []const u8, b: []const u8) bool {
 
     if (a.len <= 16) {
         if (a.len < 4) {
-            const x = (a[0] ^ b[0]) | (a[a.len - 1] ^ b[a.len - 1]) | (a[a.len / 2] ^ b[a.len / 2]);
+            const x = (a[0] ^ b[0]) |
+                (a[a.len - 1] ^ b[a.len - 1]) |
+                (a[a.len / 2] ^ b[a.len / 2]);
             return x == 0;
         }
         var x: u32 = 0;
@@ -539,7 +546,9 @@ fn eqlBytes(a: []const u8, b: []const u8) bool {
         if (n <= Scan.size and a.len <= n) {
             const V = @Vector(n / 2, u8);
             var x = @as(V, a[0 .. n / 2].*) ^ @as(V, b[0 .. n / 2].*);
-            x |= @as(V, a[a.len - n / 2 ..][0 .. n / 2].*) ^ @as(V, b[a.len - n / 2 ..][0 .. n / 2].*);
+            x |=
+                @as(V, a[a.len - n / 2 ..][0 .. n / 2].*) ^
+                @as(V, b[a.len - n / 2 ..][0 .. n / 2].*);
             const zero: V = @splat(0);
             return !@reduce(.Or, x != zero);
         }

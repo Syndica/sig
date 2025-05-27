@@ -78,11 +78,16 @@ pub fn BoundedSpec(comptime spec: []const u8) type {
 pub inline fn boundedString(
     /// `*const std.BoundedArray(u8, capacity)`
     bounded: anytype,
-) if (sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*))) |ba_info| BoundedString(ba_info.capacity) else noreturn {
+) if (sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*))) |ba_info|
+    BoundedString(ba_info.capacity)
+else
+    noreturn {
     const lazy = struct {
-        const compile_err = "Expected `std.BoundedArray(u8, capacity)`, got " ++ @typeName(@TypeOf(bounded.*));
+        const compile_err = "Expected `std.BoundedArray(u8, capacity)`, got " ++
+            @typeName(@TypeOf(bounded.*));
     };
-    const ba_info = sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*)) orelse @compileError(lazy.compile_err);
+    const ba_info = sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*)) orelse
+        @compileError(lazy.compile_err);
     if (ba_info.Elem != u8) @compileError(lazy.compile_err);
     return .{ .bounded = bounded };
 }
@@ -169,7 +174,8 @@ inline fn boundedStringMaxArg(comptime T: type) ?T {
         const Actual = BoundedString(ba_info.capacity);
         if (T != Actual) return null;
 
-        const bounded = ba_info.Type().fromSlice(&[_]u8{255} ** ba_info.capacity) catch unreachable;
+        const bounded =
+            ba_info.Type().fromSlice(&[_]u8{255} ** ba_info.capacity) catch unreachable;
         return boundedString(&bounded);
     }
 }
@@ -224,9 +230,17 @@ pub const TryRealPathFmt = struct {
 };
 
 /// The format string is of the form `key_fmt|value_fmt`, wherein the `|` character can be escaped in the `key_fmt` as `||`.
-pub inline fn hashMapFmt(hash_map: anytype, sep: []const u8) if (sig.utils.types.hashMapInfo(@TypeOf(hash_map.*))) |hm_info| HashMapFmt(hm_info) else noreturn {
+pub inline fn hashMapFmt(
+    hash_map: anytype,
+    sep: []const u8,
+) if (sig.utils.types.hashMapInfo(@TypeOf(hash_map.*))) |hm_info|
+    HashMapFmt(hm_info)
+else
+    noreturn {
     const Hm = @TypeOf(hash_map.*);
-    if (sig.utils.types.hashMapInfo(Hm) == null) @compileError("Expected pointer to hash map, got " ++ @typeName(Hm));
+    if (sig.utils.types.hashMapInfo(Hm) == null) @compileError(
+        "Expected pointer to hash map, got " ++ @typeName(Hm),
+    );
     return .{
         .map = hash_map,
         .sep = sep,
