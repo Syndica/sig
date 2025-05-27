@@ -187,11 +187,12 @@ fn testParseVoteTransaction(input_hash: ?Hash, random: std.Random) !void {
     vote_ix.program_id = Pubkey.ZEROES;
 
     const vote_tx = blk: {
-        const vote_tx_msg = try TransactionMessage.legacyCompileFrom(
+        const vote_tx_msg = try TransactionMessage.compile(
             allocator,
             &.{vote_ix},
             Pubkey.fromPublicKey(&node_keypair.public_key),
             Hash.ZEROES,
+            null,
         );
         errdefer vote_tx_msg.deinit(allocator);
         break :blk try Transaction.initOwnedMsgWithSigningKeypairs(
@@ -226,11 +227,12 @@ fn newVoteTransaction(
     );
     defer vote_ix.deinit(allocator);
 
-    const vote_tx_msg = try TransactionMessage.legacyCompileFrom(
+    const vote_tx_msg = try TransactionMessage.compile(
         allocator,
         &.{vote_ix},
         Pubkey.fromPublicKey(&node_keypair.public_key),
         blockhash,
+        null,
     );
     errdefer vote_tx_msg.deinit(allocator);
     return try Transaction.initOwnedMsgWithSigningKeypairs(

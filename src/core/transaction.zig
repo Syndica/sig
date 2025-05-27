@@ -283,13 +283,18 @@ pub const TransactionMessage = struct {
         };
     }
 
-    pub const LegacyCompileFromError = TransactionInstruction.CompileFromError;
-    pub fn legacyCompileFrom(
+    pub const CompileError = TransactionInstruction.CompileFromError;
+    pub fn compile(
         allocator: std.mem.Allocator,
         instructions: []const sig.core.Instruction,
         payer: ?Pubkey,
         recent_blockhash: Hash,
-    ) LegacyCompileFromError!TransactionMessage {
+        /// TODO: currently forced to be null by the compiler,
+        /// will become a proper optional parameter in the future.
+        lookup_tables: ?noreturn,
+    ) CompileError!TransactionMessage {
+        comptime std.debug.assert(lookup_tables == null);
+
         const account_keys: []const Pubkey, const counts: AccountKindCounts = blk: {
             var compiled_keys = try compileKeys(allocator, payer, instructions);
             defer compiled_keys.deinit(allocator);
