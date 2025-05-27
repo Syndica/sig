@@ -352,7 +352,7 @@ pub const VoteStakeTracker = struct {
         if (@typeInfo(ReachedThresholds) != .@"struct") return null;
 
         if (!@hasDecl(ReachedThresholds, "bit_length")) return null;
-        if (!@typeInfo(@TypeOf(&ReachedThresholds.bit_length)).Pointer.is_const) {
+        if (!@typeInfo(@TypeOf(&ReachedThresholds.bit_length)).pointer.is_const) {
             return null;
         }
 

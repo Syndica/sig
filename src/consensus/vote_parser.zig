@@ -279,5 +279,5 @@ fn newVoteInstruction(
 fn randomKeyPair(random: std.Random) !sig.identity.KeyPair {
     var seed: [sig.identity.KeyPair.seed_length]u8 = undefined;
     random.bytes(&seed);
-    return try sig.identity.KeyPair.create(seed);
+    return try sig.identity.KeyPair.generateDeterministic(seed);
 }
