@@ -1576,7 +1576,7 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
     return false;
 }
 
-test "tower: check vote threshold without votes" {
+test "check vote threshold without votes" {
     var tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -1596,7 +1596,7 @@ test "tower: check vote threshold without votes" {
     try std.testing.expectEqual(0, result.len);
 }
 
-test "tower: check vote threshold no skip lockout with new root" {
+test "check vote threshold no skip lockout with new root" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 4, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1623,7 +1623,7 @@ test "tower: check vote threshold no skip lockout with new root" {
     try std.testing.expect(result.len != 0);
 }
 
-test "tower: is locked out empty" {
+test "is locked out empty" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1638,7 +1638,7 @@ test "tower: is locked out empty" {
     try std.testing.expect(!result);
 }
 
-test "tower: is locked out root slot child pass" {
+test "is locked out root slot child pass" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1655,7 +1655,7 @@ test "tower: is locked out root slot child pass" {
     try std.testing.expect(!result);
 }
 
-test "tower: is locked out root slot sibling fail" {
+test "is locked out root slot sibling fail" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1679,7 +1679,7 @@ test "tower: is locked out root slot sibling fail" {
     try std.testing.expect(result);
 }
 
-test "tower: check already voted" {
+test "check already voted" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1695,7 +1695,7 @@ test "tower: check already voted" {
     try std.testing.expect(!replay_tower.tower.hasVoted(1));
 }
 
-test "tower: check recent slot" {
+test "check recent slot" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1716,7 +1716,7 @@ test "tower: check recent slot" {
     try std.testing.expect(replay_tower.tower.isRecent(65));
 }
 
-test "tower: is locked out double vote" {
+test "is locked out double vote" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1740,7 +1740,7 @@ test "tower: is locked out double vote" {
     try std.testing.expect(result);
 }
 
-test "tower: is locked out child" {
+test "is locked out child" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1762,7 +1762,7 @@ test "tower: is locked out child" {
     try std.testing.expect(!result);
 }
 
-test "tower: is locked out sibling" {
+test "is locked out sibling" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1786,7 +1786,7 @@ test "tower: is locked out sibling" {
     try std.testing.expect(result);
 }
 
-test "tower: is locked out last vote expired" {
+test "is locked out last vote expired" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1821,7 +1821,7 @@ test "tower: is locked out last vote expired" {
     try std.testing.expectEqual(1, replay_tower.tower.vote_state.votes.get(1).confirmation_count);
 }
 
-test "tower: check vote threshold below threshold" {
+test "check vote threshold below threshold" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1847,7 +1847,7 @@ test "tower: check vote threshold below threshold" {
     try std.testing.expect(result.len != 0);
 }
 
-test "tower: check vote threshold above threshold" {
+test "check vote threshold above threshold" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -1873,7 +1873,7 @@ test "tower: check vote threshold above threshold" {
     try std.testing.expectEqual(0, result.len);
 }
 
-test "tower: check vote thresholds above thresholds" {
+test "check vote thresholds above thresholds" {
     var tower = try createTestReplayTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -1904,7 +1904,7 @@ test "tower: check vote thresholds above thresholds" {
     try std.testing.expectEqual(0, result.len);
 }
 
-test "tower: check vote threshold deep below threshold" {
+test "check vote threshold deep below threshold" {
     var tower = try createTestReplayTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -1934,7 +1934,7 @@ test "tower: check vote threshold deep below threshold" {
     try std.testing.expect(result.len != 0);
 }
 
-test "tower: check vote threshold shallow below threshold" {
+test "check vote threshold shallow below threshold" {
     var tower = try createTestReplayTower(std.testing.allocator, VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -1964,7 +1964,7 @@ test "tower: check vote threshold shallow below threshold" {
     try std.testing.expect(result.len != 0);
 }
 
-test "tower: check vote threshold above threshold after pop" {
+test "check vote threshold above threshold after pop" {
     var tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -1993,7 +1993,7 @@ test "tower: check vote threshold above threshold after pop" {
     try std.testing.expectEqual(0, result.len);
 }
 
-test "tower: check vote threshold above threshold no stake" {
+test "check vote threshold above threshold no stake" {
     var tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -2017,7 +2017,7 @@ test "tower: check vote threshold above threshold no stake" {
     try std.testing.expect(result.len != 0);
 }
 
-test "tower: check vote threshold lockouts not updated" {
+test "check vote threshold lockouts not updated" {
     var tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -2047,7 +2047,7 @@ test "tower: check vote threshold lockouts not updated" {
     try std.testing.expect(result.len == 0);
 }
 
-test "tower: maybe timestamp" {
+test "maybe timestamp" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0);
     try std.testing.expect(replay_tower.maybeTimestamp(0) != null);
     try std.testing.expect(replay_tower.maybeTimestamp(1) != null);
@@ -2067,7 +2067,7 @@ test "tower: maybe timestamp" {
     try std.testing.expect(replay_tower.maybeTimestamp(3) == null);
 }
 
-test "tower: refresh last vote timestamp" {
+test "refresh last vote timestamp" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 0, 0);
 
     // Tower has no vote or timestamp
@@ -2164,7 +2164,7 @@ test "tower: refresh last vote timestamp" {
     }
 }
 
-test "tower: adjust lockouts after replay future slots" {
+test "adjust lockouts after replay future slots" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2203,7 +2203,7 @@ test "tower: adjust lockouts after replay future slots" {
     try std.testing.expectEqual(replayed_root_slot, try replay_tower.tower.getRoot());
 }
 
-test "tower: adjust lockouts after replay not found slots" {
+test "adjust lockouts after replay not found slots" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2243,7 +2243,7 @@ test "tower: adjust lockouts after replay not found slots" {
     try std.testing.expectEqual(replayed_root_slot, try replay_tower.tower.getRoot());
 }
 
-test "tower: adjust lockouts after replay all rooted with no too old" {
+test "adjust lockouts after replay all rooted with no too old" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2278,7 +2278,7 @@ test "tower: adjust lockouts after replay all rooted with no too old" {
     try std.testing.expectEqual(null, replay_tower.stray_restored_slot);
 }
 
-test "tower: adjust lockouts after replay all rooted with too old" {
+test "adjust lockouts after replay all rooted with too old" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2312,7 +2312,7 @@ test "tower: adjust lockouts after replay all rooted with too old" {
     try std.testing.expectEqual(MAX_ENTRIES, try replay_tower.tower.getRoot());
 }
 
-test "tower: adjust lockouts after replay anchored future slots" {
+test "adjust lockouts after replay anchored future slots" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2350,7 +2350,7 @@ test "tower: adjust lockouts after replay anchored future slots" {
     try std.testing.expectEqual(replayed_root_slot, try replay_tower.tower.getRoot());
 }
 
-test "tower: adjust lockouts after replay all not found" {
+test "adjust lockouts after replay all not found" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2389,7 +2389,7 @@ test "tower: adjust lockouts after replay all not found" {
     try std.testing.expectEqual(replayed_root_slot, try replay_tower.tower.getRoot());
 }
 
-test "tower: adjust lockouts after replay all not found even if rooted" {
+test "adjust lockouts after replay all not found even if rooted" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2421,7 +2421,7 @@ test "tower: adjust lockouts after replay all not found even if rooted" {
     try std.testing.expectError(error.FatallyInconsistent, result);
 }
 
-test "tower: test adjust lockouts after replay all future votes only root found" {
+test "test adjust lockouts after replay all future votes only root found" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2456,7 +2456,7 @@ test "tower: test adjust lockouts after replay all future votes only root found"
     try std.testing.expectEqual(replayed_root_slot, try replay_tower.tower.getRoot());
 }
 
-test "tower: adjust lockouts after replay empty" {
+test "adjust lockouts after replay empty" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2473,7 +2473,7 @@ test "tower: adjust lockouts after replay empty" {
     try std.testing.expectEqual(replayed_root_slot, try replay_tower.tower.getRoot());
 }
 
-test "tower: adjust lockouts after replay too old tower" {
+test "adjust lockouts after replay too old tower" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2500,7 +2500,7 @@ test "tower: adjust lockouts after replay too old tower" {
     try std.testing.expectError(TowerError.TooOldTower, result);
 }
 
-test "tower: adjust lockouts after replay time warped" {
+test "adjust lockouts after replay time warped" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2534,7 +2534,7 @@ test "tower: adjust lockouts after replay time warped" {
     try std.testing.expectError(TowerError.FatallyInconsistentTimeWarp, result);
 }
 
-test "tower: adjust lockouts after replay diverged ancestor" {
+test "adjust lockouts after replay diverged ancestor" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2569,7 +2569,7 @@ test "tower: adjust lockouts after replay diverged ancestor" {
     try std.testing.expectError(TowerError.FatallyInconsistentDivergedAncestors, result);
 }
 
-test "tower: adjust lockouts after replay out of order" {
+test "adjust lockouts after replay out of order" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2607,7 +2607,7 @@ test "tower: adjust lockouts after replay out of order" {
     try std.testing.expectError(TowerError.FatallyInconsistentReplayOutOfOrder, result);
 }
 
-test "tower: adjust lockouts after replay out of order via clearing history" {
+test "adjust lockouts after replay out of order via clearing history" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2644,7 +2644,7 @@ test "tower: adjust lockouts after replay out of order via clearing history" {
     try std.testing.expectError(TowerError.FatallyInconsistentReplayOutOfOrder, result);
 }
 
-test "tower: adjust lockouts after replay reversed votes" {
+test "adjust lockouts after replay reversed votes" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2679,7 +2679,7 @@ test "tower: adjust lockouts after replay reversed votes" {
     try std.testing.expectError(TowerError.FatallyInconsistentTowerSlotOrder, result);
 }
 
-test "tower: adjust lockouts after replay repeated non root votes" {
+test "adjust lockouts after replay repeated non root votes" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2718,7 +2718,7 @@ test "tower: adjust lockouts after replay repeated non root votes" {
     try std.testing.expectError(TowerError.FatallyInconsistentTowerSlotOrder, result);
 }
 
-test "tower: adjust lockouts after replay vote on root" {
+test "adjust lockouts after replay vote on root" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2767,7 +2767,7 @@ test "tower: adjust lockouts after replay vote on root" {
     );
 }
 
-test "tower: adjust lockouts after replay vote on genesis" {
+test "adjust lockouts after replay vote on genesis" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2797,7 +2797,7 @@ test "tower: adjust lockouts after replay vote on genesis" {
     try std.testing.expect(true);
 }
 
-test "tower: adjust lockouts after replay future tower" {
+test "adjust lockouts after replay future tower" {
     var replay_tower = try createTestReplayTower(std.testing.allocator, 10, 0.9);
     defer replay_tower.deinit(std.testing.allocator);
 
@@ -2850,7 +2850,7 @@ test "tower: adjust lockouts after replay future tower" {
     );
 }
 
-test "tower: is slot confirmed not enough stake failure" {
+test "is slot confirmed not enough stake failure" {
     var tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -2864,7 +2864,7 @@ test "tower: is slot confirmed not enough stake failure" {
     try std.testing.expect(!result);
 }
 
-test "tower: is slot confirmed unknown slot" {
+test "is slot confirmed unknown slot" {
     var tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -2875,7 +2875,7 @@ test "tower: is slot confirmed unknown slot" {
     try std.testing.expect(!result);
 }
 
-test "tower: is slot confirmed pass" {
+test "is slot confirmed pass" {
     var tower = try createTestReplayTower(std.testing.allocator, 1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
@@ -2889,7 +2889,7 @@ test "tower: is slot confirmed pass" {
     try std.testing.expect(result);
 }
 
-test "tower: default tower has no stray last vote" {
+test "default tower has no stray last vote" {
     var replay_tower = try createTestReplayTower(
         std.testing.allocator,
         VOTE_THRESHOLD_DEPTH,
@@ -2900,19 +2900,19 @@ test "tower: default tower has no stray last vote" {
     try std.testing.expect(!replay_tower.isStrayLastVote());
 }
 
-test "tower: recent votes full" {
+test "recent votes full" {
     try voteAndCheckRecent(MAX_LOCKOUT_HISTORY);
 }
 
-test "tower: recent votes empty" {
+test "recent votes empty" {
     try voteAndCheckRecent(0);
 }
 
-test "tower: recent votes exact" {
+test "recent votes exact" {
     try voteAndCheckRecent(5);
 }
 
-test "tower: greatestCommonAncestor" {
+test "greatestCommonAncestor" {
     const allocator = std.testing.allocator;
 
     // Test case: Basic common ancestor
@@ -3017,7 +3017,7 @@ test "tower: greatestCommonAncestor" {
     }
 }
 
-test "tower: selectVoteAndResetForks stake not found" {
+test "selectVoteAndResetForks stake not found" {
     const allocator = std.testing.allocator;
     const fork_tuples = sig.consensus.fork_choice.fork_tuples;
 
@@ -3062,7 +3062,7 @@ const EpochStakes = sig.core.stake.EpochStakes;
 const Stakes = sig.core.stake.Stakes;
 const splitOff = sig.consensus.fork_choice.splitOff;
 
-test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork" {
+test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(91);
@@ -3364,7 +3364,7 @@ test "tower: test unconfirmed duplicate slots and lockouts for non heaviest fork
     }
 }
 
-test "tower: test tower sync from bank failed lockout" {}
+test "test tower sync from bank failed lockout" {}
 
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
