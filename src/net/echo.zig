@@ -237,7 +237,8 @@ const ConnectionTask = struct {
         const socket_addr = SocketAddr.fromIpV4Address(request.server.connection.address);
         const ip_echo_response: IpEchoResponse = .{
             .address = .{ .ipv4 = socket_addr.V4.ip },
-            .shred_version = .{ .value = 0 }, // TODO: correct shred version needs to be propagated here
+            // TODO: correct shred version needs to be propagated here
+            .shred_version = .{ .value = 0 },
         };
 
         const content_len = blk: {
