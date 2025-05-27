@@ -167,7 +167,6 @@ files_excluded_from_line_length_check = [
     "src/ledger/shred_inserter/working_state.zig",
     "src/ledger/shred.zig",
     "src/ledger/test_shreds.zig",
-    "src/rand/rand.zig",
     "src/rpc/client.zig",
     "src/rpc/request.zig",
     "src/rpc/test_serialize.zig",
