@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
+const AtomicBool = std.atomic.Value(bool);
 
 const ThreadPool = sig.sync.ThreadPool;
 
@@ -11,13 +12,22 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
+const Signature = sig.core.Signature;
+const Keypair = sig.identity.KeyPair;
+const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const Epoch = sig.core.Epoch;
 const SlotAndHash = sig.core.hash.SlotAndHash;
+
+const SlotHistory = sig.runtime.sysvar.SlotHistory;
+const SortedSet = sig.utils.collections.SortedSet;
 
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
+const LatestValidatorVotesForFrozenBanks =
+    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -115,6 +125,7 @@ fn handleEdgeCases() void {
 }
 
 const ConsensusDependencies = struct {
+    allocator: Allocator,
     replay_tower: *ReplayTower,
     progress_map: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -151,12 +162,111 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         );
     }
 
-    // TODO: select_forks
-    // TODO: check_for_vote_only_mode
-    // TODO: select_vote_and_reset_forks
-    // TODO: if vote_bank.is_none: maybe_refresh_last_vote
+    const heaviest_slot = deps.fork_choice.heaviestOverallSlot().slot;
+    const heaviest_slot_on_same_voted_fork =
+        (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
+
+    // TODO replace hardcoded value.
+    const forks_root: Slot = 0;
+    var in_vote_only_mode = AtomicBool.init(false);
+    const heaviest_epoch: Epoch = 0;
+    const ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    const descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    const vote_account_pubkey = Pubkey.ZEROES;
+    const identity_pair = Keypair.generate();
+    var authorized_voter_keypairs = [_]Keypair{Keypair.generate()};
+    var vote_signatures =
+        std.ArrayList(Signature).init(deps.allocator);
+    const has_new_vote_been_rooted = true;
+    const last_vote_refresh_time: LastVoteRefreshTime = .{
+        .last_refresh_time = sig.time.Instant.now(),
+        .last_print_time = sig.time.Instant.now(),
+    };
+    const voting_sender: stubs.Sender(VoteOp) = .{};
+    const latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenBanks{
+        .max_gossip_frozen_votes = .{},
+    };
+    const bits = try sig.bloom.bit_set.DynamicArrayBitSet(u64).initEmpty(deps.allocator, 10);
+    defer bits.deinit(deps.allocator);
+    const slot_history = SlotHistory{ .bits = bits, .next_slot = 0 };
+    const wait_till_vote_slot = null;
+
+    // Looks like this is mostly used for logging? So maybe it can be skipped?
+    checkForVoteOnlyMode(
+        heaviest_slot,
+        forks_root,
+        &in_vote_only_mode,
+    );
+
+    const result = try deps.replay_tower.selectVoteAndResetForks(
+        deps.allocator,
+        heaviest_slot,
+        if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
+        heaviest_epoch,
+        &ancestors,
+        &descendants,
+        deps.progress_map,
+        &latest_validator_votes_for_frozen_banks,
+        deps.fork_choice,
+        .{},
+        &slot_history,
+    );
+    const voted_slot = result.vote_slot;
+    const reset_slot = result.reset_slot;
+    _ = &reset_slot;
+    const heaviest_fork_failures = result.heaviest_fork_failures;
+    _ = &heaviest_fork_failures;
+
+    if (voted_slot == null) {
+        _ = maybeRefreshLastVote(
+            deps.replay_tower,
+            deps.progress_map,
+            if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
+            &vote_account_pubkey,
+            &identity_pair,
+            &authorized_voter_keypairs,
+            &vote_signatures,
+            has_new_vote_been_rooted,
+            &last_vote_refresh_time,
+            &voting_sender,
+            wait_till_vote_slot,
+        );
+    }
+
     // TODO: handle_votable_bank
     // TODO: if reset_bank: Reset onto a fork
+}
+
+const LastVoteRefreshTime = struct {
+    last_refresh_time: sig.time.Instant,
+    last_print_time: sig.time.Instant,
+};
+
+fn maybeRefreshLastVote(
+    replay_tower: *ReplayTower,
+    progress: *const ProgressMap,
+    heaviest_slot_on_same_fork: ?Slot,
+    vote_account_pubkey: *const Pubkey,
+    identity_keypair: *const Keypair,
+    authorized_voter_keypairs: []Keypair, // TODO Arc
+    vote_signatures: *std.ArrayList(Signature),
+    has_new_vote_been_rooted: bool,
+    last_vote_refresh_time: *const LastVoteRefreshTime,
+    voting_sender: *const stubs.Sender(VoteOp),
+    wait_to_vote_slot: ?Slot,
+) bool {
+    _ = &replay_tower;
+    _ = &progress;
+    _ = &heaviest_slot_on_same_fork;
+    _ = &vote_account_pubkey;
+    _ = &identity_keypair;
+    _ = &authorized_voter_keypairs;
+    _ = &vote_signatures;
+    _ = &has_new_vote_been_rooted;
+    _ = &last_vote_refresh_time;
+    _ = &voting_sender;
+    _ = &wait_to_vote_slot;
+    return true;
 }
 
 fn towerDuplicateConfirmedForks(
@@ -176,6 +286,12 @@ fn towerDuplicateConfirmedForks(
     return &[0]SlotAndHash{};
 }
 
+// TODO complete
+const VoteOp = union(enum) {
+    push_vote,
+    refresh_vote,
+};
+
 // TODO Revisit
 const stubs = struct {
     pub const DuplicateSlotsTracker = struct {};
@@ -184,6 +300,10 @@ const stubs = struct {
     pub const PurgeRepairSlotCounter = struct {};
     pub const DuplicateConfirmedSlots = struct {};
     pub const AncestorHashesReplayUpdateSender = struct {};
+    pub fn Sender(t: type) type {
+        _ = &t;
+        return struct {};
+    }
 };
 
 fn markSlotsDuplicateConfirmed(
@@ -210,6 +330,17 @@ fn markSlotsDuplicateConfirmed(
     _ = &ancestor_hashes_replay_update_sender;
     _ = &purge_repair_slot_counter;
     _ = &duplicate_confirmed_slots;
+}
+
+// Looks like this is mostly used for logging? So maybe it can be skipped?
+fn checkForVoteOnlyMode(
+    heaviest_bank_slot: Slot,
+    forks_root: Slot,
+    in_vote_only_mode: *AtomicBool,
+) void {
+    _ = &heaviest_bank_slot;
+    _ = &forks_root;
+    _ = &in_vote_only_mode;
 }
 
 /// stub to represent struct coming in the next pr (already implemented)
