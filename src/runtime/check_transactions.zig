@@ -7,18 +7,13 @@ const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 
-const TransactionError = sig.ledger.transaction_status.TransactionError;
-
 const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
-
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.runtime.FeatureSet;
-const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
-const LoadedTransactionAccount = sig.runtime.account_loader.BatchAccountCache.LoadedTransactionAccount;
-const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
+const LoadedTransactionAccount = BatchAccountCache.LoadedTransactionAccount;
 const CopiedAccount = sig.runtime.transaction_execution.CopiedAccount;
 const TransactionFees = sig.runtime.transaction_execution.TransactionFees;
 const NonceData = sig.runtime.nonce.Data;
@@ -27,6 +22,8 @@ const NonceVersions = sig.runtime.nonce.Versions;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
 const TransactionRollbacks = sig.runtime.transaction_execution.TransactionRollbacks;
+
+const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 pub const CheckResult = ?error{ AlreadyProcessed, BlockhashNotFound };
 
@@ -74,7 +71,6 @@ pub fn checkAge(
     return .{ .err = .BlockhashNotFound };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/0d682755d1e576971bd29b41ee56dc9a9e320787/core/src/banking_stage/consumer.rs#L755
 /// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/svm/src/transaction_processor.rs#L557
 pub fn checkFeePayer(
     /// same allocator as batch account cache
@@ -214,7 +210,11 @@ pub const FeeDetails = struct {
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L66
-    fn calculateSignatureFee(sig_counts: SignatureCounts, lamports_per_signature: u64, enable_secp256r1: bool) u64 {
+    fn calculateSignatureFee(
+        sig_counts: SignatureCounts,
+        lamports_per_signature: u64,
+        enable_secp256r1: bool,
+    ) u64 {
         const sig_count = sig_counts.num_transaction_signatures +|
             sig_counts.num_ed25519_signatures +|
             sig_counts.num_secp256k1_signatures +|
@@ -266,7 +266,11 @@ const FeeBudgetLimits = struct {
 // const CheckedTransactionDetails = struct { nonce: ?CachedAccount, lamports_per_signature: u64 };
 
 // [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
-fn validateFeePayer(payer: CachedAccount, rent_collector: *const RentCollector, fee: u64) TransactionResult(void) {
+fn validateFeePayer(
+    payer: CachedAccount,
+    rent_collector: *const RentCollector,
+    fee: u64,
+) TransactionResult(void) {
     if (payer.account.lamports == 0) return .{ .err = .AccountNotFound };
 
     const system_account_kind = getSystemAccountKind(payer.account) orelse
@@ -391,7 +395,7 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
     var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&deserialize_buf);
 
-    const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account_data, .{}) catch
+    const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account.data, .{}) catch
         return null;
 
     const nonce_data = nonce.verify(recent_blockhash.*) orelse
