@@ -17,7 +17,6 @@ const Fork = struct { slot: Slot, maybe_err: T = null };
 /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
 pub const StatusCache = struct {
     cache: HashMap(Hash, HighestFork),
-
     roots: HashMap(Slot, void),
     min_root: ?Slot,
 
