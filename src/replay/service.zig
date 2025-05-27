@@ -11,6 +11,14 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
+const Slot = sig.core.Slot;
+const SlotAndHash = sig.core.hash.SlotAndHash;
+
+const ReplayTower = sig.consensus.replay_tower.ReplayTower;
+const ProgressMap = sig.consensus.progress_map.ProgressMap;
+const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
+const ForkChoice = sig.consensus.fork_choice.ForkChoice;
+
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
 
@@ -84,7 +92,9 @@ fn advanceReplay(state: *ReplayState) !void {
 
     handleEdgeCases();
 
-    processConsensus();
+    var slots = [_]Slot{0};
+    // TODO: Pass in the consensus deps
+    try processConsensus(null, slots[0..]);
 
     // TODO: dump_then_repair_correct_slots
 
@@ -104,22 +114,102 @@ fn handleEdgeCases() void {
 
 }
 
-fn processConsensus() void {
-    // TODO: for each slot:
-    //           tower_duplicate_confirmed_forks
-    //           mark_slots_duplicate_confirmed
+const ConsensusDependencies = struct {
+    replay_tower: *ReplayTower,
+    progress_map: *ProgressMap,
+    fork_choice: *ForkChoice,
+    blockstore: *BlockstoreReader,
+};
+
+fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stats: []Slot) !void {
+    const deps = if (maybe_deps) |deps|
+        deps
+    else
+        return error.Todo;
+    for (newly_computed_slot_stats) |slot| {
+        const fork_stats = deps.progress_map.getForkStats(slot) orelse
+            return error.Todo;
+        const duplicate_confirmed_forks = towerDuplicateConfirmedForks(
+            deps.replay_tower,
+            deps.progress_map,
+            slot,
+            fork_stats.voted_stakes,
+            fork_stats.total_stake,
+        );
+        markSlotsDuplicateConfirmed(
+            deps.blockstore,
+            deps.progress_map,
+            deps.fork_choice,
+            duplicate_confirmed_forks,
+            0,
+            .{},
+            .{},
+            .{},
+            .{},
+            .{},
+            .{},
+        );
+    }
 
     // TODO: select_forks
-
     // TODO: check_for_vote_only_mode
-
     // TODO: select_vote_and_reset_forks
-
     // TODO: if vote_bank.is_none: maybe_refresh_last_vote
-
     // TODO: handle_votable_bank
-
     // TODO: if reset_bank: Reset onto a fork
+}
+
+fn towerDuplicateConfirmedForks(
+    replay_tower: *const ReplayTower,
+    progress_map: *const ProgressMap,
+    slot: Slot,
+    vote_stake: VotedStakes,
+    total_stake: u64,
+    // mising BankForks or alternative
+) []SlotAndHash {
+    _ = &replay_tower;
+    _ = &progress_map;
+    _ = &slot;
+    _ = &vote_stake;
+    _ = &total_stake;
+
+    return &[0]SlotAndHash{};
+}
+
+// TODO Revisit
+const stubs = struct {
+    pub const DuplicateSlotsTracker = struct {};
+    pub const EpochSlotsFrozenSlots = struct {};
+    pub const DuplicateSlotsToRepair = struct {};
+    pub const PurgeRepairSlotCounter = struct {};
+    pub const DuplicateConfirmedSlots = struct {};
+    pub const AncestorHashesReplayUpdateSender = struct {};
+};
+
+fn markSlotsDuplicateConfirmed(
+    blockstore: *BlockstoreReader,
+    progress_map: *ProgressMap,
+    fork_choice: *ForkChoice,
+    confirmed_slots: []SlotAndHash,
+    root_slot: Slot,
+    duplicate_slot_tracker: stubs.DuplicateSlotsTracker,
+    epoch_slots_frozen_slots: stubs.EpochSlotsFrozenSlots,
+    duplicate_slots_to_repair: stubs.DuplicateSlotsToRepair,
+    ancestor_hashes_replay_update_sender: stubs.AncestorHashesReplayUpdateSender,
+    purge_repair_slot_counter: stubs.PurgeRepairSlotCounter,
+    duplicate_confirmed_slots: stubs.DuplicateConfirmedSlots,
+) void {
+    _ = &confirmed_slots;
+    _ = &blockstore;
+    _ = &root_slot;
+    _ = &progress_map;
+    _ = &duplicate_slot_tracker;
+    _ = &fork_choice;
+    _ = &epoch_slots_frozen_slots;
+    _ = &duplicate_slots_to_repair;
+    _ = &ancestor_hashes_replay_update_sender;
+    _ = &purge_repair_slot_counter;
+    _ = &duplicate_confirmed_slots;
 }
 
 /// stub to represent struct coming in the next pr (already implemented)
