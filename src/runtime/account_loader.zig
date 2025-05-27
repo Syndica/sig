@@ -386,7 +386,7 @@ pub const BatchAccountCache = struct {
         return loaded;
     }
 
-    const LoadedTransactionAccount = struct {
+    pub const LoadedTransactionAccount = struct {
         account: *AccountSharedData,
         loaded_size: usize,
         rent_collected: u64,
@@ -457,7 +457,7 @@ pub const BatchAccountCache = struct {
     }
 
     /// null return => account is now dead
-    fn loadAccount(
+    pub fn loadAccount(
         self: *BatchAccountCache,
         allocator: std.mem.Allocator,
         transaction: *const RuntimeTransaction,
@@ -493,7 +493,7 @@ pub const BatchAccountCache = struct {
 };
 
 // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L293
-fn collectRentFromAccount(
+pub fn collectRentFromAccount(
     account: *AccountSharedData,
     account_key: *const Pubkey,
     feature_set: *const runtime.FeatureSet,
@@ -853,7 +853,7 @@ test "load accounts rent paid" {
 
 test "constructInstructionsAccount" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var data: [1024]u8 = undefined;
     prng.fill(&data);

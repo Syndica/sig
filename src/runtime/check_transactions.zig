@@ -5,17 +5,28 @@ const Hash = sig.core.Hash;
 const Ancestors = sig.core.status_cache.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
+const RentCollector = sig.core.rent_collector.RentCollector;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
+const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
+
+const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
+const FeatureSet = sig.runtime.FeatureSet;
+const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
+const LoadedTransactionAccount = sig.runtime.account_loader.BatchAccountCache.LoadedTransactionAccount;
+const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
+const CopiedAccount = sig.runtime.transaction_execution.CopiedAccount;
+const TransactionFees = sig.runtime.transaction_execution.TransactionFees;
 const NonceData = sig.runtime.nonce.Data;
 const NonceState = sig.runtime.nonce.State;
 const NonceVersions = sig.runtime.nonce.Versions;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
+const TransactionRollbacks = sig.runtime.transaction_execution.TransactionRollbacks;
 
 pub const CheckResult = ?error{ AlreadyProcessed, BlockhashNotFound };
 
@@ -61,6 +72,255 @@ pub fn checkAge(
     }
 
     return .{ .err = .BlockhashNotFound };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/0d682755d1e576971bd29b41ee56dc9a9e320787/core/src/banking_stage/consumer.rs#L755
+/// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/svm/src/transaction_processor.rs#L557
+pub fn checkFeePayer(
+    /// same allocator as batch account cache
+    allocator: std.mem.Allocator,
+    transaction: *const RuntimeTransaction,
+    batch_account_cache: *BatchAccountCache,
+    compute_budget_limits: *const ComputeBudgetLimits,
+    nonce_account: ?CachedAccount,
+    rent_collector: *const RentCollector,
+    feature_set: *const FeatureSet,
+    lamports_per_signature: u64,
+) error{OutOfMemory}!TransactionResult(struct {
+    TransactionFees,
+    TransactionRollbacks,
+    LoadedTransactionAccount,
+}) {
+    const enable_secp256r1 = feature_set.active.contains(
+        sig.runtime.features.ENABLE_SECP256R1_PRECOMPILE,
+    );
+
+    const fee_payer_key = transaction.accounts.items(.pubkey)[0];
+
+    var loaded_fee_payer = try batch_account_cache.loadAccount(
+        allocator,
+        transaction,
+        &fee_payer_key,
+        true,
+    ) orelse return .{ .err = .AccountNotFound };
+
+    const fee_payer_loaded_rent_epoch = loaded_fee_payer.account.rent_epoch;
+
+    loaded_fee_payer.rent_collected = account_loader.collectRentFromAccount(
+        loaded_fee_payer.account,
+        &fee_payer_key,
+        feature_set,
+        rent_collector,
+    ).rent_amount;
+
+    const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(compute_budget_limits.*);
+    const fee_details = if (lamports_per_signature == 0) FeeDetails.DEFAULT else fee: {
+        const signature_counts = SignatureCounts.fromTransaction(transaction);
+        break :fee FeeDetails.init(
+            signature_counts,
+            lamports_per_signature,
+            enable_secp256r1,
+            fee_budget_limits.prioritization_fee,
+        );
+    };
+
+    const cached_fee_payer_account: CachedAccount = .{
+        .pubkey = fee_payer_key,
+        .account = loaded_fee_payer.account,
+    };
+
+    const validate_result = validateFeePayer(
+        cached_fee_payer_account,
+        rent_collector,
+        fee_details.total(),
+    );
+    switch (validate_result) {
+        .err => |err| return .{ .err = err },
+        else => {},
+    }
+
+    const copied_fee_payer_account: CopiedAccount = .{
+        .pubkey = fee_payer_key,
+        .account = loaded_fee_payer.account.*,
+    };
+
+    const rollback_accounts = try TransactionRollbacks.new(
+        allocator,
+        nonce_account,
+        copied_fee_payer_account,
+        loaded_fee_payer.rent_collected,
+        fee_payer_loaded_rent_epoch,
+    );
+
+    return .{
+        .ok = .{ fee_details, rollback_accounts, loaded_fee_payer },
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L85
+const SignatureCounts = struct {
+    num_transaction_signatures: u64,
+    num_ed25519_signatures: u64,
+    num_secp256k1_signatures: u64,
+    num_secp256r1_signatures: u64,
+
+    // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L139
+    fn sumPrecompileSigs(
+        transaction: *const RuntimeTransaction,
+        precompile: *const Pubkey,
+    ) u64 {
+        var n_signatures: u64 = 0;
+        for (transaction.instruction_infos) |instr_info| {
+            if (instr_info.program_meta.pubkey.equals(precompile)) continue;
+            if (instr_info.instruction_data.len == 0) continue;
+            n_signatures += instr_info.instruction_data[0];
+        }
+        return n_signatures;
+    }
+
+    // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L139
+    fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
+        const precompiles = sig.runtime.program.precompiles;
+
+        return .{
+            .num_ed25519_signatures = sumPrecompileSigs(transaction, &precompiles.ed25519.ID),
+            .num_secp256k1_signatures = sumPrecompileSigs(transaction, &precompiles.secp256k1.ID),
+            .num_secp256r1_signatures = sumPrecompileSigs(transaction, &precompiles.secp256r1.ID),
+            .num_transaction_signatures = transaction.signature_count,
+        };
+    }
+};
+
+pub const FeeDetails = struct {
+    transaction_fee: u64,
+    prioritization_fee: u64,
+
+    const DEFAULT: FeeDetails = .{ .transaction_fee = 0, .prioritization_fee = 0 };
+
+    fn init(
+        sig_counts: SignatureCounts,
+        lamports_per_signature: u64,
+        enable_secp256r1: bool,
+        prioritization_fee: u64,
+    ) FeeDetails {
+        return .{
+            .transaction_fee = calculateSignatureFee(
+                sig_counts,
+                lamports_per_signature,
+                enable_secp256r1,
+            ),
+            .prioritization_fee = prioritization_fee,
+        };
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L66
+    fn calculateSignatureFee(sig_counts: SignatureCounts, lamports_per_signature: u64, enable_secp256r1: bool) u64 {
+        const sig_count = sig_counts.num_transaction_signatures +|
+            sig_counts.num_ed25519_signatures +|
+            sig_counts.num_secp256k1_signatures +|
+            if (enable_secp256r1) sig_counts.num_secp256r1_signatures else 0;
+
+        return sig_count *| lamports_per_signature;
+    }
+
+    fn total(self: FeeDetails) u64 {
+        return self.prioritization_fee +| self.transaction_fee;
+    }
+};
+
+const FeeBudgetLimits = struct {
+    /// non-zero
+    loaded_accounts_data_size_limit: u32,
+    heap_cost: u64,
+    compute_unit_limit: u64,
+    prioritization_fee: u64,
+
+    // [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L20
+    const MICRO_LAMPORTS_PER_LAMPORT = 1_000_000;
+    const DEFAULT_HEAP_COST = 8;
+
+    fn getPrioritizationFee(compute_unit_price: u64, compute_unit_limit: u64) u64 {
+        const micro_lamport_fee = @as(u128, compute_unit_price) *| @as(u128, compute_unit_limit);
+
+        return std.math.cast(
+            u64,
+            (micro_lamport_fee +| (MICRO_LAMPORTS_PER_LAMPORT -| 1)) / MICRO_LAMPORTS_PER_LAMPORT,
+        ) orelse std.math.maxInt(u64);
+    }
+
+    fn fromComputeBudgetLimits(val: ComputeBudgetLimits) FeeBudgetLimits {
+        const prioritization_fee = getPrioritizationFee(
+            val.compute_unit_price,
+            val.compute_unit_limit,
+        );
+
+        return .{
+            .loaded_accounts_data_size_limit = val.loaded_accounts_bytes,
+            .heap_cost = DEFAULT_HEAP_COST,
+            .compute_unit_limit = val.compute_unit_limit,
+            .prioritization_fee = prioritization_fee,
+        };
+    }
+};
+
+// const CheckedTransactionDetails = struct { nonce: ?CachedAccount, lamports_per_signature: u64 };
+
+// [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
+fn validateFeePayer(payer: CachedAccount, rent_collector: *const RentCollector, fee: u64) TransactionResult(void) {
+    if (payer.account.lamports == 0) return .{ .err = .AccountNotFound };
+
+    const system_account_kind = getSystemAccountKind(payer.account) orelse
+        return .{ .err = .InvalidAccountForFee };
+
+    const min_balance = switch (system_account_kind) {
+        .System => 0,
+        .Nonce => rent_collector.rent.minimumBalance(NonceState.SIZE),
+    };
+
+    _ = std.math.sub(u64, payer.account.lamports, min_balance) catch
+        return .{ .err = .InsufficientFundsForFee };
+
+    const pre_rent_state = rent_collector.getAccountRentState(
+        payer.account.lamports,
+        payer.account.data.len,
+    );
+
+    payer.account.lamports = std.math.sub(u64, payer.account.lamports, fee) catch
+        return .{ .err = .InsufficientFundsForFee };
+
+    const post_rent_state = rent_collector.getAccountRentState(
+        payer.account.lamports,
+        payer.account.data.len,
+    );
+
+    sig.core.rent_collector.RentCollector.checkRentStateWithAccount(
+        pre_rent_state,
+        post_rent_state,
+        &payer.pubkey,
+    ) catch
+        return .{ .err = .{ .InsufficientFundsForRent = .{ .account_index = 0 } } };
+
+    return .{ .ok = {} };
+}
+
+const SystemAccountKind = enum { System, Nonce };
+
+// [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
+fn getSystemAccountKind(account: *const AccountSharedData) ?SystemAccountKind {
+    return switch (account.data.len) {
+        else => null,
+        0 => .System,
+        NonceState.SIZE => {
+            const versions = NonceVersions.deserialize(account.data) orelse
+                return null;
+
+            const state = versions.state();
+            return switch (state) {
+                .Uninitialized => null,
+                .Initialized => .Nonce,
+            };
+        },
+    };
 }
 
 fn checkLoadAndAdvanceMessageNonceAccount(
@@ -131,7 +391,7 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
     var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&deserialize_buf);
 
-    const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account.data, .{}) catch
+    const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account_data, .{}) catch
         return null;
 
     const nonce_data = nonce.verify(recent_blockhash.*) orelse
