@@ -18,6 +18,7 @@ pub const CheckResult = ?error{ AlreadyProcessed, BlockhashNotFound };
 
 const NONCED_TX_MARKER_IX_INDEX = 0;
 
+/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
 pub fn checkStatusCache(
     msg_hash: *const Hash,
     recent_blockhash: *const Hash,
@@ -29,6 +30,11 @@ pub fn checkStatusCache(
     return null;
 }
 
+/// Requires full transaction to find nonce account in the event that the transactions recent blockhash
+/// is not in the blockhash queue within the max age. Also worth noting that Agave returns a CheckTransactionDetails
+/// struct which contains a lamports_per_signature field which is unused, hence we return only the nonce account
+/// if it exists.
+/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
 pub fn checkAge(
     transaction: *const RuntimeTransaction,
     batch_account_cache: *BatchAccountCache,
@@ -38,8 +44,7 @@ pub fn checkAge(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
 ) TransactionResult(?CachedAccount) {
-    if (blockhash_queue.getHashInfoIfValid(last_blockhash, max_age)) |hash_info| {
-        _ = hash_info;
+    if (blockhash_queue.getHashInfoIfValid(last_blockhash, max_age) != null)  {
         return .{ .ok = null };
     }
 
@@ -49,8 +54,7 @@ pub fn checkAge(
         next_lamports_per_signature,
         batch_account_cache,
     )) |nonce| {
-        const nonce_account, const previous_lamports_per_signature = nonce;
-        _ = previous_lamports_per_signature;
+        const nonce_account = nonce.@"0";
         return .{ .ok = nonce_account };
     }
 
@@ -63,8 +67,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     next_lamports_per_signature: u64,
     batch_account_cache: *BatchAccountCache,
 ) ?struct { CachedAccount, u64 } {
-    const nonce_is_advanceable = !transaction.recent_blockhash.eql(next_durable_nonce.*);
-    if (!nonce_is_advanceable) return null;
+    if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
     const cached_account, const nonce_data = loadMessageNonceAccount(
         transaction,

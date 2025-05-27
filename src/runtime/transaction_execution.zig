@@ -173,7 +173,7 @@ pub fn loadAndExecuteTransaction(
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
-    const check_age_result = checkAge(
+    const check_age_result = sig.runtime.check_transactions.checkAge(
         transaction,
         batch_account_cache,
         environment.blockhash_queue,
@@ -187,7 +187,7 @@ pub fn loadAndExecuteTransaction(
         .err => |err| return .{ .err = err },
     };
 
-    if (checkStatusCache(
+    if (sig.runtime.check_transactions.checkStatusCache(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
         environment.ancestors,
@@ -343,46 +343,6 @@ pub fn executeTransaction(
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
     };
-}
-
-/// Requires full transaction to find nonce account in the event that the transactions recent blockhash
-/// is not in the blockhash queue within the max age. Also worth noting that Agave returns a CheckTransactionDetails
-/// struct which contains a lamports_per_signature field which is unused, hence we return only the nonce account
-/// if it exists.
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
-pub fn checkAge(
-    transaction: *const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
-    blockhash_queue: *const BlockhashQueue,
-    max_age: u64,
-    last_blockhash: *const Hash,
-    next_durable_nonce: *const Hash,
-    next_lamports_per_signature: u64,
-) TransactionResult(?CachedAccount) {
-    return sig.runtime.check_transactions.checkAge(
-        transaction,
-        batch_account_cache,
-        blockhash_queue,
-        max_age,
-        last_blockhash,
-        next_durable_nonce,
-        next_lamports_per_signature,
-    );
-}
-
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
-pub fn checkStatusCache(
-    msg_hash: *const Hash,
-    recent_blockhash: *const Hash,
-    ancestors: *const Ancestors,
-    status_cache: *const StatusCache,
-) ?TransactionError {
-    return sig.runtime.check_transactions.checkStatusCache(
-        msg_hash,
-        recent_blockhash,
-        ancestors,
-        status_cache,
-    );
 }
 
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L557
