@@ -13,25 +13,21 @@ const Slot = sig.core.Slot;
 const Fork = struct { slot: Slot, maybe_err: T };
 
 pub const StatusCache = struct {
-    cache: KeyStatusMap,
+    cache: HashMap(Hash, HighestFork),
     roots: HashMap(Slot, void),
     /// all keys seen during a fork/slot
-    slot_deltas: SlotDeltaMap,
+    slot_deltas: HashMap(Slot, StatusKv),
 
     const CACHED_KEY_SIZE = 20;
     const KeySlice = [CACHED_KEY_SIZE]u8;
     const ForkStatus = ArrayList(Fork);
 
-    const statusValElement = struct { key_slice: KeySlice, maybe_err: T };
-    const StatusVal = ArrayList(statusValElement);
+    const StatusVal = ArrayList(struct { key_slice: KeySlice, maybe_err: T });
     // TODO: might be able to get rid of this RwMux, agave has one here
     const StatusKv = RwMux(HashMap(Hash, StatusVal));
     const KeyMap = HashMap(KeySlice, ForkStatus);
 
     const HighestFork = struct { slot: Slot, index: usize, key_map: KeyMap };
-
-    const KeyStatusMap = HashMap(Hash, HighestFork);
-    const SlotDeltaMap = HashMap(Slot, StatusKv);
 
     pub fn default(allocator: std.mem.Allocator) error{OutOfMemory}!StatusCache {
         const roots = try HashMap(Slot, void).init(allocator, &.{}, &.{});
@@ -46,10 +42,10 @@ pub const StatusCache = struct {
     pub fn getStatus(
         self: *const StatusCache,
         key: []const u8,
-        tx_blockhash: *const Hash,
+        blockhash: *const Hash,
         ancestors: *const Ancestors,
     ) ?Fork {
-        const map = self.cache.get(tx_blockhash.*) orelse return null;
+        const map = self.cache.get(blockhash.*) orelse return null;
 
         const max_key_index = key.len -| (CACHED_KEY_SIZE + 1);
         const index = @min(map.index, max_key_index);
