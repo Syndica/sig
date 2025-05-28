@@ -17,7 +17,9 @@ const Keypair = sig.identity.KeyPair;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
+const Hash = sig.core.Hash;
 const SlotAndHash = sig.core.hash.SlotAndHash;
+const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -28,6 +30,7 @@ const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+const SwitchForkDecision = sig.consensus.replay_tower.SwitchForkDecision;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -233,7 +236,6 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         );
     }
 
-    // TODO: handle_votable_bank
     // TODO: if reset_bank: Reset onto a fork
 }
 
@@ -299,7 +301,19 @@ const stubs = struct {
     pub const DuplicateSlotsToRepair = struct {};
     pub const PurgeRepairSlotCounter = struct {};
     pub const DuplicateConfirmedSlots = struct {};
+    pub const UnfrozenGossipVerifiedVoteHashes = struct {};
+    pub const ReplayLoopTiming = struct {};
     pub const AncestorHashesReplayUpdateSender = struct {};
+    pub const BankForks = struct {};
+    pub const PohRecorder = struct {};
+    pub const ClusterInfo = struct {};
+    pub const PartitionInfo = struct {};
+    pub const CommitmentAggregationData = struct {};
+    pub const RpcSubscriptions = struct {};
+    pub const SnapshotController = struct {};
+    pub const BlockCommitmentCache = struct {};
+    pub const BankNotificationSenderConfig = struct {};
+    pub const BankWithScheduler = struct {};
     pub fn Sender(t: type) type {
         _ = &t;
         return struct {};
@@ -341,6 +355,89 @@ fn checkForVoteOnlyMode(
     _ = &heaviest_bank_slot;
     _ = &forks_root;
     _ = &in_vote_only_mode;
+}
+
+// TODO The parameter list is humongous. Try to simplify
+fn handleVotableBank(
+    vote_slot: Slot,
+    vote_hash: Hash, // vote_slot and vote_hash replaces Bank
+    switch_fork_decision: *const SwitchForkDecision,
+    bank_forks: *const stubs.BankForks, // TODO replace with alternative, have ref counted
+    tower: *ReplayTower,
+    progress: *ProgressMap,
+    vote_account_pubkey: *const Pubkey,
+    identity_keypair: *const Keypair,
+    authorized_voter_keypairs: []Keypair, // TODO Arc
+    blockstore: *const BlockstoreReader,
+    leader_schedule_cache: *const LeaderScheduleCache, // TODO Arc
+    lockouts_sender: *const stubs.Sender(stubs.CommitmentAggregationData),
+    snapshot_controller: ?*const stubs.SnapshotController,
+    rpc_subscriptions: *const stubs.RpcSubscriptions, // TODO Arc
+    block_commitment_cache: *const stubs.BlockCommitmentCache, // TODO Arc/RwLock
+    heaviest_subtree_fork_choice: *ForkChoice,
+    bank_notification_sender: *const ?stubs.BankNotificationSenderConfig,
+    duplicate_slots_tracker: *stubs.DuplicateSlotsTracker,
+    duplicate_confirmed_slots: *stubs.DuplicateConfirmedSlots,
+    unfrozen_gossip_verified_vote_hashes: *stubs.UnfrozenGossipVerifiedVoteHashes,
+    vote_signatures: *std.ArrayList(Signature),
+    has_new_vote_been_rooted: *bool,
+    replay_timing: *stubs.ReplayLoopTiming,
+    voting_sender: *stubs.Sender(VoteOp),
+    epoch_slots_frozen_slots: *const stubs.EpochSlotsFrozenSlots,
+    drop_bank_sender: *const stubs.Sender(std.ArrayList(stubs.BankWithScheduler)),
+    wait_to_vote_slot: ?Slot,
+) !void {
+    _ = &vote_slot;
+    _ = &vote_hash;
+    _ = &switch_fork_decision;
+    _ = &bank_forks;
+    _ = &tower;
+    _ = &progress;
+    _ = &vote_account_pubkey;
+    _ = &identity_keypair;
+    _ = &authorized_voter_keypairs;
+    _ = &blockstore;
+    _ = &leader_schedule_cache;
+    _ = &lockouts_sender;
+    _ = &snapshot_controller;
+    _ = &rpc_subscriptions;
+    _ = &block_commitment_cache;
+    _ = &heaviest_subtree_fork_choice;
+    _ = &bank_notification_sender;
+    _ = &duplicate_slots_tracker;
+    _ = &duplicate_confirmed_slots;
+    _ = &unfrozen_gossip_verified_vote_hashes;
+    _ = &vote_signatures;
+    _ = &has_new_vote_been_rooted;
+    _ = &replay_timing;
+    _ = &voting_sender;
+    _ = &epoch_slots_frozen_slots;
+    _ = &drop_bank_sender;
+    _ = &wait_to_vote_slot;
+}
+
+fn resetFork(
+    progress: *const ProgressMap,
+    blockstore: *const BlockstoreReader,
+    reset_slot: Slot,
+    last_reset_hash: Hash,
+    last_blockhash: Hash,
+    last_reset_bank_descendants: std.ArrayList(Slot),
+    poh_recorder: stubs.PohRecorder,
+    cluster_info: stubs.ClusterInfo,
+    partition_info: stubs.PartitionInfo,
+    leader_schedule_cache: LeaderScheduleCache,
+) !void {
+    _ = &progress;
+    _ = &blockstore;
+    _ = &reset_slot;
+    _ = &last_reset_hash;
+    _ = &last_blockhash;
+    _ = &last_reset_bank_descendants;
+    _ = &poh_recorder;
+    _ = &cluster_info;
+    _ = &partition_info;
+    _ = &leader_schedule_cache;
 }
 
 /// stub to represent struct coming in the next pr (already implemented)
