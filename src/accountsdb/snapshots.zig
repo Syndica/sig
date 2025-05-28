@@ -73,9 +73,12 @@ pub const StakeReward = struct {
 /// Analogous to [RewardInfo](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_info.rs#L5)
 pub const RewardInfo = struct {
     reward_type: RewardType,
-    lamports: i64, // Reward amount
-    post_balance: u64, // Account balance in lamports after `lamports` was applied
-    commission: ?u8, // Vote account commission when the reward was credited, only present for voting and staking rewards
+    /// Reward amount
+    lamports: i64,
+    /// Account balance in lamports after `lamports` was applied
+    post_balance: u64,
+    /// Vote account commission when the reward was credited, only present for voting and staking rewards
+    commission: ?u8,
 };
 
 /// Analogous to [RewardType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_type.rs#L7)
@@ -820,7 +823,9 @@ pub const FullSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
 
-    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("snapshot-{[slot]d}-{[hash]s}.tar.zst");
+    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec(
+        "snapshot-{[slot]d}-{[hash]s}.tar.zst",
+    );
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .slot = std.math.maxInt(Slot),
@@ -845,8 +850,12 @@ pub const FullSnapshotFileInfo = struct {
         filename: []const u8,
     ) ParseFileNameTarZstError!FullSnapshotFileInfo {
         const snapshot_file_info, const extension_start = try parseFileBaseName(filename);
-        if (extension_start == filename.len) return error.MissingExtension;
-        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) return error.InvalidExtension;
+        if (extension_start == filename.len) {
+            return error.MissingExtension;
+        }
+        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) {
+            return error.InvalidExtension;
+        }
         return snapshot_file_info;
     }
 
@@ -946,7 +955,9 @@ pub const IncrementalSnapshotFileInfo = struct {
         };
     }
 
-    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec("incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst");
+    pub const SnapshotArchiveNameFmtSpec = sig.utils.fmt.BoundedSpec(
+        "incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.zst",
+    );
 
     pub const SnapshotArchiveNameStr = SnapshotArchiveNameFmtSpec.BoundedArrayValue(.{
         .base_slot = std.math.maxInt(Slot),
@@ -973,8 +984,12 @@ pub const IncrementalSnapshotFileInfo = struct {
         filename: []const u8,
     ) ParseFileNameTarZstError!IncrementalSnapshotFileInfo {
         const snapshot_file_info, const extension_start = try parseFileBaseName(filename);
-        if (extension_start == filename.len) return error.MissingExtension;
-        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) return error.InvalidExtension;
+        if (extension_start == filename.len) {
+            return error.MissingExtension;
+        }
+        if (!std.mem.eql(u8, filename[extension_start..], ".tar.zst")) {
+            return error.InvalidExtension;
+        }
         return snapshot_file_info;
     }
 
@@ -1206,10 +1221,16 @@ pub const FullAndIncrementalManifest = struct {
         const logger = unscoped_logger.withScope("accounts_db.snapshot_manifest");
 
         const full_fields = blk: {
-            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full.slot});
+            const rel_path_bounded = sig.utils.fmt.boundedFmt(
+                "snapshots/{0}/{0}",
+                .{files.full.slot},
+            );
             const rel_path = rel_path_bounded.constSlice();
 
-            logger.info().logf("reading *full* snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf(
+                "reading *full* snapshot fields from: {s}",
+                .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
+            );
 
             const full_file = try snapshot_dir.openFile(rel_path, .{});
             defer full_file.close();
@@ -1219,9 +1240,15 @@ pub const FullAndIncrementalManifest = struct {
         errdefer full_fields.deinit(allocator);
 
         const incremental_fields = if (files.incremental_info) |inc_snap| blk: {
-            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_snap.slot});
+            const rel_path_bounded = sig.utils.fmt.boundedFmt(
+                "snapshots/{0}/{0}",
+                .{inc_snap.slot},
+            );
             const rel_path = rel_path_bounded.constSlice();
-            logger.info().logf("reading *incremental* snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+            logger.info().logf(
+                "reading *incremental* snapshot fields from: {s}",
+                .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)},
+            );
 
             const incremental_file = try snapshot_dir.openFile(rel_path, .{});
             defer incremental_file.close();
@@ -1352,28 +1379,47 @@ pub const generate = struct {
         const writer = counting_writer_state.writer();
 
         // write the version file
-        const version_str_bounded = sig.utils.fmt.boundedFmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+        const version_str_bounded = sig.utils.fmt.boundedFmt(
+            "{d}.{d}.{d}",
+            .{ version.major, version.minor, version.patch },
+        );
         const version_str = version_str_bounded.constSlice();
         try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
         try writer.writeAll(version_str);
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(
+            counting_writer_state.bytes_written,
+        ));
 
         // create the snapshots dir
         try sig.utils.tar.writeTarHeader(writer, .directory, "snapshots/", 0);
 
         // write the status cache
-        try sig.utils.tar.writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
+        try sig.utils.tar.writeTarHeader(
+            writer,
+            .regular,
+            "snapshots/status_cache",
+            bincode.sizeOf(status_cache, .{}),
+        );
         try bincode.write(writer, status_cache, .{});
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(
+            counting_writer_state.bytes_written,
+        ));
 
         // write the manifest
         const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot});
         try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
 
         const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot});
-        try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), bincode.sizeOf(manifest, .{}));
+        try sig.utils.tar.writeTarHeader(
+            writer,
+            .regular,
+            file_name_bounded.constSlice(),
+            bincode.sizeOf(manifest, .{}),
+        );
         try bincode.write(writer, manifest, .{});
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(
+            counting_writer_state.bytes_written,
+        ));
 
         std.debug.assert(counting_writer_state.bytes_written % 512 == 0);
     }
@@ -1386,9 +1432,21 @@ pub const generate = struct {
     /// Writes the account file header - follow this up by writing the file content to `archive_writer`,
     /// and then follow that up with `writeAccountFilePadding(archive_writer, file_info.length)`.
     /// Do this for each account file included in the snapshot.
-    pub fn writeAccountFileHeader(archive_writer: anytype, file_slot: Slot, file_info: AccountFileInfo) !void {
-        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ file_slot, file_info.id.toInt() });
-        try sig.utils.tar.writeTarHeader(archive_writer, .regular, name_bounded.constSlice(), file_info.length);
+    pub fn writeAccountFileHeader(
+        archive_writer: anytype,
+        file_slot: Slot,
+        file_info: AccountFileInfo,
+    ) !void {
+        const name_bounded = sig.utils.fmt.boundedFmt(
+            "accounts/{d}.{d}",
+            .{ file_slot, file_info.id.toInt() },
+        );
+        try sig.utils.tar.writeTarHeader(
+            archive_writer,
+            .regular,
+            name_bounded.constSlice(),
+            file_info.length,
+        );
     }
 
     pub fn writeAccountFilePadding(archive_writer: anytype, file_length: usize) !void {
@@ -1447,34 +1505,57 @@ pub fn parallelUnpackZstdTarBall(
 }
 
 test FullSnapshotFileInfo {
-    try std.testing.expectEqualStrings(
-        "snapshot-10-11111111111111111111111111111111.tar.zst",
-        FullSnapshotFileInfo.snapshotArchiveName(.{ .slot = 10, .hash = Hash.ZEROES }).constSlice(),
-    );
+    try testFullSnapshotFileInfo("snapshot-10-11111111111111111111111111111111.tar.zst", .{
+        .slot = 10,
+        .hash = Hash.ZEROES,
+    });
 
     const snapshot_name = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
     const snapshot_info = try FullSnapshotFileInfo.parseFileNameTarZst(snapshot_name);
 
     try std.testing.expectEqual(269, snapshot_info.slot);
-    try std.testing.expectEqualStrings("EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn", snapshot_info.hash.base58String().constSlice());
+    try std.testing.expectEqualStrings(
+        "EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn",
+        snapshot_info.hash.base58String().constSlice(),
+    );
 
-    try std.testing.expectEqualStrings(snapshot_name, snapshot_info.snapshotArchiveName().constSlice());
+    try std.testing.expectEqualStrings(
+        snapshot_name,
+        snapshot_info.snapshotArchiveName().constSlice(),
+    );
+}
+
+fn testFullSnapshotFileInfo(expected: []const u8, info: FullSnapshotFileInfo) !void {
+    const name_bounded = info.snapshotArchiveName();
+    try std.testing.expectEqualStrings(expected, name_bounded.constSlice());
 }
 
 test IncrementalSnapshotFileInfo {
-    try std.testing.expectEqualStrings(
+    try testIncrementalSnapshotFileInfo(
         "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zst",
-        IncrementalSnapshotFileInfo.snapshotArchiveName(.{ .base_slot = 10, .slot = 25, .hash = Hash.ZEROES }).constSlice(),
+        .{ .base_slot = 10, .slot = 25, .hash = Hash.ZEROES },
     );
 
-    const snapshot_name = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
+    const snapshot_name =
+        "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
     const snapshot_info = try IncrementalSnapshotFileInfo.parseFileNameTarZst(snapshot_name);
 
     try std.testing.expectEqual(269, snapshot_info.base_slot);
     try std.testing.expectEqual(307, snapshot_info.slot);
-    try std.testing.expectEqualStrings("4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB", snapshot_info.hash.base58String().constSlice());
+    try std.testing.expectEqualStrings(
+        "4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB",
+        snapshot_info.hash.base58String().constSlice(),
+    );
 
-    try std.testing.expectEqualStrings(snapshot_name, snapshot_info.snapshotArchiveName().constSlice());
+    try std.testing.expectEqualStrings(
+        snapshot_name,
+        snapshot_info.snapshotArchiveName().constSlice(),
+    );
+}
+
+fn testIncrementalSnapshotFileInfo(expected: []const u8, info: IncrementalSnapshotFileInfo) !void {
+    const name_bounded = info.snapshotArchiveName();
+    try std.testing.expectEqualStrings(expected, name_bounded.constSlice());
 }
 
 test "parse status cache" {
@@ -1516,7 +1597,10 @@ test "parse snapshot fields" {
 
     if (snapshot_files.incremental_info) |inc| {
         const inc_slot = inc.slot;
-        const inc_manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{inc_slot});
+        const inc_manifest_path_bounded = sig.utils.fmt.boundedFmt(
+            "snapshots/{0}/{0}",
+            .{inc_slot},
+        );
         const inc_manifest_path = inc_manifest_path_bounded.constSlice();
 
         const inc_manifest_file = try snapdir.openFile(inc_manifest_path, .{});
