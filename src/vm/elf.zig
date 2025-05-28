@@ -38,6 +38,11 @@ pub const Elf = struct {
         shdrs: []align(1) const elf.Elf64_Shdr,
         phdrs: []align(1) const elf.Elf64_Phdr,
 
+        fn checkOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) !void {
+            if (a_end <= b_start or b_end <= a_start) return;
+            return error.Overlap;
+        }
+
         fn parse(bytes: []const u8) !Headers {
             // There aren't enough bytes in the ELF file to contain a header.
             if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
@@ -56,21 +61,64 @@ pub const Elf = struct {
                 return error.InvalidFileHeader;
             }
 
-            // Compute the size of the section headers in the ELF in bytes.
-            const shsize = try std.math.mul(u64, header.e_shnum, @sizeOf(elf.Elf64_Shdr));
-            // A slice representing the section headers, re-interpreted into `Elf64_Shdr`.
-            const shdrs = std.mem.bytesAsSlice(
-                elf.Elf64_Shdr,
-                try safeSlice(bytes, header.e_shoff, shsize),
-            );
-
             // Compute the size of the program headers in the ELF in bytes.
-            const phsize = try std.math.mul(u64, header.e_phnum, @sizeOf(elf.Elf64_Phdr));
+            const ph_size = try std.math.mul(u64, header.e_phnum, @sizeOf(elf.Elf64_Phdr));
+            const ph_end = try std.math.add(u64, header.e_phoff, ph_size);
+            try checkOverlap(0, @sizeOf(elf.Elf64_Ehdr), header.e_phoff, ph_end);
+
             // A slice representing the program headers, re-interpreted into `Elf64_Phdr`.
             const phdrs = std.mem.bytesAsSlice(
                 elf.Elf64_Phdr,
-                try safeSlice(bytes, header.e_phoff, phsize),
+                try safeSlice(bytes, header.e_phoff, ph_size),
             );
+
+            // Compute the size of the section headers in the ELF in bytes.
+            const sh_size = try std.math.mul(u64, header.e_shnum, @sizeOf(elf.Elf64_Shdr));
+            const sh_end = try std.math.add(u64, header.e_shoff, sh_size);
+            try checkOverlap(0, @sizeOf(elf.Elf64_Ehdr), header.e_shoff, sh_end);
+            try checkOverlap(header.e_phoff, ph_end, header.e_shoff, sh_end);
+
+            // A slice representing the section headers, re-interpreted into `Elf64_Shdr`.
+            const shdrs = std.mem.bytesAsSlice(
+                elf.Elf64_Shdr,
+                try safeSlice(bytes, header.e_shoff, sh_size),
+            );
+            
+            if (!(shdrs.len > 0 and shdrs[0].sh_type == elf.SHT_NULL)) {
+                return error.InvalidSectionHeader;
+            }
+
+            // Validate program header address ranges.
+            var vaddr: elf.Elf64_Addr = 0;
+            for (phdrs) |phdr| {
+                if (phdr.p_type != elf.PT_LOAD) continue;
+                if (phdr.p_vaddr < vaddr) return error.InvalidProgramHeader;
+                defer vaddr = phdr.p_vaddr;
+
+                const file_offset = try std.math.add(usize, phdr.p_offset, phdr.p_filesz);
+                if (file_offset > bytes.len) {
+                    return error.OutOfBounds;
+                }
+            }
+
+            var offset: usize = 0;
+            for (shdrs) |shdr| {
+                if (shdr.sh_type == elf.SHT_NOBITS) continue;
+                const start = shdr.sh_offset;
+                const end = try std.math.add(usize, start, shdr.sh_size);
+
+                try checkOverlap(0, @sizeOf(elf.Elf64_Ehdr), start, end);
+                try checkOverlap(header.e_phoff, ph_end, start, end);
+                try checkOverlap(header.e_shoff, sh_end, start, end);
+
+                if (start < offset) return error.SectionNotInOrder;
+                offset = end;
+                if (offset > bytes.len) return error.OutOfBounds;
+            }
+
+            if (header.e_shstrndx != elf.SHN_UNDEF and shdrs.len <= header.e_shstrndx) {
+                return error.OutOfBounds;
+            }
 
             return .{
                 .bytes = bytes,
@@ -717,6 +765,7 @@ pub const Elf = struct {
         }
 
         if (sbpf_version.enableStricterElfHeaders()) {
+            std.debug.print("parseStrict\n", .{});
             return try parseStrict(
                 allocator,
                 bytes,
@@ -726,6 +775,7 @@ pub const Elf = struct {
                 config,
             );
         } else {
+            std.debug.print("parseLenient\n", .{});
             if (sbpf_version.enableElfVaddr() and
                 config.optimize_rodata != true)
             {
