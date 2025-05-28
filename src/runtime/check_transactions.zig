@@ -90,8 +90,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         },
     };
 
-    // could probably be smaller
-    var serialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
+    var serialize_buf: [NonceState.SERIALIZED_SIZE]u8 = undefined;
     const new_data = sig.bincode.writeToSlice(&serialize_buf, next_nonce_state, .{}) catch
         return null;
 
