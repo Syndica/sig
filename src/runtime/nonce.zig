@@ -62,6 +62,8 @@ pub const Versions = union(enum) {
 pub const State = union(enum) {
     unintialized,
     initialized: Data,
+
+    pub const SERIALIZED_SIZE = 80;
 };
 
 /// Initialized data of a durable transaction nonce account
