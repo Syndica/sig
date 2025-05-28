@@ -121,6 +121,19 @@ pub const InstructionInfo = struct {
         return data;
     }
 
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/1276772ee61fbd1f8a60cfec7cd553aa4f6a55f3/bincode/src/lib.rs#L9
+    pub fn limitedDeserializeInstruction(
+        self: *const InstructionInfo,
+        comptime T: type,
+        comptime limit: u64,
+    ) InstructionError!T {
+        var buf: [limit]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        return bincode.readFromSlice(fba.allocator(), T, self.instruction_data, .{}) catch {
+            return InstructionError.InvalidInstructionData;
+        };
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
     pub fn checkNumberOfAccounts(
         self: *const InstructionInfo,
