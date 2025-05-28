@@ -16,10 +16,10 @@ pub const Transaction = struct {
     signatures: []const Signature,
 
     /// The version, either legacy or v0.
-    version: TransactionVersion,
+    version: Version,
 
     /// The signable data of a transaction
-    msg: TransactionMessage,
+    msg: Message,
 
     /// MAX_BYTES is the maximum size of a transaction.
     pub const MAX_BYTES: u32 = 1232;
@@ -87,8 +87,8 @@ pub const Transaction = struct {
     /// to allocate space for the signatures.
     pub fn initOwnedMsgWithSigningKeypairs(
         allocator: std.mem.Allocator,
-        version: TransactionVersion,
-        msg: TransactionMessage,
+        version: Version,
+        msg: Message,
         keypairs: []const sig.identity.KeyPair,
     ) InitOwnedMsgWithSigningKeypairsError!Transaction {
         const msg_bytes_bounded = msg.serializeBounded(version) catch return error.BadMessage;
@@ -122,11 +122,11 @@ pub const Transaction = struct {
         errdefer allocator.free(signatures);
         for (signatures) |*sgn| sgn.* = .{ .data = try reader.readBytesNoEof(Signature.SIZE) };
         var peekable = sig.utils.io.peekableReader(reader);
-        const version = try TransactionVersion.deserialize(&peekable);
+        const version = try Version.deserialize(&peekable);
         return .{
             .signatures = signatures,
             .version = version,
-            .msg = try TransactionMessage.deserialize(allocator, peekable.reader(), version),
+            .msg = try Message.deserialize(allocator, peekable.reader(), version),
         };
     }
 
@@ -185,24 +185,24 @@ pub const Transaction = struct {
             }
         }
 
-        return TransactionMessage.hash(serialized_message.slice());
+        return Message.hash(serialized_message.slice());
     }
 };
 
-pub const TransactionVersion = enum(u8) {
+pub const Version = enum(u8) {
     /// Legacy transaction without address lookups.
     legacy = 0xFF,
     /// Transaction with address lookups.
     v0 = 0x00,
 
-    pub fn serialize(self: TransactionVersion, writer: anytype) !void {
+    pub fn serialize(self: Version, writer: anytype) !void {
         if (self != .legacy)
             try writer.writeByte(Transaction.VERSION_PREFIX | @intFromEnum(self));
     }
 
-    pub fn deserialize(peekable: anytype) !TransactionVersion {
+    pub fn deserialize(peekable: anytype) !Version {
         if (try peekable.peekByte() & Transaction.VERSION_PREFIX == 0)
-            return TransactionVersion.legacy;
+            return Version.legacy;
 
         const version = try peekable.reader().readByte();
         return switch (version & ~Transaction.VERSION_PREFIX) {
@@ -213,7 +213,7 @@ pub const TransactionVersion = enum(u8) {
     }
 };
 
-pub const TransactionMessage = struct {
+pub const Message = struct {
     /// The number of signatures required for this transaction to be considered
     /// valid. The signers of those signatures must match the first
     /// `signature_count` of `account_keys`.
@@ -242,12 +242,12 @@ pub const TransactionMessage = struct {
     ///   1) `account_keys`
     ///   2) ordered list of account_keys loaded from `writable` lookup table indexes
     ///   3) ordered list of account_keys loaded from `readable` lookup table indexes
-    instructions: []const TransactionInstruction,
+    instructions: []const Instruction,
 
     /// `AddressLookup`'s are used to load account addresses from lookup tables.
-    address_lookups: []const TransactionAddressLookup = &.{},
+    address_lookups: []const AddressLookup = &.{},
 
-    pub fn deinit(self: TransactionMessage, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: Message, allocator: std.mem.Allocator) void {
         allocator.free(self.account_keys);
 
         for (self.instructions) |inst| inst.deinit(allocator);
@@ -257,17 +257,17 @@ pub const TransactionMessage = struct {
         allocator.free(self.address_lookups);
     }
 
-    pub fn clone(self: TransactionMessage, allocator: std.mem.Allocator) !TransactionMessage {
+    pub fn clone(self: Message, allocator: std.mem.Allocator) !Message {
         const account_keys = try allocator.dupe(Pubkey, self.account_keys);
         errdefer sig.bincode.free(allocator, account_keys);
 
-        var instructions = try allocator.alloc(TransactionInstruction, self.instructions.len);
+        var instructions = try allocator.alloc(Instruction, self.instructions.len);
         errdefer sig.bincode.free(allocator, instructions);
         for (self.instructions, 0..) |instr, i|
             instructions[i] = try instr.clone(allocator);
 
         const address_lookups =
-            try allocator.alloc(TransactionAddressLookup, self.address_lookups.len);
+            try allocator.alloc(AddressLookup, self.address_lookups.len);
         errdefer sig.bincode.free(allocator, address_lookups);
         for (address_lookups, 0..) |*alt, i|
             alt.* = try self.address_lookups[i].clone(allocator);
@@ -283,61 +283,11 @@ pub const TransactionMessage = struct {
         };
     }
 
-    pub const CompileError = TransactionInstruction.CompileFromError;
-    pub fn compile(
-        allocator: std.mem.Allocator,
-        instructions: []const sig.core.Instruction,
-        payer: ?Pubkey,
-        recent_blockhash: Hash,
-        /// TODO: currently forced to be null by the compiler,
-        /// will become a proper optional parameter in the future.
-        lookup_tables: ?noreturn,
-    ) CompileError!TransactionMessage {
-        comptime std.debug.assert(lookup_tables == null);
-
-        const account_keys: []const Pubkey, const counts: AccountKindCounts = blk: {
-            var compiled_keys = try compileKeys(allocator, payer, instructions);
-            defer compiled_keys.deinit(allocator);
-
-            const counts = AccountKindCounts.count(compiled_keys.values()) orelse
-                return error.TooManyKeys;
-
-            const account_keys = try allocator.dupe(Pubkey, compiled_keys.keys());
-            errdefer allocator.free(account_keys);
-
-            break :blk .{ account_keys, counts };
-        };
-        errdefer allocator.free(account_keys);
-
-        const tx_instructions = try allocator.alloc(TransactionInstruction, instructions.len);
-        errdefer allocator.free(tx_instructions);
-
-        var tx_instructions_list =
-            std.ArrayListUnmanaged(TransactionInstruction).initBuffer(tx_instructions);
-        errdefer for (tx_instructions_list.items) |tx_inst| tx_inst.deinit(allocator);
-        try TransactionInstruction.compileListFrom(
-            allocator,
-            &tx_instructions_list,
-            instructions,
-            account_keys,
-        );
-        std.debug.assert(tx_instructions_list.items.len == tx_instructions.len);
-
-        return .{
-            .signature_count = counts.signature_count,
-            .readonly_signed_count = counts.readonly_signed_count,
-            .readonly_unsigned_count = counts.readonly_unsigned_count,
-            .account_keys = account_keys,
-            .recent_blockhash = recent_blockhash,
-            .instructions = tx_instructions,
-        };
-    }
-
-    pub fn isSigner(self: TransactionMessage, index: usize) bool {
+    pub fn isSigner(self: Message, index: usize) bool {
         return index < self.signature_count;
     }
 
-    pub fn isWritable(self: TransactionMessage, index: usize) bool {
+    pub fn isWritable(self: Message, index: usize) bool {
         const is_readonly_signed =
             index < self.signature_count and
             index > self.signature_count - self.readonly_signed_count;
@@ -351,15 +301,15 @@ pub const TransactionMessage = struct {
     /// Returns the serialized message as a bounded array.
     /// Returns an error if the message would exceed the maximum allowed transaction size.
     pub fn serializeBounded(
-        self: TransactionMessage,
-        version: TransactionVersion,
+        self: Message,
+        version: Version,
     ) !std.BoundedArray(u8, Transaction.MAX_BYTES) {
         var buf: std.BoundedArray(u8, Transaction.MAX_BYTES) = .{};
         try self.serialize(buf.writer(), version);
         return buf;
     }
 
-    pub fn serialize(self: TransactionMessage, writer: anytype, version: TransactionVersion) !void {
+    pub fn serialize(self: Message, writer: anytype, version: Version) !void {
         try writer.writeByte(self.signature_count);
         try writer.writeByte(self.readonly_signed_count);
         try writer.writeByte(self.readonly_unsigned_count);
@@ -377,14 +327,14 @@ pub const TransactionMessage = struct {
         for (self.instructions) |instr| try sig.bincode.write(writer, instr, .{});
 
         // WARN: Truncate okay if transaction is valid
-        if (version != TransactionVersion.legacy) {
+        if (version != Version.legacy) {
             std.debug.assert(self.address_lookups.len <= std.math.maxInt(u16));
             try leb.writeULEB128(writer, @as(u16, @intCast(self.address_lookups.len)));
             for (self.address_lookups) |alt| try sig.bincode.write(writer, alt, .{});
         }
     }
 
-    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, version: TransactionVersion) !TransactionMessage {
+    pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, version: Version) !Message {
         const signature_count = try reader.readByte();
         const readonly_signed_count = try reader.readByte();
         const readonly_unsigned_count = try reader.readByte();
@@ -395,14 +345,14 @@ pub const TransactionMessage = struct {
 
         const recent_blockhash: Hash = .{ .data = try reader.readBytesNoEof(Hash.SIZE) };
 
-        const instructions = try allocator.alloc(TransactionInstruction, try leb.readULEB128(u16, reader));
+        const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
         errdefer sig.bincode.free(allocator, instructions);
-        for (instructions) |*instr| instr.* = try sig.bincode.read(allocator, TransactionInstruction, reader, .{});
+        for (instructions) |*instr| instr.* = try sig.bincode.read(allocator, Instruction, reader, .{});
 
         const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
-        const address_lookups = try allocator.alloc(TransactionAddressLookup, address_lookups_len);
+        const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
         errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups) |*alt| alt.* = try sig.bincode.read(allocator, TransactionAddressLookup, reader, .{});
+        for (address_lookups) |*alt| alt.* = try sig.bincode.read(allocator, AddressLookup, reader, .{});
 
         return .{
             .signature_count = signature_count,
@@ -415,7 +365,7 @@ pub const TransactionMessage = struct {
         };
     }
 
-    pub fn validate(self: TransactionMessage) !void {
+    pub fn validate(self: Message) !void {
         // number of accounts should match spec in header. signed and unsigned should not overlap.
         if (self.signature_count +| self.readonly_unsigned_count > self.account_keys.len)
             return error.NotEnoughAccounts;
@@ -449,13 +399,119 @@ pub const TransactionMessage = struct {
         return the_hash;
     }
 
-    pub fn getSigningKeypairPosition(self: TransactionMessage, pubkey: Pubkey) ?usize {
+    pub fn getSigningKeypairPosition(self: Message, pubkey: Pubkey) ?usize {
         const signed_keys = self.account_keys[0..self.signature_count];
         return for (signed_keys, 0..) |signed_key, i| {
             if (pubkey.equals(&signed_key)) break i;
         } else null;
     }
 };
+
+pub const Instruction = struct {
+    /// Index into the transactions account_keys array
+    program_index: u8,
+    /// Index into the concatenation of the transactions account_keys array,
+    /// writable lookup results, and readable lookup results
+    account_indexes: []const u8,
+    /// Serialized program instruction.
+    data: []const u8,
+
+    pub const @"!bincode-config:account_indexes" = shortVecConfig([]const u8);
+    pub const @"!bincode-config:data" = shortVecConfig([]const u8);
+
+    pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
+        allocator.free(self.account_indexes);
+        allocator.free(self.data);
+    }
+
+    pub fn clone(self: *const Instruction, allocator: std.mem.Allocator) !Instruction {
+        const account_indexes = try allocator.dupe(u8, self.account_indexes);
+        errdefer allocator.free(account_indexes);
+        return .{
+            .program_index = self.program_index,
+            .account_indexes = account_indexes,
+            .data = try allocator.dupe(u8, self.data),
+        };
+    }
+};
+
+pub const AddressLookup = struct {
+    /// Address of the lookup table
+    table_address: Pubkey,
+    /// List of indexes used to load writable account ids
+    writable_indexes: []const u8,
+    /// List of indexes used to load readonly account ids
+    readonly_indexes: []const u8,
+
+    pub const @"!bincode-config:writable_indexes" = shortVecConfig([]const u8);
+    pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]const u8);
+
+    pub fn deinit(self: AddressLookup, allocator: std.mem.Allocator) void {
+        allocator.free(self.writable_indexes);
+        allocator.free(self.readonly_indexes);
+    }
+
+    pub fn clone(self: *const AddressLookup, allocator: std.mem.Allocator) !AddressLookup {
+        const writable_indexes = try allocator.dupe(u8, self.writable_indexes);
+        errdefer allocator.free(writable_indexes);
+        return .{
+            .table_address = self.table_address,
+            .writable_indexes = writable_indexes,
+            .readonly_indexes = try allocator.dupe(u8, self.readonly_indexes),
+        };
+    }
+};
+
+/// Compiles a transaction message.
+pub fn compileMessage(
+    allocator: std.mem.Allocator,
+    instructions: []const sig.core.Instruction,
+    payer: ?Pubkey,
+    recent_blockhash: Hash,
+    /// TODO: currently forced to be null by the compiler,
+    /// will become a proper optional parameter in the future
+    /// when v0 compilation is implemented.
+    lookup_tables: ?noreturn,
+) InstructionCompileError!Message {
+    comptime std.debug.assert(lookup_tables == null);
+
+    const account_keys: []const Pubkey, const counts: AccountKindCounts = blk: {
+        var compiled_keys = try compileKeys(allocator, payer, instructions);
+        defer compiled_keys.deinit(allocator);
+
+        const counts = AccountKindCounts.count(compiled_keys.values()) orelse
+            return error.TooManyKeys;
+
+        const account_keys = try allocator.dupe(Pubkey, compiled_keys.keys());
+        errdefer allocator.free(account_keys);
+
+        break :blk .{ account_keys, counts };
+    };
+    errdefer allocator.free(account_keys);
+
+    const tx_instructions = try allocator.alloc(Instruction, instructions.len);
+    errdefer allocator.free(tx_instructions);
+
+    var tx_instructions_list: std.ArrayListUnmanaged(Instruction) =
+        .initBuffer(tx_instructions);
+    errdefer for (tx_instructions_list.items) |tx_inst| tx_inst.deinit(allocator);
+    try compileInstructionList(
+        allocator,
+        &tx_instructions_list,
+        instructions,
+        account_keys,
+    );
+    std.debug.assert(tx_instructions_list.items.len == tx_instructions.len);
+
+    return .{
+        .signature_count = counts.signature_count,
+        .readonly_signed_count = counts.readonly_signed_count,
+        .readonly_unsigned_count = counts.readonly_unsigned_count,
+        .account_keys = account_keys,
+        .recent_blockhash = recent_blockhash,
+        .instructions = tx_instructions,
+    };
+}
 
 const KeyMetaMap = std.AutoArrayHashMapUnmanaged(Pubkey, SignerWritableFlags);
 
@@ -615,109 +671,54 @@ fn sortCompiledKeys(
     key_meta_map.sort(sort_ctx);
 }
 
-pub const TransactionInstruction = struct {
-    /// Index into the transactions account_keys array
-    program_index: u8,
-    /// Index into the concatenation of the transactions account_keys array,
-    /// writable lookup results, and readable lookup results
-    account_indexes: []const u8,
-    /// Serialized program instruction.
-    data: []const u8,
+pub const InstructionCompileError = error{
+    MissingProgramIndex,
+    MissingKeys,
+    TooManyKeys,
+} || std.mem.Allocator.Error;
 
-    pub const @"!bincode-config:account_indexes" = shortVecConfig([]const u8);
-    pub const @"!bincode-config:data" = shortVecConfig([]const u8);
+pub fn compileInstruction(
+    allocator: std.mem.Allocator,
+    inst: sig.core.Instruction,
+    keys: []const Pubkey,
+) InstructionCompileError!Instruction {
+    const program_index = blk: {
+        const index = inst.program_id.indexIn(keys) orelse return error.MissingProgramIndex;
+        break :blk std.math.cast(u8, index) orelse return error.TooManyKeys;
+    };
 
-    pub fn deinit(self: TransactionInstruction, allocator: std.mem.Allocator) void {
-        allocator.free(self.account_indexes);
-        allocator.free(self.data);
+    const data = try allocator.dupe(u8, inst.data);
+    errdefer allocator.free(data);
+
+    const account_indexes = try allocator.alloc(u8, inst.accounts.len);
+    errdefer allocator.free(account_indexes);
+    for (account_indexes, inst.accounts) |*account_idx, account| {
+        const key_pos = account.pubkey.indexIn(keys) orelse return error.MissingKeys;
+        account_idx.* = std.math.cast(u8, key_pos) orelse return error.TooManyKeys;
     }
 
-    pub fn clone(self: *const TransactionInstruction, allocator: std.mem.Allocator) !TransactionInstruction {
-        const account_indexes = try allocator.dupe(u8, self.account_indexes);
-        errdefer allocator.free(account_indexes);
-        return .{
-            .program_index = self.program_index,
-            .account_indexes = account_indexes,
-            .data = try allocator.dupe(u8, self.data),
-        };
+    return .{
+        .program_index = program_index,
+        .account_indexes = account_indexes,
+        .data = data,
+    };
+}
+
+/// Asserts that `result.unusedCapacitySlice()` is large enough to hold the same number of instructions as `instructions.len`.
+/// `result` is not re-allocated, the caller may pass in a pointer-locked arraylist.
+/// Its elements, including the newly appended ones, must all be freed by the caller (including on error return).
+pub fn compileInstructionList(
+    allocator: std.mem.Allocator,
+    result: *std.ArrayListUnmanaged(Instruction),
+    instructions: []const sig.core.Instruction,
+    keys: []const Pubkey,
+) InstructionCompileError!void {
+    std.debug.assert(result.unusedCapacitySlice().len >= instructions.len);
+    for (instructions) |inst| {
+        const compiled = try compileInstruction(allocator, inst, keys);
+        result.appendAssumeCapacity(compiled);
     }
-
-    pub const CompileFromError = error{
-        MissingProgramIndex,
-        MissingKeys,
-        TooManyKeys,
-    } || std.mem.Allocator.Error;
-
-    pub fn compileFrom(
-        allocator: std.mem.Allocator,
-        inst: sig.core.Instruction,
-        keys: []const Pubkey,
-    ) CompileFromError!TransactionInstruction {
-        const program_index = blk: {
-            const index = inst.program_id.indexIn(keys) orelse return error.MissingProgramIndex;
-            break :blk std.math.cast(u8, index) orelse return error.TooManyKeys;
-        };
-
-        const data = try allocator.dupe(u8, inst.data);
-        errdefer allocator.free(data);
-
-        const account_indexes = try allocator.alloc(u8, inst.accounts.len);
-        errdefer allocator.free(account_indexes);
-        for (account_indexes, inst.accounts) |*account_idx, account| {
-            const key_pos = account.pubkey.indexIn(keys) orelse return error.MissingKeys;
-            account_idx.* = std.math.cast(u8, key_pos) orelse return error.TooManyKeys;
-        }
-
-        return .{
-            .program_index = program_index,
-            .account_indexes = account_indexes,
-            .data = data,
-        };
-    }
-
-    /// Asserts that `result.unusedCapacitySlice()` is large enough to hold the same number of instructions as `instructions.len`.
-    /// `result` is not re-allocated, the caller may pass in a pointer-locked arraylist.
-    /// Its elements, including the newly appended ones, must all be freed by the caller (including on error return).
-    pub fn compileListFrom(
-        allocator: std.mem.Allocator,
-        result: *std.ArrayListUnmanaged(TransactionInstruction),
-        instructions: []const sig.core.Instruction,
-        keys: []const Pubkey,
-    ) CompileFromError!void {
-        std.debug.assert(result.unusedCapacitySlice().len >= instructions.len);
-        for (instructions) |inst| {
-            const compiled = try compileFrom(allocator, inst, keys);
-            result.appendAssumeCapacity(compiled);
-        }
-    }
-};
-
-pub const TransactionAddressLookup = struct {
-    /// Address of the lookup table
-    table_address: Pubkey,
-    /// List of indexes used to load writable account ids
-    writable_indexes: []const u8,
-    /// List of indexes used to load readonly account ids
-    readonly_indexes: []const u8,
-
-    pub const @"!bincode-config:writable_indexes" = shortVecConfig([]const u8);
-    pub const @"!bincode-config:readonly_indexes" = shortVecConfig([]const u8);
-
-    pub fn deinit(self: TransactionAddressLookup, allocator: std.mem.Allocator) void {
-        allocator.free(self.writable_indexes);
-        allocator.free(self.readonly_indexes);
-    }
-
-    pub fn clone(self: *const TransactionAddressLookup, allocator: std.mem.Allocator) !TransactionAddressLookup {
-        const writable_indexes = try allocator.dupe(u8, self.writable_indexes);
-        errdefer allocator.free(writable_indexes);
-        return .{
-            .table_address = self.table_address,
-            .writable_indexes = writable_indexes,
-            .readonly_indexes = try allocator.dupe(u8, self.readonly_indexes),
-        };
-    }
-};
+}
 
 test "clone transaction" {
     const allocator = std.testing.allocator;
