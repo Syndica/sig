@@ -3062,7 +3062,7 @@ const EpochStakes = sig.core.stake.EpochStakes;
 const Stakes = sig.core.stake.Stakes;
 const splitOff = sig.consensus.fork_choice.splitOff;
 
-test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
+test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(91);
@@ -3113,6 +3113,7 @@ test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
     });
 
     try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 });
+    try fixture.fill_epoch_stake_random(allocator, random);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3143,18 +3144,6 @@ test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
     );
     defer replay_tower.deinit(allocator);
 
-    var epoch_stake_map: EpochStakeMap = .{};
-    defer epoch_stake_map.deinit(allocator);
-
-    var epoch_stakes: EpochStakes = try EpochStakes.initRandom(allocator, random, 1);
-    defer epoch_stakes.deinit(allocator);
-
-    epoch_stakes.total_stake = 1000;
-    epoch_stakes.stakes.deinit(allocator);
-    epoch_stakes.stakes = try Stakes(.delegation).initRandom(allocator, random, 1);
-
-    try epoch_stake_map.put(allocator, 0, epoch_stakes);
-
     var ancestors: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     defer ancestors.deinit(allocator);
     for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
@@ -3175,7 +3164,7 @@ test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &.{ .max_gossip_frozen_votes = .{} },
         &fixture.fork_choice,
-        epoch_stake_map,
+        fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
     try std.testing.expectEqual(4, result.reset_slot.?);
@@ -3196,7 +3185,7 @@ test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &.{ .max_gossip_frozen_votes = .{} },
         &fixture.fork_choice,
-        epoch_stake_map,
+        fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3221,7 +3210,7 @@ test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &.{ .max_gossip_frozen_votes = .{} },
         &fixture.fork_choice,
-        epoch_stake_map,
+        fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3293,7 +3282,7 @@ test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &.{ .max_gossip_frozen_votes = .{} },
         &fixture.fork_choice,
-        epoch_stake_map,
+        fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3335,7 +3324,7 @@ test "test unconfirmed duplicate slots and lockouts for non heaviest fork" {
         &fixture.progress,
         &.{ .max_gossip_frozen_votes = .{} },
         &fixture.fork_choice,
-        epoch_stake_map,
+        fixture.epoch_stake_map,
         &SlotHistory{ .bits = bits, .next_slot = 0 },
     );
 
@@ -3506,16 +3495,27 @@ const TestFixture = struct {
     ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
+    epoch_stake_map: EpochStakeMap,
 
     pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
         return .{
             .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
+            .epoch_stake_map = .{},
         };
     }
 
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
         self.fork_choice.deinit();
         self.progress.map.deinit(allocator);
+
+        {
+            var it = self.epoch_stake_map.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.stakes.deinit(allocator);
+                entry.value_ptr.epoch_authorized_voters.deinit(allocator);
+            }
+            self.epoch_stake_map.deinit(allocator);
+        }
 
         {
             var it = self.descendants.iterator();
@@ -3598,6 +3598,29 @@ const TestFixture = struct {
             extended_descendants.deinit(allocator);
         }
         try extendForkTree(allocator, &self.descendants, extended_descendants);
+    }
+
+    pub fn fill_epoch_stake_random(
+        self: *TestFixture,
+        allocator: std.mem.Allocator,
+        random: std.Random,
+    ) !void {
+        var epoch_stakes: EpochStakes = try EpochStakes.initRandom(
+            allocator,
+            random,
+            1,
+        );
+        epoch_stakes.total_stake = 1000;
+        epoch_stakes.stakes.deinit(allocator);
+        epoch_stakes.stakes = try Stakes(.delegation).initRandom(
+            allocator,
+            random,
+            1,
+        );
+
+        // Always resest for now.
+        self.epoch_stake_map = .{};
+        try self.epoch_stake_map.put(allocator, 0, epoch_stakes);
     }
 };
 
