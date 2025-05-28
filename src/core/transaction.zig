@@ -489,19 +489,13 @@ pub fn compileMessage(
     };
     errdefer allocator.free(account_keys);
 
-    const tx_instructions = try allocator.alloc(Instruction, instructions.len);
-    errdefer allocator.free(tx_instructions);
-
-    var tx_instructions_list: std.ArrayListUnmanaged(Instruction) =
-        .initBuffer(tx_instructions);
-    errdefer for (tx_instructions_list.items) |tx_inst| tx_inst.deinit(allocator);
-    try compileInstructionList(
+    const tx_instructions = try compileInstructionList(
         allocator,
-        &tx_instructions_list,
         instructions,
         account_keys,
     );
-    std.debug.assert(tx_instructions_list.items.len == tx_instructions.len);
+    errdefer allocator.free(tx_instructions);
+    errdefer for (tx_instructions) |tx_inst| tx_inst.deinit(allocator);
 
     return .{
         .signature_count = counts.signature_count,
@@ -704,20 +698,18 @@ pub fn compileInstruction(
     };
 }
 
-/// Asserts that `result.unusedCapacitySlice()` is large enough to hold the same number of instructions as `instructions.len`.
-/// `result` is not re-allocated, the caller may pass in a pointer-locked arraylist.
-/// Its elements, including the newly appended ones, must all be freed by the caller (including on error return).
 pub fn compileInstructionList(
     allocator: std.mem.Allocator,
-    result: *std.ArrayListUnmanaged(Instruction),
     instructions: []const sig.core.Instruction,
     keys: []const Pubkey,
-) InstructionCompileError!void {
-    std.debug.assert(result.unusedCapacitySlice().len >= instructions.len);
-    for (instructions) |inst| {
-        const compiled = try compileInstruction(allocator, inst, keys);
-        result.appendAssumeCapacity(compiled);
+) InstructionCompileError![]const Instruction {
+    const compiled_insts = try allocator.alloc(Instruction, instructions.len);
+    errdefer allocator.free(compiled_insts);
+    for (compiled_insts, instructions, 0..) |*compiled, inst, i| {
+        errdefer for (compiled_insts[0..i]) |prev| prev.deinit(allocator);
+        compiled.* = try compileInstruction(allocator, inst, keys);
     }
+    return compiled_insts;
 }
 
 test "clone transaction" {
