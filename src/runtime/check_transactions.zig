@@ -266,7 +266,7 @@ fn validateFeePayer(
 
     const min_balance = switch (system_account_kind) {
         .System => 0,
-        .Nonce => rent_collector.rent.minimumBalance(NonceState.SIZE),
+        .Nonce => rent_collector.rent.minimumBalance(NonceVersions.SERIALIZED_SIZE),
     };
 
     if (payer.account.lamports < min_balance) return .InsufficientFundsForFee;
@@ -301,14 +301,14 @@ fn getSystemAccountKind(account: *const AccountSharedData) ?SystemAccountKind {
     return switch (account.data.len) {
         else => null,
         0 => .System,
-        NonceState.SIZE => {
-            const versions = NonceVersions.deserialize(account.data) orelse
+        NonceVersions.SERIALIZED_SIZE => {
+            const versions = NonceVersions.fromAccountData(account.data) orelse
                 return null;
 
-            const state = versions.state();
+            const state = versions.getState();
             return switch (state) {
-                .Uninitialized => null,
-                .Initialized => .Nonce,
+                .uninitialized => null,
+                .initialized => .Nonce,
             };
         },
     };
@@ -340,7 +340,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         },
     };
 
-    var serialize_buf: [NonceState.SERIALIZED_SIZE]u8 = undefined;
+    var serialize_buf: [NonceVersions.SERIALIZED_SIZE]u8 = undefined;
     const new_data = sig.bincode.writeToSlice(&serialize_buf, next_nonce_state, .{}) catch
         return null;
 
