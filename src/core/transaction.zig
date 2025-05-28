@@ -494,8 +494,10 @@ pub fn compileMessage(
         instructions,
         account_keys,
     );
-    errdefer allocator.free(tx_instructions);
-    errdefer for (tx_instructions) |tx_inst| tx_inst.deinit(allocator);
+    errdefer {
+        for (tx_instructions) |tx_inst| tx_inst.deinit(allocator);
+        allocator.free(tx_instructions);
+    }
 
     return .{
         .signature_count = counts.signature_count,
