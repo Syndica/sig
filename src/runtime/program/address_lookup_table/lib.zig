@@ -5,9 +5,9 @@ pub const state = @import("state.zig");
 pub const instruction = @import("instruction.zig");
 
 pub const Instruction = instruction.Instruction;
-pub const ProgramState = state.ProgramState;
-pub const LookupTableMeta = state.LookupTableMeta;
 pub const AddressLookupTable = state.AddressLookupTable;
+pub const LookupTableMeta = state.LookupTableMeta;
+pub const ProgramState = state.ProgramState;
 
 const Pubkey = sig.core.Pubkey;
 

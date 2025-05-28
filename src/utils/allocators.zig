@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
+const Alignment = std.mem.Alignment;
 const Atomic = std.atomic.Value;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
@@ -10,26 +11,32 @@ const bytesAsValue = std.mem.bytesAsValue;
 
 /// An allocator that can only allocate 0 bytes.
 pub const NoAlloc = struct {
-    pub const allocator = std.mem.Allocator{
+    pub const allocator = Allocator{
         .ptr = undefined,
         .vtable = &.{
-            .alloc = NoAlloc.alloc,
-            .resize = NoAlloc.resize,
-            .free = NoAlloc.free,
+            .alloc = alloc,
+            .resize = resize,
+            .free = free,
+            .remap = remap,
         },
     };
 
-    fn alloc(_: *anyopaque, n: usize, _: u8, _: usize) ?[*]u8 {
+    fn alloc(_: *anyopaque, n: usize, _: Alignment, _: usize) ?[*]u8 {
         return if (n == 0) @constCast(@ptrCast(&.{})) else null;
     }
 
-    fn free(_: *anyopaque, buf: []u8, _: u8, _: usize) void {
+    fn free(_: *anyopaque, buf: []u8, _: Alignment, _: usize) void {
         std.debug.assert(buf.len == 0);
     }
 
-    fn resize(_: *anyopaque, buf: []u8, _: u8, new_size: usize, _: usize) bool {
+    fn resize(_: *anyopaque, buf: []u8, _: Alignment, new_size: usize, _: usize) bool {
         std.debug.assert(buf.len == 0);
         return new_size == 0;
+    }
+
+    fn remap(_: *anyopaque, memory: []u8, _: Alignment, new_len: usize, _: usize) ?[*]u8 {
+        std.debug.assert(memory.len == 0);
+        return if (new_len == 0) memory.ptr else null;
     }
 };
 
@@ -53,11 +60,11 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
     std.debug.assert(config.min_split_size > 0);
 
     return struct {
-        records_allocator: std.mem.Allocator,
+        records_allocator: Allocator,
         /// records are used to keep track of the memory blocks
         records: std.ArrayListUnmanaged(Record),
         /// allocator used to alloc the memory blocks
-        memory_allocator: std.mem.Allocator,
+        memory_allocator: Allocator,
         /// memory holds blocks of memory ([]T) that can be allocated/deallocated
         memory: std.ArrayListUnmanaged([]T),
         /// total number of T elements we have in memory
@@ -86,8 +93,8 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         };
 
         const AllocatorConfig = struct {
-            records_allocator: std.mem.Allocator,
-            memory_allocator: std.mem.Allocator,
+            records_allocator: Allocator,
+            memory_allocator: Allocator,
         };
 
         pub fn init(allocator_config: AllocatorConfig) Self {
@@ -124,14 +131,14 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
         }
 
         /// append a block of N elements to the manager
-        pub fn expandCapacity(self: *Self, n: u64) std.mem.Allocator.Error!void {
+        pub fn expandCapacity(self: *Self, n: u64) Allocator.Error!void {
             if (config.thread_safe) self.mux.lock();
             defer if (config.thread_safe) self.mux.unlock();
 
             return self.expandCapacityUnsafe(n);
         }
 
-        pub fn expandCapacityUnsafe(self: *Self, n: u64) std.mem.Allocator.Error!void {
+        pub fn expandCapacityUnsafe(self: *Self, n: u64) Allocator.Error!void {
             if (n == 0) return;
 
             try self.records.ensureUnusedCapacity(self.records_allocator, 1);
@@ -160,7 +167,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             AttemptedZeroAlloc,
             // NOTE: even though this doesnt get hit on `alloc`, zig isnt smart enough to know that
             CollapseFailed,
-        } || std.mem.Allocator.Error;
+        } || Allocator.Error;
 
         pub fn alloc(self: *Self, n: u64) AllocError!struct { []T, u64 } {
             if (config.thread_safe) self.mux.lock();
@@ -362,7 +369,7 @@ pub fn RecycleFBA(config: struct {
     return struct {
         // this allocates the underlying memory + dynamic expansions
         // (only used on init/deinit + arraylist expansion)
-        bytes_allocator: std.mem.Allocator,
+        bytes_allocator: Allocator,
         // this does the data allocations (data is returned from alloc)
         fba_allocator: std.heap.FixedBufferAllocator,
         // recycling depot
@@ -373,9 +380,9 @@ pub fn RecycleFBA(config: struct {
         const Record = struct { is_free: bool, buf: [*]u8, len: u64 };
         const AllocatorConfig = struct {
             // used for the records array
-            records_allocator: std.mem.Allocator,
+            records_allocator: Allocator,
             // used for the underlying memory for the allocations
-            bytes_allocator: std.mem.Allocator,
+            bytes_allocator: Allocator,
         };
         const Self = @This();
 
@@ -396,8 +403,8 @@ pub fn RecycleFBA(config: struct {
             self.records.deinit();
         }
 
-        pub fn allocator(self: *Self) std.mem.Allocator {
-            return std.mem.Allocator{
+        pub fn allocator(self: *Self) Allocator {
+            return Allocator{
                 .ptr = self,
                 .vtable = &.{
                     .alloc = alloc,
@@ -412,7 +419,7 @@ pub fn RecycleFBA(config: struct {
         pub fn alloc(
             ctx: *anyopaque,
             n: usize,
-            alignment: std.mem.Alignment,
+            alignment: Alignment,
             return_address: usize,
         ) ?[*]u8 {
             const self: *Self = @ptrCast(@alignCast(ctx));
@@ -475,7 +482,7 @@ pub fn RecycleFBA(config: struct {
         pub fn free(
             ctx: *anyopaque,
             buf: []u8,
-            alignment: std.mem.Alignment,
+            alignment: Alignment,
             return_address: usize,
         ) void {
             _ = alignment;
@@ -497,7 +504,7 @@ pub fn RecycleFBA(config: struct {
         fn resize(
             ctx: *anyopaque,
             buf: []u8,
-            alignment: std.mem.Alignment,
+            alignment: Alignment,
             new_size: usize,
             return_address: usize,
         ) bool {
@@ -528,7 +535,7 @@ pub fn RecycleFBA(config: struct {
         fn remap(
             context: *anyopaque,
             memory: []u8,
-            alignment: std.mem.Alignment,
+            alignment: Alignment,
             new_len: usize,
             return_address: usize,
         ) ?[*]u8 {
@@ -541,7 +548,7 @@ pub fn RecycleFBA(config: struct {
             )) memory.ptr else null;
         }
 
-        pub fn isPossibleToAllocate(self: *Self, n: u64, alignment: std.mem.Alignment) bool {
+        pub fn isPossibleToAllocate(self: *Self, n: u64, alignment: Alignment) bool {
             // direct alloc check
             const fba_size_left = self.fba_allocator.buffer.len - self.fba_allocator.end_index;
             if (fba_size_left >= n) {
@@ -619,7 +626,7 @@ pub const BatchAllocator = struct {
         fn alloc(
             batch: *Batch,
             len: usize,
-            alignment: std.mem.Alignment,
+            alignment: Alignment,
             ret_addr: usize,
         ) ?[*]u8 {
             // allocate the full slice including space for the *Batch
@@ -635,7 +642,7 @@ pub const BatchAllocator = struct {
 
         /// identifies the batch by extending the buf,
         /// then frees the buf using the batch's fba.
-        fn free(buf: []u8, log2_buf_align: std.mem.Alignment, return_address: usize) *Batch {
+        fn free(buf: []u8, log2_buf_align: Alignment, return_address: usize) *Batch {
             // extract the batch pointer from after the end of the buffer
             const batch_bytes = buf.ptr[buf.len..][0..@sizeOf(*Batch)];
             const batch = bytesAsValue(*Batch, batch_bytes).*;
@@ -664,7 +671,7 @@ pub const BatchAllocator = struct {
             .vtable = &.{
                 .alloc = alloc,
                 .resize = Allocator.noResize,
-                .remap = std.mem.Allocator.noRemap,
+                .remap = Allocator.noRemap,
                 .free = free,
             },
         };
@@ -673,7 +680,7 @@ pub const BatchAllocator = struct {
     fn alloc(
         ctx: *anyopaque,
         len: usize,
-        log2_ptr_align: std.mem.Alignment,
+        log2_ptr_align: Alignment,
         ret_addr: usize,
     ) ?[*]u8 {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
@@ -694,7 +701,7 @@ pub const BatchAllocator = struct {
     fn tryAllocOldBatch(
         self: *Self,
         len: usize,
-        log2_ptr_align: std.mem.Alignment,
+        log2_ptr_align: Alignment,
         ret_addr: usize,
     ) ?[*]u8 {
         self.new_batch_lock.lockShared();
@@ -714,7 +721,7 @@ pub const BatchAllocator = struct {
     fn tryAllocNewBatch(
         self: *Self,
         len: usize,
-        alignment: std.mem.Alignment,
+        alignment: Alignment,
         ret_addr: usize,
     ) ?[*]u8 {
         // only one thread should do this at a time.
@@ -762,7 +769,7 @@ pub const BatchAllocator = struct {
     fn free(
         ctx: *anyopaque,
         buf: []u8,
-        log2_buf_align: std.mem.Alignment,
+        log2_buf_align: Alignment,
         return_address: usize,
     ) void {
         const self: *BatchAllocator = @ptrCast(@alignCast(ctx));
@@ -808,7 +815,7 @@ pub const DiskMemoryAllocator = struct {
         return aligned_file_size *| mmap_ratio;
     }
 
-    pub inline fn allocator(self: *Self) std.mem.Allocator {
+    pub inline fn allocator(self: *Self) Allocator {
         return .{
             .ptr = self,
             .vtable = &.{
@@ -828,7 +835,7 @@ pub const DiskMemoryAllocator = struct {
     fn alloc(
         ctx: *anyopaque,
         requested_size: usize,
-        alignment: std.mem.Alignment,
+        alignment: Alignment,
         return_address: usize,
     ) ?[*]u8 {
         _ = return_address;
@@ -885,7 +892,7 @@ pub const DiskMemoryAllocator = struct {
     fn resize(
         ctx: *anyopaque,
         buf: []u8,
-        alignment: std.mem.Alignment,
+        alignment: Alignment,
         requested_size: usize,
         return_address: usize,
     ) bool {
@@ -942,7 +949,7 @@ pub const DiskMemoryAllocator = struct {
     fn remap(
         context: *anyopaque,
         memory: []u8,
-        alignment: std.mem.Alignment,
+        alignment: Alignment,
         new_len: usize,
         return_address: usize,
     ) ?[*]u8 {
@@ -959,7 +966,7 @@ pub const DiskMemoryAllocator = struct {
     fn free(
         ctx: *anyopaque,
         buf: []u8,
-        alignment: std.mem.Alignment,
+        alignment: Alignment,
         return_address: usize,
     ) void {
         _ = return_address;
@@ -1046,30 +1053,30 @@ pub const failing = struct {
     /// Returns a comptime-known stateless allocator where each method fails in the specified manner.
     /// By default each method is a simple failure or noop, and can be escalated to a panic which is
     /// enabled in safe and unsafe modes, or to an assertion which triggers checked illegal behaviour.
-    pub inline fn allocator(config: Config) std.mem.Allocator {
+    pub inline fn allocator(config: Config) Allocator {
         const S = struct {
-            fn alloc(_: *anyopaque, _: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
+            fn alloc(_: *anyopaque, _: usize, _: Alignment, _: usize) ?[*]u8 {
                 return switch (config.alloc) {
                     .noop_or_fail => null,
                     .panics => @panic("Unexpected call to alloc"),
                     .assert => unreachable,
                 };
             }
-            fn resize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+            fn resize(_: *anyopaque, _: []u8, _: Alignment, _: usize, _: usize) bool {
                 return switch (config.resize) {
                     .noop_or_fail => false,
                     .panics => @panic("Unexpected call to resize"),
                     .assert => unreachable,
                 };
             }
-            fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+            fn remap(_: *anyopaque, _: []u8, _: Alignment, _: usize, _: usize) ?[*]u8 {
                 return switch (config.resize) {
                     .noop_or_fail => null,
                     .panics => @panic("Unexpected call to resize"),
                     .assert => unreachable,
                 };
             }
-            fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
+            fn free(_: *anyopaque, _: []u8, _: Alignment, _: usize) void {
                 return switch (config.free) {
                     .noop_or_fail => {},
                     .panics => @panic("Unexpected call to free"),
@@ -1491,7 +1498,7 @@ fn fuzzBatchAllocator(config: AllocatorFuzzParams, batch_size: usize) !void {
 
 const AllocatorFuzzParams = struct {
     /// Used for bookkeeping during the test. This allocator will *not* be fuzzed.
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     /// Determines which actions to take, and how much to allocate.
     random: std.Random,
     /// Number of actions to take.
@@ -1505,7 +1512,7 @@ fn fuzzAllocatorMultiThreaded(
     comptime num_threads: usize,
     params: AllocatorFuzzParams,
     /// The allocator being tested.
-    subject: std.mem.Allocator,
+    subject: Allocator,
 ) !void {
     var threads: [num_threads - 1]std.Thread = undefined;
     for (0..num_threads - 1) |i| {
@@ -1519,8 +1526,8 @@ fn fuzzAllocatorMultiThreaded(
 fn fuzzAllocator(
     params: AllocatorFuzzParams,
     /// The allocator being tested.
-    subject: std.mem.Allocator,
-) std.mem.Allocator.Error!void {
+    subject: Allocator,
+) Allocator.Error!void {
     // all existing allocations from the allocator
     var allocations = std.ArrayList(struct { usize, []u8 }).init(params.allocator);
     defer {

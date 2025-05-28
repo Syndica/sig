@@ -102,7 +102,7 @@ test "RingBuffer - multi threaded" {
     for (0..32) |thread_id| {
         threads[thread_id] = try std.Thread.spawn(.{}, struct {
             fn run(seed: u64, src: *RingBuffer(u64), tgt: *RingBuffer(u64)) void {
-                var rand = std.rand.Xoshiro256.init(seed);
+                var rand = std.Random.Xoshiro256.init(seed);
                 const random = rand.random();
                 var maybe_item: ?u64 = null;
                 for (0..10_000) |_| {
