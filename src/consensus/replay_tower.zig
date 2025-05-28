@@ -1402,7 +1402,7 @@ const BlockhashStatus = union(enum) {
     blockhash: Hash,
 };
 
-const SwitchForkDecision = union(enum) {
+pub const SwitchForkDecision = union(enum) {
     switch_proof: Hash,
     same_fork,
     failed_switch_threshold: struct {
