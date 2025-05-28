@@ -356,10 +356,7 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                 };
             }
         },
-        .fixed => return switch (params.endian) {
-            .little => reader.readInt(T, .little),
-            .big => reader.readInt(T, .big),
-        },
+        .fixed => return reader.readInt(T, params.endian),
     }
 }
 
