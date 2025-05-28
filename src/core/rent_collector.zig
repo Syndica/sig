@@ -139,18 +139,18 @@ pub const RentCollector = struct {
 
     pub const RentState = union(enum) {
         /// account.lamports == 0
-        Uninitialized,
+        uninitialized,
         /// 0 < account.lamports < rent-exempt-minimum
-        RentPaying: RentPaying,
+        rent_paying: RentPaying,
         /// account.lamports >= rent-exempt-minimum
-        RentExempt,
+        rent_exempt,
     };
 
     pub fn getAccountRentState(self: RentCollector, lamports: u64, data_len: usize) RentState {
-        if (lamports == 0) return .Uninitialized;
-        if (self.rent.isExempt(lamports, data_len)) return .RentExempt;
+        if (lamports == 0) return .uninitialized;
+        if (self.rent.isExempt(lamports, data_len)) return .rent_exempt;
         return .{
-            .RentPaying = .{
+            .rent_paying = .{
                 .data_len = data_len,
                 .lamports = lamports,
             },
@@ -159,13 +159,13 @@ pub const RentCollector = struct {
 
     pub fn transitionAllowed(pre: RentState, post: RentState) bool {
         // can always transition away from RentPaying
-        if (post != .RentPaying) return true;
+        if (post != .rent_paying) return true;
         // can't transition an account into RentPaying
-        if (pre != .RentPaying) return false;
+        if (pre != .rent_paying) return false;
 
         // can't remain RentPaying if resized or credited.
-        if (post.RentPaying.lamports > pre.RentPaying.lamports) return false;
-        if (post.RentPaying.data_len != pre.RentPaying.data_len) return false;
+        if (post.rent_paying.lamports > pre.rent_paying.lamports) return false;
+        if (post.rent_paying.data_len != pre.rent_paying.data_len) return false;
 
         return true;
     }
