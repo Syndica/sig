@@ -8,11 +8,14 @@ const Pubkey = sig.core.Pubkey;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
-const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
+const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
+const NonceData = sig.runtime.nonce.Data;
+const NonceState = sig.runtime.nonce.State;
+const NonceVersions = sig.runtime.nonce.Versions;
+const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
-const AccountSharedData = sig.runtime.AccountSharedData;
 
 pub const CheckResult = ?error{ AlreadyProcessed, BlockhashNotFound };
 
@@ -74,13 +77,15 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         batch_account_cache,
     ) orelse return null;
 
-    const previous_lamports_per_signature = nonce_data.lamports_per_signature;
+    const previous_lamports_per_signature = nonce_data.fee_calculator.lamports_per_signature;
     const next_nonce_state = NonceVersions{
-        .Current = NonceState{
-            .Initialized = .{
+        .current = NonceState{
+            .initialized = .{
                 .authority = nonce_data.authority,
                 .durable_nonce = next_durable_nonce.*,
-                .lamports_per_signature = next_lamports_per_signature,
+                .fee_calculator = .{
+                    .lamports_per_signature = next_lamports_per_signature,
+                },
             },
         },
     };
@@ -121,38 +126,6 @@ fn loadMessageNonceAccount(
     };
 }
 
-const NonceData = struct {
-    authority: Pubkey,
-    durable_nonce: Hash,
-    lamports_per_signature: u64,
-};
-
-const NonceState = union(enum) {
-    Uninitialized,
-    Initialized: NonceData,
-};
-
-const NonceVersions = union(enum) {
-    Legacy: NonceState,
-    Current: NonceState,
-
-    fn verifyRecentBlockHash(
-        self: *const NonceVersions,
-        recent_blockhash: *const Hash,
-    ) ?*const NonceData {
-        return switch (self.*) {
-            .Legacy => null,
-            .Current => |state| switch (state) {
-                .Uninitialized => null,
-                .Initialized => |*data| if (recent_blockhash.eql(data.durable_nonce))
-                    data
-                else
-                    null,
-            },
-        };
-    }
-};
-
 fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash) ?NonceData {
     if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
 
@@ -163,10 +136,10 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
     const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account.data, .{}) catch
         return null;
 
-    const nonce_data = nonce.verifyRecentBlockHash(recent_blockhash) orelse
+    const nonce_data = nonce.verify(recent_blockhash.*) orelse
         return null;
 
-    return nonce_data.*;
+    return nonce_data;
 }
 
 // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L84
