@@ -12,10 +12,9 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
+const CopiedAccount = sig.runtime.transaction_execution.CopiedAccount;
 const FeatureSet = sig.runtime.FeatureSet;
 const LoadedTransactionAccount = BatchAccountCache.LoadedTransactionAccount;
-const CopiedAccount = sig.runtime.transaction_execution.CopiedAccount;
-const TransactionFees = sig.runtime.transaction_execution.TransactionFees;
 const NonceData = sig.runtime.nonce.Data;
 const NonceState = sig.runtime.nonce.State;
 const NonceVersions = sig.runtime.nonce.Versions;
@@ -83,7 +82,7 @@ pub fn checkFeePayer(
     feature_set: *const FeatureSet,
     lamports_per_signature: u64,
 ) error{OutOfMemory}!TransactionResult(struct {
-    TransactionFees,
+    FeeDetails,
     TransactionRollbacks,
     LoadedTransactionAccount,
 }) {
@@ -125,25 +124,16 @@ pub fn checkFeePayer(
         .account = loaded_fee_payer.account,
     };
 
-    const validate_result = validateFeePayer(
+    if (validateFeePayer(
         cached_fee_payer_account,
         rent_collector,
         fee_details.total(),
-    );
-    switch (validate_result) {
-        .err => |err| return .{ .err = err },
-        else => {},
-    }
-
-    const copied_fee_payer_account: CopiedAccount = .{
-        .pubkey = fee_payer_key,
-        .account = loaded_fee_payer.account.*,
-    };
+    )) |validation_error| return .{ .err = validation_error };
 
     const rollback_accounts = try TransactionRollbacks.new(
         allocator,
         nonce_account,
-        copied_fee_payer_account,
+        cached_fee_payer_account,
         loaded_fee_payer.rent_collected,
         fee_payer_loaded_rent_epoch,
     );
@@ -263,26 +253,23 @@ const FeeBudgetLimits = struct {
     }
 };
 
-// const CheckedTransactionDetails = struct { nonce: ?CachedAccount, lamports_per_signature: u64 };
-
 // [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
 fn validateFeePayer(
     payer: CachedAccount,
     rent_collector: *const RentCollector,
     fee: u64,
-) TransactionResult(void) {
-    if (payer.account.lamports == 0) return .{ .err = .AccountNotFound };
+) ?TransactionError {
+    if (payer.account.lamports == 0) return .AccountNotFound;
 
     const system_account_kind = getSystemAccountKind(payer.account) orelse
-        return .{ .err = .InvalidAccountForFee };
+        return .InvalidAccountForFee;
 
     const min_balance = switch (system_account_kind) {
         .System => 0,
         .Nonce => rent_collector.rent.minimumBalance(NonceState.SIZE),
     };
 
-    _ = std.math.sub(u64, payer.account.lamports, min_balance) catch
-        return .{ .err = .InsufficientFundsForFee };
+    if (payer.account.lamports < min_balance) return .InsufficientFundsForFee;
 
     const pre_rent_state = rent_collector.getAccountRentState(
         payer.account.lamports,
@@ -290,7 +277,7 @@ fn validateFeePayer(
     );
 
     payer.account.lamports = std.math.sub(u64, payer.account.lamports, fee) catch
-        return .{ .err = .InsufficientFundsForFee };
+        return .InsufficientFundsForFee;
 
     const post_rent_state = rent_collector.getAccountRentState(
         payer.account.lamports,
@@ -302,9 +289,9 @@ fn validateFeePayer(
         post_rent_state,
         &payer.pubkey,
     ) catch
-        return .{ .err = .{ .InsufficientFundsForRent = .{ .account_index = 0 } } };
+        return .{ .InsufficientFundsForRent = .{ .account_index = 0 } };
 
-    return .{ .ok = {} };
+    return null;
 }
 
 const SystemAccountKind = enum { System, Nonce };

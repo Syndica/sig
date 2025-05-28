@@ -19,6 +19,7 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const FeatureSet = sig.runtime.FeatureSet;
+const FeeDetails = sig.runtime.check_transactions.FeeDetails;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
 const LogCollector = sig.runtime.LogCollector;
@@ -82,8 +83,6 @@ pub const TransactionExecutionConfig = struct {
     log_messages_byte_limit: ?u64,
 };
 
-pub const TransactionFees = sig.runtime.check_transactions.FeeDetails;
-
 /// [agave] https://github.com/anza-xyz/agave/blob/5bcdd4934475fde094ffbddd3f8c4067238dc9b0/svm/src/rollback_accounts.rs#L11
 pub const TransactionRollbacks = union(enum(u8)) {
     fee_payer_only: CopiedAccount,
@@ -93,12 +92,16 @@ pub const TransactionRollbacks = union(enum(u8)) {
     pub fn new(
         allocator: std.mem.Allocator,
         maybe_nonce: ?CachedAccount,
-        fee_payer: CopiedAccount,
+        fee_payer: CachedAccount,
         fee_payer_rent_debit: u64,
         fee_payer_rent_epoch: sig.core.Epoch,
     ) error{OutOfMemory}!TransactionRollbacks {
-        var copied_account = fee_payer;
+        var copied_account: CopiedAccount = .{
+            .account = fee_payer.account.*,
+            .pubkey = fee_payer.pubkey,
+        };
         copied_account.account.lamports +|= fee_payer_rent_debit;
+        copied_account.account.data = undefined; // safety: overwritten before returning in all cases
 
         if (maybe_nonce) |nonce| {
             if (fee_payer.pubkey.equals(&nonce.pubkey)) {
@@ -155,11 +158,11 @@ pub const ExecutedTransaction = struct {
 pub const ProcessedTransaction = union(enum(u8)) {
     fees_only: struct {
         err: TransactionError,
-        fees: TransactionFees,
+        fees: FeeDetails,
         rollbacks: TransactionRollbacks,
     },
     executed: struct {
-        fees: TransactionFees,
+        fees: FeeDetails,
         rollbacks: TransactionRollbacks,
         loaded_accounts: LoadedTransactionAccounts,
         executed_transaction: ExecutedTransaction,
