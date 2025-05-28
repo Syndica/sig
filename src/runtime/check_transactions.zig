@@ -12,7 +12,6 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
-const CopiedAccount = sig.runtime.transaction_execution.CopiedAccount;
 const FeatureSet = sig.runtime.FeatureSet;
 const LoadedTransactionAccount = BatchAccountCache.LoadedTransactionAccount;
 const NonceData = sig.runtime.nonce.Data;
