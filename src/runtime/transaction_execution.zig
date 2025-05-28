@@ -380,7 +380,7 @@ test "transaction_execution" {
 
     const ancestors: Ancestors = .{};
     const feature_set: FeatureSet = FeatureSet.EMPTY;
-    const status_cache = try StatusCache.default(std.testing.allocator);
+    const status_cache = StatusCache.default();
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(

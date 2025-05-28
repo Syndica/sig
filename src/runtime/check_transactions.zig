@@ -44,7 +44,7 @@ pub fn checkAge(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
 ) TransactionResult(?CachedAccount) {
-    if (blockhash_queue.getHashInfoIfValid(last_blockhash, max_age) != null)  {
+    if (blockhash_queue.getHashInfoIfValid(last_blockhash, max_age) != null) {
         return .{ .ok = null };
     }
 
@@ -154,7 +154,7 @@ const NonceVersions = union(enum) {
 };
 
 fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash) ?NonceData {
-    if (!account.owner.equals(&sig.runtime.program.system_program.ID)) return null;
+    if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
 
     // could probably be smaller
     var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
@@ -185,7 +185,7 @@ fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
     if (program_account_idx >= account_keys.len) return null;
     const program_key = account_keys[program_account_idx];
 
-    if (!program_key.equals(&sig.runtime.program.system_program.ID)) return null;
+    if (!program_key.equals(&sig.runtime.program.system.ID)) return null;
 
     // Serialized value of [`SystemInstruction::AdvanceNonceAccount`].
     const serialized_advance_nonce_account: [serialized_size]u8 = @bitCast(
