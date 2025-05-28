@@ -114,11 +114,11 @@ pub const TransactionRollbacks = union(enum(u8)) {
                 };
                 copied_nonce.account.data = try allocator.dupe(u8, nonce.account.data);
                 errdefer allocator.free(copied_nonce.account.data);
-                copied_account.account.data = try allocator.dupe(u8, copied_account.account.data);
+                copied_account.account.data = try allocator.dupe(u8, fee_payer.account.data);
                 return .{ .separate_nonce_and_fee_payer = .{ copied_nonce, copied_account } };
             }
         } else {
-            copied_account.account.data = try allocator.dupe(u8, copied_account.account.data);
+            copied_account.account.data = try allocator.dupe(u8, fee_payer.account.data);
             copied_account.account.rent_epoch = fee_payer_rent_epoch;
             return .{ .fee_payer_only = copied_account };
         }
