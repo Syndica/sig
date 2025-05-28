@@ -189,7 +189,9 @@ pub fn main() !void {
             logger.warn().log("[accounts_db_snapshot]: skipping benchmark, use -e to run");
         }
 
-        if ((filter == .accounts_db_snapshot or run_all) and run_expensive_benchmarks) snapshot_benchmark: {
+        if ((filter == .accounts_db_snapshot or run_all) and
+            run_expensive_benchmarks //
+        ) snapshot_benchmark: {
             // NOTE: snapshot must exist in this directory for the benchmark to run
             // NOTE: also need to increase file limits to run this benchmark (see debugging.md)
             const BENCH_SNAPSHOT_DIR_PATH = @import("accountsdb/db.zig")
@@ -239,7 +241,9 @@ pub fn main() !void {
                 try gossip_service.start(.{});
 
                 // download and unpack snapshot
-                var snapshot_manifests, _ = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
+                const snapshot_manifests, //
+                _ //
+                = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
                     allocator,
                     logger,
                     BENCH_SNAPSHOT_DIR_PATH,
@@ -375,8 +379,8 @@ pub fn benchmark(
 
     const functions = comptime blk: {
         var res: []const Decl = &[_]Decl{};
-        for (@typeInfo(B).Struct.decls) |decl| {
-            if (@typeInfo(@TypeOf(@field(B, decl.name))) != .Fn)
+        for (@typeInfo(B).@"struct".decls) |decl| {
+            if (@typeInfo(@TypeOf(@field(B, decl.name))) != .@"fn")
                 continue;
             res = res ++ [_]Decl{decl};
         }
@@ -412,21 +416,32 @@ pub fn benchmark(
 
     inline for (functions) |def| {
         var fmt_buf: [512]u8 = undefined;
-        const file_name_average = try std.fmt.bufPrint(&fmt_buf, "{s}/{s}.csv", .{ benchmark_name, def.name });
+        const file_name_average = try std.fmt.bufPrint(
+            &fmt_buf,
+            "{s}/{s}.csv",
+            .{ benchmark_name, def.name },
+        );
         const file_average = try results_dir.createFile(file_name_average, .{ .read = true });
         defer file_average.close();
         const writer_average = file_average.writer();
         logger.debug().logf("writing benchmark results to {s}", .{file_name_average});
 
         var fmt_buf2: [512]u8 = undefined;
-        const file_name_runtimes = try std.fmt.bufPrint(&fmt_buf2, "{s}/{s}_runtimes.csv", .{ benchmark_name, def.name });
+        const file_name_runtimes = try std.fmt.bufPrint(
+            &fmt_buf2,
+            "{s}/{s}_runtimes.csv",
+            .{ benchmark_name, def.name },
+        );
         const file_runtimes = try results_dir.createFile(file_name_runtimes, .{ .read = true });
         defer file_runtimes.close();
         const writer_runtimes = file_runtimes.writer();
 
         inline for (args, 0..) |arg, arg_i| {
             const arg_name = if (has_args) arg.name else "_";
-            logger.debug().logf("benchmarking arg: {d}/{d}: {s}", .{ arg_i + 1, args.len, arg_name });
+            logger.debug().logf(
+                "benchmarking arg: {d}/{d}: {s}",
+                .{ arg_i + 1, args.len, arg_name },
+            );
 
             const benchFunction = @field(B, def.name);
             // NOTE: @TypeOf guarantees no runtime side-effects of argument expressions.
@@ -436,8 +451,10 @@ pub fn benchmark(
                 // NOTE: to know if we should pass in the time unit we
                 // check the input params of the function, so any multi-return
                 // function NEEDS to have the time unit as the first parameter
-                const info = @typeInfo(@TypeOf(benchFunction)).Fn;
-                const has_time_unit = info.params.len > 0 and info.params[0].type.? == BenchTimeUnit;
+                const info = @typeInfo(@TypeOf(benchFunction)).@"fn";
+                const has_time_unit =
+                    info.params.len > 0 and
+                    info.params[0].type.? == BenchTimeUnit;
                 const time_arg = if (has_time_unit) .{time_unit} else .{};
                 const other_arg = if (@TypeOf(arg) != void) .{arg} else .{};
                 break :blk time_arg ++ other_arg;
@@ -466,7 +483,7 @@ pub fn benchmark(
             var sum: u64 = 0;
 
             // NOTE: these are set to valid values on first iteration
-            const runtime_info = @typeInfo(RuntimeType).Struct;
+            const runtime_info = @typeInfo(RuntimeType).@"struct";
             var sum_s: RuntimeType = undefined;
             var min_s: RuntimeType = undefined;
             var max_s: RuntimeType = undefined;
@@ -499,14 +516,16 @@ pub fn benchmark(
                             inline for (runtime_info.fields) |field| {
                                 const f_max = @field(max_s, field.name);
                                 const f_min = @field(min_s, field.name);
-                                @field(max_s, field.name) = @max(@field(result, field.name), f_max);
-                                @field(min_s, field.name) = @min(@field(result, field.name), f_min);
-                                @field(sum_s, field.name) += @field(result, field.name);
+                                const result_field = @field(result, field.name);
+                                @field(max_s, field.name) = @max(result_field, f_max);
+                                @field(min_s, field.name) = @min(result_field, f_min);
+                                @field(sum_s, field.name) += result_field;
                             }
                         }
                     },
                 }
-                ran_out_of_time = runtime_timer.read().asNanos() < max_time_per_benchmark.asNanos();
+                ran_out_of_time =
+                    runtime_timer.read().asNanos() < max_time_per_benchmark.asNanos();
             }
 
             if (ran_out_of_time) {
@@ -529,7 +548,10 @@ pub fn benchmark(
                 },
                 else => {
                     inline for (runtime_info.fields, 0..) |field, j| {
-                        try writer_runtimes.print("{s}({s}) ({s}), ", .{ def.name, arg_name, field.name });
+                        try writer_runtimes.print(
+                            "{s}({s}) ({s}), ",
+                            .{ def.name, arg_name, field.name },
+                        );
                         const x: std.MultiArrayList(RuntimeType).Field = @enumFromInt(j);
                         for (runtimes.items(x), 0..) |runtime, i| {
                             if (i != 0) try writer_runtimes.print(", ", .{});
@@ -562,14 +584,20 @@ pub fn benchmark(
                     const std_dev = std.math.sqrt(variance);
 
                     // print column results
-                    try writer_average.print("{s}, {d}, {d}, {d}, {d}\n", .{ arg_name, min, max, mean, std_dev });
+                    try writer_average.print(
+                        "{s}, {d}, {d}, {d}, {d}\n",
+                        .{ arg_name, min, max, mean, std_dev },
+                    );
 
                     // collect the metric
                     if (maybe_metrics.*) |*metrics| {
-                        const fmt_size = std.fmt.count("{s}({s})", .{ def.name, arg_name });
-                        const name_buf = try allocator.alloc(u8, fmt_size);
-                        const name = try std.fmt.bufPrint(name_buf, "{s}({s})", .{ def.name, arg_name });
-                        const metric = Metric{
+                        const name = try std.fmt.allocPrint(
+                            allocator,
+                            "{s}({s})",
+                            .{ def.name, arg_name },
+                        );
+                        errdefer allocator.free(name);
+                        const metric: Metric = .{
                             .name = name,
                             .unit = time_unit.toString(),
                             .value = max,
@@ -585,9 +613,15 @@ pub fn benchmark(
                         inline for (runtime_info.fields, 0..) |field, i| {
                             if (i == runtime_info.fields.len - 1) {
                                 // dont print trailing comma
-                                try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_std_dev", .{ field.name, field.name, field.name, field.name });
+                                try writer_average.print(
+                                    "{s}_min, {s}_max, {s}_mean, {s}_std_dev",
+                                    .{ field.name, field.name, field.name, field.name },
+                                );
                             } else {
-                                try writer_average.print("{s}_min, {s}_max, {s}_mean, {s}_std_dev, ", .{ field.name, field.name, field.name, field.name });
+                                try writer_average.print(
+                                    "{s}_min, {s}_max, {s}_mean, {s}_std_dev, ",
+                                    .{ field.name, field.name, field.name, field.name },
+                                );
                             }
                         }
                         try writer_average.print("\n", .{});
@@ -601,7 +635,7 @@ pub fn benchmark(
                         const f_sum = @field(sum_s, field.name);
                         const T = @TypeOf(f_sum);
                         const n_iters = switch (@typeInfo(T)) {
-                            .Float => @as(T, @floatFromInt(iter_count)),
+                            .float => @as(T, @floatFromInt(iter_count)),
                             else => iter_count,
                         };
                         const f_mean = f_sum / n_iters;
@@ -609,9 +643,12 @@ pub fn benchmark(
                         var f_variance: T = 0;
                         const x: std.MultiArrayList(RuntimeType).Field = @enumFromInt(j);
                         for (runtimes.items(x)) |f_runtime| {
-                            const d = if (f_runtime > f_mean) f_runtime - f_mean else f_mean - f_runtime;
+                            const d = if (f_runtime > f_mean)
+                                f_runtime - f_mean
+                            else
+                                f_mean - f_runtime;
                             switch (@typeInfo(T)) {
-                                .Float => f_variance = d * d,
+                                .float => f_variance = d * d,
                                 else => f_variance +|= d *| d,
                             }
                         }
@@ -620,23 +657,37 @@ pub fn benchmark(
 
                         if (j == runtime_info.fields.len - 1) {
                             // dont print trailing comma
-                            try writer_average.print("{d}, {d}, {any}, {any}", .{ f_min, f_max, f_mean, f_std_dev });
+                            try writer_average.print(
+                                "{d}, {d}, {any}, {any}",
+                                .{ f_min, f_max, f_mean, f_std_dev },
+                            );
                         } else {
-                            try writer_average.print("{d}, {d}, {any}, {any}, ", .{ f_min, f_max, f_mean, f_std_dev });
+                            try writer_average.print(
+                                "{d}, {d}, {any}, {any}, ",
+                                .{ f_min, f_max, f_mean, f_std_dev },
+                            );
                         }
 
                         // collect the metric
                         if (maybe_metrics.*) |*metrics| {
-                            const fmt_size = std.fmt.count("{s}({s})_{s}", .{ def.name, arg_name, field.name });
+                            const fmt_size = std.fmt.count(
+                                "{s}({s})_{s}",
+                                .{ def.name, arg_name, field.name },
+                            );
                             const name_buf = try allocator.alloc(u8, fmt_size);
-                            const name = try std.fmt.bufPrint(name_buf, "{s}({s})_{s}", .{ def.name, arg_name, field.name });
+                            errdefer allocator.free(name_buf);
+                            const name = try std.fmt.bufPrint(
+                                name_buf,
+                                "{s}({s})_{s}",
+                                .{ def.name, arg_name, field.name },
+                            );
                             const value = switch (@typeInfo(T)) {
                                 // in the float case we retain the last two decimal points by
                                 // multiplying by 100 and converting to an integer
-                                .Float => @as(u64, @intFromFloat(f_max * 100)),
+                                .float => @as(u64, @intFromFloat(f_max * 100)),
                                 else => f_max,
                             };
-                            const metric = Metric{
+                            const metric: Metric = .{
                                 .name = name,
                                 .unit = time_unit.toString(),
                                 .value = value,
@@ -654,7 +705,11 @@ pub fn benchmark(
     // print the results in a formatted table
     inline for (functions, 0..) |def, fcni| {
         var fmt_buf: [512]u8 = undefined;
-        const file_name_average = try std.fmt.bufPrint(&fmt_buf, "{s}/{s}.csv", .{ benchmark_name, def.name });
+        const file_name_average = try std.fmt.bufPrint(
+            &fmt_buf,
+            "{s}/{s}.csv",
+            .{ benchmark_name, def.name },
+        );
         const file_average = try results_dir.openFile(file_name_average, .{});
         defer file_average.close();
 
@@ -676,8 +731,10 @@ pub fn benchmark(
                 // NOTE: to know if we should pass in the time unit we
                 // check the input params of the function, so any multi-return
                 // function NEEDS to have the time unit as the first parameter
-                const info = @typeInfo(@TypeOf(benchFunction)).Fn;
-                const has_time_unit = info.params.len > 0 and info.params[0].type.? == BenchTimeUnit;
+                const info = @typeInfo(@TypeOf(benchFunction)).@"fn";
+                const has_time_unit =
+                    info.params.len > 0 and
+                    info.params[0].type.? == BenchTimeUnit;
                 const time_arg = if (has_time_unit) .{time_unit} else .{};
                 const other_arg = if (@TypeOf(args[0]) != void) .{args[0]} else .{};
                 break :blk time_arg ++ other_arg;
@@ -695,7 +752,7 @@ pub fn benchmark(
                     },
                 }
             };
-            const runtime_info = @typeInfo(RuntimeType).Struct;
+            const runtime_info = @typeInfo(RuntimeType).@"struct";
 
             // organize the data into a table:
             // field_name,              field_name2
@@ -703,9 +760,15 @@ pub fn benchmark(
             const stat_titles: [4][]const u8 = .{ "min", "max", "mean", "std_dev" };
             const per_field_column_count = stat_titles.len;
             // first column is the field names
-            const field_name_data = try allocator.alloc([]const u8, 1 + per_field_column_count * runtime_info.fields.len);
+            const field_name_data = try allocator.alloc(
+                []const u8,
+                1 + per_field_column_count * runtime_info.fields.len,
+            );
             field_name_data[0] = ""; // benchmark name is blank
-            const stat_data_row = try allocator.alloc([]const u8, 1 + per_field_column_count * runtime_info.fields.len);
+            const stat_data_row = try allocator.alloc(
+                []const u8,
+                1 + per_field_column_count * runtime_info.fields.len,
+            );
             stat_data_row[0] = def.name;
             var i: u64 = 1;
             var k: u64 = 1;

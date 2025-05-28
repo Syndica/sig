@@ -795,16 +795,19 @@ pub const BlockstoreReader = struct {
                 until_signature,
                 &confirmed_unrooted_slots,
             )) |status| {
-                const slot_, _ = status;
-                const slot_signatures = try self.getBlockSignatures(slot_);
+                const lowest_slot, _ = status;
+                const slot_signatures = try self.getBlockSignatures(lowest_slot);
                 defer slot_signatures.deinit();
                 var excluded = AutoHashMap(Signature, void).init(self.allocator);
                 for (slot_signatures.items) |signature| {
                     try excluded.put(signature, {});
                     if (signature.eql(&until_signature)) break;
                 }
-                break :blk .{ slot_, excluded };
-            }
+                break :blk .{ lowest_slot, excluded };
+            } else break :blk .{
+                first_available_block,
+                AutoHashMap(Signature, void).init(self.allocator),
+            };
         } else .{
             first_available_block,
             AutoHashMap(Signature, void).init(self.allocator),
@@ -2057,7 +2060,7 @@ test "isShredDuplicate" {
     const shred_payload = try allocator.alloc(u8, size);
     defer allocator.free(shred_payload);
 
-    var shred = Shred{ .data = try DataShred.zeroedForTest(allocator) };
+    var shred: Shred = .{ .data = try DataShred.zeroedForTest(allocator) };
     defer shred.deinit();
     shred.data.common.slot = shred_slot;
     shred.data.common.index = shred_index;

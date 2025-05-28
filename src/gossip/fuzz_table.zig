@@ -29,11 +29,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
 
     // setup
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .safety = true,
-    }){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    var gpa_state: std.heap.DebugAllocator(.{ .safety = true }) = .init;
+    defer _ = gpa_state.deinit();
+    const allocator = gpa_state.allocator();
 
     // NOTE: change to trace for full logs
     var std_logger = sig.trace.DirectPrintLogger.init(
@@ -42,7 +40,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     );
     const logger = std_logger.logger();
 
-    var prng = std.rand.DefaultPrng.init(seed);
+    var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
     // init gossip table
@@ -98,7 +96,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 if (new_keypair) {
                     var seed_buf: [32]u8 = undefined;
                     random.bytes(&seed_buf);
-                    const keypair = try KeyPair.create(seed_buf);
+                    const keypair = try KeyPair.generateDeterministic(seed_buf);
                     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
                     data.setId(pubkey);

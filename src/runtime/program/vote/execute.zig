@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
-const vote_program = sig.runtime.program.vote_program;
+const vote_program = sig.runtime.program.vote;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const vote_instruction = vote_program.vote_instruction;
 
@@ -611,8 +611,9 @@ fn updateCommission(
 
     if (enforce_commission_update_rule and
         ic.tc.feature_set.active.contains(
-        features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
-    )) {
+            features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
+        ))
+    {
         if (!isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
             // Clean up before returning, if we have a vote_state already.
             if (maybe_vote_state) |*vote_state| {
@@ -783,8 +784,9 @@ fn executeProcessVoteWithAccount(
         features.DEPRECATE_LEGACY_VOTE_IXS,
     ) and
         ic.tc.feature_set.active.contains(
-        features.ENABLE_TOWER_SYNC_IX,
-    )) {
+            features.ENABLE_TOWER_SYNC_IX,
+        ))
+    {
         return InstructionError.InvalidInstructionData;
     }
 
@@ -1042,11 +1044,12 @@ fn setVoteState(
 ) (error{OutOfMemory} || InstructionError)!void {
     if (account.constAccountData().len < VoteState.MAX_VOTE_STATE_SIZE and
         (!rent.isExempt(account.account.lamports, VoteState.MAX_VOTE_STATE_SIZE) or
-        std.meta.isError(account.setDataLength(
-        allocator,
-        resize_delta,
-        VoteState.MAX_VOTE_STATE_SIZE,
-    )))) {
+            std.meta.isError(account.setDataLength(
+                allocator,
+                resize_delta,
+                VoteState.MAX_VOTE_STATE_SIZE,
+            ))))
+    {
         var votes = try std.ArrayList(Lockout).initCapacity(allocator, state.votes.items.len);
         defer votes.deinit();
         for (state.votes.items) |vote| votes.appendAssumeCapacity(vote.lockout);
@@ -1428,7 +1431,7 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
 test "vote_program: executeAuthorize voter signed by current withdrawer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const PriorVote = sig.runtime.program.vote_program.state.PriorVote;
+    const PriorVote = sig.runtime.program.vote.state.PriorVote;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
@@ -2944,7 +2947,7 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
 }
 
 test "vote_program: widthdraw all and close account with active vote account" {
-    const EpochCredit = sig.runtime.program.vote_program.state.EpochCredit;
+    const EpochCredit = sig.runtime.program.vote.state.EpochCredit;
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
     // TODO use constant in other tests.

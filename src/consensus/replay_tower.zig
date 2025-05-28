@@ -5,17 +5,17 @@ const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-const BlockTimestamp = sig.runtime.program.vote_program.state.BlockTimestamp;
+const BlockTimestamp = sig.runtime.program.vote.state.BlockTimestamp;
 const Hash = sig.core.Hash;
-const Lockout = sig.runtime.program.vote_program.state.Lockout;
+const Lockout = sig.runtime.program.vote.state.Lockout;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
-const TowerSync = sig.runtime.program.vote_program.state.TowerSync;
-const Vote = sig.runtime.program.vote_program.state.Vote;
-const VoteStateUpdate = sig.runtime.program.vote_program.state.VoteStateUpdate;
+const TowerSync = sig.runtime.program.vote.state.TowerSync;
+const Vote = sig.runtime.program.vote.state.Vote;
+const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
 const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
@@ -586,17 +586,17 @@ pub const ReplayTower = struct {
                     // 2) Not from before the current root as we can't determine if
                     // anything before the root was an ancestor of `last_vote` or not
                     if (!last_vote_ancestors.contains(vote_account[0]) and (
-                    // Given a `lockout_interval_start` < root that appears in a
-                    // bank for a `candidate_slot`, it must be that `lockout_interval_start`
-                    // is an ancestor of the current root, because `candidate_slot` is a
-                    // descendant of the current root
+                        // Given a `lockout_interval_start` < root that appears in a
+                        // bank for a `candidate_slot`, it must be that `lockout_interval_start`
+                        // is an ancestor of the current root, because `candidate_slot` is a
+                        // descendant of the current root
                         vote_account[0] > root))
                     {
                         const stake =
                             if (epoch_vote_accounts.get(vote_account[1])) |staked_account|
-                            staked_account[0]
-                        else
-                            0;
+                                staked_account[0]
+                            else
+                                0;
                         locked_out_stake += stake;
 
                         if (@as(f64, @floatFromInt(locked_out_stake)) / @as(
@@ -817,7 +817,7 @@ pub const ReplayTower = struct {
             (self.last_vote.eql(&default_vote) and
                 self.tower.vote_state.votes.len == 0) or
                 (self.last_vote.eql(&default_tower) and
-                self.tower.vote_state.votes.len == 0) or
+                    self.tower.vote_state.votes.len == 0) or
                 (self.tower.vote_state.votes.len > 0),
         );
 
@@ -2614,7 +2614,7 @@ test "greatestCommonAncestor" {
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
-fn createTestReplayTower(
+pub fn createTestReplayTower(
     allocator: std.mem.Allocator,
     threshold_depth: usize,
     threshold_size: f64,
@@ -2709,7 +2709,7 @@ fn voteAndCheckRecent(num_votes: usize) !void {
     );
 }
 
-fn createTestSlotHistory(
+pub fn createTestSlotHistory(
     allocator: std.mem.Allocator,
 ) !SlotHistory {
     if (!builtin.is_test) {

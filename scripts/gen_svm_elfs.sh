@@ -4,8 +4,8 @@ CC="../toolchain/llvm/bin/clang"
 LD="../toolchain/llvm/bin/ld.lld"
 ZIG=${ZIG:-zig}
 
-if [ "$($ZIG version)" != "0.13.0" ]; then
-    echo "Need Zig 0.13.0 to compile these tests"
+if [ "$($ZIG version)" != "0.14.1" ]; then
+    echo "Need Zig 0.14.1 to compile these tests"
     exit 1
 fi
 

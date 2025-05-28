@@ -27,10 +27,10 @@ jobs:
           name: Download Zig
           command: |
             apt update && apt install -y wget unzip xz-utils
-            wget https://ziglang.org/download/0.13.0/zig-<< parameters.target >>-0.13.0.tar.xz
-            tar xf zig-<< parameters.target >>-0.13.0.tar.xz
+            wget https://ziglang.org/download/0.14.1/zig-<< parameters.target >>-0.14.1.tar.xz
+            tar xf zig-<< parameters.target >>-0.14.1.tar.xz
             mkdir -p workspace
-            mv zig-<< parameters.target >>-0.13.0 workspace/zig
+            mv zig-<< parameters.target >>-0.14.1 workspace/zig
       - persist_to_workspace:
           root: workspace
           paths:
@@ -75,7 +75,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
       - run:
           name: Build
           command: |
@@ -83,7 +83,7 @@ jobs:
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
       - save_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -99,7 +99,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-release-v4
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-release
       - run:
           name: Build
           command: |
@@ -107,7 +107,7 @@ jobs:
             ./scripts/proxy_workaround.sh workspace/zig/zig
             workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
       - save_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-release-v4
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-release
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -124,18 +124,18 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: macos-aarch64-0.13.0-{{ checksum "build.zig.zon" }}
+          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
       - run:
           name: Build
           command: |
             export PATH="workspace/zig:$PATH"
             # it seems that the feature detection is a bit broken in CircleCI's virtual machines
             # so we will manually say that it's an Apple M2.
-            zig build -Denable-tsan=false -Dno-run -Dcpu=apple_m2 --summary all
-            zig build test -Denable-tsan=false -Dblockstore=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2
+            zig build -Denable-tsan=true -Dno-run -Dcpu=apple_m2 --summary all
+            zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
             zig-out/bin/test
       - save_cache:
-          key: macos-aarch64-0.13.0-{{ checksum "build.zig.zon" }}
+          key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
           paths:
             - .zig-cache
             - ~/.cache/zig
@@ -147,10 +147,10 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
       - run:
           name: Build and Test
-          command: workspace/zig/zig build test -Denable-tsan=true -Dblockstore=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --color off --summary all
+          command: workspace/zig/zig build test -Denable-tsan=true -Dblockstore=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
 
   test_linux:
     executor: linux-executor
@@ -161,14 +161,11 @@ jobs:
       # Restore the cache in order to have access to the files which the DWARF info
       # is referencing when dumping stack traces.
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
       - run:
           name: Test
           # Disable network-accessing tests for this job, which behave badly on circleci
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --color off --summary all
-          # Because we need to "--color off" in order to avoid the TSan issues in std.Progress
-          # CircleCI's default no output timeout of 10 minutes is sometimes hit.
-          no_output_timeout: 30m
+          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
 
   test_kcov_linux:
     executor: linux-executor
@@ -177,7 +174,7 @@ jobs:
       - attach_workspace:
           at: workspace
       - restore_cache:
-          key: linux-x86_64-0.13.0-{{ checksum "build.zig.zon" }}-v7
+          key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
       - run:
           name: Build
           command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
@@ -248,7 +245,7 @@ workflows:
       - check_docs
       - setup_zig:
           name: setup_zig_linux
-          target: "linux-x86_64"
+          target: "x86_64-linux"
       - lint:
           requires:
             - setup_zig_linux
@@ -287,7 +284,7 @@ workflows:
     jobs:
       - setup_zig:
           name: setup_zig_macos
-          target: "macos-aarch64"
+          target: "aarch64-macos"
       - build_and_test_macos:
           requires:
             - setup_zig_macos

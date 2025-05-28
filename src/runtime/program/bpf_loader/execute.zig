@@ -9,8 +9,8 @@ const pubkey_utils = sig.runtime.pubkey_utils;
 const sysvar = sig.runtime.sysvar;
 const vm = sig.vm;
 const bpf_program = sig.runtime.program.bpf;
-const system_program = sig.runtime.program.system_program;
-const bpf_loader_program = sig.runtime.program.bpf_loader_program;
+const system_program = sig.runtime.program.system;
+const bpf_loader_program = sig.runtime.program.bpf_loader;
 const features = sig.runtime.features;
 
 const Pubkey = sig.core.Pubkey;
@@ -18,7 +18,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
-const V3State = sig.runtime.program.bpf_loader_program.v3.State;
+const V3State = sig.runtime.program.bpf_loader.v3.State;
 
 // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/bpf_loader/src/lib.rs#L399-L401
 const migration_authority =
@@ -64,7 +64,15 @@ pub fn execute(
     // NOTE: We reborrow the program account within bpf_program.execute, this adds an additional
     // borrow wrt Agave's implementation. It should not cause an issue but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
-    try bpf_program.execute(allocator, ic);
+    bpf_program.execute(allocator, ic) catch |err| {
+        _, const kind, const msg = sig.vm.convertExecutionError(err);
+        if (kind != .Instruction) {
+            try sig.runtime.stable_log.programFailure(ic.tc, ic.ixn_info.program_meta.pubkey, msg);
+            return InstructionError.ProgramFailedToComplete;
+        } else {
+            return sig.vm.instructionErrorFromExecutionError(err);
+        }
+    };
 }
 
 // TODO: v4 loader
@@ -1747,7 +1755,7 @@ test "executeDeployWithMaxDataLen" {
                 .{ .pubkey = sysvar.Rent.ID },
                 .{ .pubkey = sysvar.Clock.ID },
                 .{
-                    .pubkey = program.system_program.ID,
+                    .pubkey = program.system.ID,
                     .owner = ids.NATIVE_LOADER_ID,
                     .executable = true,
                 },
@@ -1792,7 +1800,7 @@ test "executeDeployWithMaxDataLen" {
                 .{ .pubkey = sysvar.Rent.ID },
                 .{ .pubkey = sysvar.Clock.ID },
                 .{
-                    .pubkey = program.system_program.ID,
+                    .pubkey = program.system.ID,
                     .owner = ids.NATIVE_LOADER_ID,
                     .executable = true,
                 },
@@ -2886,9 +2894,9 @@ fn createValidProgramData(
 
     const program_data =
         try allocator.alloc(
-        u8,
-        state_size + elf_bytes.len + additional_bytes,
-    );
+            u8,
+            state_size + elf_bytes.len + additional_bytes,
+        );
     errdefer allocator.free(program_data);
     @memset(program_data, 0);
 

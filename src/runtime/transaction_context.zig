@@ -53,6 +53,7 @@ pub const TransactionContext = struct {
 
     instruction_stack: InstructionStack,
     instruction_trace: InstructionTrace,
+    top_level_instruction_index: u16 = 0,
     return_data: TransactionReturnData,
 
     /// Total change to account data size within transaction
@@ -167,6 +168,25 @@ pub const TransactionContext = struct {
         args: anytype,
     ) (error{OutOfMemory} || InstructionError)!void {
         if (self.log_collector) |*lc| try lc.log(self.allocator, fmt, args);
+    }
+
+    pub fn takeLogCollector(
+        self: *TransactionContext,
+    ) ?LogCollector {
+        if (self.log_collector) |lc| {
+            self.log_collector = null;
+            return lc;
+        }
+        return null;
+    }
+
+    pub fn takeReturnData(
+        self: *TransactionContext,
+    ) ?TransactionReturnData {
+        if (self.return_data.data.len == 0) return null;
+        const data = self.return_data;
+        self.return_data.data.len = 0;
+        return data;
     }
 };
 

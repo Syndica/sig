@@ -8,7 +8,9 @@ const Atomic = std.atomic.Value;
 const Metric = prometheus.metric.Metric;
 const MetricType = prometheus.metric.MetricType;
 
-pub const DEFAULT_BUCKETS: [11]f64 = .{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 };
+pub const DEFAULT_BUCKETS: [11]f64 = .{
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+};
 
 pub fn exponentialBuckets(base: i64, comptime start: i64, comptime end: i64) [end - start]f64 {
     std.debug.assert(end > start);
@@ -110,7 +112,7 @@ pub const Histogram = struct {
         /// Must be f64 or int
         value: anytype,
     ) void {
-        const float: f64 = if (@typeInfo(@TypeOf(value)) == .Int) @floatFromInt(value) else value;
+        const float: f64 = if (@typeInfo(@TypeOf(value)) == .int) @floatFromInt(value) else value;
         const shard_sync = self.incrementCount(.acquire); // acquires lock. must be first step.
         const shard = &self.shards[shard_sync.shard];
         for (self.upper_bounds.items, 0..) |bound, i| {
@@ -335,8 +337,18 @@ fn expectSnapshot(
     try std.testing.expectEqual(expected_total, snapshot.count);
     try std.testing.expectEqual(DEFAULT_BUCKETS.len, snapshot.buckets.len);
     for (0.., snapshot.buckets) |i, bucket| {
-        try expectEqual(expected_buckets[i], bucket.cumulative_count, "value in bucket {}\n", .{i});
-        try expectEqual(expected_bounds[i], bucket.upper_bound, "bound for bucket {}\n", .{i});
+        try expectEqual(
+            expected_buckets[i],
+            bucket.cumulative_count,
+            "value in bucket {}\n",
+            .{i},
+        );
+        try expectEqual(
+            expected_bounds[i],
+            bucket.upper_bound,
+            "bound for bucket {}\n",
+            .{i},
+        );
     }
 }
 

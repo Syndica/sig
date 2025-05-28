@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
-const InstructionError = sig.core.instruction.InstructionErrorEnum;
+const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 
 pub const TransactionStatusMeta = struct {
     /// Indicates whether the transaction succeeded, or exactly what error caused it to fail
@@ -205,7 +205,7 @@ pub const TransactionError = union(enum) {
 
     /// An error occurred while processing an instruction. The first element of the tuple
     /// indicates the instruction index in which the error occurred.
-    InstructionError: struct { u8, InstructionError },
+    InstructionError: struct { u8, InstructionErrorEnum },
 
     /// Loader call chain is too deep
     CallChainTooDeep,

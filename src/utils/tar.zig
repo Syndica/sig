@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
 
-const TarOutputHeader = std.tar.output.Header;
 const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 
@@ -77,7 +76,8 @@ pub fn parallelUntarToFileSystem(
 
     logger.info().logf("using {d} threads to unpack snapshot", .{n_threads});
 
-    var pool = try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
+    var pool =
+        try HomogeneousThreadPool(UnTarTask).init(allocator, @intCast(n_threads), n_threads);
     defer pool.deinit(allocator);
 
     var timer = try sig.time.Timer.start();
@@ -89,7 +89,10 @@ pub fn parallelUntarToFileSystem(
         switch (try reader.readAtLeast(&header_buf, 512)) {
             0 => break,
             512 => {},
-            else => |actual_size| std.debug.panic("Actual file size ({d}) too small for header (< 512).", .{actual_size}),
+            else => |actual_size| std.debug.panic(
+                "Actual file size ({d}) too small for header (< 512).",
+                .{actual_size},
+            ),
         }
 
         const header: TarHeaderMinimal = .{ .bytes = header_buf[0..512] };
@@ -113,7 +116,10 @@ pub fn parallelUntarToFileSystem(
                     break :loop; // tar EOF
                 }
 
-                const file_name_stripped = try stripComponents(unstripped_file_name, strip_components);
+                const file_name_stripped = try stripComponents(
+                    unstripped_file_name,
+                    strip_components,
+                );
                 if (std.fs.path.dirname(file_name_stripped)) |dir_name| {
                     try dir.makePath(dir_name);
                 }
@@ -138,7 +144,10 @@ pub fn parallelUntarToFileSystem(
 
                 const actual_contents_len = try reader.readAtLeast(contents, file_size);
                 if (actual_contents_len != file_size) {
-                    std.debug.panic("Reported file ({d}) size does not match actual file size ({d})", .{ contents.len, actual_contents_len });
+                    std.debug.panic(
+                        "Reported file ({d}) size does not match actual file size ({d})",
+                        .{ contents.len, actual_contents_len },
+                    );
                 }
 
                 try reader.skipBytes(pad_len, .{});
@@ -167,19 +176,172 @@ pub fn parallelUntarToFileSystem(
         logger.err().logf("UnTarTask encountered error: {s}", .{@errorName(err)});
 }
 
-pub fn writeTarHeader(writer: anytype, typeflag: TarOutputHeader.FileType, path: []const u8, size: u64) !void {
-    var header = TarOutputHeader.init();
+/// A struct that is exactly 512 bytes and matches tar file format. This is
+/// intended to be used for outputting tar files; for parsing there is
+/// `std.tar.Header`.
+///
+/// TODO:(Zig 0.15.0) Hopefully the change to expose this header from the stdlib
+/// will have made it in, update it if so!
+const TarOutputHeader = extern struct {
+    // This struct was originally copied from
+    // https://github.com/mattnite/tar/blob/main/src/main.zig which is MIT
+    // licensed.
+    //
+    // The name, linkname, magic, uname, and gname are null-terminated character
+    // strings. All other fields are zero-filled octal numbers in ASCII. Each
+    // numeric field of width w contains w minus 1 digits, and a null.
+    // Reference: https://www.gnu.org/software/tar/manual/html_node/Standard.html
+    // POSIX header:                                  byte offset
+    name: [100]u8 = [_]u8{0} ** 100, //                         0
+    mode: [7:0]u8 = default_mode.file, //                     100
+    uid: [7:0]u8 = [_:0]u8{0} ** 7, // unused                 108
+    gid: [7:0]u8 = [_:0]u8{0} ** 7, // unused                 116
+    size: [11:0]u8 = [_:0]u8{'0'} ** 11, //                   124
+    mtime: [11:0]u8 = [_:0]u8{'0'} ** 11, //                  136
+    checksum: [7:0]u8 = [_:0]u8{' '} ** 7, //                 148
+    typeflag: FileType = .regular, //                         156
+    linkname: [100]u8 = [_]u8{0} ** 100, //                   157
+    magic: [6]u8 = [_]u8{ 'u', 's', 't', 'a', 'r', 0 }, //    257
+    version: [2]u8 = [_]u8{ '0', '0' }, //                    263
+    uname: [32]u8 = [_]u8{0} ** 32, // unused                 265
+    gname: [32]u8 = [_]u8{0} ** 32, // unused                 297
+    devmajor: [7:0]u8 = [_:0]u8{0} ** 7, // unused            329
+    devminor: [7:0]u8 = [_:0]u8{0} ** 7, // unused            337
+    prefix: [155]u8 = [_]u8{0} ** 155, //                     345
+    pad: [12]u8 = [_]u8{0} ** 12, // unused                   500
+
+    pub const FileType = enum(u8) {
+        regular = '0',
+        symbolic_link = '2',
+        directory = '5',
+        gnu_long_name = 'L',
+        gnu_long_link = 'K',
+    };
+
+    const default_mode = struct {
+        const file = [_:0]u8{ '0', '0', '0', '0', '6', '6', '4' }; // 0o664
+        const dir = [_:0]u8{ '0', '0', '0', '0', '7', '7', '5' }; // 0o775
+        const sym_link = [_:0]u8{ '0', '0', '0', '0', '7', '7', '7' }; // 0o777
+        const other = [_:0]u8{ '0', '0', '0', '0', '0', '0', '0' }; // 0o000
+    };
+
+    pub fn init(typeflag: FileType) TarOutputHeader {
+        return .{
+            .typeflag = typeflag,
+            .mode = switch (typeflag) {
+                .directory => default_mode.dir,
+                .symbolic_link => default_mode.sym_link,
+                .regular => default_mode.file,
+                else => default_mode.other,
+            },
+        };
+    }
+
+    pub fn setSize(self: *TarOutputHeader, size: u64) !void {
+        try octal(&self.size, size);
+    }
+
+    fn octal(buf: []u8, value: u64) !void {
+        var remainder: u64 = value;
+        var pos: usize = buf.len;
+        while (remainder > 0 and pos > 0) {
+            pos -= 1;
+            const c: u8 = @as(u8, @intCast(remainder % 8)) + '0';
+            buf[pos] = c;
+            remainder /= 8;
+            if (pos == 0 and remainder > 0) return error.OctalOverflow;
+        }
+    }
+
+    pub fn setMode(self: *TarOutputHeader, mode: u32) !void {
+        try octal(&self.mode, mode);
+    }
+
+    // Integer number of seconds since January 1, 1970, 00:00 Coordinated Universal Time.
+    // mtime == 0 will use current time
+    pub fn setMtime(self: *TarOutputHeader, mtime: u64) !void {
+        try octal(&self.mtime, mtime);
+    }
+
+    pub fn updateChecksum(self: *TarOutputHeader) !void {
+        var checksum: usize = ' '; // other 7 self.checksum bytes are initialized to ' '
+        for (std.mem.asBytes(self)) |val|
+            checksum += val;
+        try octal(&self.checksum, checksum);
+    }
+
+    pub fn write(self: *TarOutputHeader, output_writer: anytype) !void {
+        try self.updateChecksum();
+        try output_writer.writeAll(std.mem.asBytes(self));
+    }
+
+    pub fn setLinkname(self: *TarOutputHeader, link: []const u8) !void {
+        if (link.len > self.linkname.len) return error.NameTooLong;
+        @memcpy(self.linkname[0..link.len], link);
+    }
+
+    pub fn setPath(self: *TarOutputHeader, prefix: []const u8, sub_path: []const u8) !void {
+        const max_prefix = self.prefix.len;
+        const max_name = self.name.len;
+        const sep = std.fs.path.sep_posix;
+
+        if (prefix.len + sub_path.len > max_name + max_prefix or prefix.len > max_prefix)
+            return error.NameTooLong;
+
+        // both fit into name
+        if (prefix.len > 0 and prefix.len + sub_path.len < max_name) {
+            @memcpy(self.name[0..prefix.len], prefix);
+            self.name[prefix.len] = sep;
+            @memcpy(self.name[prefix.len + 1 ..][0..sub_path.len], sub_path);
+            return;
+        }
+
+        // sub_path fits into name
+        // there is no prefix or prefix fits into prefix
+        if (sub_path.len <= max_name) {
+            @memcpy(self.name[0..sub_path.len], sub_path);
+            @memcpy(self.prefix[0..prefix.len], prefix);
+            return;
+        }
+
+        if (prefix.len > 0) {
+            @memcpy(self.prefix[0..prefix.len], prefix);
+            self.prefix[prefix.len] = sep;
+        }
+        const prefix_pos = if (prefix.len > 0) prefix.len + 1 else 0;
+
+        // add as much to prefix as you can, must split at /
+        const prefix_remaining = max_prefix - prefix_pos;
+        if (std.mem.lastIndexOfScalar(
+            u8,
+            sub_path[0..@min(prefix_remaining, sub_path.len)],
+            '/',
+        )) |sep_pos| {
+            @memcpy(self.prefix[prefix_pos..][0..sep_pos], sub_path[0..sep_pos]);
+            if ((sub_path.len - sep_pos - 1) > max_name) return error.NameTooLong;
+            @memcpy(self.name[0..][0 .. sub_path.len - sep_pos - 1], sub_path[sep_pos + 1 ..]);
+            return;
+        }
+
+        return error.NameTooLong;
+    }
+};
+
+pub fn writeTarHeader(
+    writer: anytype,
+    typeflag: TarOutputHeader.FileType,
+    path: []const u8,
+    size: u64,
+) !void {
+    var header = TarOutputHeader.init(typeflag);
     _ = try std.fmt.bufPrint(&header.name, "{s}", .{path});
     try header.setSize(size);
-    header.typeflag = typeflag;
 
     const mode: u21 = switch (typeflag) {
         // allow read & write, but not execution by anyone
         .regular => 0o666,
-
         // allow read, write, and traversal by anyone
         .directory => 0o777,
-
         // we don't really use anything else, so just set no permissions so that it's obvious something is wrong if this somehow occurs
         else => 0,
     };

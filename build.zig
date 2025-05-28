@@ -17,12 +17,12 @@ pub const Config = struct {
     no_network_tests: bool,
     has_side_effects: bool,
     enable_tracy: bool,
+    use_llvm: bool,
+    force_pic: bool,
 
     pub fn fromBuild(b: *Build) !Config {
         var self = Config{
-            .target = b.standardTargetOptions(.{
-                .default_target = defaultTargetDetectM3() orelse .{},
-            }),
+            .target = b.standardTargetOptions(.{}),
             .optimize = b.standardOptimizeOption(.{}),
             .filters = b.option(
                 []const []const u8,
@@ -85,6 +85,16 @@ pub const Config = struct {
                 "enable-tracy",
                 "Enables tracy",
             ) orelse false,
+            .use_llvm = b.option(
+                bool,
+                "use_llvm",
+                "If disabled, uses experimental self-hosted backend. Only works for x86_64-linux",
+            ) orelse true,
+            .force_pic = b.option(
+                bool,
+                "force_pic",
+                "Builds linked dependencies with PIC enabled",
+            ) orelse false,
         };
 
         if (self.ssh_host) |host| {
@@ -98,15 +108,12 @@ pub const Config = struct {
 pub fn build(b: *Build) !void {
     defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
 
-    // CLI options
     const config = try Config.fromBuild(b);
 
-    // Build options
     const build_options = b.addOptions();
     build_options.addOption(BlockstoreDB, "blockstore_db", config.blockstore_db);
     build_options.addOption(bool, "no_network_tests", config.no_network_tests);
 
-    // CLI build steps
     const install_step = b.getInstallStep();
     const sig_step = b.step("sig", "Run the sig executable");
     const test_step = b.step("test", "Run library tests");
@@ -117,69 +124,45 @@ pub fn build(b: *Build) !void {
     const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
 
     // Dependencies
-    const dep_opts = .{ .target = config.target, .optimize = config.optimize };
+    const dep_opts = .{
+        .target = config.target,
+        .optimize = config.optimize,
+    };
 
-    const base58_dep = b.dependency("base58", dep_opts);
-    const base58_mod = base58_dep.module("base58");
-
-    const zig_network_dep = b.dependency("zig-network", dep_opts);
-    const zig_network_mod = zig_network_dep.module("network");
-
-    const httpz_dep = b.dependency("httpz", dep_opts);
-    const httpz_mod = httpz_dep.module("httpz");
-
-    const zstd_dep = b.dependency("zstd", dep_opts);
-    const zstd_mod = zstd_dep.module("zstd");
-
-    const poseidon_dep = b.dependency("poseidon", dep_opts);
-    const poseidon_mod = poseidon_dep.module("poseidon");
-
-    const rocksdb_dep = b.dependency("rocksdb", dep_opts);
-    const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
-
-    const secp256k1_dep = b.dependency("secp256k1", dep_opts);
-    const secp256k1_mod = secp256k1_dep.module("secp256k1");
+    const base58_mod = b.dependency("base58", dep_opts).module("base58");
+    const zig_network_mod = b.dependency("zig-network", dep_opts).module("network");
+    const httpz_mod = b.dependency("httpz", dep_opts).module("httpz");
+    const zstd_mod = b.dependency("zstd", dep_opts).module("zstd");
+    const poseidon_mod = b.dependency("poseidon", dep_opts).module("poseidon");
+    const xev_mod = b.dependency("xev", dep_opts).module("xev");
+    const pretty_table_mod = b.dependency("prettytable", dep_opts).module("prettytable");
 
     const lsquic_dep = b.dependency("lsquic", dep_opts);
-    const lsquic_mod = lsquic_dep.module("lsquic");
-
+    const lsquic_mod = b.dependency("lsquic", dep_opts).module("lsquic");
     const ssl_dep = lsquic_dep.builder.dependency("boringssl", dep_opts);
     const ssl_mod = ssl_dep.module("ssl");
 
-    const xev_dep = b.dependency("xev", dep_opts);
-    const xev_mod = xev_dep.module("xev");
+    const rocksdb_dep = b.dependency("rocksdb", dep_opts);
+    const rocksdb_mod = rocksdb_dep.module("bindings");
+    // TODO: UB might be fixed by future RocksDB version upgrade.
+    // reproducable via: zig build test -Dfilter="ledger"
+    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = false;
 
-    const pretty_table_dep = b.dependency("prettytable", dep_opts);
-    const pretty_table_mod = pretty_table_dep.module("prettytable");
-
-    const tracy_dep = b.dependency("tracy", .{
+    // the sig-fuzz target needs to be built as a shared library, which requires
+    // the linked dependencies of sig to have been built with PIC.
+    const secp256k1_mod = b.dependency("secp256k1", .{
         .target = config.target,
-        // needed to avoid ubsan killing tracy with system tracing on (Illegal Instruction)
-        .optimize = .ReleaseFast,
+        .optimize = config.optimize,
+        .force_pic = config.force_pic,
+    }).module("secp256k1");
+
+    const tracy_mod = b.dependency("tracy", .{
+        .target = config.target,
+        .optimize = config.optimize,
         .tracy_enable = config.enable_tracy,
         .tracy_no_system_tracing = false,
-    });
-    const tracy_mod = tracy_dep.module("tracy");
-
-    // expose Sig as a module
-    const sig_mod = b.addModule("sig", .{
-        .root_source_file = b.path("src/sig.zig"),
-    });
-
-    sig_mod.addOptions("build-options", build_options);
-
-    sig_mod.addImport("zig-network", zig_network_mod);
-    sig_mod.addImport("base58", base58_mod);
-    sig_mod.addImport("secp256k1", secp256k1_mod);
-    sig_mod.addImport("httpz", httpz_mod);
-    sig_mod.addImport("zstd", zstd_mod);
-    sig_mod.addImport("poseidon", poseidon_mod);
-    sig_mod.addImport("tracy", tracy_mod);
-
-    switch (config.blockstore_db) {
-        .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
-        .hashmap => {},
-    }
+    }).module("tracy");
+    tracy_mod.sanitize_c = false; // Workaround UB in Tracy.
 
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
@@ -187,36 +170,51 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
     });
 
-    // main executable
-    const sig_exe = b.addExecutable(.{
-        .name = "sig",
-        .root_source_file = b.path("src/cmd.zig"),
+    // zig fmt: off
+    const imports: []const Build.Module.Import = &.{
+        .{ .name = "base58",        .module = base58_mod },
+        .{ .name = "build-options", .module = build_options.createModule() },
+        .{ .name = "httpz",         .module = httpz_mod },
+        .{ .name = "lsquic",        .module = lsquic_mod },
+        .{ .name = "poseidon",      .module = poseidon_mod },
+        .{ .name = "prettytable",   .module = pretty_table_mod },
+        .{ .name = "secp256k1",     .module = secp256k1_mod },
+        .{ .name = "ssl",           .module = ssl_mod },
+        .{ .name = "tracy",         .module = tracy_mod },
+        .{ .name = "xev",           .module = xev_mod },
+        .{ .name = "zig-network",   .module = zig_network_mod },
+        .{ .name = "zstd",          .module = zstd_mod },
+    };
+    // zig fmt: on
+
+    const sig_mod = b.addModule("sig", .{
+        .root_source_file = b.path("src/sig.zig"),
         .target = config.target,
         .optimize = config.optimize,
-        .sanitize_thread = config.enable_tsan,
+        .imports = imports,
     });
-    sig_step.dependOn(&sig_exe.step);
-    install_step.dependOn(&sig_exe.step);
+
+    switch (config.blockstore_db) {
+        .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+
+    const sig_exe = b.addExecutable(.{
+        .name = "sig",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cmd.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+        }),
+        .sanitize_thread = config.enable_tsan,
+        .use_llvm = config.use_llvm,
+    });
+    sig_exe.linkLibC();
+    sig_exe.root_module.addImport("cli", cli_mod);
 
     // make sure pyroscope's got enough info to profile
     sig_exe.build_id = .fast;
-    sig_exe.root_module.omit_frame_pointer = false;
-    sig_exe.root_module.strip = false;
-
-    sig_exe.linkLibC();
-    sig_exe.root_module.addOptions("build-options", build_options);
-
-    sig_exe.root_module.addImport("cli", cli_mod);
-    sig_exe.root_module.addImport("xev", xev_mod);
-    sig_exe.root_module.addImport("base58", base58_mod);
-    sig_exe.root_module.addImport("httpz", httpz_mod);
-    sig_exe.root_module.addImport("zig-network", zig_network_mod);
-    sig_exe.root_module.addImport("zstd", zstd_mod);
-    sig_exe.root_module.addImport("lsquic", lsquic_mod);
-    sig_exe.root_module.addImport("secp256k1", secp256k1_mod);
-    sig_exe.root_module.addImport("ssl", ssl_mod);
-    sig_exe.root_module.addImport("xev", xev_mod);
-    sig_exe.root_module.addImport("tracy", tracy_mod);
 
     switch (config.blockstore_db) {
         .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -224,89 +222,56 @@ pub fn build(b: *Build) !void {
     }
     try addInstallAndRun(b, sig_step, sig_exe, config);
 
-    // unit tests
     const unit_tests_exe = b.addTest(.{
-        .root_source_file = b.path("src/tests.zig"),
-        .target = config.target,
-        .optimize = config.optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+        }),
         .sanitize_thread = config.enable_tsan,
         .filters = config.filters orelse &.{},
+        .use_llvm = config.use_llvm,
     });
-    test_step.dependOn(&unit_tests_exe.step);
-    install_step.dependOn(&unit_tests_exe.step);
-
     unit_tests_exe.linkLibC();
-    unit_tests_exe.root_module.addOptions("build-options", build_options);
-
-    unit_tests_exe.root_module.addImport("xev", xev_mod);
-    unit_tests_exe.root_module.addImport("base58", base58_mod);
-    unit_tests_exe.root_module.addImport("httpz", httpz_mod);
-    unit_tests_exe.root_module.addImport("zig-network", zig_network_mod);
-    unit_tests_exe.root_module.addImport("zstd", zstd_mod);
-    unit_tests_exe.root_module.addImport("poseidon", poseidon_mod);
-    unit_tests_exe.root_module.addImport("secp256k1", secp256k1_mod);
-    unit_tests_exe.root_module.addImport("tracy", tracy_mod);
-
     switch (config.blockstore_db) {
         .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
     try addInstallAndRun(b, test_step, unit_tests_exe, config);
 
-    // fuzz test
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
-        .root_source_file = b.path("src/fuzz.zig"),
-        .target = config.target,
-        .optimize = config.optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/fuzz.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+        }),
         .sanitize_thread = config.enable_tsan,
     });
-    fuzz_step.dependOn(&fuzz_exe.step);
-    install_step.dependOn(&fuzz_exe.step);
-
     fuzz_exe.linkLibC();
     fuzz_exe.root_module.addOptions("build-options", build_options);
-
-    fuzz_exe.root_module.addImport("xev", xev_mod);
-    fuzz_exe.root_module.addImport("base58", base58_mod);
-    fuzz_exe.root_module.addImport("secp256k1", secp256k1_mod);
-    fuzz_exe.root_module.addImport("zig-network", zig_network_mod);
-    fuzz_exe.root_module.addImport("httpz", httpz_mod);
-    fuzz_exe.root_module.addImport("zstd", zstd_mod);
-    fuzz_exe.root_module.addImport("tracy", tracy_mod);
-
     switch (config.blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
     }
     try addInstallAndRun(b, fuzz_step, fuzz_exe, config);
 
-    // benchmarks
     const benchmark_exe = b.addExecutable(.{
         .name = "benchmark",
-        .root_source_file = b.path("src/benchmarks.zig"),
-        .target = config.target,
-        .optimize = config.optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/benchmarks.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+        }),
         .sanitize_thread = config.enable_tsan,
     });
-    benchmark_step.dependOn(&benchmark_exe.step);
-    install_step.dependOn(&benchmark_exe.step);
-
     benchmark_exe.linkLibC();
-    benchmark_exe.root_module.addOptions("build-options", build_options);
 
     // make sure pyroscope's got enough info to profile
     benchmark_exe.build_id = .fast;
-    benchmark_exe.root_module.omit_frame_pointer = false;
-    benchmark_exe.root_module.strip = false;
-
-    benchmark_exe.root_module.addImport("secp256k1", secp256k1_mod);
-    benchmark_exe.root_module.addImport("base58", base58_mod);
-    benchmark_exe.root_module.addImport("zig-network", zig_network_mod);
-    benchmark_exe.root_module.addImport("httpz", httpz_mod);
-    benchmark_exe.root_module.addImport("zstd", zstd_mod);
-    benchmark_exe.root_module.addImport("prettytable", pretty_table_mod);
-    benchmark_exe.root_module.addImport("tracy", tracy_mod);
 
     switch (config.blockstore_db) {
         .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
@@ -314,7 +279,6 @@ pub fn build(b: *Build) !void {
     }
     try addInstallAndRun(b, benchmark_step, benchmark_exe, config);
 
-    // geyser reader
     const geyser_reader_exe = b.addExecutable(.{
         .name = "geyser",
         .root_source_file = b.path("src/geyser/main.zig"),
@@ -336,9 +300,6 @@ pub fn build(b: *Build) !void {
         .optimize = config.optimize,
         .sanitize_thread = config.enable_tsan,
     });
-    vm_step.dependOn(&vm_exe.step);
-    install_step.dependOn(&vm_exe.step);
-
     vm_exe.root_module.addImport("sig", sig_mod);
     vm_exe.root_module.addImport("cli", cli_mod);
     try addInstallAndRun(b, vm_step, vm_exe, config);
@@ -422,37 +383,6 @@ fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
     }
 }
 
-/// TODO: remove after updating to 0.14, where M3/M4 feature detection is fixed.
-/// Ref: https://github.com/ziglang/zig/pull/21116
-fn defaultTargetDetectM3() ?std.Target.Query {
-    const builtin = @import("builtin");
-    if (builtin.os.tag != .macos) return null;
-    switch (builtin.cpu.arch) {
-        .aarch64, .aarch64_be => {},
-        else => return null,
-    }
-    var cpu_family: std.c.CPUFAMILY = undefined;
-    var len: usize = @sizeOf(std.c.CPUFAMILY);
-    std.posix.sysctlbynameZ("hw.cpufamily", &cpu_family, &len, null, 0) catch unreachable;
-
-    // Detects M4 as M3 to get around missing C flag translations when passing the target to dependencies.
-    // https://github.com/Homebrew/brew/blob/64edbe6b7905c47b113c1af9cb1a2009ed57a5c7/Library/Homebrew/extend/os/mac/hardware/cpu.rb#L106
-    const model: *const std.Target.Cpu.Model = switch (@intFromEnum(cpu_family)) {
-        else => return null,
-        0x2876f5b5 => &std.Target.aarch64.cpu.apple_a17, // ARM_COLL
-        0xfa33415e => &std.Target.aarch64.cpu.apple_m3, // ARM_IBIZA
-        0x5f4dea93 => &std.Target.aarch64.cpu.apple_m3, // ARM_LOBOS
-        0x72015832 => &std.Target.aarch64.cpu.apple_m3, // ARM_PALMA
-        0x6f5129ac => &std.Target.aarch64.cpu.apple_m3, // ARM_DONAN (M4)
-        0x17d5b93a => &std.Target.aarch64.cpu.apple_m3, // ARM_BRAVA (M4)
-    };
-
-    return .{
-        .cpu_arch = builtin.cpu.arch,
-        .cpu_model = .{ .explicit = model },
-    };
-}
-
 const ssh = struct {
     /// SSH into the host and call `zig targets` to determine the compilation
     /// target for that machine.
@@ -517,7 +447,7 @@ const ssh = struct {
         const exe = b.addExecutable(.{
             .name = "send-file",
             .root_source_file = b.path("scripts/send-file.zig"),
-            .target = b.host,
+            .target = b.graph.host,
             .link_libc = true,
         });
 

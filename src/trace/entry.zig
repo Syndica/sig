@@ -32,7 +32,7 @@ pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
                 .fields = undefined,
             };
             var new_fields: FieldsPlus(name, @TypeOf(value)) = undefined;
-            inline for (@typeInfo(Fields).Struct.fields) |existing_field| {
+            inline for (@typeInfo(Fields).@"struct".fields) |existing_field| {
                 @field(new_fields, existing_field.name) = @field(self.fields, existing_field.name);
             }
             @field(new_fields, name) = value;
@@ -57,25 +57,24 @@ pub fn Entry(comptime Fields: type, comptime scope: ?[]const u8) type {
         fn FieldsPlus(comptime field_name: [:0]const u8, comptime FieldType: type) type {
             const info = @typeInfo(Fields);
             const ActualFieldType = switch (@typeInfo(FieldType)) {
-                .ComptimeFloat => f64,
-                .ComptimeInt => u64,
+                .comptime_float => f64,
+                .comptime_int => u64,
                 else => FieldType,
             };
-            const new_fields = info.Struct.fields ++ &[_]std.builtin.Type.StructField{.{
+            const new_fields = info.@"struct".fields ++ &[_]std.builtin.Type.StructField{.{
                 .name = field_name,
                 .type = ActualFieldType,
-                .default_value = null,
+                .default_value_ptr = null,
                 .is_comptime = false,
                 .alignment = @alignOf(FieldType),
             }};
-            const new_struct = std.builtin.Type.Struct{
+            return @Type(.{ .@"struct" = .{
                 .layout = .auto,
                 .backing_integer = null,
                 .fields = new_fields,
                 .decls = &.{},
                 .is_tuple = false,
-            };
-            return @Type(.{ .Struct = new_struct });
+            } });
         }
     };
 }

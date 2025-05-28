@@ -294,7 +294,7 @@ pub const BytesRef = struct {
 
     pub const Deinitializer = union(enum) {
         allocator: Allocator,
-        rocksdb: *const fn (?*anyopaque) callconv(.C) void,
+        rocksdb: *const fn (?*anyopaque) callconv(.c) void,
         rc_slice: Allocator,
 
         pub fn deinit(self: Deinitializer, data: []const u8) void {

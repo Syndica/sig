@@ -5,7 +5,6 @@
 // https://github.com/kprotty/zap/blob/blog/src/thread_pool.zig
 
 const std = @import("std");
-const builtin = @import("builtin");
 const Futex = std.Thread.Futex;
 const assert = std.debug.assert;
 const Atomic = std.atomic.Value;
@@ -417,14 +416,8 @@ pub const ThreadPool = struct {
                 .release,
                 .monotonic,
             ) orelse break));
-            const spawn_config = if (builtin.os.tag.isDarwin())
-                // stack size must be a multiple of page_size
-                // macOS will fail to spawn a thread if the stack size is not a multiple of page_size
-                std.Thread.SpawnConfig{ .stack_size = ((std.Thread.SpawnConfig{}).stack_size + (std.mem.page_size / 2) / std.mem.page_size) * std.mem.page_size }
-            else
-                std.Thread.SpawnConfig{};
-
-            const thread = std.Thread.spawn(spawn_config, Thread.run, .{self}) catch return self.unregister(null);
+            const thread = std.Thread.spawn(.{}, Thread.run, .{self}) catch
+                return self.unregister(null);
             thread.detach();
         }
     }
@@ -465,14 +458,7 @@ pub const ThreadPool = struct {
 
                 // We signaled to spawn a new thread
                 if (can_wake and sync.spawned < self.max_threads) {
-                    const spawn_config = if (builtin.os.tag.isDarwin())
-                        // stack size must be a multiple of page_size
-                        // macOS will fail to spawn a thread if the stack size is not a multiple of page_size
-                        std.Thread.SpawnConfig{ .stack_size = ((std.Thread.SpawnConfig{}).stack_size + (std.mem.page_size / 2) / std.mem.page_size) * std.mem.page_size }
-                    else
-                        std.Thread.SpawnConfig{};
-
-                    const thread = std.Thread.spawn(spawn_config, Thread.run, .{self}) catch return self.unregister(null);
+                    const thread = std.Thread.spawn(.{}, Thread.run, .{self}) catch return self.unregister(null);
                     // if (self.name.len > 0) thread.setName(self.name) catch {};
                     return thread.detach();
                 }
@@ -753,7 +739,7 @@ pub const ThreadPool = struct {
                 // Acquire barrier to ensure operations before the shutdown() are seen after the wait().
                 // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS failure + load which are common.
                 if (state == SHUTDOWN) {
-                    self.state.fence(.acquire);
+                    _ = self.state.load(.acquire);
                     return;
                 }
 
@@ -805,7 +791,7 @@ pub const ThreadPool = struct {
                 // Acquire barrier to ensure operations before the shutdown() are seen after the wait().
                 // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS failure + load which are common.
                 if (state == SHUTDOWN) {
-                    std.atomic.fence(.acquire);
+                    _ = self.state.load(.acquire);
                     return;
                 }
 
@@ -1008,7 +994,7 @@ pub const ThreadPool = struct {
                             const node = nodes orelse break;
                             nodes = node.next;
 
-                            // Array written atomically with weakest ordering since it could be getting atomically read by steal().
+                            // array written atomically with weakest ordering since it could be getting atomically read by steal().
                             self.array[tail % capacity].store(node, .release);
                             tail +%= 1;
                         }

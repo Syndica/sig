@@ -398,7 +398,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
         max_list_entries: usize,
     ) Allocator.Error!VersionedEpochStake {
         // randomly generate the tag otherwise
-        comptime std.debug.assert(@typeInfo(VersionedEpochStake).Union.fields.len == 1);
+        comptime std.debug.assert(@typeInfo(VersionedEpochStake).@"union".fields.len == 1);
         return .{
             .current = try Current.initRandom(allocator, random, max_list_entries),
         };
@@ -784,10 +784,10 @@ pub const VoteAccount = struct {
 
         const vote_state: ?anyerror!VoteState =
             switch (random.enumValue(enum { null, err, value })) {
-            .null => null,
-            .err => @as(anyerror!VoteState, sig.rand.errorValue(random, RandomErrorSet)),
-            .value => VoteState.initRandom(random),
-        };
+                .null => null,
+                .err => @as(anyerror!VoteState, sig.rand.errorValue(random, RandomErrorSet)),
+                .value => VoteState.initRandom(random),
+            };
 
         return .{
             .account = account,

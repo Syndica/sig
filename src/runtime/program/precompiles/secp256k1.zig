@@ -3,12 +3,16 @@ const builtin = @import("builtin");
 const libsecp256k1 = @import("secp256k1");
 const sig = @import("../../../sig.zig");
 
-const precompile_programs = sig.runtime.program.precompile_programs;
-const PrecompileProgramError = precompile_programs.PrecompileProgramError;
+const precompile_programs = sig.runtime.program.precompiles;
 
+const Pubkey = sig.core.Pubkey;
+const PrecompileProgramError = precompile_programs.PrecompileProgramError;
 const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const Secp256k1 = std.crypto.ecc.Secp256k1;
 const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
+
+pub const ID =
+    Pubkey.parseBase58String("KeccakSecp256k11111111111111111111111111111") catch unreachable;
 
 pub const SECP256K1_DATA_START = SECP256K1_SIGNATURE_OFFSETS_SERIALIZED_SIZE +
     SECP256K1_SIGNATURE_OFFSETS_START;
@@ -280,7 +284,7 @@ fn newSecp256k1Instruction(
     @memcpy(instruction_data[1..SECP256K1_DATA_START], offsets.asBytes());
 
     return .{
-        .program_id = sig.runtime.ids.PRECOMPILE_SECP256K1_PROGRAM_ID,
+        .program_id = ID,
         .accounts = &.{},
         .data = instruction_data,
     };
@@ -420,7 +424,7 @@ test "secp256k1 count is zero but sig data exists" {
 test "secp256k1" {
     const allocator = std.testing.allocator;
 
-    const keypair = try Ecdsa.KeyPair.create(null);
+    const keypair = Ecdsa.KeyPair.generate();
 
     const instruction = try newSecp256k1Instruction(allocator, &keypair, "hello");
     defer allocator.free(instruction.data);
@@ -484,7 +488,7 @@ test "secp256k1" {
 test "flipped signature" {
     const seed: [32]u8 = .{ 50, 83 } ++ .{0} ** 30;
 
-    const keypair = try Ecdsa.KeyPair.create(seed);
+    const keypair = try Ecdsa.KeyPair.generateDeterministic(seed);
     const eth_address = constructEthAddress(&keypair.public_key);
 
     const message = "hello";
@@ -578,7 +582,7 @@ test "flipped signature" {
 test "secp256 malleability" {
     const allocator = std.testing.allocator;
 
-    const keypair = try Ecdsa.KeyPair.create(null);
+    const keypair = Ecdsa.KeyPair.generate();
     const eth_address = constructEthAddress(&keypair.public_key);
     const message = "hello";
 

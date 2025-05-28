@@ -43,9 +43,9 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-fn GpaOrCAllocator(comptime gpa_config: std.heap.GeneralPurposeAllocatorConfig) type {
+fn GpaOrCAllocator(comptime gpa_config: std.heap.DebugAllocatorConfig) type {
     if (builtin.mode == .Debug) {
-        return std.heap.GeneralPurposeAllocator(gpa_config);
+        return std.heap.DebugAllocator(gpa_config);
     }
 
     return struct {
@@ -1169,7 +1169,7 @@ fn validator(
     const replay_thread = try app_base.spawnService(
         "replay",
         sig.replay.service.run,
-        .{.{
+        .{sig.replay.service.ReplayDependencies{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
             .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
@@ -1613,9 +1613,7 @@ fn mockRpcServer(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
     defer server_ctx.joinDeinit();
 
     var maybe_liou = try sig.rpc.server.LinuxIoUring.init(&server_ctx);
-    // TODO: currently `if (a) |*b|` on `a: ?noreturn` causes analysis of
-    // the unwrap block, even though `if (a) |b|` doesn't; fixed in 0.14
-    defer if (maybe_liou != null) maybe_liou.?.deinit();
+    defer if (maybe_liou) |*liou| liou.deinit();
 
     var exit = std.atomic.Value(bool).init(false);
     try sig.rpc.server.serve(
@@ -1649,7 +1647,7 @@ const AppBase = struct {
         const logger = plain_logger.withScope(LOG_SCOPE);
         errdefer logger.deinit();
 
-        const exit = try std.heap.c_allocator.create(std.atomic.Value(bool));
+        const exit = try allocator.create(std.atomic.Value(bool));
         errdefer allocator.destroy(exit);
         exit.* = std.atomic.Value(bool).init(false);
 
@@ -1705,8 +1703,14 @@ const AppBase = struct {
         function: anytype,
         args: anytype,
     ) std.Thread.SpawnError!std.Thread {
-        return try sig.utils.service_manager
-            .spawnService(self.logger, self.exit, name, .{}, function, args);
+        return try sig.utils.service_manager.spawnService(
+            self.logger,
+            self.exit,
+            name,
+            .{},
+            function,
+            args,
+        );
     }
 
     /// Signals the shutdown, however it does not block.

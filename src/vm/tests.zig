@@ -1904,6 +1904,7 @@ test "pqr" {
         .{ .compute_meter = 6 },
     );
     defer deinitTranactionContext(allocator, tc);
+
     const max_int = std.math.maxInt(u64);
     inline for (
         // zig fmt: off
@@ -1991,9 +1992,6 @@ test "pqr" {
 
         const map = try MemoryMap.init(allocator, &.{}, .v2, .{});
 
-        // TODO: I would have defined the `tc` struct inside of the loop,
-        // but an LLVM 18 miscompilation on ARM64 doesn't let me.
-        // TODO(0.14): Move it back
         tc.compute_meter = 6;
         var vm = try Vm.init(
             allocator,
@@ -2328,7 +2326,7 @@ pub fn testElfWithSyscalls(
         prng.random(),
         .{
             .accounts = &.{
-                .{ .pubkey = sig.runtime.program.system_program.ID },
+                .{ .pubkey = sig.runtime.program.system.ID },
             },
             .compute_meter = expected[1],
         },
@@ -2338,7 +2336,7 @@ pub fn testElfWithSyscalls(
     const instr_info = InstructionInfo{
         .program_meta = .{
             .index_in_transaction = 0,
-            .pubkey = sig.runtime.program.system_program.ID,
+            .pubkey = sig.runtime.program.system.ID,
         },
         .account_metas = .{},
         .instruction_data = &.{},

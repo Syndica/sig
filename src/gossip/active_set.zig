@@ -137,7 +137,7 @@ test "init/denit" {
     defer table.deinit();
 
     // insert some contacts
-    var prng = std.rand.DefaultPrng.init(100);
+    var prng = std.Random.DefaultPrng.init(100);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
@@ -145,7 +145,7 @@ test "init/denit" {
         const data = LegacyContactInfo.initRandom(prng.random());
         try gossip_peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(data));
 
-        const keypair = try KeyPair.create(null);
+        const keypair = KeyPair.generate();
         const value = SignedGossipData.initSigned(&keypair, .{
             .LegacyContactInfo = data,
         });
@@ -177,7 +177,7 @@ test "init/denit" {
 test "gracefully rotates with duplicate contact ids" {
     const alloc = std.testing.allocator;
 
-    var prng = std.rand.DefaultPrng.init(100);
+    var prng = std.Random.DefaultPrng.init(100);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 

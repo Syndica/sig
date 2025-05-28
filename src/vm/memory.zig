@@ -618,12 +618,12 @@ const UnalignedMemoryMap = struct {
 /// Returns true if T is a type that has a stable layout to be translated from VM memory.
 fn hasTranslatableRepresentation(comptime T: type) bool {
     return switch (@typeInfo(T)) {
-        .Bool => false, // u8's should be used instead to be explicit on data layout.
-        .Int => |info| @sizeOf(T) * 8 == info.bits, // TODO: check for large than __uint128_t?
-        .Float => T == f32 or T == f64, // extern structs realistically only support float & double.
-        .Pointer => |info| info.size != .Slice, // Slice have undefined memory layout.
-        .Array => |info| hasTranslatableRepresentation(info.child),
-        .Struct => |info| switch (info.layout) {
+        .bool => false, // u8's should be used instead to be explicit on data layout.
+        .int => |info| @sizeOf(T) * 8 == info.bits, // TODO: check for large than __uint128_t?
+        .float => T == f32 or T == f64, // extern structs realistically only support float & double.
+        .pointer => |info| info.size != .slice, // Slice have undefined memory layout.
+        .array => |info| hasTranslatableRepresentation(info.child),
+        .@"struct" => |info| switch (info.layout) {
             .auto => false, // Zig could change the size of structs any time.
             .@"packed" => hasTranslatableRepresentation(info.backing_integer orelse return false),
             .@"extern" => true, // any extern struct has a defined layout according to C.

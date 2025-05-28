@@ -139,18 +139,18 @@ fn Saturating(comptime T: type) type {
             };
 
             var info = switch (@typeInfo(Self)) {
-                .Pointer => |info| info,
-                .Optional => |info| switch (@typeInfo(info.child)) {
-                    .Pointer => return ?AsInt(info.child),
+                .pointer => |info| info,
+                .optional => |info| switch (@typeInfo(info.child)) {
+                    .pointer => return ?AsInt(info.child),
                     else => lazy.nonMatchErr(),
                 },
                 else => lazy.nonMatchErr(),
             };
-            if (info.size != .One) lazy.nonMatchErr();
+            if (info.size != .one) lazy.nonMatchErr();
             if (info.child != Saturating(T)) lazy.nonMatchErr();
             info.child = T;
 
-            return @Type(.{ .Pointer = info });
+            return @Type(.{ .pointer = info });
         }
     };
 }
@@ -413,7 +413,7 @@ pub const ValidatorStakeInfo = struct {
     pub fn isPropagated(self: ValidatorStakeInfo) bool {
         return self.total_epoch_stake == 0 or
             replay_stage.SUPERMINORITY_THRESHOLD
-            .orderAgainstFraction(self.stake, self.total_epoch_stake) == .lt;
+                .orderAgainstFraction(self.stake, self.total_epoch_stake) == .lt;
     }
 };
 
@@ -1010,7 +1010,7 @@ pub const timings = struct {
         }
 
         pub fn eql(self: *const ProgramTiming, other: *const ProgramTiming) bool {
-            inline for (@typeInfo(ProgramTiming).Struct.fields) |field| {
+            inline for (@typeInfo(ProgramTiming).@"struct".fields) |field| {
                 const self_field = &@field(self, field.name);
                 const other_field = &@field(other, field.name);
                 switch (field.type) {
@@ -1123,7 +1123,7 @@ pub const timings = struct {
         }
 
         pub fn eql(self: *const ExecuteDetailsTimings, other: *const ExecuteDetailsTimings) bool {
-            inline for (@typeInfo(ExecuteDetailsTimings).Struct.fields) |field| {
+            inline for (@typeInfo(ExecuteDetailsTimings).@"struct".fields) |field| {
                 const self_field = &@field(self, field.name);
                 const other_field = &@field(other, field.name);
                 switch (field.type) {
@@ -1409,7 +1409,7 @@ test "addNodePubkeyInternal" {
     var epoch_vote_accounts: sig.core.stake.StakeAndVoteAccountsMap = .{};
     defer sig.core.stake.stakeAndVoteAccountsMapDeinit(epoch_vote_accounts, allocator);
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
-        try epoch_vote_accounts.ensureTotalCapacity(allocator, 1);
+        try epoch_vote_accounts.ensureUnusedCapacity(allocator, 1);
         const VoteAccount = sig.core.stake.VoteAccount;
         const vote_account = try VoteAccount.initRandom(
             random,
@@ -1472,7 +1472,7 @@ test "addNodePubkeyInternal" {
         allocator,
     );
     for (vote_account_pubkeys2[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
-        try epoch_vote_accounts.ensureTotalCapacity(allocator, 1);
+        try epoch_vote_accounts.ensureUnusedCapacity(allocator, 1);
         const VoteAccount = sig.core.stake.VoteAccount;
         const vote_account = try VoteAccount.initRandom(
             random,
@@ -1713,7 +1713,7 @@ fn forkStatsInitRandom(
     errdefer allocator.free(vote_threshold);
 
     for (vote_threshold) |*vt| {
-        const Tag = @typeInfo(ThresholdDecision).Union.tag_type.?;
+        const Tag = @typeInfo(ThresholdDecision).@"union".tag_type.?;
         vt.* = switch (random.enumValueWithIndex(Tag, u1)) {
             inline .passed_threshold => |tag| tag,
             inline .failed_threshold => |tag| @unionInit(ThresholdDecision, @tagName(tag), .{

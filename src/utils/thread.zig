@@ -32,8 +32,8 @@ pub fn SpawnThreadTasksParams(comptime TaskFn: type) type {
         max_threads: usize,
         params: Params,
 
-        pub const Params = std.meta.ArgsTuple(@Type(.{ .Fn = blk: {
-            var info = @typeInfo(TaskFn).Fn;
+        pub const Params = std.meta.ArgsTuple(@Type(.{ .@"fn" = blk: {
+            var info = @typeInfo(TaskFn).@"fn";
             info.params = info.params[0 .. info.params.len - 1];
             break :blk info;
         } }));
@@ -46,13 +46,14 @@ pub fn spawnThreadTasks(
     comptime taskFn: anytype,
     config: SpawnThreadTasksParams(@TypeOf(taskFn)),
 ) !void {
-    const chunk_size, const n_threads = chunkSizeAndThreadCount(config.data_len, config.max_threads);
+    const chunk_size, const n_threads =
+        chunkSizeAndThreadCount(config.data_len, config.max_threads);
 
     const S = struct {
         task_params: TaskParams,
         fcn_params: @TypeOf(config).Params,
 
-        fn run(self: *const @This()) @typeInfo(@TypeOf(taskFn)).Fn.return_type.? {
+        fn run(self: *const @This()) @typeInfo(@TypeOf(taskFn)).@"fn".return_type.? {
             return @call(.auto, taskFn, self.fcn_params ++ .{self.task_params});
         }
     };
@@ -66,7 +67,10 @@ pub fn spawnThreadTasks(
 
     var start_index: usize = 0;
     for (0..n_threads) |thread_id| {
-        const end_index = if (thread_id == n_threads - 1) config.data_len else (start_index + chunk_size);
+        const end_index = if (thread_id == n_threads - 1)
+            config.data_len
+        else
+            (start_index + chunk_size);
         try thread_pool.schedule(allocator, .{
             .task_params = .{
                 .start_index = start_index,
@@ -94,7 +98,7 @@ pub fn spawnThreadTasks(
 /// This will require changes the underlying ThreadPool implementation.
 pub fn HomogeneousThreadPool(comptime TaskType: type) type {
     // the task's return type
-    const TaskResult = @typeInfo(@TypeOf(TaskType.run)).Fn.return_type.?;
+    const TaskResult = @typeInfo(@TypeOf(TaskType.run)).@"fn".return_type.?;
 
     // compatibility layer between user-defined TaskType and ThreadPool's Task type,
     const TaskAdapter = struct {

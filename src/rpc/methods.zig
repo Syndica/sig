@@ -73,7 +73,7 @@ pub const MethodAndParams = union(enum) {
     sendTransaction: SendTransaction,
     simulateTransaction: noreturn,
 
-    pub const Tag = @typeInfo(MethodAndParams).Union.tag_type.?;
+    pub const Tag = @typeInfo(MethodAndParams).@"union".tag_type.?;
 
     /// Returns a wrapper over `self` which will be stringified as an array.
     pub fn jsonStringifyAsParamsArray(self: MethodAndParams) JsonStringifiedAsParamsArray {
@@ -97,10 +97,10 @@ pub const MethodAndParams = union(enum) {
                         var null_count: usize = 0;
 
                         try jw.beginArray();
-                        inline for (@typeInfo(T).Struct.fields) |field| cont: {
+                        inline for (@typeInfo(T).@"struct".fields) |field| cont: {
                             const maybe_value = @field(method, field.name);
                             const value = blk: {
-                                if (@typeInfo(field.type) != .Optional) break :blk maybe_value;
+                                if (@typeInfo(field.type) != .optional) break :blk maybe_value;
                                 if (maybe_value) |value| break :blk value;
                                 null_count += 1;
                                 break :cont;

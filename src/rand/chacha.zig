@@ -32,7 +32,7 @@ pub fn ChaChaRng(comptime rounds: usize) type {
             return .{ .block_rng = .{ .core = ChaCha(rounds).init(seed, .{0} ** 12) } };
         }
 
-        pub fn random(self: *Self) std.rand.Random {
+        pub fn random(self: *Self) std.Random {
             return self.block_rng.random();
         }
     };
@@ -196,7 +196,7 @@ fn leIntBitCast(comptime Output: type, input: anytype) Output {
 /// len of array, or 1 if not array.
 fn numItems(comptime T: type) usize {
     return switch (@typeInfo(T)) {
-        .Array => |a| a.len,
+        .array => |a| a.len,
         else => 1,
     };
 }

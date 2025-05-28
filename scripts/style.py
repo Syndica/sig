@@ -34,7 +34,7 @@ def get_files(args):
     dirs = [*args.dirs]
     while len(dirs) > 0:
         d = dirs.pop()
-        if os.path.isfile(d): 
+        if os.path.isfile(d):
             return [d]
         files = os.listdir(d)
         for file in files:
@@ -46,10 +46,12 @@ def get_files(args):
                     files_to_check.append(full_path)
     return files_to_check
 
+
 def remove_line(file_contents: str, line: int) -> str:
     lines = file_contents.splitlines()
     del lines[line]
     return "\n".join(lines)
+
 
 def unused_imports(args, files_to_check):
     """Checks for unused imports in files."""
@@ -80,7 +82,9 @@ def unused_imports(args, files_to_check):
 
             # identify which imports are unused
             for name, line in imported_names:
-                match = re.findall(f"[^a-zA-Z0-9_.]{name}[^a-zA-Z0-9_]", remove_line(orig_file, line))
+                match = re.findall(
+                    f"[^a-zA-Z0-9_.]{name}[^a-zA-Z0-9_]", remove_line(orig_file, line)
+                )
                 if len(match) == 0:
                     lines_to_drop.add(line)
                     num_lines_to_remove += 1
@@ -125,16 +129,14 @@ def unused_imports(args, files_to_check):
 
     return total_lines_removed
 
+
 files_excluded_from_line_length_check = [
-    "src/accountsdb/bank.zig",
     "src/accountsdb/db.zig",
     "src/accountsdb/download.zig",
     "src/accountsdb/fuzz_snapshot.zig",
     "src/accountsdb/index.zig",
     "src/accountsdb/snapshots.zig",
     "src/accountsdb/swiss_map.zig",
-    "src/accountsdb/sysvars.zig",
-    "src/benchmarks.zig",
     "src/bincode/arraylist.zig",
     "src/bincode/bincode.zig",
     "src/bincode/int.zig",
@@ -144,7 +146,6 @@ files_excluded_from_line_length_check = [
     "src/bloom/bitvec.zig",
     "src/core/leader_schedule.zig",
     "src/core/transaction.zig",
-    "src/geyser/core.zig",
     "src/gossip/data.zig",
     "src/gossip/fuzz_service.zig",
     "src/gossip/fuzz_table.zig",
@@ -153,7 +154,6 @@ files_excluded_from_line_length_check = [
     "src/gossip/pull_request.zig",
     "src/gossip/service.zig",
     "src/gossip/shards.zig",
-    "src/ledger/benchmarks.zig",
     "src/ledger/cleanup_service.zig",
     "src/ledger/database/hashmap.zig",
     "src/ledger/database/rocksdb.zig",
@@ -165,27 +165,15 @@ files_excluded_from_line_length_check = [
     "src/ledger/shred_inserter/working_state.zig",
     "src/ledger/shred.zig",
     "src/ledger/test_shreds.zig",
-    "src/net/echo.zig",
-    "src/net/net.zig",
-    "src/prometheus/histogram.zig",
-    "src/prometheus/metric.zig",
-    "src/prometheus/registry.zig",
-    "src/rand/rand.zig",
     "src/rpc/client.zig",
     "src/rpc/request.zig",
     "src/rpc/test_serialize.zig",
     "src/shred_network/repair_message.zig",
     "src/shred_network/repair_service.zig",
     "src/sync/thread_pool.zig",
-    "src/time/time.zig",
     "src/transaction_sender/mock_transfer_generator.zig",
     "src/transaction_sender/service.zig",
     "src/transaction_sender/transaction_pool.zig",
-    "src/utils/allocators.zig",
-    "src/utils/fmt.zig",
-    "src/utils/tar.zig",
-    "src/utils/thread.zig",
-    "src/utils/types.zig",
 ]
 
 
@@ -209,9 +197,9 @@ def line_length(args, files_to_check):
                 fmt_off = True
             if "// zig fmt: on" in stripped:
                 fmt_off = False
-                continue # Don't check lines that have formatting turned off
+                continue  # Don't check lines that have formatting turned off
 
-            if fmt_off: 
+            if fmt_off:
                 continue
 
             if stripped.strip().startswith(("//", "\\" + "\\")):

@@ -28,6 +28,12 @@ pub const FeatureSet = struct {
             return slot >= activated_slot;
         return false;
     }
+
+    pub fn allEnabled(allocator: std.mem.Allocator) !FeatureSet {
+        var feature_set = FeatureSet.EMPTY;
+        for (FEATURES) |feature| try feature_set.active.put(allocator, feature, 0);
+        return feature_set;
+    }
 };
 
 pub const DEPRECATE_REWARDS_SYSVAR =
@@ -723,6 +729,9 @@ pub const REQUIRE_STATIC_NONCE_ACCOUNT =
 pub const RAISE_BLOCK_LIMITS_TO_60M =
     Pubkey.parseBase58String("6oMCUgfY6BzZ6jwB681J6ju5Bh6CjVXbd7NeWYqiXBSu") catch unreachable;
 
+pub const MASK_OUT_RENT_EPOCH_IN_VM_SERIALIZATION =
+    Pubkey.parseBase58String("RENtePQcDLrAbxAsP3k8dwVcnNYQ466hi2uKvALjnXx") catch unreachable;
+
 pub const FEATURES = [_]Pubkey{
     DEPRECATE_REWARDS_SYSVAR,
     PICO_INFLATION,
@@ -955,4 +964,5 @@ pub const FEATURES = [_]Pubkey{
     ENABLE_VOTE_ADDRESS_LEADER_SCHEDULE,
     REQUIRE_STATIC_NONCE_ACCOUNT,
     RAISE_BLOCK_LIMITS_TO_60M,
+    MASK_OUT_RENT_EPOCH_IN_VM_SERIALIZATION,
 };

@@ -12,7 +12,7 @@ const InstructionError = sig.core.instruction.InstructionError;
 const Pubkey = sig.core.Pubkey;
 const runtime = sig.runtime;
 const Slot = sig.core.Slot;
-const system_program = runtime.program.system_program;
+const system_program = runtime.program.system;
 const sysvar = runtime.sysvar;
 
 const LOOKUP_TABLE_META_SIZE = state.LOOKUP_TABLE_META_SIZE;
@@ -63,8 +63,8 @@ fn createLookupTable(
 
     const has_relax_authority_signer_check_for_lookup_table_creation =
         ic.tc.feature_set.active.contains(
-        runtime.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
-    );
+            runtime.features.RELAX_AUTHORITY_SIGNER_CHECK_FOR_LOOKUP_TABLE_CREATION,
+        );
 
     // [agave] https://github.com/anza-xyz/agave/blob/8116c10021f09c806159852f65d37ffe6d5a118e/programs/address-lookup-table/src/processor.rs#L59
     const lookup_table_lamports, const table_key: Pubkey, const lookup_table_owner: Pubkey = blk: {
@@ -625,7 +625,7 @@ test "address-lookup-table missing accounts" {
     const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
     const expectProgramExecuteError = sig.runtime.program.testing.expectProgramExecuteError;
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const recent_slot = std.math.maxInt(Slot);
@@ -667,7 +667,7 @@ test "address-lookup-table create" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const payer = Pubkey.initRandom(prng.random());
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
@@ -686,9 +686,9 @@ test "address-lookup-table create" {
 
     const before_compute_meter = 9999999;
     const expected_used_compute = program.COMPUTE_UNITS +
-        runtime.program.system_program.COMPUTE_UNITS + // transfer
-        runtime.program.system_program.COMPUTE_UNITS + // allocate
-        runtime.program.system_program.COMPUTE_UNITS; //  assign
+        runtime.program.system.COMPUTE_UNITS + // transfer
+        runtime.program.system.COMPUTE_UNITS + // allocate
+        runtime.program.system.COMPUTE_UNITS; //  assign
 
     // cross-verified with real instructions
     // note: real instructions also call SetComputeUnitLimit and SetComputeUnitPrice,
@@ -705,7 +705,7 @@ test "address-lookup-table create" {
     const accounts: []const ExecuteContextsParams.AccountParams = &.{
         .{
             .pubkey = lookup_table_address,
-            .owner = runtime.program.system_program.ID,
+            .owner = runtime.program.system.ID,
             .lamports = 0,
             .data = &.{},
         },
@@ -713,7 +713,7 @@ test "address-lookup-table create" {
         .{ .pubkey = payer, .lamports = before_lamports, .owner = system_program.ID },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
-            .pubkey = runtime.program.system_program.ID,
+            .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
         },
@@ -730,7 +730,7 @@ test "address-lookup-table create" {
         .{ .pubkey = payer, .lamports = after_lamports, .owner = system_program.ID },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
-            .pubkey = runtime.program.system_program.ID,
+            .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
         },
@@ -779,7 +779,7 @@ test "address-lookup-table freeze" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -821,7 +821,7 @@ test "address-lookup-table freeze" {
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
-            .pubkey = runtime.program.system_program.ID,
+            .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
         },
@@ -837,7 +837,7 @@ test "address-lookup-table freeze" {
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
-            .pubkey = runtime.program.system_program.ID,
+            .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
         },
@@ -887,7 +887,7 @@ test "address-lookup-table close" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -929,7 +929,7 @@ test "address-lookup-table close" {
         .{ .pubkey = payer, .lamports = 0 },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
-            .pubkey = runtime.program.system_program.ID,
+            .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
         },
@@ -946,7 +946,7 @@ test "address-lookup-table close" {
         .{ .pubkey = payer, .lamports = 100 },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
-            .pubkey = runtime.program.system_program.ID,
+            .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
         },
@@ -997,7 +997,7 @@ test "address-lookup-table deactivate" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -1039,7 +1039,7 @@ test "address-lookup-table deactivate" {
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
-            .pubkey = runtime.program.system_program.ID,
+            .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
         },
@@ -1055,7 +1055,7 @@ test "address-lookup-table deactivate" {
         .{ .pubkey = unsigned_authority_address },
         .{ .pubkey = program.ID, .owner = runtime.ids.NATIVE_LOADER_ID, .executable = true },
         .{
-            .pubkey = runtime.program.system_program.ID,
+            .pubkey = runtime.program.system.ID,
             .owner = runtime.ids.NATIVE_LOADER_ID,
             .executable = true,
         },
@@ -1105,7 +1105,7 @@ test "address-lookup-table extend" {
     const expectProgramExecuteResult = sig.runtime.program.testing.expectProgramExecuteResult;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const unsigned_authority_address = Pubkey.initRandom(prng.random());
     const first_address = Pubkey.initRandom(prng.random());
@@ -1161,7 +1161,7 @@ test "address-lookup-table extend" {
                 .executable = true,
             },
             .{
-                .pubkey = runtime.program.system_program.ID,
+                .pubkey = runtime.program.system.ID,
                 .owner = runtime.ids.NATIVE_LOADER_ID,
                 .executable = true,
             },
@@ -1186,7 +1186,7 @@ test "address-lookup-table extend" {
                 .executable = true,
             },
             .{
-                .pubkey = runtime.program.system_program.ID,
+                .pubkey = runtime.program.system.ID,
                 .owner = runtime.ids.NATIVE_LOADER_ID,
                 .executable = true,
             },
@@ -1209,7 +1209,7 @@ test "address-lookup-table extend" {
         };
 
         const expected_used_compute = program.COMPUTE_UNITS +
-            if (payer_required) runtime.program.system_program.COMPUTE_UNITS else 0;
+            if (payer_required) runtime.program.system.COMPUTE_UNITS else 0;
 
         const before_compute_meter = 9999999;
         const after_compute_meter = before_compute_meter - expected_used_compute;

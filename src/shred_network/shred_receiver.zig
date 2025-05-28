@@ -186,7 +186,7 @@ test "handlePing" {
 
     const shred_metrics = try metrics_registry.initStruct(ShredReceiverMetrics);
 
-    const my_keypair = try sig.identity.KeyPair.create(.{1} ** 32);
+    const my_keypair = try sig.identity.KeyPair.generateDeterministic(.{1} ** 32);
     const ping = try Ping.init(.{1} ** 32, &my_keypair);
     const pong = try Pong.init(&ping, &my_keypair);
 
@@ -203,7 +203,7 @@ test "handlePing" {
 
     try std.testing.expectEqual(expected_pong_packet, actual_pong_packet);
 
-    const evil_keypair = try sig.identity.KeyPair.create(.{64} ** 32);
+    const evil_keypair = try sig.identity.KeyPair.generateDeterministic(.{64} ** 32);
     var evil_ping = ping;
     evil_ping.from = sig.core.Pubkey.fromPublicKey(&evil_keypair.public_key);
     const evil_ping_packet = try Packet.initFromBincode(addr, RepairPing{ .Ping = evil_ping });
@@ -231,13 +231,13 @@ fn validateShred(
     if (slot > max_slot) return error.slot_too_new;
     switch (variant.shred_type) {
         .code => {
-            if (index >= sig.ledger.shred.code_shred_constants.max_per_slot) {
+            if (index >= sig.ledger.shred.CodeShred.constants.max_per_slot) {
                 return error.code_index_too_high;
             }
             if (slot <= root) return error.rooted_slot;
         },
         .data => {
-            if (index >= sig.ledger.shred.data_shred_constants.max_per_slot) {
+            if (index >= sig.ledger.shred.DataShred.constants.max_per_slot) {
                 return error.data_index_too_high;
             }
             const parent_slot_offset = layout.getParentSlotOffset(shred) orelse {

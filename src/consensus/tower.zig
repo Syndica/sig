@@ -8,16 +8,16 @@ const AccountsDB = sig.accounts_db.AccountsDB;
 const Hash = sig.core.Hash;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
-const Lockout = sig.runtime.program.vote_program.state.Lockout;
+const Lockout = sig.runtime.program.vote.state.Lockout;
 const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
-const Vote = sig.runtime.program.vote_program.state.Vote;
-const VoteState = sig.runtime.program.vote_program.state.VoteState;
-const VoteStateVersions = sig.runtime.program.vote_program.state.VoteStateVersions;
+const Vote = sig.runtime.program.vote.state.Vote;
+const VoteState = sig.runtime.program.vote.state.VoteState;
+const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
 const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
@@ -25,7 +25,7 @@ const ScopedLogger = sig.trace.ScopedLogger;
 
 const DUPLICATE_THRESHOLD = sig.consensus.unimplemented.DUPLICATE_THRESHOLD;
 
-pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote_program.state.MAX_LOCKOUT_HISTORY;
+pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
 pub const Stake = u64;
 
@@ -259,8 +259,8 @@ pub const Tower = struct {
 
         if (vote_state.root_slot) |root_slot| {
             if (slot != root_slot
-            // This case should never happen because bank forks purges all
-            // non-descendants of the root every time root is set
+                // This case should never happen because bank forks purges all
+                // non-descendants of the root every time root is set
             and !ancestors.contains(root_slot)) {
                 return error.InvalidRootSlot;
             }

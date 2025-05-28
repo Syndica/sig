@@ -112,6 +112,16 @@ pub fn pushInstruction(
         .ixn_info = instruction_info,
         .depth = @intCast(tc.instruction_stack.len),
     });
+
+    if (tc.getAccountIndex(sig.runtime.ids.SYSVAR_INSTRUCTIONS_ID)) |index_in_transaction| {
+        const account = tc.getAccountAtIndex(index_in_transaction) orelse
+            return InstructionError.NotEnoughAccountKeys;
+        const data = account.account.data;
+        if (data.len >= 2) {
+            const last_index = data.len - 2;
+            @memcpy(data[last_index..][0..2], std.mem.asBytes(&tc.top_level_instruction_index));
+        }
+    }
 }
 
 /// Execute an instruction context after it has been pushed onto the instruction stack\
@@ -166,11 +176,24 @@ fn processNextInstruction(
         program_id,
         ic.tc.instruction_stack.len,
     );
-    native_program_fn(allocator, ic) catch |execute_error| {
-        try stable_log.programFailure(ic.tc, program_id, @errorName(execute_error));
-        return execute_error;
+
+    native_program_fn(allocator, ic) catch |err| {
+        // This approach to failure logging is used to prevent requiring all native programs to return
+        // an ExecutionError. Instead, native programs return an InstructionError, and more granular
+        // failure logging for bpf programs is handled in the BPF executor.
+        if (err != InstructionError.ProgramFailedToComplete)
+            try stable_log.programFailure(
+                ic.tc,
+                program_id,
+                sig.vm.getExecutionErrorMessage(err),
+            );
+        return err;
     };
-    try stable_log.programSuccess(ic.tc, program_id);
+
+    try stable_log.programSuccess(
+        ic.tc,
+        program_id,
+    );
 }
 
 /// Pop an instruction from the instruction stack\
@@ -204,6 +227,9 @@ pub fn popInstruction(
     };
 
     _ = tc.instruction_stack.pop();
+    if (tc.instruction_stack.len == 0) {
+        tc.top_level_instruction_index +|= 1;
+    }
 
     if (unbalanced_instruction) return InstructionError.UnbalancedInstruction;
 }
@@ -215,8 +241,7 @@ pub fn prepareCpiInstructionInfo(
     callee: Instruction,
     signers: []const Pubkey,
 ) (error{OutOfMemory} || InstructionError)!InstructionInfo {
-    if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
-    const caller = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+    const caller = try tc.getCurrentInstructionContext();
 
     var deduped_account_metas = std.BoundedArray(
         InstructionInfo.AccountMeta,
@@ -230,7 +255,7 @@ pub fn prepareCpiInstructionInfo(
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L337-L386
     for (callee.accounts, 0..) |account, index| {
         const index_in_transaction = tc.getAccountIndex(account.pubkey) orelse {
-            try tc.log("Instruction references unknown account {}", .{account.pubkey});
+            try tc.log("Instruction references an unknown account {}", .{account.pubkey});
             return InstructionError.MissingAccount;
         };
 
@@ -250,7 +275,7 @@ pub fn prepareCpiInstructionInfo(
             deduped_meta.is_writable = deduped_meta.is_writable or account.is_writable;
         } else {
             const index_in_caller = caller.ixn_info.getAccountMetaIndex(account.pubkey) orelse {
-                try tc.log("Instruction references unknown account {}", .{account.pubkey});
+                try tc.log("Instruction references an unknown account {}", .{account.pubkey});
                 return InstructionError.MissingAccount;
             };
 
@@ -270,7 +295,7 @@ pub fn prepareCpiInstructionInfo(
     for (deduped_account_metas.slice()) |callee_account| {
         // Borrow the account via the caller context
         const caller_account =
-            try caller.borrowInstructionAccount(callee_account.index_in_transaction);
+            try caller.borrowInstructionAccount(callee_account.index_in_caller);
         defer caller_account.release();
 
         // Readonly in caller cannot become writable in callee
@@ -379,10 +404,10 @@ fn sumAccountLamports(
 
 test "pushInstruction" {
     const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system_program;
+    const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var tc = try testing.createTransactionContext(
         allocator,
@@ -463,10 +488,10 @@ test "pushInstruction" {
 
 test "processNextInstruction" {
     const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system_program;
+    const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var tc = try testing.createTransactionContext(
         allocator,
@@ -527,10 +552,10 @@ test "processNextInstruction" {
 
 test "popInstruction" {
     const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system_program;
+    const system_program = sig.runtime.program.system;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var tc = try testing.createTransactionContext(
         allocator,
@@ -607,11 +632,11 @@ test "popInstruction" {
 
 test "prepareCpiInstructionInfo" {
     const testing = sig.runtime.testing;
-    const system_program = sig.runtime.program.system_program;
+    const system_program = sig.runtime.program.system;
     const FeatureSet = sig.runtime.features.FeatureSet;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var feature_set = try allocator.create(FeatureSet);
     var tc = try testing.createTransactionContext(
@@ -763,7 +788,7 @@ test "sumAccountLamports" {
     const testing = sig.runtime.testing;
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     var tc = try testing.createTransactionContext(
         allocator,

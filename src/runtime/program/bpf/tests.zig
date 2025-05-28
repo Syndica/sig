@@ -4,7 +4,8 @@ const sig = @import("../../../sig.zig");
 const program = sig.runtime.program;
 const features = sig.runtime.features;
 const Pubkey = sig.core.Pubkey;
-const AccountParams = sig.runtime.testing.ExecuteContextsParams.AccountParams;
+const ExecuteContextParams = sig.runtime.testing.ExecuteContextsParams;
+const AccountParams = ExecuteContextParams.AccountParams;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
@@ -22,7 +23,7 @@ test "hello_world" {
     // }
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
     const program_bytes = try std.fs.cwd().readFileAlloc(
@@ -32,11 +33,11 @@ test "hello_world" {
     );
     defer allocator.free(program_bytes);
 
-    const accounts = &.{
+    const accounts: []const AccountParams = &.{
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -80,7 +81,7 @@ test "print_account" {
     // }
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
     const program_bytes = try std.fs.cwd().readFileAlloc(
@@ -90,11 +91,11 @@ test "print_account" {
     );
     defer allocator.free(program_bytes);
 
-    const accounts = &.{
+    const accounts: []const AccountParams = &.{
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -120,7 +121,7 @@ test "print_account" {
                 .is_writable = false,
             },
         },
-        .{
+        ExecuteContextParams{
             .accounts = accounts,
             .compute_meter = 29_105,
             .feature_set = &.{
@@ -138,7 +139,7 @@ test "print_account" {
 // [program source] https://github.com/solana-labs/solana-program-library/tree/master/shared-memory/program
 test "fast_copy" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
     const program_bytes = try std.fs.cwd().readFileAlloc(
@@ -147,22 +148,22 @@ test "fast_copy" {
         MAX_FILE_BYTES,
     );
     defer allocator.free(program_bytes);
-    const program_account = .{
+    const program_account: AccountParams = .{
         .pubkey = program_id,
         .lamports = 1_000_000_000,
-        .owner = program.bpf_loader_program.v3.ID,
+        .owner = program.bpf_loader.v3.ID,
         .executable = true,
         .rent_epoch = 0,
         .data = program_bytes,
     };
 
     const account_id = Pubkey.initRandom(prng.random());
-    const initial_instruction_account = .{
+    const initial_instruction_account: AccountParams = .{
         .pubkey = account_id,
         .owner = program_id,
         .data = &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     };
-    const final_instruction_account = .{
+    const final_instruction_account: AccountParams = .{
         .pubkey = account_id,
         .owner = program_id,
         .data = &[_]u8{ 'm', 'y', ' ', 'd', 'a', 't', 'a', ' ', ':', ')' },
@@ -186,7 +187,7 @@ test "fast_copy" {
                 .is_writable = true,
             },
         },
-        .{
+        ExecuteContextParams{
             .accounts = &.{
                 program_account,
                 initial_instruction_account,
@@ -217,7 +218,7 @@ test "set_return_data" {
     // }
 
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
     const program_bytes = try std.fs.cwd().readFileAlloc(
@@ -227,11 +228,11 @@ test "set_return_data" {
     );
     defer allocator.free(program_bytes);
 
-    const accounts = &.{
+    const accounts: []const AccountParams = &.{
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -243,7 +244,7 @@ test "set_return_data" {
         program_id,
         &[_]u8{},
         &.{},
-        .{
+        ExecuteContextParams{
             .accounts = accounts,
             .compute_meter = 141,
             .feature_set = &.{
@@ -263,7 +264,7 @@ test "set_return_data" {
 
 test "program_is_not_executable" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
     const program_bytes = try std.fs.cwd().readFileAlloc(
@@ -273,11 +274,11 @@ test "program_is_not_executable" {
     );
     defer allocator.free(program_bytes);
 
-    const accounts = &.{
+    const accounts: []const AccountParams = &.{
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = false,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -290,7 +291,7 @@ test "program_is_not_executable" {
         program_id,
         &[_]u8{},
         &.{},
-        .{
+        ExecuteContextParams{
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
@@ -303,7 +304,7 @@ test "program_is_not_executable" {
 
 test "program_invalid_account_data" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
     var program_bytes = try std.fs.cwd().readFileAlloc(
@@ -314,11 +315,11 @@ test "program_invalid_account_data" {
     program_bytes[3] = 0x00; // corrupt the program
     defer allocator.free(program_bytes);
 
-    const accounts = &.{
+    const accounts: []const AccountParams = &.{
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -330,7 +331,7 @@ test "program_invalid_account_data" {
         program_id,
         &[_]u8{},
         &.{},
-        .{
+        ExecuteContextParams{
             .accounts = accounts,
             .compute_meter = 137,
             .feature_set = &.{
@@ -348,7 +349,7 @@ test "program_invalid_account_data" {
 
 test "program_init_vm_not_enough_compute" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
     const program_bytes = try std.fs.cwd().readFileAlloc(
@@ -358,11 +359,11 @@ test "program_init_vm_not_enough_compute" {
     );
     defer allocator.free(program_bytes);
 
-    const accounts = &.{
+    const accounts: []const AccountParams = &.{
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -378,7 +379,7 @@ test "program_init_vm_not_enough_compute" {
         program_id,
         &[_]u8{},
         &.{},
-        .{
+        sig.runtime.testing.ExecuteContextsParams{
             .accounts = accounts,
             .compute_meter = 7,
             .compute_budget = compute_budget,
@@ -395,7 +396,7 @@ test "program_init_vm_not_enough_compute" {
 
 test "basic direct mapping" {
     const allocator = std.testing.allocator;
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
 
     const program_id = Pubkey.initRandom(prng.random());
     const program_bytes = try std.fs.cwd().readFileAlloc(
@@ -409,7 +410,7 @@ test "basic direct mapping" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,
@@ -429,7 +430,7 @@ test "basic direct mapping" {
         .{
             .pubkey = program_id,
             .lamports = 1_000_000_000,
-            .owner = program.bpf_loader_program.v3.ID,
+            .owner = program.bpf_loader.v3.ID,
             .executable = true,
             .rent_epoch = 0,
             .data = program_bytes,

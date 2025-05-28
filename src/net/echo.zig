@@ -135,8 +135,8 @@ pub const Server = struct {
             errdefer conn.stream.close();
 
             // TODO: unify this with the code for the RPC server
-            if (comptime builtin.target.isDarwin()) set_flags: {
-                const FlagsInt = @typeInfo(std.posix.O).Struct.backing_integer.?;
+            if (comptime builtin.target.os.tag.isDarwin()) set_flags: {
+                const FlagsInt = @typeInfo(std.posix.O).@"struct".backing_integer.?;
                 var flags_int: FlagsInt =
                     @intCast(try std.posix.fcntl(conn.stream.handle, std.posix.F.GETFL, 0));
                 const flags: *std.posix.O =
@@ -237,7 +237,8 @@ const ConnectionTask = struct {
         const socket_addr = SocketAddr.fromIpV4Address(request.server.connection.address);
         const ip_echo_response: IpEchoResponse = .{
             .address = .{ .ipv4 = socket_addr.V4.ip },
-            .shred_version = .{ .value = 0 }, // TODO: correct shred version needs to be propagated here
+            // TODO: correct shred version needs to be propagated here
+            .shred_version = .{ .value = 0 },
         };
 
         const content_len = blk: {
@@ -272,7 +273,7 @@ fn httpRespondError(
 ) !void {
     std.debug.assert( //
         status.class() == .client_error or
-        status.class() == .server_error //
+            status.class() == .server_error //
     );
     try request.respond(content, .{
         .version = .@"HTTP/1.0",

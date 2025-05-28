@@ -108,7 +108,7 @@ test "GossipTableShards" {
     var shards = try GossipTableShards.init(std.testing.allocator);
     defer shards.deinit();
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
     const v = Hash.initRandom(random);
@@ -120,8 +120,8 @@ test "GossipTableShards" {
 }
 
 // test helper fcns
-fn newTestGossipVersionedData(random: std.rand.Random, gossip_table: *GossipTable) !GossipVersionedData {
-    const keypair = try KeyPair.create(null);
+fn newTestGossipVersionedData(random: std.Random, gossip_table: *GossipTable) !GossipVersionedData {
+    const keypair = KeyPair.generate();
     const value = SignedGossipData.initRandom(random, &keypair);
     _ = try gossip_table.insert(value, 0);
     const label = value.label();
@@ -158,7 +158,7 @@ test "gossip.gossip_shards: test shard find" {
     var values = try std.ArrayList(GossipVersionedData).initCapacity(std.testing.allocator, 1000);
     defer values.deinit();
 
-    var prng = std.rand.DefaultPrng.init(91);
+    var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
     while (values.items.len < 50) {

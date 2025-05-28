@@ -1,4 +1,4 @@
-pub const account_loaded = @import("account_loader.zig");
+pub const account_loader = @import("account_loader.zig");
 pub const borrowed_account = @import("borrowed_account.zig");
 pub const compute_budget = @import("compute_budget.zig");
 pub const executor = @import("executor.zig");
@@ -15,6 +15,7 @@ pub const sysvar = @import("sysvar/lib.zig");
 pub const sysvar_cache = @import("sysvar_cache.zig");
 pub const testing = @import("testing.zig");
 pub const transaction_context = @import("transaction_context.zig");
+pub const transaction_execution = @import("transaction_execution.zig");
 
 pub const BorrowedAccount = borrowed_account.BorrowedAccount;
 pub const BorrowedAccountContext = borrowed_account.BorrowedAccountContext;

@@ -1,55 +1,57 @@
 .{
-    .name = "sig",
+    .name = .sig,
     .version = "0.1.1",
     .paths = .{
         "build.zig.zon",
         "build.zig",
         "src",
     },
+    .minimum_zig_version = "0.14.1",
+    .fingerprint = 0xce1f2b0e2866b810,
     .dependencies = .{
         .@"zig-network" = .{
-            .url = "git+https://github.com/ikskuh/zig-network#d4506cd1950de8a6e6d3f28aed68a0b4f64e0b44",
-            .hash = "122080b2675fa7fdd7410af5f62942dec99e0ea766827c8c6506e6672b575fb0a50e",
+            .url = "git+https://github.com/ikskuh/zig-network#d293b60f47ec6355ebfb981e83255fa6a4ef7c5f",
+            .hash = "network-0.1.0-6n8DsRImAQAeRhyBO4l1c1IyK23kZokecQQrqUe9b2Z1",
         },
         .httpz = .{
-            .url = "git+https://github.com/karlseguin/http.zig#79dad0f0cc652830cd8e49bf3e73aa77155ad4b2",
-            .hash = "1220b8a918dfcee4fc8326ec337776e2ffd3029511c35f6b96d10aa7be98ca2faf99",
+            .url = "git+https://github.com/karlseguin/http.zig#0ce9038e13c138423f68d95a475159039458e798",
+            .hash = "httpz-0.0.0-PNVzrJ-0BgAp8WPkVfsFGNPRlRpBoU-8w0LxMDXBp37t",
         },
         .zstd = .{
-            .url = "git+https://github.com/Syndica/zstd.zig#5095f011c1183aa67d696172795440d6a33732c9",
-            .hash = "122030ebe280b73693963a67ed656226a67b7f00a0a05665155da00c9fcdee90de88",
+            .url = "git+https://github.com/Syndica/zstd.zig#d8fb9959e34eab8cc92fb2364e1814246b35f61e",
+            .hash = "zstd-0.0.1-8QsqCQOhAAAb1-CVSg161GorCrXDtEWMGJfld2Ymgra6",
         },
         .rocksdb = .{
-            .url = "git+https://github.com/Syndica/rocksdb-zig#cd747a88e66539e37585cccacb5ae311be2ad527",
-            .hash = "1220d917ac77a71426253d31e6c2b6db40494aa4e18c7284dfca9dc1eed5c7864274",
+            .url = "git+https://github.com/Syndica/rocksdb-zig#30d74945eb01a5162fe4642615f40c63062b0507",
+            .hash = "rocksdb-9.7.4-z_CUThu4AAANnxXa3N8NHS6Ll9DdwjVHfFgcDggA4yK4",
         },
         .lsquic = .{
             .url = "git+https://github.com/Syndica/lsquic#ed6ced0cbc6447f7135a32db491e398debdf8af7",
-            .hash = "12207247a06ac1e7f4ddd6f0fbca4bcdcdf78655432a07928a96c8ec456bdfca71e3",
+            .hash = "lsquic-0.1.0-AAAAAJScHQFyR6Bqwef03dbw-8pLzc33hlVDKgeSipbI",
         },
         .xev = .{
-            .url = "git+https://github.com/mitchellh/libxev#b8d1d93e5c899b27abbaa7df23b496c3e6a178c7",
-            .hash = "1220612bc023c21d75234882ec9a8c6a1cbd9d642da3dfb899297f14bb5bd7b6cd78",
+            .url = "git+https://github.com/mitchellh/libxev#94ed6af7b2aaaeab987fbf87fcee410063df715b",
+            .hash = "libxev-0.0.0-86vtc-zkEgB7uv1i0Sa6ytJETZQi_lHJrImu9mLb9moi",
         },
         .prettytable = .{
             .url = "git+https://github.com/dying-will-bullet/prettytable-zig#46b6ad9b5970def35fa43c9613cd244f28862fa9",
-            .hash = "122098d444c9c7112c66481e7655bb5389829c67e04b280a029200545e1971187443",
+            .hash = "prettytable-0.1.0-AAAAAM9TAQCY1ETJxxEsZkgedlW7U4mCnGfgSygKApIA",
         },
         .base58 = .{
             .url = "git+https://github.com/Syndica/base58-zig#e6337e7eb3dc7ca77cad4c3b2fe4a34357bd50ea",
-            .hash = "122092353c0b494c2a4968c10a527dc90d6e89eaac48637fda1a0af3efd948bf4ee3",
+            .hash = "base58-0.2.0-AAAAAAsxAACSNTwLSUwqSWjBClJ9yQ1uieqsSGN_2hoK",
         },
         .poseidon = .{
             .url = "git+https://github.com/Rexicon226/zig-poseidon#a6b20b50420bdb15bfe29cafcb27e440a776ce9b",
-            .hash = "1220151eed676d55cf6517aa6f712b7fead33cd262616978a29a9381c351ba5afc95",
+            .hash = "poseidon-0.2.0-2qOpv8d5DQAVHu1nbVXPZReqb3Erf-rTPNJiYWl4opqT",
         },
         .secp256k1 = .{
-            .url = "git+https://github.com/Syndica/secp256k1-zig#82bbb3a5bf16c39330d69fa8699cf1b4b7f7f316",
-            .hash = "1220f7a062a9df740338610beb50a4af1a8a089e47ef01339b220f42626bc16494fd",
+            .url = "git+https://github.com/Syndica/secp256k1-zig#c0a6abf275b6ab8eee7f706f972928d79a9d5de6",
+            .hash = "secp256k1-0.5.0-AAAAAP0GAADG2Mba0yTtLlhjK8IripV_-4Hj9c3N2CQd",
         },
         .tracy = .{
-            .url = "git+https://github.com/Sobeston/zig-tracy/#283e6fba375d5bb4b85735188d3059e028022774",
-            .hash = "12206816af8efb7a3c133f5d27f0b7c3cd2a9b38bdb957f8b74c855a2bd38072a5b6",
+            .url = "git+https://github.com/Rexicon226/zig-tracy/#c338e84ea281141c57d23dc715bff7b463b264de",
+            .hash = "zig_tracy-0.0.4-4TLLRzJxAABiGlxsT2KVLY54IRX1TbIZ_YJUFUXV9Ky4",
         },
     },
 }

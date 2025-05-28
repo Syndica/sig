@@ -19,9 +19,9 @@ const EpochStakes = sig.core.stake.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
 
 pub fn main() !void {
-    var gpa_state: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
-    const gpa = if (builtin.mode == .Debug) gpa_state.allocator() else std.heap.c_allocator;
+    const gpa = if (builtin.mode == .Debug) gpa_state.allocator() else std.heap.smp_allocator;
 
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);

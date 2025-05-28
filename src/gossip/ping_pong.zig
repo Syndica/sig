@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const testing = std.testing;
 
-const DefaultPrng = std.rand.DefaultPrng;
+const DefaultPrng = std.Random.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const LruCache = sig.utils.lru.LruCache;
 const Pubkey = sig.core.Pubkey;
@@ -27,18 +27,17 @@ pub const Ping = struct {
 
     pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Ping {
         const signature = try keypair.sign(&token, null);
-        const self = .{
+        return .{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = .{ .data = signature.toBytes() },
         };
-        return self;
     }
 
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Ping {
+    pub fn initRandom(random: std.Random, keypair: *const KeyPair) !Ping {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
         random.bytes(&token);
-        const signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
+        const signature = try keypair.sign(&token, null);
 
         return Ping{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
@@ -77,7 +76,7 @@ pub const Pong = struct {
         }
     }
 
-    pub fn initRandom(random: std.rand.Random, keypair: *const KeyPair) !Pong {
+    pub fn initRandom(random: std.Random, keypair: *const KeyPair) !Pong {
         const ping = try Ping.initRandom(random, keypair);
         return try Pong.init(&ping, keypair);
     }
@@ -248,12 +247,12 @@ test "PingCache works" {
     );
     defer ping_cache.deinit();
 
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
     const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.initRandom(random), .socket_addr = SocketAddr.UNSPECIFIED };
     const now1 = try std.time.Instant.now();
-    var our_kp = try KeyPair.create(null);
+    var our_kp = KeyPair.generate();
 
     const ping = ping_cache.maybePing(
         now1,
