@@ -96,17 +96,17 @@ pub const TransactionRollbacks = union(enum(u8)) {
         fee_payer_rent_debit: u64,
         fee_payer_rent_epoch: sig.core.Epoch,
     ) error{OutOfMemory}!TransactionRollbacks {
-        var copied_account: CopiedAccount = .{
+        var copied_fee_payer: CopiedAccount = .{
             .account = fee_payer.account.*,
             .pubkey = fee_payer.pubkey,
         };
-        copied_account.account.lamports +|= fee_payer_rent_debit;
-        copied_account.account.data = undefined; // safety: overwritten before returning in all cases
+        copied_fee_payer.account.lamports +|= fee_payer_rent_debit;
+        copied_fee_payer.account.data = undefined; // safety: overwritten before returning in all cases
 
         if (maybe_nonce) |nonce| {
             if (fee_payer.pubkey.equals(&nonce.pubkey)) {
-                copied_account.account.data = try allocator.dupe(u8, nonce.account.data);
-                return .{ .same_nonce_and_fee_payer = copied_account };
+                copied_fee_payer.account.data = try allocator.dupe(u8, nonce.account.data);
+                return .{ .same_nonce_and_fee_payer = copied_fee_payer };
             } else {
                 var copied_nonce = CopiedAccount{
                     .pubkey = nonce.pubkey,
@@ -114,13 +114,13 @@ pub const TransactionRollbacks = union(enum(u8)) {
                 };
                 copied_nonce.account.data = try allocator.dupe(u8, nonce.account.data);
                 errdefer allocator.free(copied_nonce.account.data);
-                copied_account.account.data = try allocator.dupe(u8, fee_payer.account.data);
-                return .{ .separate_nonce_and_fee_payer = .{ copied_nonce, copied_account } };
+                copied_fee_payer.account.data = try allocator.dupe(u8, fee_payer.account.data);
+                return .{ .separate_nonce_and_fee_payer = .{ copied_nonce, copied_fee_payer } };
             }
         } else {
-            copied_account.account.data = try allocator.dupe(u8, fee_payer.account.data);
-            copied_account.account.rent_epoch = fee_payer_rent_epoch;
-            return .{ .fee_payer_only = copied_account };
+            copied_fee_payer.account.data = try allocator.dupe(u8, fee_payer.account.data);
+            copied_fee_payer.account.rent_epoch = fee_payer_rent_epoch;
+            return .{ .fee_payer_only = copied_fee_payer };
         }
     }
 
