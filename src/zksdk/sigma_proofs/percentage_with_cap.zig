@@ -444,8 +444,10 @@ test "below max proof" {
     const percentage_amount: u64 = 1;
     const delta: u64 = 9600;
 
-    const transfer_commitment, const transfer_opening = pedersen.initValue(u64, transfer_amount);
-    const percentage_commitment, const percentage_opening = pedersen.initValue(u64, percentage_amount);
+    const transfer_commitment, const transfer_opening =
+        pedersen.initValue(u64, transfer_amount);
+    const percentage_commitment, const percentage_opening =
+        pedersen.initValue(u64, percentage_amount);
 
     const scalar_rate = el_gamal.scalarFromInt(u64, percentage_rate);
     const constant_scalar = el_gamal.scalarFromInt(u64, 10_000);
@@ -507,8 +509,10 @@ test "is zero" {
     const percentage_amount: u64 = 1;
     const delta: u64 = 0; // (1 * 10_000) - (100 * 100)
 
-    const transfer_commitment, const transfer_opening = pedersen.initValue(u64, transfer_amount);
-    const percentage_commitment, const percentage_opening = pedersen.initValue(u64, percentage_amount);
+    const transfer_commitment, const transfer_opening =
+        pedersen.initValue(u64, transfer_amount);
+    const percentage_commitment, const percentage_opening =
+        pedersen.initValue(u64, percentage_amount);
 
     const scalar_rate = el_gamal.scalarFromInt(u64, percentage_rate);
     const constant_scalar = el_gamal.scalarFromInt(u64, 10_000);

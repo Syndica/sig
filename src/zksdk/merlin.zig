@@ -6,7 +6,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const Keccak1600 = std.crypto.core.keccak.KeccakF(1600);
 const Ed25519 = std.crypto.ecc.Edwards25519;
-const CompressedScalar = Ed25519.scalar.CompressedScalar;
 const Scalar = Ed25519.scalar.Scalar;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 
