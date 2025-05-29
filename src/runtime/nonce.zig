@@ -34,7 +34,7 @@ pub const Versions = union(enum) {
         switch (self) {
             .legacy => |_| return null,
             .current => |state| switch (state) {
-                .unintialized => return null,
+                .uninitialized => return null,
                 .initialized => |data| {
                     return if (durable_nonce.eql(data.durable_nonce)) data else null;
                 },
@@ -45,7 +45,7 @@ pub const Versions = union(enum) {
     pub fn upgrade(self: Versions) ?Versions {
         switch (self) {
             .legacy => |state| switch (state) {
-                .unintialized => return null,
+                .uninitialized => return null,
                 .initialized => |data| {
                     var new_data = data;
                     new_data.durable_nonce = initDurableNonceFromHash(data.durable_nonce);
@@ -55,12 +55,24 @@ pub const Versions = union(enum) {
             .current => |_| return null,
         }
     }
+
+    pub fn fromAccountData(account_data: []const u8) ?Versions {
+        var buf: [SERIALIZED_SIZE]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+
+        return sig.bincode.readFromSlice(
+            fba.allocator(),
+            Versions,
+            account_data,
+            .{},
+        ) catch null;
+    }
 };
 
 /// The state of a durable transaction nonce account.
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/current.rs#L71
 pub const State = union(enum) {
-    unintialized,
+    uninitialized,
     initialized: Data,
 };
 
@@ -97,13 +109,13 @@ test "verify_durable_nonce" {
     const blockhash = Hash{ .data = [_]u8{171} ** 32 };
 
     {
-        const versions = Versions{ .legacy = .unintialized };
+        const versions = Versions{ .legacy = .uninitialized };
         try std.testing.expectEqual(null, versions.verify(blockhash));
         try std.testing.expectEqual(null, versions.verify(Hash.ZEROES));
     }
 
     {
-        const versions = Versions{ .current = .unintialized };
+        const versions = Versions{ .current = .uninitialized };
         try std.testing.expectEqual(null, versions.verify(blockhash));
         try std.testing.expectEqual(null, versions.verify(Hash.ZEROES));
     }
@@ -139,7 +151,7 @@ test "upgrade_nonce_version" {
     var prng = std.Random.DefaultPrng.init(0);
 
     {
-        const versions = Versions{ .legacy = .unintialized };
+        const versions = Versions{ .legacy = .uninitialized };
         try std.testing.expectEqual(null, versions.upgrade());
     }
 

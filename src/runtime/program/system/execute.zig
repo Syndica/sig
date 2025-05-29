@@ -527,7 +527,7 @@ fn advanceNonceAccount(
 
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
     switch (versioned_nonce.getState()) {
-        .unintialized => {
+        .uninitialized => {
             try ic.tc.log(
                 "Advance nonce account: Account {} state is invalid",
                 .{account.pubkey},
@@ -593,7 +593,7 @@ fn withdrawNonceAccount(
             nonce.Versions,
         );
         const authority = switch (versioned_nonce.getState()) {
-            .unintialized => blk: {
+            .uninitialized => blk: {
                 if (lamports > from_account.account.lamports) {
                     try ic.tc.log(
                         "Withdraw nonce account: insufficient lamports {}, need {}",
@@ -616,7 +616,7 @@ fn withdrawNonceAccount(
                         return InstructionError.Custom;
                     }
                     try from_account.serializeIntoAccountData(
-                        nonce.Versions{ .current = nonce.State.unintialized },
+                        nonce.Versions{ .current = nonce.State.uninitialized },
                     );
                 } else {
                     const min_balance = rent.minimumBalance(from_account.constAccountData().len);
@@ -668,7 +668,7 @@ fn initializeNonceAccount(
 
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
     switch (versioned_nonce.getState()) {
-        .unintialized => {
+        .uninitialized => {
             const min_balance = rent.minimumBalance(account.constAccountData().len);
             if (min_balance > account.account.lamports) {
                 try ic.tc.log(
@@ -716,7 +716,7 @@ pub fn authorizeNonceAccount(
     const versioned_nonce = try account.deserializeFromAccountData(allocator, nonce.Versions);
 
     const nonce_data = switch (versioned_nonce.getState()) {
-        .unintialized => {
+        .uninitialized => {
             try ic.tc.log(
                 "Authorize nonce account: Account {} state is invalid",
                 .{account.pubkey},
@@ -1184,7 +1184,7 @@ test "executeInitializeNonceAccount" {
 
     // Create Uninitialized Nonce State
     // The nonce state bytes must have sufficient space to store the final nonce state
-    const nonce_state = nonce.Versions{ .current = .unintialized };
+    const nonce_state = nonce.Versions{ .current = .uninitialized };
     const nonce_state_bytes = try allocator.alloc(u8, final_nonce_state_bytes.len);
     _ = try sig.bincode.writeToSlice(nonce_state_bytes, nonce_state, .{});
     defer allocator.free(nonce_state_bytes);

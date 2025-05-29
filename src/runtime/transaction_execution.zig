@@ -5,29 +5,32 @@ const account_loader = sig.runtime.account_loader;
 const executor = sig.runtime.executor;
 const compute_budget_program = sig.runtime.program.compute_budget;
 
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
+const Ancestors = sig.core.status_cache.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
-const AccountSharedData = sig.runtime.AccountSharedData;
-const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
-const FeatureSet = sig.runtime.FeatureSet;
-const SysvarCache = sig.runtime.SysvarCache;
-const TransactionContext = sig.runtime.TransactionContext;
-const InstructionInfo = sig.runtime.InstructionInfo;
-const TransactionError = sig.ledger.transaction_status.TransactionError;
+const EpochStakes = sig.core.stake.EpochStakes;
+const Hash = sig.core.Hash;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
-const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
-const InstructionTrace = TransactionContext.InstructionTrace;
-const LogCollector = sig.runtime.LogCollector;
-const Ancestors = sig.core.status_cache.Ancestors;
+const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
-const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
+const StatusCache = sig.core.StatusCache;
+
+const AccountSharedData = sig.runtime.AccountSharedData;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
-const EpochStakes = sig.core.stake.EpochStakes;
+const FeatureSet = sig.runtime.FeatureSet;
+const FeeDetails = sig.runtime.check_transactions.FeeDetails;
+const InstructionInfo = sig.runtime.InstructionInfo;
+const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
+const LogCollector = sig.runtime.LogCollector;
+const SysvarCache = sig.runtime.SysvarCache;
+const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
-const StatusCache = sig.core.StatusCache;
+const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
+
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
+const InstructionTrace = TransactionContext.InstructionTrace;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -80,15 +83,58 @@ pub const TransactionExecutionConfig = struct {
     log_messages_byte_limit: ?u64,
 };
 
-pub const TransactionFees = struct {
-    transaction_fee: u64,
-    prioritization_fee: u64,
-};
-
+/// [agave] https://github.com/anza-xyz/agave/blob/5bcdd4934475fde094ffbddd3f8c4067238dc9b0/svm/src/rollback_accounts.rs#L11
 pub const TransactionRollbacks = union(enum(u8)) {
     fee_payer_only: CopiedAccount,
     same_nonce_and_fee_payer: CopiedAccount,
     separate_nonce_and_fee_payer: struct { CopiedAccount, CopiedAccount },
+
+    pub fn new(
+        allocator: std.mem.Allocator,
+        maybe_nonce: ?CachedAccount,
+        fee_payer: CachedAccount,
+        fee_payer_rent_debit: u64,
+        fee_payer_rent_epoch: sig.core.Epoch,
+    ) error{OutOfMemory}!TransactionRollbacks {
+        var copied_fee_payer: CopiedAccount = .{
+            .account = fee_payer.account.*,
+            .pubkey = fee_payer.pubkey,
+        };
+        copied_fee_payer.account.lamports +|= fee_payer_rent_debit;
+        copied_fee_payer.account.data = undefined; // safety: overwritten before returning in all cases
+
+        if (maybe_nonce) |nonce| {
+            if (fee_payer.pubkey.equals(&nonce.pubkey)) {
+                copied_fee_payer.account.data = try allocator.dupe(u8, nonce.account.data);
+                return .{ .same_nonce_and_fee_payer = copied_fee_payer };
+            } else {
+                var copied_nonce = CopiedAccount{
+                    .pubkey = nonce.pubkey,
+                    .account = nonce.account.*,
+                };
+                copied_nonce.account.data = try allocator.dupe(u8, nonce.account.data);
+                errdefer allocator.free(copied_nonce.account.data);
+                copied_fee_payer.account.data = try allocator.dupe(u8, fee_payer.account.data);
+                return .{ .separate_nonce_and_fee_payer = .{ copied_nonce, copied_fee_payer } };
+            }
+        } else {
+            copied_fee_payer.account.data = try allocator.dupe(u8, fee_payer.account.data);
+            copied_fee_payer.account.rent_epoch = fee_payer_rent_epoch;
+            return .{ .fee_payer_only = copied_fee_payer };
+        }
+    }
+
+    pub fn deinit(self: TransactionRollbacks, allocator: std.mem.Allocator) !void {
+        switch (self) {
+            .fee_payer_only => |fee_payer_account| allocator.free(fee_payer_account.account.data),
+            .same_nonce_and_fee_payer => |account| allocator.free(account.account.data),
+            .separate_nonce_and_fee_payer => |accounts| {
+                const nonce, const fee_payer = accounts;
+                allocator.free(nonce.account.data);
+                allocator.free(fee_payer.account.data);
+            },
+        }
+    }
 };
 
 pub const CopiedAccount = struct {
@@ -113,11 +159,11 @@ pub const ExecutedTransaction = struct {
 pub const ProcessedTransaction = union(enum(u8)) {
     fees_only: struct {
         err: TransactionError,
-        fees: TransactionFees,
+        fees: FeeDetails,
         rollbacks: TransactionRollbacks,
     },
     executed: struct {
-        fees: TransactionFees,
+        fees: FeeDetails,
         rollbacks: TransactionRollbacks,
         loaded_accounts: LoadedTransactionAccounts,
         executed_transaction: ExecutedTransaction,
@@ -209,9 +255,9 @@ pub fn loadAndExecuteTransaction(
         .err => |err| return .{ .err = err },
     };
 
-    const check_fee_payer_result = checkFeePayer(
-        &transaction.fee_payer,
-        transaction.signature_count,
+    const check_fee_payer_result = try sig.runtime.check_transactions.checkFeePayer(
+        allocator,
+        transaction,
         batch_account_cache,
         &compute_budget_limits,
         maybe_nonce_info,
@@ -343,32 +389,6 @@ pub fn executeTransaction(
         .compute_meter = tc.compute_meter,
         .accounts_data_len_delta = tc.accounts_resize_delta,
     };
-}
-
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L557
-pub fn checkFeePayer(
-    fee_payer: *const Pubkey,
-    signature_count: u64,
-    batch_account_cache: *BatchAccountCache,
-    compute_budget_limits: *const ComputeBudgetLimits,
-    nonce_account: ?CachedAccount,
-    rent_collector: *const RentCollector,
-    feature_set: *const FeatureSet,
-    lamports_per_signature: u64,
-) TransactionResult(struct {
-    TransactionFees,
-    TransactionRollbacks,
-    LoadedTransactionAccounts,
-}) {
-    _ = fee_payer;
-    _ = signature_count;
-    _ = batch_account_cache;
-    _ = compute_budget_limits;
-    _ = nonce_account;
-    _ = lamports_per_signature;
-    _ = rent_collector;
-    _ = feature_set;
-    @panic("not implemented");
 }
 
 test "transaction_execution" {
