@@ -189,33 +189,26 @@ pub const Ancestors = struct {
     // agave uses a "RollingBitField" which seems to be just an optimisation for a set
     ancestors: Map = .{},
 
-    pub const @"!bincode-config:ancestors" = mapConfig();
     pub const Map = HashMap(Slot, void);
 
-    fn mapConfig() bincode.FieldConfig(Map) {
-        // [agave] https://github.com/anza-xyz/agave/blob/85b647f149b0f08d30e6cd6081d50e87b3cc6c20/accounts-db/src/ancestors.rs#L54
-        // For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
-        // ignores the usize, and serializing just uses the value 0. So we need to serialize void
-        // as if it's 0, and deserialize 0 as if it's void.
-        const VoidCfg = struct {
-            fn deserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) !void {
-                _ = try bincode.read(alloc, usize, reader, params);
-            }
-            fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-                _ = data;
-                try bincode.write(writer, @as(usize, 0), params);
-            }
-        };
+    // For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
+    // ignores the usize, and serializing just uses the value 0. So we need to serialize void
+    // as if it's 0, and deserialize 0 as if it's void.
+    pub const @"!bincode-config:ancestors" = bincode.hashmap.hashMapFieldConfig(
+        Map,
+        .{
+            .key = .{},
+            .value = .{ .serializer = voidSerialize, .deserializer = voidDeserialize },
+        },
+    );
 
-        const void_field_config = bincode.FieldConfig(void){
-            .serializer = VoidCfg.serialize,
-            .deserializer = VoidCfg.deserialize,
-        };
+    fn voidDeserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) !void {
+        _ = try bincode.read(alloc, usize, reader, params);
+    }
 
-        return bincode.hashmap.hashMapFieldConfig(
-            Map,
-            .{ .key = .{}, .value = void_field_config },
-        );
+    fn voidSerialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+        _ = data;
+        try bincode.write(writer, @as(usize, 0), params);
     }
 
     pub fn clone(self: *const Ancestors, allocator: std.mem.Allocator) !Ancestors {
