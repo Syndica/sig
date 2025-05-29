@@ -1088,16 +1088,10 @@ pub const ReplayTower = struct {
     /// super refresh to vote at the tip.
     pub fn lastVoteAbleToLand(
         self: *const ReplayTower,
-        reset_slot: ?Slot,
+        heaviest_bank_on_same_voted_fork: Slot,
         progress: *const ProgressMap,
         slot_history: *const SlotHistory,
     ) bool {
-        const heaviest_bank_on_same_voted_fork = reset_slot orelse {
-            // No reset slot means we are in the middle of dump & repair. Last vote
-            // landing is irrelevant.
-            return true;
-        };
-
         const last_voted_slot = self.lastVotedSlot() orelse {
             // No previous vote.
             return true;
@@ -1141,12 +1135,17 @@ pub const ReplayTower = struct {
     ) !CandidateVoteAndResetSlots {
         // If our last vote is unable to land (even through normal refresh), then we
         // temporarily "super" refresh our vote to the tip of our last voted fork.
-
-        const can_land_last_vote = self.lastVoteAbleToLand(
-            if (heaviest_slot_on_same_voted_fork) |slot| slot else null,
-            progress,
-            slot_history,
-        );
+        const can_land_last_vote = if (heaviest_slot_on_same_voted_fork) |slot|
+            self.lastVoteAbleToLand(
+                slot,
+                progress,
+                slot_history,
+            )
+        else
+            // No reset slot means we are in the middle of dump & repair. Last vote
+            // landing is irrelevant. So set to true to not trigger a super refresh below,
+            // and to keep the initial switch fork decision and only record the failure.
+            true;
 
         const final_switch_fork_decision = if (!can_land_last_vote) blk: {
             // Decision rationale:
