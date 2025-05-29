@@ -137,7 +137,7 @@ pub const pedersen = struct {
         }
 
         pub fn random() Opening {
-            return .{ .scalar = sig.zksdk.bulletproofs.ONE }; // TODO: random
+            return .{ .scalar = .random() };
         }
     };
 
