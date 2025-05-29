@@ -11,13 +11,11 @@ pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 const el_gamal = sig.zksdk.el_gamal;
 const pedersen = sig.zksdk.pedersen;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const Sha3 = std.crypto.hash.sha3.Sha3_512;
 const Shake256 = std.crypto.hash.sha3.Shake256;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 const Transcript = sig.zksdk.Transcript;
-const bp = sig.zksdk.bulletproofs;
 
 pub const ZERO = Scalar.fromBytes(Edwards25519.scalar.zero);
 pub const ONE = Scalar.fromBytes(.{1} ++ .{0} ** 31);
@@ -124,7 +122,7 @@ pub fn Proof(bit_size: comptime_int) type {
             var H_gen = GeneratorsChain.init("H");
 
             // bit-decompose values and generate their Pedersen vector commitment
-            const a_blinding = ONE; // TODO: random
+            const a_blinding: Scalar = .random();
             var A = el_gamal.H.mul(a_blinding.toBytes()) catch unreachable;
 
             var G_points: std.BoundedArray(Edwards25519, bit_size) = .{};
@@ -150,10 +148,10 @@ pub fn Proof(bit_size: comptime_int) type {
             var s_L: [bit_size][32]u8 = undefined;
             var s_R: [bit_size][32]u8 = undefined;
             for (&s_L, &s_R) |*l, *r| {
-                l.* = ONE.toBytes(); // TODO: random
-                r.* = ONE.toBytes(); // TODO: random
+                l.* = Scalar.random().toBytes();
+                r.* = Scalar.random().toBytes();
             }
-            const s_blinding = ONE.toBytes(); // TODO: random
+            const s_blinding = Scalar.random().toBytes();
 
             const S: Ristretto255 = .{ .p = Edwards25519.mulMulti(
                 1 + bit_size * 2,
@@ -604,8 +602,10 @@ test "proof string" {
     const commitment_3_string = "ZAC5ZLXotsMOVExtrr56D/EZNeyo9iWepNbeH22EuRo=";
     const commitment_3 = try pedersen.Commitment.fromBase64(commitment_3_string);
 
+    // zig fmt: off
     const proof_string = "AvvBQL63pXMXsmuvuNbs/CqXdzeyrMpEIO2O/cI6/SyqU4N+7HUU3LmXai9st+DxqTnuKsm0SgnADfpLpQCEbDDupMb09NY8oHT8Bx8WQhv9eyoBlrPRd7DVhOUsio02gBshe3p2Wj7+yDCpFaZ7/PMypFBX6+E+EqCiPI6yUk4ztslWY0Ksac41eJgcPzXyIx2kvmSTsVBKLb7U01PWBC+AUyUmK3/IdvmJ4DnlS3xFrdg/mxSsYJFd3OZA3cwDb0jePQf/P43/2VVqPRixMVO7+VGoMKPoRTEEVbClsAlW6stGTFPcrimu3c+geASgvwElkIKNGtYcjoj3SS+/VeqIG9Ei1j+TJtPhOE9SG4KNw9xBGwecpliDbQhKjO950EVcnOts+a525/frZV1jHJmOOrZtKRV4pvk37dtQkx4sv+pxRmfVrjwOcKQeg+BzcuF0vaQbqa4SUbzbO9z3RwIMlYIBaz0bqZgJmtPOFuFmNyCJaeB29vlcEAfYbn5gdlgtWP50tKmhoskndulziKZjz4qHSA9rbG2ZtoMHoCsAobHKu2H9OxcaK4Scj1QGwst+zXBEY8uePNbxvU5DMJLVFORtLUXkVdPCmCSsm1Bz4TRbnls8LOVW6wqTgShQMhjNM3RtwdHXENPn5uDnhyvfduAcL+DtI8AIJyRneROefk7i7gjal8dLdMM/QnXT7ctpMQU6uNlpsNzq65xlOQKXO71vQ3c2mE/DmxVJi6BTS5WCzavvhiqdhQyRL61ESCALQpaP0/d0DLwLikVH3ypuDLEnVXe9Pmkxdd0xCzO6QcfyK50CPnV/dVgHeLg8EVag2O83+/7Ys5oLxrDad9TJTDcrT2xsRqECFnSA+z9uZtDPujhQL0ogS5RH4agnQN4mVGTwOLV8OKpn+AvWq6+j1/9EXFkLPBTU5wT0FQuT2VZ8xp5GeqdI13Zey1uPrxc6CZZ407y9OINED4IdBQ==";
     const proof = try Proof(128).fromBase64(736, proof_string);
+    // zig fmt: on
 
     var verification_transcript = Transcript.init("Test");
     try proof.verify(
