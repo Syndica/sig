@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 const HashMap = std.AutoArrayHashMapUnmanaged;
 const ArrayList = std.ArrayListUnmanaged;
 const RwMux = sig.sync.RwMux;
+const bincode = sig.bincode;
 
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
@@ -186,8 +187,70 @@ pub const StatusCache = struct {
 
 pub const Ancestors = struct {
     // agave uses a "RollingBitField" which seems to be just an optimisation for a set
-    ancestors: HashMap(Slot, void) = .{},
+    ancestors: Map = .{},
+
+    pub const @"!bincode-config:ancestors" = mapConfig();
+    pub const Map = HashMap(Slot, void);
+
+    fn mapConfig() bincode.FieldConfig(Map) {
+        // [agave] https://github.com/anza-xyz/agave/blob/85b647f149b0f08d30e6cd6081d50e87b3cc6c20/accounts-db/src/ancestors.rs#L54
+        // For some reason, agave serializes Ancestors as HashMap(slot, usize). But deserializing
+        // ignores the usize, and serializing just uses the value 0. So we need to serialize void
+        // as if it's 0, and deserialize 0 as if it's void.
+        const VoidCfg = struct {
+            fn deserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) !void {
+                _ = try bincode.read(alloc, usize, reader, params);
+            }
+            fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+                _ = data;
+                try bincode.write(writer, @as(usize, 0), params);
+            }
+        };
+
+        const void_field_config = bincode.FieldConfig(void){
+            .serializer = VoidCfg.serialize,
+            .deserializer = VoidCfg.deserialize,
+        };
+
+        return bincode.hashmap.hashMapFieldConfig(
+            Map,
+            .{ .key = .{}, .value = void_field_config },
+        );
+    }
+
+    pub fn clone(self: *const Ancestors, allocator: std.mem.Allocator) !Ancestors {
+        return .{ .ancestors = try self.ancestors.clone(allocator) };
+    }
+
+    pub fn deinit(self: *Ancestors, allocator: std.mem.Allocator) void {
+        self.ancestors.deinit(allocator);
+    }
 };
+
+test "status cache (de)serialize Ancestors" {
+    const allocator = std.testing.allocator;
+
+    var ancestors: Ancestors = .{
+        .ancestors = try Ancestors.Map.init(allocator, &.{ 1, 2, 3, 4 }, &.{}),
+    };
+    defer ancestors.deinit(allocator);
+
+    const serialized = try bincode.writeAlloc(allocator, ancestors, .{});
+
+    defer allocator.free(serialized);
+
+    const deserialized = try bincode.readFromSlice(
+        allocator,
+        HashMap(Slot, usize),
+        serialized,
+        .{},
+    );
+    defer bincode.free(allocator, deserialized);
+
+    try std.testing.expectEqual(ancestors.ancestors.count(), deserialized.count());
+    try std.testing.expectEqualSlices(Slot, ancestors.ancestors.keys(), deserialized.keys());
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0, 0 }, deserialized.values());
+}
 
 test "status cache empty" {
     const signature = sig.core.Signature.ZEROES;
