@@ -6,7 +6,9 @@ const features = sig.runtime.features;
 const builtin_costs = sig.runtime.program.builtin_costs;
 
 const Pubkey = sig.core.Pubkey;
+const InstructionError = sig.core.instruction.InstructionError;
 const FeatureSet = sig.runtime.FeatureSet;
+const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
@@ -25,6 +27,15 @@ pub const ID =
     Pubkey.parseBase58String("ComputeBudget111111111111111111111111111111") catch unreachable;
 
 pub const COMPUTE_UNITS = 150;
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/compute-budget/src/lib.rs#L5
+pub fn entrypoint(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
+    _ = allocator;
+    try ic.tc.consumeCompute(COMPUTE_UNITS);
+}
 
 // [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L28
 pub const ComputeBudgetLimits = struct {
