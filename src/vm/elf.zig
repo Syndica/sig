@@ -38,6 +38,7 @@ pub const Elf = struct {
         shdrs: []align(1) const elf.Elf64_Shdr,
         phdrs: []align(1) const elf.Elf64_Phdr,
 
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/56e14672804ae762030e2f620aae6b6e6fa50d34/src/elf_parser/mod.rs#L120-L129
         fn checkOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) !void {
             if (a_end <= b_start or b_end <= a_start) return;
             return error.Overlap;
@@ -83,7 +84,7 @@ pub const Elf = struct {
                 elf.Elf64_Shdr,
                 try safeSlice(bytes, header.e_shoff, sh_size),
             );
-            
+
             if (!(shdrs.len > 0 and shdrs[0].sh_type == elf.SHT_NULL)) {
                 return error.InvalidSectionHeader;
             }
