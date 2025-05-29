@@ -14,6 +14,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Transaction = sig.core.Transaction;
+const TransactionMessage = sig.core.transaction.Message;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 
 pub const ParsedVote = struct {
@@ -187,7 +188,7 @@ fn testParseVoteTransaction(input_hash: ?Hash, random: std.Random) !void {
     vote_ix.program_id = Pubkey.ZEROES;
 
     const vote_tx = blk: {
-        const vote_tx_msg = try sig.core.transaction.compileMessage(
+        const vote_tx_msg: TransactionMessage = try .initCompile(
             allocator,
             &.{vote_ix},
             Pubkey.fromPublicKey(&node_keypair.public_key),
@@ -227,7 +228,7 @@ fn newVoteTransaction(
     );
     defer vote_ix.deinit(allocator);
 
-    const vote_tx_msg = try sig.core.transaction.compileMessage(
+    const vote_tx_msg: TransactionMessage = try .initCompile(
         allocator,
         &.{vote_ix},
         Pubkey.fromPublicKey(&node_keypair.public_key),

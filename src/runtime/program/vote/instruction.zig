@@ -455,23 +455,23 @@ pub const Instruction = union(enum(u32)) {
             => |payload| payload.deinit(allocator),
         }
     }
-};
 
-pub fn serialize(
-    allocator: std.mem.Allocator,
-    vote_instruction: Instruction,
-    account_metas: []const InstructionAccount,
-) std.mem.Allocator.Error!sig.core.Instruction {
-    const account_metas_duped = try allocator.dupe(InstructionAccount, account_metas);
-    errdefer allocator.free(account_metas_duped);
-    return try sig.core.Instruction.initUsingBincodeAlloc(
-        allocator,
-        Instruction,
-        vote_program.ID,
-        account_metas_duped,
-        &vote_instruction,
-    );
-}
+    pub fn serialize(
+        vote_instruction: Instruction,
+        allocator: std.mem.Allocator,
+        account_metas: []const InstructionAccount,
+    ) std.mem.Allocator.Error!sig.core.Instruction {
+        const account_metas_duped = try allocator.dupe(InstructionAccount, account_metas);
+        errdefer allocator.free(account_metas_duped);
+        return try sig.core.Instruction.initUsingBincodeAlloc(
+            allocator,
+            Instruction,
+            vote_program.ID,
+            account_metas_duped,
+            &vote_instruction,
+        );
+    }
+};
 
 /// Helper function for more concisely initializing the account lists when serializing an instruction.
 fn accountMeta(
@@ -497,7 +497,7 @@ pub fn createInitializeAccount(
     init_account: InitializeAccount,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .initialize_account = init_account };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(sig.runtime.sysvar.Rent.ID, .none),
         accountMeta(sig.runtime.sysvar.Clock.ID, .none),
@@ -513,7 +513,7 @@ pub fn createAuthorize(
     authorize: Authorize,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .authorize = authorize };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(sig.runtime.sysvar.Clock.ID, .none),
         accountMeta(authorized_pubkey, .signer),
@@ -528,7 +528,7 @@ pub fn createAuthorizeChecked(
     vote_authorize: VoteAuthorize,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .authorize_checked = vote_authorize };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(sig.runtime.sysvar.Clock.ID, .none),
         accountMeta(authorized_pubkey, .signer),
@@ -551,7 +551,7 @@ pub fn createAuthorizeWithSeed(
         .current_authority_derived_key_seed = current_authority_derived_key_seed,
         .new_authority = new_authority,
     } };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(sig.runtime.sysvar.Clock.ID, .none),
         accountMeta(current_authority_base_key, .signer),
@@ -572,7 +572,7 @@ pub fn createAuthorizeCheckedWithSeed(
         .current_authority_derived_key_owner = current_authority_derived_key_owner,
         .current_authority_derived_key_seed = current_authority_derived_key_seed,
     } };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(sig.runtime.sysvar.Clock.ID, .none),
         accountMeta(current_authority_base_key, .signer),
@@ -587,7 +587,7 @@ pub fn createUpdateValidatorIdentity(
     node_pubkey: Pubkey,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .update_validator_identity;
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(node_pubkey, .signer),
         accountMeta(authorized_withdrawer_pubkey, .signer),
@@ -601,7 +601,7 @@ pub fn createUpdateCommission(
     commission: u8,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .update_commission = commission };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(authorized_withdrawer_pubkey, .signer),
     });
@@ -614,7 +614,7 @@ pub fn createVote(
     vote: Vote,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .vote = vote };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(sig.runtime.sysvar.SlotHashes.ID, .none),
         accountMeta(sig.runtime.sysvar.Clock.ID, .none),
@@ -629,7 +629,7 @@ pub fn createVoteSwitch(
     vote_switch: VoteSwitch,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .vote_switch = vote_switch };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(sig.runtime.sysvar.SlotHashes.ID, .none),
         accountMeta(sig.runtime.sysvar.Clock.ID, .none),
@@ -644,7 +644,7 @@ pub fn createUpdateVoteState(
     vote_state_update: VoteStateUpdate,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .update_vote_state = vote_state_update };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(authorized_voter_pubkey, .signer),
     });
@@ -657,7 +657,7 @@ pub fn createUpdateVoteStateSwitch(
     vote_state_update_switch: VoteStateUpdateSwitch,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .update_vote_state_switch = vote_state_update_switch };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(authorized_voter_pubkey, .signer),
     });
@@ -670,7 +670,7 @@ pub fn createCompactUpdateVoteState(
     vote_state_update: CompactVoteStateUpdate,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .compact_update_vote_state = vote_state_update };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(authorized_voter_pubkey, .signer),
     });
@@ -683,7 +683,7 @@ pub fn createCompactUpdateVoteStateSwitch(
     vote_state_update_switch: CompactVoteStateUpdateSwitch,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .compact_update_vote_state_switch = vote_state_update_switch };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(authorized_voter_pubkey, .signer),
     });
@@ -696,7 +696,7 @@ pub fn createTowerSync(
     tower_sync: TowerSync,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .tower_sync = tower_sync };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(authorized_voter_pubkey, .signer),
     });
@@ -709,7 +709,7 @@ pub fn createTowerSyncSwitch(
     tower_sync_switch: TowerSyncSwitch,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .tower_sync_switch = tower_sync_switch };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(authorized_voter_pubkey, .signer),
     });
@@ -723,7 +723,7 @@ pub fn createWithdraw(
     to_pubkey: Pubkey,
 ) std.mem.Allocator.Error!sig.core.Instruction {
     const ix: Instruction = .{ .withdraw = lamports };
-    return try serialize(allocator, ix, &.{
+    return try ix.serialize(allocator, &.{
         accountMeta(vote_pubkey, .writable),
         accountMeta(to_pubkey, .writable),
         accountMeta(authorized_withdrawer_pubkey, .signer),

@@ -283,6 +283,53 @@ pub const Message = struct {
         };
     }
 
+    /// Compiles a transaction message.
+    pub fn initCompile(
+        allocator: std.mem.Allocator,
+        instructions: []const sig.core.Instruction,
+        payer: ?Pubkey,
+        recent_blockhash: Hash,
+        /// TODO: currently forced to be null by the compiler,
+        /// will become a proper optional parameter in the future
+        /// when v0 compilation is implemented.
+        lookup_tables: ?noreturn,
+    ) Instruction.InstructionCompileError!Message {
+        comptime std.debug.assert(lookup_tables == null);
+
+        const account_keys: []const Pubkey, const counts: AccountKindCounts = blk: {
+            var compiled_keys = try compileKeys(allocator, payer, instructions);
+            defer compiled_keys.deinit(allocator);
+
+            const counts = AccountKindCounts.count(compiled_keys.values()) orelse
+                return error.TooManyKeys;
+
+            const account_keys = try allocator.dupe(Pubkey, compiled_keys.keys());
+            errdefer allocator.free(account_keys);
+
+            break :blk .{ account_keys, counts };
+        };
+        errdefer allocator.free(account_keys);
+
+        const tx_instructions = try Instruction.compileList(
+            allocator,
+            instructions,
+            account_keys,
+        );
+        errdefer {
+            for (tx_instructions) |tx_inst| tx_inst.deinit(allocator);
+            allocator.free(tx_instructions);
+        }
+
+        return .{
+            .signature_count = counts.signature_count,
+            .readonly_signed_count = counts.readonly_signed_count,
+            .readonly_unsigned_count = counts.readonly_unsigned_count,
+            .account_keys = account_keys,
+            .recent_blockhash = recent_blockhash,
+            .instructions = tx_instructions,
+        };
+    }
+
     pub fn isSigner(self: Message, index: usize) bool {
         return index < self.signature_count;
     }
@@ -433,6 +480,53 @@ pub const Instruction = struct {
             .data = try allocator.dupe(u8, self.data),
         };
     }
+
+    pub const InstructionCompileError = error{
+        MissingProgramIndex,
+        MissingKeys,
+        TooManyKeys,
+    } || std.mem.Allocator.Error;
+
+    pub fn initCompile(
+        allocator: std.mem.Allocator,
+        inst: sig.core.Instruction,
+        keys: []const Pubkey,
+    ) InstructionCompileError!Instruction {
+        const program_index = blk: {
+            const index = inst.program_id.indexIn(keys) orelse return error.MissingProgramIndex;
+            break :blk std.math.cast(u8, index) orelse return error.TooManyKeys;
+        };
+
+        const data = try allocator.dupe(u8, inst.data);
+        errdefer allocator.free(data);
+
+        const account_indexes = try allocator.alloc(u8, inst.accounts.len);
+        errdefer allocator.free(account_indexes);
+        for (account_indexes, inst.accounts) |*account_idx, account| {
+            const key_pos = account.pubkey.indexIn(keys) orelse return error.MissingKeys;
+            account_idx.* = std.math.cast(u8, key_pos) orelse return error.TooManyKeys;
+        }
+
+        return .{
+            .program_index = program_index,
+            .account_indexes = account_indexes,
+            .data = data,
+        };
+    }
+
+    pub fn compileList(
+        allocator: std.mem.Allocator,
+        instructions: []const sig.core.Instruction,
+        keys: []const Pubkey,
+    ) InstructionCompileError![]const Instruction {
+        const compiled_insts = try allocator.alloc(Instruction, instructions.len);
+        errdefer allocator.free(compiled_insts);
+        for (compiled_insts, instructions, 0..) |*compiled, inst, i| {
+            errdefer for (compiled_insts[0..i]) |prev| prev.deinit(allocator);
+            compiled.* = try initCompile(allocator, inst, keys);
+        }
+        return compiled_insts;
+    }
 };
 
 pub const AddressLookup = struct {
@@ -461,53 +555,6 @@ pub const AddressLookup = struct {
         };
     }
 };
-
-/// Compiles a transaction message.
-pub fn compileMessage(
-    allocator: std.mem.Allocator,
-    instructions: []const sig.core.Instruction,
-    payer: ?Pubkey,
-    recent_blockhash: Hash,
-    /// TODO: currently forced to be null by the compiler,
-    /// will become a proper optional parameter in the future
-    /// when v0 compilation is implemented.
-    lookup_tables: ?noreturn,
-) InstructionCompileError!Message {
-    comptime std.debug.assert(lookup_tables == null);
-
-    const account_keys: []const Pubkey, const counts: AccountKindCounts = blk: {
-        var compiled_keys = try compileKeys(allocator, payer, instructions);
-        defer compiled_keys.deinit(allocator);
-
-        const counts = AccountKindCounts.count(compiled_keys.values()) orelse
-            return error.TooManyKeys;
-
-        const account_keys = try allocator.dupe(Pubkey, compiled_keys.keys());
-        errdefer allocator.free(account_keys);
-
-        break :blk .{ account_keys, counts };
-    };
-    errdefer allocator.free(account_keys);
-
-    const tx_instructions = try compileInstructionList(
-        allocator,
-        instructions,
-        account_keys,
-    );
-    errdefer {
-        for (tx_instructions) |tx_inst| tx_inst.deinit(allocator);
-        allocator.free(tx_instructions);
-    }
-
-    return .{
-        .signature_count = counts.signature_count,
-        .readonly_signed_count = counts.readonly_signed_count,
-        .readonly_unsigned_count = counts.readonly_unsigned_count,
-        .account_keys = account_keys,
-        .recent_blockhash = recent_blockhash,
-        .instructions = tx_instructions,
-    };
-}
 
 const KeyMetaMap = std.AutoArrayHashMapUnmanaged(Pubkey, SignerWritableFlags);
 
@@ -665,53 +712,6 @@ fn sortCompiledKeys(
     };
 
     key_meta_map.sort(sort_ctx);
-}
-
-pub const InstructionCompileError = error{
-    MissingProgramIndex,
-    MissingKeys,
-    TooManyKeys,
-} || std.mem.Allocator.Error;
-
-pub fn compileInstruction(
-    allocator: std.mem.Allocator,
-    inst: sig.core.Instruction,
-    keys: []const Pubkey,
-) InstructionCompileError!Instruction {
-    const program_index = blk: {
-        const index = inst.program_id.indexIn(keys) orelse return error.MissingProgramIndex;
-        break :blk std.math.cast(u8, index) orelse return error.TooManyKeys;
-    };
-
-    const data = try allocator.dupe(u8, inst.data);
-    errdefer allocator.free(data);
-
-    const account_indexes = try allocator.alloc(u8, inst.accounts.len);
-    errdefer allocator.free(account_indexes);
-    for (account_indexes, inst.accounts) |*account_idx, account| {
-        const key_pos = account.pubkey.indexIn(keys) orelse return error.MissingKeys;
-        account_idx.* = std.math.cast(u8, key_pos) orelse return error.TooManyKeys;
-    }
-
-    return .{
-        .program_index = program_index,
-        .account_indexes = account_indexes,
-        .data = data,
-    };
-}
-
-pub fn compileInstructionList(
-    allocator: std.mem.Allocator,
-    instructions: []const sig.core.Instruction,
-    keys: []const Pubkey,
-) InstructionCompileError![]const Instruction {
-    const compiled_insts = try allocator.alloc(Instruction, instructions.len);
-    errdefer allocator.free(compiled_insts);
-    for (compiled_insts, instructions, 0..) |*compiled, inst, i| {
-        errdefer for (compiled_insts[0..i]) |prev| prev.deinit(allocator);
-        compiled.* = try compileInstruction(allocator, inst, keys);
-    }
-    return compiled_insts;
 }
 
 test "clone transaction" {
