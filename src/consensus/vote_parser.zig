@@ -8,7 +8,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const vote_program = sig.runtime.program.vote;
-const vote_inst = vote_program.vote_instruction;
+const vote_instruction = vote_program.vote_instruction;
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
@@ -71,7 +71,7 @@ fn parseVoteInstructionData(
     allocator: std.mem.Allocator,
     vote_instruction_data: []const u8,
 ) std.mem.Allocator.Error!?struct { VoteTransaction, ?Hash } {
-    const vote_instruction = sig.bincode.readFromSlice(
+    const vote_inst = sig.bincode.readFromSlice(
         allocator,
         vote_program.Instruction,
         vote_instruction_data,
@@ -80,9 +80,9 @@ fn parseVoteInstructionData(
         error.OutOfMemory => |e| return e,
         else => return null,
     };
-    errdefer vote_instruction.deinit(allocator);
+    errdefer vote_inst.deinit(allocator);
 
-    return switch (vote_instruction) {
+    return switch (vote_inst) {
         .vote => |vote| .{
             .{ .vote = vote.vote },
             null,
@@ -174,7 +174,7 @@ fn testParseVoteTransaction(input_hash: ?Hash, random: std.Random) !void {
     }
 
     // Test bad program id fails
-    var vote_ix = try vote_inst.createVote(
+    var vote_ix = try vote_instruction.createVote(
         allocator,
         vote_key,
         Pubkey.fromPublicKey(&auth_voter_keypair.public_key),
@@ -259,7 +259,7 @@ fn newVoteInstruction(
     };
 
     if (maybe_switch_proof_hash) |switch_proof_hash| {
-        return try vote_inst.createVoteSwitch(
+        return try vote_instruction.createVoteSwitch(
             allocator,
             vote_key,
             authorized_voter_key,
@@ -269,7 +269,7 @@ fn newVoteInstruction(
             },
         );
     }
-    return try vote_inst.createVote(
+    return try vote_instruction.createVote(
         allocator,
         vote_key,
         authorized_voter_key,
