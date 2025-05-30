@@ -50,6 +50,22 @@ test "zero ciphertext" {
         success_proof_data,
         fail_proof_data,
     );
+
+    try testVerifyProofWithContext(
+        ZeroCiphertextData,
+        allocator,
+        .verify_zero_ciphertext,
+        zk_elgamal.VERIFY_ZERO_CIPHERTEXT_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        ZeroCiphertextData,
+        allocator,
+        .verify_zero_ciphertext,
+        success_proof_data,
+    );
 }
 
 test "ciphertext ciphertext equality" {
@@ -100,6 +116,22 @@ test "ciphertext ciphertext equality" {
         success_proof_data,
         fail_proof_data,
     );
+
+    try testVerifyProofWithContext(
+        CiphertextCiphertextData,
+        allocator,
+        .verify_ciphertext_ciphertext_equality,
+        zk_elgamal.VERIFY_CIPHERTEXT_CIPHERTEXT_EQUALITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        CiphertextCiphertextData,
+        allocator,
+        .verify_ciphertext_ciphertext_equality,
+        success_proof_data,
+    );
 }
 
 test "pubkey validity" {
@@ -121,6 +153,22 @@ test "pubkey validity" {
         zk_elgamal.VERIFY_PUBKEY_VALIDITY_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
+    );
+
+    try testVerifyProofWithContext(
+        PubkeyProofData,
+        allocator,
+        .verify_pubkey_validity,
+        zk_elgamal.VERIFY_PUBKEY_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        PubkeyProofData,
+        allocator,
+        .verify_pubkey_validity,
+        success_proof_data,
     );
 }
 
@@ -155,6 +203,22 @@ test "batched range proof u64" {
         success_proof_data,
         fail_proof_data,
     );
+
+    try testVerifyProofWithContext(
+        RangeProofU64Data,
+        allocator,
+        .verify_batched_range_proof_u64,
+        zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U64_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        RangeProofU64Data,
+        allocator,
+        .verify_batched_range_proof_u64,
+        success_proof_data,
+    );
 }
 
 test "batched range proof u128" {
@@ -187,6 +251,22 @@ test "batched range proof u128" {
         zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U128_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
+    );
+
+    try testVerifyProofWithContext(
+        RangeProofU128Data,
+        allocator,
+        .verify_batched_range_proof_u128,
+        zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U128_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        RangeProofU128Data,
+        allocator,
+        .verify_batched_range_proof_u128,
+        success_proof_data,
     );
 }
 
@@ -225,6 +305,22 @@ test "batched range proof u256" {
         success_proof_data,
         fail_proof_data,
     );
+
+    try testVerifyProofWithContext(
+        RangeProofU256Data,
+        allocator,
+        .verify_batched_range_proof_u256,
+        zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U256_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        RangeProofU256Data,
+        allocator,
+        .verify_batched_range_proof_u256,
+        success_proof_data,
+    );
 }
 
 test "ciphertext commitment equality" {
@@ -262,6 +358,22 @@ test "ciphertext commitment equality" {
         zk_elgamal.VERIFY_CIPHERTEXT_COMMITMENT_EQUALITY_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
+    );
+
+    try testVerifyProofWithContext(
+        CiphertextCommitmentData,
+        allocator,
+        .verify_ciphertext_commitment_equality,
+        zk_elgamal.VERIFY_CIPHERTEXT_COMMITMENT_EQUALITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        CiphertextCommitmentData,
+        allocator,
+        .verify_ciphertext_commitment_equality,
+        success_proof_data,
     );
 }
 
@@ -306,6 +418,22 @@ test "grouped ciphertext 2 handles" {
         zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
+    );
+
+    try testVerifyProofWithContext(
+        GroupedCiphertext2HandlesData,
+        allocator,
+        .verify_grouped_ciphertext2_handles_validity,
+        zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        GroupedCiphertext2HandlesData,
+        allocator,
+        .verify_grouped_ciphertext2_handles_validity,
+        success_proof_data,
     );
 }
 
@@ -365,6 +493,22 @@ test "batched grouped ciphertext 2 handles" {
         success_proof_data,
         fail_proof_data,
     );
+
+    try testVerifyProofWithContext(
+        BatchedGroupedCiphertext2HandlesData,
+        allocator,
+        .verify_batched_grouped_ciphertext2_handles_validity,
+        zk_elgamal.VERIFY_BATCHED_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        BatchedGroupedCiphertext2HandlesData,
+        allocator,
+        .verify_batched_grouped_ciphertext2_handles_validity,
+        success_proof_data,
+    );
 }
 
 test "grouped ciphertext 3 handles" {
@@ -412,6 +556,22 @@ test "grouped ciphertext 3 handles" {
         zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_3_HANDLES_VALIDITY_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
+    );
+
+    try testVerifyProofWithContext(
+        GroupedCiphertext3HandlesData,
+        allocator,
+        .verify_grouped_ciphertext3_handles_validity,
+        zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_3_HANDLES_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        GroupedCiphertext3HandlesData,
+        allocator,
+        .verify_grouped_ciphertext3_handles_validity,
+        success_proof_data,
     );
 }
 
@@ -476,6 +636,22 @@ test "batched grouped ciphertext 3 handles" {
         success_proof_data,
         fail_proof_data,
     );
+
+    try testVerifyProofWithContext(
+        BatchedGroupedCiphertext3HandlesData,
+        allocator,
+        .verify_batched_grouped_ciphertext3_handles_validity,
+        zk_elgamal.VERIFY_BATCHED_GROUPED_CIPHERTEXT_3_HANDLES_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+
+    try testCloseState(
+        BatchedGroupedCiphertext3HandlesData,
+        allocator,
+        .verify_batched_grouped_ciphertext3_handles_validity,
+        success_proof_data,
+    );
 }
 
 const verify_instruction_types = [_]zk_elgamal.ProofInstruction{
@@ -509,159 +685,349 @@ fn testVerifyProofWithoutContext(
     @memcpy(success_data[1..], &success_proof_data.toBytes());
 
     // case where you put the proof into the instruction data
-    {
-        try expectProgramExecuteResult(
+    try expectProgramExecuteResult(
+        allocator,
+        zk_elgamal.ID,
+        success_data,
+        &.{},
+        .{
+            .accounts = &.{.{
+                .pubkey = zk_elgamal.ID,
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            .compute_meter = compute_budget,
+        },
+        .{
+            .accounts = &.{.{
+                .pubkey = zk_elgamal.ID,
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            .compute_meter = 0,
+        },
+        .{},
+    );
+
+    // try to run a valid input data, but with the wrong instruction type
+    for (verify_instruction_types) |wrong_type| {
+        if (wrong_type == instruction) continue; // skip the same one
+
+        var wrong_data: [Proof.BYTE_LEN + 1]u8 = undefined;
+        wrong_data[0] = @intFromEnum(wrong_type);
+        @memcpy(wrong_data[1..], &success_proof_data.toBytes());
+
+        try expectProgramExecuteError(
+            error.InvalidInstructionData,
             allocator,
             zk_elgamal.ID,
-            success_data,
+            wrong_data,
             &.{},
             .{
                 .accounts = &.{.{
                     .pubkey = zk_elgamal.ID,
                     .owner = sig.runtime.ids.NATIVE_LOADER_ID,
                 }},
-                .compute_meter = compute_budget,
-            },
-            .{
-                .accounts = &.{.{
-                    .pubkey = zk_elgamal.ID,
-                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                }},
-                .compute_meter = 0,
+                .compute_meter = 500_000,
             },
             .{},
         );
-
-        // try to run a valid input data, but with the wrong instruction type
-        for (verify_instruction_types) |wrong_type| {
-            if (wrong_type == instruction) continue; // skip the same one
-
-            var wrong_data: [Proof.BYTE_LEN + 1]u8 = undefined;
-            wrong_data[0] = @intFromEnum(wrong_type);
-            @memcpy(wrong_data[1..], &success_proof_data.toBytes());
-
-            try expectProgramExecuteError(
-                error.InvalidInstructionData,
-                allocator,
-                zk_elgamal.ID,
-                wrong_data,
-                &.{},
-                .{
-                    .accounts = &.{.{
-                        .pubkey = zk_elgamal.ID,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                    }},
-                    .compute_meter = 500_000,
-                },
-                .{},
-            );
-        }
     }
 
     // case where the instruction data is a offset to an account containing the proof data
-    {
-        const account_0_key = sig.core.Pubkey.initRandom(random);
-        const owner_key = sig.core.Pubkey.initRandom(random);
+    const account_0_key = sig.core.Pubkey.initRandom(random);
+    const owner_key = sig.core.Pubkey.initRandom(random);
 
-        var success_account_data: [4 + 1]u8 = undefined;
-        success_account_data[0] = @intFromEnum(instruction);
-        success_account_data[1..][0..4].* = @splat(0); // 0 byte offset
+    var success_account_data: [4 + 1]u8 = undefined;
+    success_account_data[0] = @intFromEnum(instruction);
+    success_account_data[1..][0..4].* = @splat(0); // 0 byte offset
 
-        try expectProgramExecuteResult(
-            allocator,
-            zk_elgamal.ID,
-            success_account_data,
-            &.{
-                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-            },
-            .{
-                .accounts = &.{
-                    .{
-                        .pubkey = account_0_key,
-                        .owner = owner_key,
-                        .lamports = 1_000_000_000,
-                        .data = &success_proof_data.toBytes(),
-                    },
-                    .{
-                        .pubkey = zk_elgamal.ID,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                    },
+    try expectProgramExecuteResult(
+        allocator,
+        zk_elgamal.ID,
+        success_account_data,
+        &.{
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 0 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = account_0_key,
+                    .owner = owner_key,
+                    .lamports = 1_000_000_000,
+                    .data = &success_proof_data.toBytes(),
                 },
-                .compute_meter = compute_budget,
-            },
-            .{
-                .accounts = &.{
-                    .{
-                        .pubkey = account_0_key,
-                        .owner = owner_key,
-                        .lamports = 1_000_000_000,
-                        .data = &success_proof_data.toBytes(),
-                    },
-                    .{
-                        .pubkey = zk_elgamal.ID,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                    },
-                },
-                .compute_meter = 0,
-            },
-            .{},
-        );
-    }
-
-    {
-        var fail_data: [Proof.BYTE_LEN + 1]u8 = undefined;
-        fail_data[0] = @intFromEnum(instruction);
-        @memcpy(fail_data[1..], &fail_proof_data.toBytes());
-
-        try expectProgramExecuteError(
-            error.InvalidInstructionData,
-            allocator,
-            zk_elgamal.ID,
-            fail_data,
-            &.{},
-            .{
-                .accounts = &.{.{
+                .{
                     .pubkey = zk_elgamal.ID,
                     .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                }},
-                .compute_meter = compute_budget,
-            },
-            .{},
-        );
-    }
-
-    {
-        const account_0_key = sig.core.Pubkey.initRandom(random);
-        const owner_key = sig.core.Pubkey.initRandom(random);
-
-        var fail_account_data: [4 + 1]u8 = undefined;
-        fail_account_data[0] = @intFromEnum(instruction);
-        fail_account_data[1..][0..4].* = @splat(0); // 0 byte offset
-
-        try expectProgramExecuteError(
-            error.InvalidInstructionData,
-            allocator,
-            zk_elgamal.ID,
-            fail_account_data,
-            &.{
-                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-            },
-            .{
-                .accounts = &.{
-                    .{
-                        .pubkey = account_0_key,
-                        .owner = owner_key,
-                        .lamports = 1_000_000_000,
-                        .data = &fail_proof_data.toBytes(),
-                    },
-                    .{
-                        .pubkey = zk_elgamal.ID,
-                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
-                    },
                 },
-                .compute_meter = compute_budget,
             },
-            .{},
-        );
-    }
+            .compute_meter = compute_budget,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = account_0_key,
+                    .owner = owner_key,
+                    .lamports = 1_000_000_000,
+                    .data = &success_proof_data.toBytes(),
+                },
+                .{
+                    .pubkey = zk_elgamal.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+
+    var fail_data: [Proof.BYTE_LEN + 1]u8 = undefined;
+    fail_data[0] = @intFromEnum(instruction);
+    @memcpy(fail_data[1..], &fail_proof_data.toBytes());
+
+    try expectProgramExecuteError(
+        error.InvalidInstructionData,
+        allocator,
+        zk_elgamal.ID,
+        fail_data,
+        &.{},
+        .{
+            .accounts = &.{.{
+                .pubkey = zk_elgamal.ID,
+                .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            }},
+            .compute_meter = compute_budget,
+        },
+        .{},
+    );
+
+    var fail_account_data: [4 + 1]u8 = undefined;
+    fail_account_data[0] = @intFromEnum(instruction);
+    fail_account_data[1..][0..4].* = @splat(0); // 0 byte offset
+
+    try expectProgramExecuteError(
+        error.InvalidInstructionData,
+        allocator,
+        zk_elgamal.ID,
+        fail_account_data,
+        &.{
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 0 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = account_0_key,
+                    .owner = owner_key,
+                    .lamports = 1_000_000_000,
+                    .data = &fail_proof_data.toBytes(),
+                },
+                .{
+                    .pubkey = zk_elgamal.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = compute_budget,
+        },
+        .{},
+    );
+}
+
+fn testVerifyProofWithContext(
+    comptime Proof: type,
+    allocator: std.mem.Allocator,
+    instruction: zk_elgamal.ProofInstruction,
+    compute_budget: u64,
+    success_proof_data: Proof,
+    fail_proof_data: Proof,
+) !void {
+    var success_data: [Proof.BYTE_LEN + 1]u8 = undefined;
+    success_data[0] = @intFromEnum(instruction);
+    @memcpy(success_data[1..], &success_proof_data.toBytes());
+
+    var fail_data: [Proof.BYTE_LEN + 1]u8 = undefined;
+    fail_data[0] = @intFromEnum(instruction);
+    @memcpy(fail_data[1..], &fail_proof_data.toBytes());
+
+    var prng = std.Random.DefaultPrng.init(12391239);
+    const random = prng.random();
+
+    const context_state_key = sig.core.Pubkey.initRandom(random);
+    const context_authority_key = sig.core.Pubkey.initRandom(random);
+
+    var expected_contents: [33 + Proof.Context.BYTE_LEN]u8 = undefined;
+    expected_contents[0..32].* = @bitCast(context_authority_key);
+    expected_contents[32] = @intFromEnum(instruction);
+    @memcpy(expected_contents[33..], &success_proof_data.context.toBytes());
+
+    // try to create proof context state with an invalid proof
+    try expectProgramExecuteError(
+        error.InvalidInstructionData,
+        allocator,
+        zk_elgamal.ID,
+        fail_data,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = context_state_key,
+                    .owner = zk_elgamal.ID,
+                    .data = &(.{0} ** (Proof.Context.BYTE_LEN + 33)),
+                    .lamports = 500_000,
+                },
+                .{ .pubkey = context_authority_key },
+                .{
+                    .pubkey = zk_elgamal.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = compute_budget,
+        },
+        .{},
+    );
+
+    // try to create proof context state with incorrect account data length
+    try expectProgramExecuteError(
+        error.InvalidAccountData,
+        allocator,
+        zk_elgamal.ID,
+        success_data,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = context_state_key,
+                    .owner = zk_elgamal.ID,
+                    .data = &(.{0} ** (Proof.Context.BYTE_LEN + 33 + 1)), // wrong length
+                    .lamports = 500_000,
+                },
+                .{ .pubkey = context_authority_key },
+                .{
+                    .pubkey = zk_elgamal.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = compute_budget,
+        },
+        .{},
+    );
+
+    try expectProgramExecuteResult(
+        allocator,
+        zk_elgamal.ID,
+        success_data,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = false, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = context_state_key,
+                    .owner = zk_elgamal.ID,
+                    .data = &(.{0} ** (Proof.Context.BYTE_LEN + 33)),
+                    .lamports = 500_000,
+                },
+                .{ .pubkey = context_authority_key },
+                .{
+                    .pubkey = zk_elgamal.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = compute_budget,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = context_state_key,
+                    .owner = zk_elgamal.ID,
+                    .data = &expected_contents,
+                    .lamports = 500_000,
+                },
+                .{ .pubkey = context_authority_key },
+                .{
+                    .pubkey = zk_elgamal.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = 0,
+        },
+        .{},
+    );
+}
+
+fn testCloseState(
+    comptime Proof: type,
+    allocator: std.mem.Allocator,
+    instruction: zk_elgamal.ProofInstruction,
+    success_proof_data: Proof,
+) !void {
+    var prng = std.Random.DefaultPrng.init(12391239);
+    const random = prng.random();
+
+    const context_state_key = sig.core.Pubkey.initRandom(random);
+    const context_authority_key = sig.core.Pubkey.initRandom(random);
+    const destination_key = sig.core.Pubkey.initRandom(random);
+
+    var initial_contents: [33 + Proof.Context.BYTE_LEN]u8 = undefined;
+    initial_contents[0..32].* = @bitCast(context_authority_key);
+    initial_contents[32] = @intFromEnum(instruction);
+    @memcpy(initial_contents[33..], &success_proof_data.context.toBytes());
+
+    try expectProgramExecuteResult(
+        allocator,
+        zk_elgamal.ID,
+        zk_elgamal.ProofInstruction.close_context_state,
+        &.{
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+            .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = context_state_key,
+                    .owner = zk_elgamal.ID,
+                    .data = &initial_contents,
+                    .lamports = 12345,
+                },
+                .{
+                    .pubkey = destination_key,
+                    .lamports = 0,
+                },
+                .{ .pubkey = context_authority_key },
+                .{
+                    .pubkey = zk_elgamal.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = zk_elgamal.CLOSE_CONTEXT_STATE_COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = context_state_key,
+                    .owner = sig.runtime.program.system.ID,
+                    .data = &.{},
+                    .lamports = 0,
+                },
+                .{
+                    .pubkey = destination_key,
+                    .lamports = 12345,
+                },
+                .{ .pubkey = context_authority_key },
+                .{
+                    .pubkey = zk_elgamal.ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .accounts_resize_delta = -@as(i32, initial_contents.len),
+            .compute_meter = 0,
+        },
+        .{},
+    );
 }
