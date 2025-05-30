@@ -1,5 +1,3 @@
-const std = @import("std");
-
 pub const el_gamal = @import("el_gamal.zig");
 pub const pedersen = @import("pedersen.zig");
 pub const merlin = @import("merlin.zig");
@@ -7,6 +5,7 @@ pub const merlin = @import("merlin.zig");
 pub const ElGamalCiphertext = el_gamal.Ciphertext;
 pub const ElGamalKeypair = el_gamal.Keypair;
 pub const ElGamalPubkey = el_gamal.Pubkey;
+pub const GroupedElGamalCiphertext = el_gamal.GroupedElGamalCiphertext;
 pub const Strobe128 = merlin.Strobe128;
 pub const Transcript = merlin.Transcript;
 
@@ -28,6 +27,7 @@ const grouped_cipher_handles_2 = @import("sigma_proofs/grouped_ciphertext/handle
 const grouped_cipher_handles_3 = @import("sigma_proofs/grouped_ciphertext/handles_3.zig");
 
 pub const GroupedCiphertext2HandlesValidityProof = grouped_cipher_handles_2.Proof;
+pub const GroupedCiphertext2HandlesValidityData = grouped_cipher_handles_2.Data;
 pub const GroupedCiphertext3HandlesValidityProof = grouped_cipher_handles_3.Proof;
 
 // range proof
