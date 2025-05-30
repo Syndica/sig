@@ -600,7 +600,9 @@ pub fn Data(bit_size: comptime_int) type {
 
             for (context.commitments, context.bit_lengths) |commitment, length| {
                 if (std.mem.allEqual(u8, &commitment, 0)) break; // we've hit the terminator
-                commitments.appendAssumeCapacity(.{ .point = try Ristretto255.fromBytes(commitment) });
+                commitments.appendAssumeCapacity(.{
+                    .point = try Ristretto255.fromBytes(commitment),
+                });
                 bit_lengths.appendAssumeCapacity(length);
             }
 
