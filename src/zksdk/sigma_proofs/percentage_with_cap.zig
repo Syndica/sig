@@ -353,6 +353,15 @@ pub const Proof = struct {
         };
     }
 
+    fn toBytes(self: Proof) [256]u8 {
+        const max_proof = self.max_proof;
+        const equality_proof = self.equality_proof;
+        return max_proof.Y_max_proof.toBytes() ++ max_proof.z_max_proof.toBytes() ++
+            max_proof.c_max_proof.toBytes() ++ equality_proof.Y_delta.toBytes() ++
+            equality_proof.Y_claimed.toBytes() ++ equality_proof.z_x.toBytes() ++
+            equality_proof.z_delta.toBytes() ++ equality_proof.z_claimed.toBytes();
+    }
+
     pub fn fromBase64(string: []const u8) !Proof {
         const base64 = std.base64.standard;
         var buffer: [256]u8 = .{0} ** 256;
@@ -362,6 +371,184 @@ pub const Proof = struct {
             string,
         );
         return fromBytes(buffer);
+    }
+};
+
+pub const Data = struct {
+    context: Context,
+    proof: Proof,
+
+    pub const BYTE_LEN = 360;
+
+    pub fn init(
+        percentage_commitment: *const pedersen.Commitment,
+        percentage_opening: *const pedersen.Opening,
+        percentage_amount: u64,
+        delta_commitment: *const pedersen.Commitment,
+        delta_opening: *const pedersen.Opening,
+        delta_amount: u64,
+        claimed_commitment: *const pedersen.Commitment,
+        claimed_opening: *const pedersen.Opening,
+        max_value: u64,
+    ) Data {
+        const context: Context = .{
+            .percentage_commitment = percentage_commitment.*,
+            .delta_commitment = delta_commitment.*,
+            .claimed_commitment = claimed_commitment.*,
+            .max_value = max_value,
+        };
+        var transcript = context.newTranscript();
+        const proof = Proof.init(
+            percentage_commitment,
+            percentage_opening,
+            percentage_amount,
+            delta_commitment,
+            delta_opening,
+            delta_amount,
+            claimed_commitment,
+            claimed_opening,
+            max_value,
+            &transcript,
+        );
+        return .{ .context = context, .proof = proof };
+    }
+
+    pub fn fromBytes(data: []const u8) !Data {
+        if (data.len != BYTE_LEN) return error.InvalidLength;
+        return .{
+            .context = try Context.fromBytes(data[0..104].*),
+            .proof = try Proof.fromBytes(data[104..][0..256].*),
+        };
+    }
+
+    pub fn toBytes(self: Data) [BYTE_LEN]u8 {
+        return self.context.toBytes() ++ self.proof.toBytes();
+    }
+
+    pub fn verify(self: Data) !void {
+        var transcript = self.context.newTranscript();
+        try self.proof.verify(
+            &self.context.percentage_commitment,
+            &self.context.delta_commitment,
+            &self.context.claimed_commitment,
+            self.context.max_value,
+            &transcript,
+        );
+    }
+
+    test "below max value" {
+        const base_amount: u64 = 1;
+        const max_value: u64 = 3;
+
+        const percentage_rate: u16 = 400;
+        const percentage_amount: u64 = 1;
+        const delta_amount: u64 = 9_600;
+
+        const base_commitment, const base_opening = pedersen.initValue(u64, base_amount);
+        const percentage_commitment, //
+        const percentage_opening = pedersen.initValue(u64, percentage_amount);
+
+        const scalar_rate = pedersen.scalarFromInt(u64, percentage_rate);
+        const ten_thousand = pedersen.scalarFromInt(u64, 10_000);
+
+        const delta_commitment: pedersen.Commitment = d: {
+            const a = try percentage_commitment.point.mul(ten_thousand.toBytes());
+            const b = try base_commitment.point.mul(scalar_rate.toBytes());
+            break :d .{ .point = .{ .p = a.p.sub(b.p) } };
+        };
+        const delta_opening: pedersen.Opening = d: {
+            const a = percentage_opening.scalar.mul(ten_thousand);
+            const b = base_opening.scalar.mul(scalar_rate);
+            break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
+        };
+
+        const claimed_commitment, const claimed_opening = pedersen.initValue(u64, delta_amount);
+
+        const proof_data = Data.init(
+            &percentage_commitment,
+            &percentage_opening,
+            percentage_amount,
+            &delta_commitment,
+            &delta_opening,
+            delta_amount,
+            &claimed_commitment,
+            &claimed_opening,
+            max_value,
+        );
+
+        try proof_data.verify();
+    }
+
+    test "equal to max value" {
+        const base_amount: u64 = 55;
+        const max_value: u64 = 3;
+
+        const percentage_rate: u16 = 555;
+        const percentage_amount: u64 = 4;
+        const delta_amount: u64 = 9600;
+
+        const transfer_commitment, const transfer_opening = pedersen.initValue(u64, base_amount);
+        const percentage_commitment, const percentage_opening = pedersen.initValue(u64, max_value);
+
+        const scalar_rate = pedersen.scalarFromInt(u64, percentage_rate);
+        const ten_thousand = pedersen.scalarFromInt(u64, 10_000);
+
+        const delta_commitment: pedersen.Commitment = d: {
+            const a = try percentage_commitment.point.mul(ten_thousand.toBytes());
+            const b = try transfer_commitment.point.mul(scalar_rate.toBytes());
+            break :d .{ .point = .{ .p = a.p.sub(b.p) } };
+        };
+        const delta_opening: pedersen.Opening = d: {
+            const a = percentage_opening.scalar.mul(ten_thousand);
+            const b = transfer_opening.scalar.mul(scalar_rate);
+            break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
+        };
+
+        const claimed_commitment, const claimed_opening = pedersen.initValue(u64, 0);
+
+        const proof_data = Data.init(
+            &percentage_commitment,
+            &percentage_opening,
+            percentage_amount,
+            &delta_commitment,
+            &delta_opening,
+            delta_amount,
+            &claimed_commitment,
+            &claimed_opening,
+            max_value,
+        );
+
+        try proof_data.verify();
+    }
+};
+
+const Context = struct {
+    percentage_commitment: pedersen.Commitment,
+    delta_commitment: pedersen.Commitment,
+    claimed_commitment: pedersen.Commitment,
+    max_value: u64,
+
+    pub fn fromBytes(bytes: [104]u8) !Context {
+        return .{
+            .percentage_commitment = try pedersen.Commitment.fromBytes(bytes[0..32].*),
+            .delta_commitment = try pedersen.Commitment.fromBytes(bytes[32..64].*),
+            .claimed_commitment = try pedersen.Commitment.fromBytes(bytes[64..96].*),
+            .max_value = @bitCast(bytes[96..][0..8].*),
+        };
+    }
+
+    pub fn toBytes(self: Context) [104]u8 {
+        return self.percentage_commitment.toBytes() ++ self.delta_commitment.toBytes() ++
+            self.claimed_commitment.toBytes() ++ @as([8]u8, @bitCast(self.max_value));
+    }
+
+    fn newTranscript(self: Context) Transcript {
+        var transcript = Transcript.init("percentage-with-cap-instruction");
+        transcript.appendCommitment("percentage-commitment", self.percentage_commitment);
+        transcript.appendCommitment("delta-commitment", self.delta_commitment);
+        transcript.appendCommitment("claimed-commitment", self.claimed_commitment);
+        transcript.appendU64("max-value", self.max_value);
+        return transcript;
     }
 };
 
@@ -394,17 +581,17 @@ test "above max proof" {
     const percentage_commitment, const percentage_opening = pedersen.initValue(u64, max_value);
 
     const scalar_rate = pedersen.scalarFromInt(u64, percentage_rate);
-    const constant_scalar = pedersen.scalarFromInt(u64, 10_000);
+    const ten_thousand = pedersen.scalarFromInt(u64, 10_000);
 
     const delta_commitment: pedersen.Commitment = d: {
-        const a = try percentage_commitment.point.mul(constant_scalar.toBytes());
-        const b = a.p.sub(transfer_commitment.point.p);
-        break :d .{ .point = .{ .p = try b.mul(scalar_rate.toBytes()) } };
+        const a = try percentage_commitment.point.mul(ten_thousand.toBytes());
+        const b = try transfer_commitment.point.mul(scalar_rate.toBytes());
+        break :d .{ .point = .{ .p = a.p.sub(b.p) } };
     };
     const delta_opening: pedersen.Opening = d: {
-        const a = percentage_opening.scalar.mul(constant_scalar);
-        const b = Edwards25519.scalar.sub(a.toBytes(), transfer_opening.scalar.toBytes());
-        break :d .{ .scalar = Scalar.fromBytes(b).mul(scalar_rate) };
+        const a = percentage_opening.scalar.mul(ten_thousand);
+        const b = transfer_opening.scalar.mul(scalar_rate);
+        break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
     };
 
     const claimed_commitment, const claimed_opening = pedersen.initValue(u64, 0);
@@ -448,16 +635,15 @@ test "below max proof" {
         pedersen.initValue(u64, percentage_amount);
 
     const scalar_rate = pedersen.scalarFromInt(u64, percentage_rate);
-    const constant_scalar = pedersen.scalarFromInt(u64, 10_000);
+    const ten_thousand = pedersen.scalarFromInt(u64, 10_000);
 
     const delta_commitment: pedersen.Commitment = d: {
-        const a = try percentage_commitment.point.mul(constant_scalar.toBytes());
+        const a = try percentage_commitment.point.mul(ten_thousand.toBytes());
         const b = try transfer_commitment.point.mul(scalar_rate.toBytes());
         break :d .{ .point = .{ .p = a.p.sub(b.p) } };
     };
-
     const delta_opening: pedersen.Opening = d: {
-        const a = percentage_opening.scalar.mul(constant_scalar);
+        const a = percentage_opening.scalar.mul(ten_thousand);
         const b = transfer_opening.scalar.mul(scalar_rate);
         break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
     };
@@ -513,16 +699,16 @@ test "is zero" {
         pedersen.initValue(u64, percentage_amount);
 
     const scalar_rate = pedersen.scalarFromInt(u64, percentage_rate);
-    const constant_scalar = pedersen.scalarFromInt(u64, 10_000);
+    const ten_thousand = pedersen.scalarFromInt(u64, 10_000);
 
     const delta_commitment: pedersen.Commitment = d: {
-        const a = try percentage_commitment.point.mul(constant_scalar.toBytes());
+        const a = try percentage_commitment.point.mul(ten_thousand.toBytes());
         const b = try transfer_commitment.point.mul(scalar_rate.toBytes());
         break :d .{ .point = .{ .p = a.p.sub(b.p) } };
     };
 
     const delta_opening: pedersen.Opening = d: {
-        const a = percentage_opening.scalar.mul(constant_scalar);
+        const a = percentage_opening.scalar.mul(ten_thousand);
         const b = transfer_opening.scalar.mul(scalar_rate);
         break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
     };

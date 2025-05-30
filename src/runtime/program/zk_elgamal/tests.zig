@@ -46,7 +46,7 @@ test "zero balance" {
         ZeroCiphertextData,
         allocator,
         .verify_zero_ciphertext,
-        zk_elgamal.VERIFY_ZERO_BALANCE_COMPUTE_UNITS,
+        zk_elgamal.VERIFY_ZERO_CIPHERTEXT_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
     );
@@ -488,7 +488,7 @@ const verify_instruction_types = [_]zk_elgamal.ProofInstruction{
     .verify_ciphertext_commitment_equality,
     .verify_grouped_ciphertext2_handles_validity,
     .verify_batched_grouped_ciphertext2_handles_validity,
-    // .verify_percentage_with_cap,
+    .verify_percentage_with_cap,
     .verify_grouped_ciphertext3_handles_validity,
     .verify_batched_grouped_ciphertext3_handles_validity,
 };

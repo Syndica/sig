@@ -52,6 +52,10 @@ pub const Commitment = struct {
         return .{ .point = try Ristretto255.fromBytes(bytes) };
     }
 
+    pub fn toBytes(self: Commitment) [32]u8 {
+        return self.point.toBytes();
+    }
+
     pub fn fromBase64(string: []const u8) !Commitment {
         const base64 = std.base64.standard;
         var buffer: [32]u8 = .{0} ** 32;

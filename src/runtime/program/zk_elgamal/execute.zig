@@ -24,7 +24,7 @@ pub fn execute(
 
     switch (instruction) {
         .verify_zero_ciphertext => {
-            try tc.consumeCompute(zk_elgamal.VERIFY_ZERO_BALANCE_COMPUTE_UNITS);
+            try tc.consumeCompute(zk_elgamal.VERIFY_ZERO_CIPHERTEXT_COMPUTE_UNITS);
             try tc.log("VerifyZeroBalance", .{});
             try processVerifyProof(zksdk.ZeroCiphertextData, ic);
         },
@@ -85,6 +85,13 @@ pub fn execute(
             );
             try tc.log("VerifyBatchedGroupedCiphertext3HandlesValidity", .{});
             try processVerifyProof(zksdk.BatchedGroupedCiphertext3HandlesData, ic);
+        },
+        .verify_percentage_with_cap => {
+            try tc.consumeCompute(
+                zk_elgamal.VERIFY_PERCENTAGE_WITH_CAP_COMPUTE_UNITS,
+            );
+            try tc.log("VerifyPercentageWithCap", .{});
+            try processVerifyProof(zksdk.PercentageWithCapData, ic);
         },
         else => @panic("TODO"),
     }
