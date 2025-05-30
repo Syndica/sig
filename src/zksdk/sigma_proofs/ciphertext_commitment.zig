@@ -166,6 +166,11 @@ pub const Proof = struct {
         };
     }
 
+    fn toBytes(self: Proof) [192]u8 {
+        return self.Y_0.toBytes() ++ self.Y_1.toBytes() ++ self.Y_2.toBytes() ++
+            self.z_s.toBytes() ++ self.z_x.toBytes() ++ self.z_r.toBytes();
+    }
+
     pub fn fromBase64(string: []const u8) !Proof {
         const base64 = std.base64.standard;
         var buffer: [192]u8 = .{0} ** 192;
@@ -175,6 +180,103 @@ pub const Proof = struct {
             string,
         );
         return fromBytes(buffer);
+    }
+};
+
+pub const Data = struct {
+    context: Context,
+    proof: Proof,
+
+    pub const BYTE_LEN = 320;
+
+    pub fn init(
+        kp: *const ElGamalKeypair,
+        ciphertext: *const ElGamalCiphertext,
+        commitment: *const pedersen.Commitment,
+        opening: *const pedersen.Opening,
+        amount: u64,
+    ) Data {
+        const context: Context = .{
+            .pubkey = kp.public,
+            .ciphertext = ciphertext.*,
+            .commitment = commitment.*,
+        };
+        var transcript = context.newTranscript();
+        const proof = Proof.init(
+            kp,
+            ciphertext,
+            opening,
+            amount,
+            &transcript,
+        );
+        return .{ .context = context, .proof = proof };
+    }
+
+    pub fn fromBytes(data: []const u8) !Data {
+        if (data.len != BYTE_LEN) return error.InvalidLength;
+        return .{
+            .context = try Context.fromBytes(data[0..128].*),
+            .proof = try Proof.fromBytes(data[128..][0..192].*),
+        };
+    }
+
+    pub fn toBytes(self: Data) [BYTE_LEN]u8 {
+        return self.context.toBytes() ++ self.proof.toBytes();
+    }
+
+    pub fn verify(self: Data) !void {
+        var transcript = self.context.newTranscript();
+        try self.proof.verify(
+            &self.context.pubkey,
+            &self.context.ciphertext,
+            &self.context.commitment,
+            &transcript,
+        );
+    }
+
+    test "correctness" {
+        const kp = ElGamalKeypair.random();
+        const amount: u64 = 55;
+        const ciphertext = el_gamal.encrypt(u64, amount, &kp.public);
+        const commitment, const opening = pedersen.initValue(u64, amount);
+
+        const proof_data = Data.init(
+            &kp,
+            &ciphertext,
+            &commitment,
+            &opening,
+            amount,
+        );
+
+        try proof_data.verify();
+    }
+};
+
+const Context = struct {
+    pubkey: ElGamalPubkey,
+    ciphertext: ElGamalCiphertext,
+    commitment: pedersen.Commitment,
+
+    fn fromBytes(bytes: [128]u8) !Context {
+        return .{
+            .pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*),
+            .ciphertext = try ElGamalCiphertext.fromBytes(bytes[32..96].*),
+            .commitment = try pedersen.Commitment.fromBytes(bytes[96..128].*),
+        };
+    }
+
+    fn toBytes(self: Context) [128]u8 {
+        return self.pubkey.toBytes() ++
+            self.ciphertext.toBytes() ++
+            self.commitment.point.toBytes();
+    }
+
+    fn newTranscript(self: Context) Transcript {
+        var transcript = Transcript.init("ciphertext-commitment-equality-instruction");
+        transcript.appendPubkey("pubkey", self.pubkey);
+        transcript.appendCiphertext("ciphertext", self.ciphertext);
+        transcript.appendMessage("commitment", &self.commitment.point.toBytes());
+        return transcript;
     }
 };
 

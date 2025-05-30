@@ -10,8 +10,11 @@ const ElGamalKeypair = zksdk.ElGamalKeypair;
 
 const ZeroCiphertextData = zksdk.ZeroCiphertextProofData;
 const CiphertextCiphertextEqualityData = zksdk.CiphertextCiphertextEqualityData;
+const CiphertextCommitmentEqualityData = zksdk.CiphertextCommitmentEqualityData;
 const PubkeyValidityProofData = zksdk.PubkeyValidityProofData;
 const RangeProofU64Data = zksdk.RangeProofU64Data;
+const RangeProofU128Data = zksdk.RangeProofU128Data;
+const RangeProofU256Data = zksdk.RangeProofU256Data;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
@@ -147,6 +150,114 @@ test "batched range proof u64" {
         allocator,
         .verify_batched_range_proof_u64,
         zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U64_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+}
+
+test "batched range proof u128" {
+    const allocator = std.testing.allocator;
+    const amount_1: u64 = 23;
+    const amount_2: u64 = 24;
+
+    const commitment_1, const opening_1 = zksdk.pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = zksdk.pedersen.initValue(u64, amount_2);
+
+    const success_proof_data = try RangeProofU128Data.init(
+        &.{ commitment_1, commitment_2 },
+        &.{ amount_1, amount_2 },
+        &.{ 64, 64 },
+        &.{ opening_1, opening_2 },
+    );
+
+    const incorrect_opening = zksdk.pedersen.Opening.random();
+    const fail_proof_data = try RangeProofU128Data.init(
+        &.{ commitment_1, commitment_2 },
+        &.{ amount_1, amount_2 },
+        &.{ 64, 64 },
+        &.{ opening_1, incorrect_opening },
+    );
+
+    try testVerifyProofWithoutContext(
+        RangeProofU128Data,
+        allocator,
+        .verify_batched_range_proof_u128,
+        zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U128_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+}
+
+test "batched range proof u256" {
+    const allocator = std.testing.allocator;
+    const amount_1: u64 = 23;
+    const amount_2: u64 = 24;
+    const amount_3: u64 = 25;
+    const amount_4: u64 = 26;
+
+    const commitment_1, const opening_1 = zksdk.pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = zksdk.pedersen.initValue(u64, amount_2);
+    const commitment_3, const opening_3 = zksdk.pedersen.initValue(u64, amount_3);
+    const commitment_4, const opening_4 = zksdk.pedersen.initValue(u64, amount_4);
+
+    const success_proof_data = try RangeProofU256Data.init(
+        &.{ commitment_1, commitment_2, commitment_3, commitment_4 },
+        &.{ amount_1, amount_2, amount_3, amount_4 },
+        &.{ 64, 64, 64, 64 },
+        &.{ opening_1, opening_2, opening_3, opening_4 },
+    );
+
+    const incorrect_opening = zksdk.pedersen.Opening.random();
+    const fail_proof_data = try RangeProofU256Data.init(
+        &.{ commitment_1, commitment_2, commitment_3, commitment_4 },
+        &.{ amount_1, amount_2, amount_3, amount_4 },
+        &.{ 64, 64, 64, 64 },
+        &.{ opening_1, opening_2, opening_3, incorrect_opening },
+    );
+
+    try testVerifyProofWithoutContext(
+        RangeProofU256Data,
+        allocator,
+        .verify_batched_range_proof_u256,
+        zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U256_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+}
+
+test "ciphertext commitment equality" {
+    const allocator = std.testing.allocator;
+    const kp = ElGamalKeypair.random();
+    const amount: u64 = 55;
+    const ciphertext = zksdk.el_gamal.encrypt(u64, amount, &kp.public);
+    const commitment, const opening = zksdk.pedersen.initValue(u64, amount);
+
+    const success_proof_data = CiphertextCommitmentEqualityData.init(
+        &kp,
+        &ciphertext,
+        &commitment,
+        &opening,
+        amount,
+    );
+
+    const incorrect_kp: ElGamalKeypair = .{
+        .public = kp.public,
+        .secret = .random(),
+    };
+
+    const fail_proof_data = CiphertextCommitmentEqualityData.init(
+        &incorrect_kp,
+        &ciphertext,
+        &commitment,
+        &opening,
+        amount,
+    );
+
+    try testVerifyProofWithoutContext(
+        CiphertextCommitmentEqualityData,
+        allocator,
+        .verify_ciphertext_commitment_equality,
+        zk_elgamal.VERIFY_CIPHERTEXT_COMMITMENT_EQUALITY_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
     );
