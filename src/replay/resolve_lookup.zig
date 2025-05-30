@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
-const TransactionAddressLookup = core.transaction.TransactionAddressLookup;
+const TransactionAddressLookup = core.transaction.AddressLookup;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 
