@@ -151,7 +151,6 @@ pub const Data = struct {
 
         pub const BYTE_LEN = 96;
 
-        // TODO: is it a problem that we error on invalid point here?
         pub fn fromBytes(bytes: [96]u8) !Context {
             return .{
                 .pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*),
