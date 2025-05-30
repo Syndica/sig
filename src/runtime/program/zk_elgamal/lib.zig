@@ -15,6 +15,7 @@ pub const ProofType = enum(u8) {
     batched_grouped_ciphertext2_handles_validity,
     grouped_ciphertext3_handles_validity,
     batched_grouped_ciphertext3_handles_validity,
+    _,
 
     pub const BincodeSize = u8;
 };
