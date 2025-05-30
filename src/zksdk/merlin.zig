@@ -277,6 +277,14 @@ pub const Transcript = struct {
         t.appendMessage(label, &buffer);
     }
 
+    pub fn appendCommitment(
+        t: *Transcript,
+        comptime label: []const u8,
+        commitment: sig.zksdk.pedersen.Commitment,
+    ) void {
+        t.appendMessage(label, &commitment.point.toBytes());
+    }
+
     pub fn appendU64(t: *Transcript, comptime label: []const u8, x: u64) void {
         var buffer: [8]u8 = .{0} ** 8;
         std.mem.writeInt(u64, &buffer, x, .little);

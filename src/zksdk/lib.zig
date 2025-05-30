@@ -18,7 +18,7 @@ const zero_ciphertext = @import("sigma_proofs/zero_ciphertext.zig");
 
 pub const CiphertextCiphertextData = ciphertext_ciphertext.Data;
 pub const CiphertextCommitmentData = ciphertext_commitment.Data;
-pub const PercentageWithCapProof = percentage.Proof;
+pub const PercentageWithCapData = percentage.Data;
 pub const PubkeyProofData = pubkey_validity.Data;
 pub const ZeroCiphertextData = zero_ciphertext.Data;
 
