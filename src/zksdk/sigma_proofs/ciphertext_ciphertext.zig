@@ -212,6 +212,173 @@ pub const Proof = struct {
         );
         return fromBytes(buffer);
     }
+
+    pub fn toBytes(self: Proof) [224]u8 {
+        return self.Y_0.toBytes() ++
+            self.Y_1.toBytes() ++ self.Y_2.toBytes() ++ self.Y_3.toBytes() ++
+            self.z_s.toBytes() ++ self.z_x.toBytes() ++ self.z_r.toBytes();
+    }
+};
+
+pub const Data = struct {
+    context: Context,
+    proof: Proof,
+
+    pub const BYTE_LEN = 416;
+
+    pub fn init(
+        first_keypair: *const ElGamalKeypair,
+        second_pubkey: *const ElGamalPubkey,
+        first_ciphertext: *const ElGamalCiphertext,
+        second_ciphertext: *const ElGamalCiphertext,
+        second_opening: *const pedersen.Opening,
+        amount: u64,
+    ) Data {
+        const context: Context = .{
+            .first_pubkey = first_keypair.public,
+            .second_pubkey = second_pubkey.*,
+            .first_ciphertext = first_ciphertext.*,
+            .second_ciphertext = second_ciphertext.*,
+        };
+        var transcript = context.newTranscript();
+        const proof = Proof.init(
+            first_keypair,
+            second_pubkey,
+            first_ciphertext,
+            second_opening,
+            amount,
+            &transcript,
+        );
+        return .{ .context = context, .proof = proof };
+    }
+
+    pub fn fromBytes(data: []const u8) !Data {
+        if (data.len != BYTE_LEN) return error.InvalidLength;
+        return .{
+            .context = try Context.fromBytes(data[0..192].*),
+            .proof = try Proof.fromBytes(data[192..][0..224].*),
+        };
+    }
+
+    pub fn toBytes(self: Data) [BYTE_LEN]u8 {
+        return self.context.toBytes() ++ self.proof.toBytes();
+    }
+
+    pub fn verify(self: Data) !void {
+        var transcript = self.context.newTranscript();
+        try self.proof.verify(
+            &self.context.first_pubkey,
+            &self.context.second_pubkey,
+            &self.context.first_ciphertext,
+            &self.context.second_ciphertext,
+            &transcript,
+        );
+    }
+
+    test "correctness" {
+        const first_kp = ElGamalKeypair.random();
+        const second_kp = ElGamalKeypair.random();
+
+        {
+            const amount: u64 = 0;
+            const first_ciphertext = el_gamal.encrypt(u64, amount, &first_kp.public);
+
+            const second_opening = pedersen.Opening.random();
+            const second_ciphertext = el_gamal.encryptWithOpening(
+                u64,
+                amount,
+                &second_kp.public,
+                &second_opening,
+            );
+
+            const proof_data: Data = .init(
+                &first_kp,
+                &second_kp.public,
+                &first_ciphertext,
+                &second_ciphertext,
+                &second_opening,
+                amount,
+            );
+            try proof_data.verify();
+        }
+
+        {
+            const amount: u64 = 55;
+            const first_ciphertext = el_gamal.encrypt(u64, amount, &first_kp.public);
+
+            const second_opening = pedersen.Opening.random();
+            const second_ciphertext = el_gamal.encryptWithOpening(
+                u64,
+                amount,
+                &second_kp.public,
+                &second_opening,
+            );
+
+            const proof_data: Data = .init(
+                &first_kp,
+                &second_kp.public,
+                &first_ciphertext,
+                &second_ciphertext,
+                &second_opening,
+                amount,
+            );
+            try proof_data.verify();
+        }
+
+        {
+            const amount: u64 = std.math.maxInt(u64);
+            const first_ciphertext = el_gamal.encrypt(u64, amount, &first_kp.public);
+
+            const second_opening = pedersen.Opening.random();
+            const second_ciphertext = el_gamal.encryptWithOpening(
+                u64,
+                amount,
+                &second_kp.public,
+                &second_opening,
+            );
+
+            const proof_data: Data = .init(
+                &first_kp,
+                &second_kp.public,
+                &first_ciphertext,
+                &second_ciphertext,
+                &second_opening,
+                amount,
+            );
+            try proof_data.verify();
+        }
+    }
+};
+
+const Context = struct {
+    first_pubkey: ElGamalPubkey,
+    second_pubkey: ElGamalPubkey,
+    first_ciphertext: ElGamalCiphertext,
+    second_ciphertext: ElGamalCiphertext,
+
+    // TODO: is it a problem that we error on invalid point here?
+    pub fn fromBytes(bytes: [192]u8) !Context {
+        return .{
+            .first_pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*),
+            .second_pubkey = try ElGamalPubkey.fromBytes(bytes[32..64].*),
+            .first_ciphertext = try ElGamalCiphertext.fromBytes(bytes[64..128].*),
+            .second_ciphertext = try ElGamalCiphertext.fromBytes(bytes[128..192].*),
+        };
+    }
+
+    pub fn toBytes(self: Context) [192]u8 {
+        return self.first_pubkey.toBytes() ++ self.second_pubkey.toBytes() ++
+            self.first_ciphertext.toBytes() ++ self.second_ciphertext.toBytes();
+    }
+
+    fn newTranscript(self: Context) Transcript {
+        var transcript = Transcript.init("ciphertext-ciphertext-equality-instruction");
+        transcript.appendPubkey("first-pubkey", self.first_pubkey);
+        transcript.appendPubkey("second-pubkey", self.second_pubkey);
+        transcript.appendCiphertext("first-ciphertext", self.first_ciphertext);
+        transcript.appendCiphertext("second-ciphertext", self.second_ciphertext);
+        return transcript;
+    }
 };
 
 test "correctness" {
