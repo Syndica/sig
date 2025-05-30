@@ -192,8 +192,12 @@ pub const SlotVoteTracker = struct {
 
     pub fn deinit(self: SlotVoteTracker, allocator: std.mem.Allocator) void {
         var copy = self;
+
         copy.voted.deinit(allocator);
+
+        for (copy.optimistic_votes_tracker.values()) |vst| vst.deinit(allocator);
         copy.optimistic_votes_tracker.deinit(allocator);
+
         copy.initAndOrGetUpdates().deinit(allocator);
     }
 
@@ -348,7 +352,7 @@ pub const VoteStakeTracker = struct {
         if (@typeInfo(ReachedThresholds) != .@"struct") return null;
 
         if (!@hasDecl(ReachedThresholds, "bit_length")) return null;
-        if (!@typeInfo(@TypeOf(&ReachedThresholds.bit_length)).Pointer.is_const) {
+        if (!@typeInfo(@TypeOf(&ReachedThresholds.bit_length)).pointer.is_const) {
             return null;
         }
 
