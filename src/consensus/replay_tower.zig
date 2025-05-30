@@ -2993,7 +2993,7 @@ test "selectVoteAndResetForks stake not found" {
     );
     defer fork_choice.deinit();
 
-    var tower = try createTestReplayTower(allocator, 8, 0.66);
+    var tower = try createTestReplayTower(8, 0.66);
     defer tower.deinit(allocator);
 
     const latest = LatestValidatorVotesForFrozenBanks{
