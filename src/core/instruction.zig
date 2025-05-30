@@ -15,6 +15,11 @@ pub const Instruction = struct {
     /// arguments. The lifetime of the data must outlive the instruction.
     data: []const u8,
 
+    pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
+        allocator.free(self.accounts);
+        allocator.free(self.data);
+    }
+
     // https://github.com/anza-xyz/agave/blob/3bbabb38c5800b197841eb79037a82e88e174440/sdk/instruction/src/lib.rs#L221
     pub fn initUsingBincodeAlloc(
         allocator: std.mem.Allocator,
