@@ -95,6 +95,12 @@ pub const Pubkey = extern struct {
             else => error.UnexpectedToken,
         };
     }
+
+    pub fn indexIn(self: Pubkey, pubkeys: []const Pubkey) ?usize {
+        return for (pubkeys, 0..) |candidate, index| {
+            if (self.equals(&candidate)) break index;
+        } else null;
+    }
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };
