@@ -6,13 +6,14 @@ const zk_elgamal = sig.runtime.program.zk_elgamal;
 const program = sig.runtime.program;
 const ElGamalKeypair = zksdk.ElGamalKeypair;
 
-const ZeroCiphertextData = zksdk.ZeroCiphertextProofData;
 const CiphertextCiphertextEqualityData = zksdk.CiphertextCiphertextEqualityData;
 const CiphertextCommitmentEqualityData = zksdk.CiphertextCommitmentEqualityData;
+const GroupedCiphertext2HandlesValidityData = zksdk.GroupedCiphertext2HandlesValidityData;
 const PubkeyValidityProofData = zksdk.PubkeyValidityProofData;
-const RangeProofU64Data = zksdk.RangeProofU64Data;
 const RangeProofU128Data = zksdk.RangeProofU128Data;
 const RangeProofU256Data = zksdk.RangeProofU256Data;
+const RangeProofU64Data = zksdk.RangeProofU64Data;
+const ZeroCiphertextData = zksdk.ZeroCiphertextProofData;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
@@ -261,21 +262,49 @@ test "ciphertext commitment equality" {
     );
 }
 
-// test "grouped ciphertext 2 handles" {
-//     const dest_kp = ElGamalKeypair.random();
-//     const dest_public = dest_kp.public;
-//     _ = dest_public; // autofix
+test "grouped ciphertext 2 handles" {
+    const allocator = std.testing.allocator;
+    const dest_kp = ElGamalKeypair.random();
+    const dest_public = dest_kp.public;
 
-//     const auditor_kp = ElGamalKeypair.random();
-//     const auditor_public = auditor_kp.public;
-//     _ = auditor_public; // autofix
+    const auditor_kp = ElGamalKeypair.random();
+    const auditor_public = auditor_kp.public;
 
-//     const amount: u64 = 55;
-//     _ = amount; // autofix
-//     const opening = zksdk.pedersen.Opening.random();
-//     _ = opening; // autofix
+    const amount: u64 = 55;
+    const opening = zksdk.pedersen.Opening.random();
 
-// }
+    const grouped_ciphertext = zksdk.GroupedElGamalCiphertext(2).encryptWithOpening(
+        .{ dest_public, auditor_public },
+        amount,
+        &opening,
+    );
+
+    const success_proof_data = GroupedCiphertext2HandlesValidityData.init(
+        &dest_public,
+        &auditor_public,
+        &grouped_ciphertext,
+        amount,
+        &opening,
+    );
+
+    const incorrect_opening = zksdk.pedersen.Opening.random();
+    const fail_proof_data = GroupedCiphertext2HandlesValidityData.init(
+        &dest_public,
+        &auditor_public,
+        &grouped_ciphertext,
+        amount,
+        &incorrect_opening,
+    );
+
+    try testVerifyProofWithoutContext(
+        GroupedCiphertext2HandlesValidityData,
+        allocator,
+        .verify_grouped_ciphertext2_handles_validity,
+        zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+}
 
 const verify_instruction_types = [_]zk_elgamal.ProofInstruction{
     .verify_zero_ciphertext,

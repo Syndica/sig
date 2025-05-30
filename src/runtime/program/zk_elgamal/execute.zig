@@ -58,6 +58,13 @@ pub fn execute(
             try tc.log("VerifyBatchedRangeProofU256", .{});
             try processVerifyProof(zksdk.RangeProofU256Data, ic);
         },
+        .verify_grouped_ciphertext2_handles_validity => {
+            try tc.consumeCompute(
+                zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
+            );
+            try tc.log("VerifyGroupedCiphertext2HandlesValidity", .{});
+            try processVerifyProof(zksdk.GroupedCiphertext2HandlesValidityData, ic);
+        },
         else => @panic("TODO"),
     }
 }

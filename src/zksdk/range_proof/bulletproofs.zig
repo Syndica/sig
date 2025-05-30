@@ -8,7 +8,6 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 
-const el_gamal = sig.zksdk.el_gamal;
 const pedersen = sig.zksdk.pedersen;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Shake256 = std.crypto.hash.sha3.Shake256;
@@ -41,7 +40,7 @@ pub fn Proof(bit_size: comptime_int) type {
         const Self = @This();
 
         // number of bytes this proof takes up in the compressed form
-        pub const BYTE_SIZE = (4 * 32) + // the four ristretto points
+        pub const BYTE_LEN = (4 * 32) + // the four ristretto points
             (3 * 32) + // the three scalars
             2 * (logn * 32) + // the L_vec and R_vec in the ipp
             2 * 32; // the `a` and `b` scalars in the ipp
@@ -475,7 +474,7 @@ pub fn Proof(bit_size: comptime_int) type {
             return acc;
         }
 
-        pub fn fromBytes(bytes: [BYTE_SIZE]u8) !Self {
+        pub fn fromBytes(bytes: [BYTE_LEN]u8) !Self {
             const A = try Ristretto255.fromBytes(bytes[0..32].*);
             const S = try Ristretto255.fromBytes(bytes[32..64].*);
             const T_1 = try Ristretto255.fromBytes(bytes[64..96].*);
@@ -503,7 +502,7 @@ pub fn Proof(bit_size: comptime_int) type {
             };
         }
 
-        pub fn toBytes(self: Self) [BYTE_SIZE]u8 {
+        pub fn toBytes(self: Self) [BYTE_LEN]u8 {
             const outer = self.A.toBytes() ++
                 self.S.toBytes() ++ self.T_1.toBytes() ++ self.T_2.toBytes() ++
                 self.t_x.toBytes() ++ self.t_x_blinding.toBytes() ++ self.e_blinding.toBytes();
@@ -524,7 +523,7 @@ pub fn Proof(bit_size: comptime_int) type {
 
         pub fn fromBase64(string: []const u8) !Self {
             const base64 = std.base64.standard;
-            var buffer: [BYTE_SIZE]u8 = .{0} ** BYTE_SIZE;
+            var buffer: [BYTE_LEN]u8 = .{0} ** BYTE_LEN;
             const decoded_length = try base64.Decoder.calcSizeForSlice(string);
             try std.base64.standard.Decoder.decode(
                 buffer[0..decoded_length],
@@ -542,7 +541,7 @@ pub fn Data(bit_size: comptime_int) type {
 
         const P = Proof(bit_size);
         const Self = @This();
-        pub const BYTE_LEN = P.BYTE_SIZE + @sizeOf(Context);
+        pub const BYTE_LEN = P.BYTE_LEN + @sizeOf(Context);
 
         pub fn init(
             commitments: []const pedersen.Commitment,
@@ -584,7 +583,7 @@ pub fn Data(bit_size: comptime_int) type {
             if (data.len != BYTE_LEN) return error.InvalidLength;
             return .{
                 .context = @bitCast(data[0..@sizeOf(Context)].*),
-                .proof = try P.fromBytes(data[@sizeOf(Context)..][0..P.BYTE_SIZE].*),
+                .proof = try P.fromBytes(data[@sizeOf(Context)..][0..P.BYTE_LEN].*),
             };
         }
 
