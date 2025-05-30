@@ -19,7 +19,6 @@ const sig = @import("../sig.zig");
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Scalar = Edwards25519.scalar.Scalar;
-const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 const pedersen = sig.zksdk.pedersen;
 
 pub const Pubkey = struct {
@@ -127,6 +126,53 @@ pub fn encryptWithOpening(
     return .{
         .commitment = commitment,
         .handle = handle,
+    };
+}
+
+pub fn GroupedElGamalCiphertext(comptime N: u64) type {
+    return struct {
+        commitment: pedersen.Commitment,
+        handles: [N]pedersen.DecryptHandle,
+
+        const Self = @This();
+        pub const BYTE_LEN = (N * 32) + 32;
+
+        pub fn encryptWithOpening(
+            pubkeys: [N]Pubkey,
+            amount: u64,
+            opening: *const pedersen.Opening,
+        ) Self {
+            const commitment = pedersen.initOpening(u64, amount, opening);
+            var handles: [N]pedersen.DecryptHandle = undefined;
+            for (&handles, pubkeys) |*handle, public| {
+                handle.* = pedersen.DecryptHandle.init(&public, opening);
+            }
+            return .{
+                .commitment = commitment,
+                .handles = handles,
+            };
+        }
+
+        pub fn fromBytes(bytes: [BYTE_LEN]u8) !Self {
+            var handles: [N]pedersen.DecryptHandle = undefined;
+            for (&handles, 0..) |*handle, i| {
+                const position = 32 + (i * 32);
+                handle.* = try pedersen.DecryptHandle.fromBytes(bytes[position..][0..32].*);
+            }
+            return .{
+                .commitment = try pedersen.Commitment.fromBytes(bytes[0..32].*),
+                .handles = handles,
+            };
+        }
+
+        pub fn toBytes(self: Self) [BYTE_LEN]u8 {
+            var handles: [N * 32]u8 = undefined;
+            for (self.handles, 0..) |handle, i| {
+                const position = i * 32;
+                handles[position..][0..32].* = handle.point.toBytes();
+            }
+            return self.commitment.point.toBytes() ++ handles;
+        }
     };
 }
 

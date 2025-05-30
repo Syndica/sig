@@ -2,8 +2,8 @@ const sig = @import("../../../sig.zig");
 
 pub const ID =
     sig.core.Pubkey.parseBase58String(
-    "ZkE1Gama1Proof11111111111111111111111111111",
-) catch unreachable;
+        "ZkE1Gama1Proof11111111111111111111111111111",
+    ) catch unreachable;
 
 pub const CLOSE_CONTEXT_STATE_COMPUTE_UNITS: u64 = 3_300;
 pub const VERIFY_ZERO_BALANCE_COMPUTE_UNITS: u64 = 6_000;
