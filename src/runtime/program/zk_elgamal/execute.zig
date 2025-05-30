@@ -98,24 +98,6 @@ pub fn execute(
     }
 }
 
-const ProofContextStateMeta = extern struct {
-    context_state_authority: sig.core.Pubkey,
-    proof_type: zk_elgamal.ProofType,
-};
-
-fn encodeProofContext(
-    comptime C: type,
-    context_state_authority: sig.core.Pubkey,
-    proof_type: zk_elgamal.ProofType,
-    context: C,
-) [C.BYTE_LEN + 33]u8 {
-    var bytes: [C.BYTE_LEN + 33]u8 = undefined;
-    bytes[0..32].* = @bitCast(context_state_authority);
-    bytes[33] = @intFromEnum(proof_type);
-    bytes[33..][0..C.BYTE_LEN].* = context.toBytes();
-    return bytes;
-}
-
 fn processVerifyProof(
     comptime Proof: type,
     allocator: std.mem.Allocator,
@@ -174,7 +156,7 @@ fn processVerifyProof(
     if (ic.ixn_info.account_metas.len > accessed_accounts) {
         const context_state_authority = try ic.borrowInstructionAccount(accessed_accounts + 1);
         defer context_state_authority.release();
-        const context_state_key = context_state_authority.pubkey;
+        const context_authority_key = context_state_authority.pubkey;
 
         const proof_context_account = try ic.borrowInstructionAccount(accessed_accounts);
         defer proof_context_account.release();
@@ -186,7 +168,7 @@ fn processVerifyProof(
 
         const proof_context_meta = sig.bincode.readFromSlice(
             allocator,
-            ProofContextStateMeta,
+            zk_elgamal.ProofContextStateMeta,
             proof_context_data,
             .{},
         ) catch return InstructionError.InvalidAccountData;
@@ -196,20 +178,19 @@ fn processVerifyProof(
             return InstructionError.AccountAlreadyInitialized;
         }
 
-        const context_state_data = encodeProofContext(
-            Proof.Context,
-            context_state_key,
-            Proof.TYPE,
-            context_data,
-        );
-        if (proof_context_data.len != context_state_data.len) {
+        var context_state: zk_elgamal.ProofContextState(Proof.Context) = .{
+            .proof_type = Proof.TYPE,
+            .context = context_data.toBytes(),
+            .context_state_authority = context_authority_key,
+        };
+        if (proof_context_data.len != @sizeOf(@TypeOf(context_state))) {
             return InstructionError.InvalidAccountData;
         }
 
         try proof_context_account.setDataFromSlice(
             allocator,
             &tc.accounts_resize_delta,
-            &context_state_data,
+            std.mem.asBytes(&context_state),
         );
     }
 }
@@ -233,13 +214,9 @@ fn processCloseContextState(
     defer proof_context_account.release();
 
     const proof_context_data = proof_context_account.constAccountData();
-    if (proof_context_data.len != @sizeOf(ProofContextStateMeta)) {
-        return InstructionError.InvalidAccountData;
-    }
-
     const proof_context_meta = sig.bincode.readFromSlice(
         allocator,
-        ProofContextStateMeta,
+        zk_elgamal.ProofContextStateMeta,
         proof_context_data,
         .{},
     ) catch return InstructionError.InvalidAccountData;
@@ -253,6 +230,7 @@ fn processCloseContextState(
     const destination_account = try ic.borrowInstructionAccount(1);
     defer destination_account.release();
 
+    try destination_account.addLamports(proof_context_account.account.lamports);
     try proof_context_account.setLamports(0);
     try proof_context_account.setDataLength(
         allocator,

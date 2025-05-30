@@ -15,7 +15,22 @@ pub const ProofType = enum(u8) {
     batched_grouped_ciphertext2_handles_validity,
     grouped_ciphertext3_handles_validity,
     batched_grouped_ciphertext3_handles_validity,
+
+    pub const BincodeSize = u8;
 };
+
+pub const ProofContextStateMeta = extern struct {
+    context_state_authority: sig.core.Pubkey,
+    proof_type: ProofType,
+};
+
+pub fn ProofContextState(C: type) type {
+    return extern struct {
+        context_state_authority: sig.core.Pubkey,
+        proof_type: ProofType,
+        context: [C.BYTE_LEN]u8,
+    };
+}
 
 pub const ID =
     sig.core.Pubkey.parseBase58String(
