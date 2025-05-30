@@ -61,7 +61,7 @@ pub fn resolveBatch(
 
 fn resolveBatchGeneric(
     allocator: Allocator,
-    comptime provider_tag: LookupTableProvider,
+    comptime provider_tag: lookup_table_provider.Tag,
     table_provider: provider_tag.T(),
     batch: []const Transaction,
 ) !ResolvedBatch {
@@ -93,7 +93,7 @@ fn resolveBatchGeneric(
 /// - Use `deinit` to free this struct
 fn resolveTransaction(
     allocator: Allocator,
-    comptime provider_tag: LookupTableProvider,
+    comptime provider_tag: lookup_table_provider.Tag,
     table_provider: provider_tag.T(),
     transaction: Transaction,
 ) !ResolvedTransaction {
@@ -200,7 +200,7 @@ fn resolveTransaction(
 
 fn resolveLookupTableAccounts(
     allocator: Allocator,
-    comptime provider_tag: LookupTableProvider,
+    comptime provider_tag: lookup_table_provider.Tag,
     table_provider: provider_tag.T(),
     address_lookups: []const TransactionAddressLookup,
 ) !struct { writable: []const Pubkey, readonly: []const Pubkey } {
@@ -222,7 +222,8 @@ fn resolveLookupTableAccounts(
 
     // handle lookup table accounts
     for (address_lookups) |lookup| {
-        const table = try provider_tag.get(table_provider, &lookup.table_address);
+        const table = try lookup_table_provider
+            .get(provider_tag, table_provider, &lookup.table_address);
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
@@ -247,19 +248,21 @@ fn resolveLookupTableAccounts(
     };
 }
 
-const LookupTableProvider = enum {
-    accounts_db,
-    map,
+const lookup_table_provider = struct {
+    pub const Tag = enum {
+        accounts_db,
+        map,
 
-    fn T(self: LookupTableProvider) type {
-        return switch (self) {
-            .accounts_db => *AccountsDB,
-            .map => *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable),
-        };
-    }
+        fn T(self: Tag) type {
+            return switch (self) {
+                .accounts_db => *AccountsDB,
+                .map => *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable),
+            };
+        }
+    };
 
     fn get(
-        comptime tag: LookupTableProvider,
+        comptime tag: Tag,
         table_provider: tag.T(),
         table_address: *const Pubkey,
     ) !AddressLookupTable {
@@ -284,7 +287,8 @@ const LookupTableProvider = enum {
                 // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank/address_lookup_table.rs#L36
             },
             .map => {
-                const map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable) = table_provider;
+                const map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable) =
+                    table_provider;
                 return map.get(table_address.*) orelse return error.PubkeyNotInIndex;
             },
         }
