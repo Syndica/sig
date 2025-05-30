@@ -266,6 +266,10 @@ const LookupTableProvider = enum {
         switch (tag) {
             .accounts_db => {
                 const accounts_db: *AccountsDB = table_provider;
+                // TODO: Ensure the account comes from a valid slot by checking
+                // it against the current slot's ancestors. This won't be usable
+                // until consensus is implemented in replay, so it's not
+                // implemented yet.
                 const account = try accounts_db.getAccount(table_address);
                 if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
                     return error.LookupTableAccountOverflow;
@@ -274,6 +278,10 @@ const LookupTableProvider = enum {
                 const account_bytes = buf[0..account.data.len()];
                 account.data.readAll(account_bytes);
                 return try AddressLookupTable.deserialize(account_bytes);
+                // NOTE: deactivated lookup tables are allowed to be used,
+                // according to agave's implementation. see here, where agave
+                // discards the value:
+                // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank/address_lookup_table.rs#L36
             },
             .map => {
                 const map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable) = table_provider;
@@ -282,8 +290,6 @@ const LookupTableProvider = enum {
         }
     }
 };
-
-// TODO verify state of lookup table for timing of slots
 
 test "resolve lookups" {
     var rng = std.Random.DefaultPrng.init(0);
