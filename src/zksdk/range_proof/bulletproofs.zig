@@ -20,6 +20,7 @@ const Transcript = sig.zksdk.Transcript;
 pub const ZERO = Scalar.fromBytes(Edwards25519.scalar.zero);
 pub const ONE = Scalar.fromBytes(.{1} ++ .{0} ** 31);
 pub const TWO = Scalar.fromBytes(.{2} ++ .{0} ** 31);
+const MAX_COMMITMENTS = 8;
 
 pub fn Proof(bit_size: comptime_int) type {
     std.debug.assert(std.math.isPowerOfTwo(bit_size));
@@ -38,6 +39,12 @@ pub fn Proof(bit_size: comptime_int) type {
         ipp: InnerProductProof(bit_size),
 
         const Self = @This();
+
+        // number of bytes this proof takes up in the compressed form
+        pub const BYTE_SIZE = (4 * 32) + // the four ristretto points
+            (3 * 32) + // the three scalars
+            2 * (logn * 32) + // the L_vec and R_vec in the ipp
+            2 * 32; // the `a` and `b` scalars in the ipp
 
         /// degree-1 vector polynomial
         const VecPoly1 = struct {
@@ -468,7 +475,7 @@ pub fn Proof(bit_size: comptime_int) type {
             return acc;
         }
 
-        pub fn fromBytes(comptime size: usize, bytes: [size]u8) !Self {
+        pub fn fromBytes(bytes: [BYTE_SIZE]u8) !Self {
             const A = try Ristretto255.fromBytes(bytes[0..32].*);
             const S = try Ristretto255.fromBytes(bytes[32..64].*);
             const T_1 = try Ristretto255.fromBytes(bytes[64..96].*);
@@ -496,16 +503,176 @@ pub fn Proof(bit_size: comptime_int) type {
             };
         }
 
-        pub fn fromBase64(comptime size: usize, string: []const u8) !Self {
+        pub fn toBytes(self: Self) [BYTE_SIZE]u8 {
+            const outer = self.A.toBytes() ++
+                self.S.toBytes() ++ self.T_1.toBytes() ++ self.T_2.toBytes() ++
+                self.t_x.toBytes() ++ self.t_x_blinding.toBytes() ++ self.e_blinding.toBytes();
+
+            const IPP = InnerProductProof(bit_size);
+            var inner: [IPP.BYTE_LEN]u8 = undefined;
+            for (self.ipp.L_vec, self.ipp.R_vec, 0..) |l, r, i| {
+                const position = 2 * i * 32;
+                @memcpy(inner[position..][0..32], &l.toBytes());
+                @memcpy(inner[position + 32 ..][0..32], &r.toBytes());
+            }
+            const final = 2 * logn * 32;
+            inner[final..][0..32].* = self.ipp.a.toBytes();
+            inner[final..][32..][0..32].* = self.ipp.b.toBytes();
+
+            return outer ++ inner;
+        }
+
+        pub fn fromBase64(string: []const u8) !Self {
             const base64 = std.base64.standard;
-            var buffer: [size]u8 = .{0} ** size;
+            var buffer: [BYTE_SIZE]u8 = .{0} ** BYTE_SIZE;
             const decoded_length = try base64.Decoder.calcSizeForSlice(string);
             try std.base64.standard.Decoder.decode(
                 buffer[0..decoded_length],
                 string,
             );
-            return fromBytes(size, buffer);
+            return fromBytes(buffer);
         }
+    };
+}
+
+pub fn Data(bit_size: comptime_int) type {
+    return struct {
+        context: Context,
+        proof: P,
+
+        const P = Proof(bit_size);
+        const Self = @This();
+        pub const BYTE_LEN = P.BYTE_SIZE + @sizeOf(Context);
+
+        pub fn init(
+            commitments: []const pedersen.Commitment,
+            amounts: []const u64,
+            bit_lengths: []const u64,
+            openings: []const pedersen.Opening,
+        ) !Self {
+            var batched_bit_length: u64 = 0;
+            for (bit_lengths) |length| {
+                batched_bit_length = try std.math.add(
+                    u64,
+                    batched_bit_length,
+                    length,
+                );
+            }
+            if (batched_bit_length != bit_size) return error.IllegalAmountBitLength;
+
+            const context = try Context.init(
+                commitments,
+                amounts,
+                bit_lengths,
+                openings,
+            );
+            var transcript = context.newTranscript();
+            const proof = try P.init(
+                amounts,
+                bit_lengths,
+                openings,
+                &transcript,
+            );
+
+            return .{
+                .context = context,
+                .proof = proof,
+            };
+        }
+
+        pub fn fromBytes(data: []const u8) !Self {
+            if (data.len != BYTE_LEN) return error.InvalidLength;
+            return .{
+                .context = @bitCast(data[0..@sizeOf(Context)].*),
+                .proof = try P.fromBytes(data[@sizeOf(Context)..][0..P.BYTE_SIZE].*),
+            };
+        }
+
+        pub fn toBytes(self: Self) [BYTE_LEN]u8 {
+            const context: [264]u8 = @bitCast(self.context);
+            return context ++ self.proof.toBytes();
+        }
+
+        pub fn verify(self: Self) !void {
+            const context = self.context;
+            var commitments: std.BoundedArray(pedersen.Commitment, 8) = .{};
+            var bit_lengths: std.BoundedArray(u64, 8) = .{};
+
+            for (context.commitments, context.bit_lengths) |commitment, length| {
+                if (std.mem.allEqual(u8, &commitment, 0)) break; // we've hit the terminator
+                commitments.appendAssumeCapacity(.{ .point = try Ristretto255.fromBytes(commitment) });
+                bit_lengths.appendAssumeCapacity(length);
+            }
+
+            var transcript = context.newTranscript();
+            try self.proof.verify(
+                commitments.constSlice(),
+                bit_lengths.constSlice(),
+                &transcript,
+            );
+        }
+
+        const Context = extern struct {
+            // commitments and bit_lengths are stored as "null terminated", where
+            // the next-after-last element is an identity point. 0 is allowed
+            // in the bit lengths, so the length there is derived from the
+            // number of commitments parsed out.
+            // important to have for constant size serialization in `toBytes()`.
+            commitments: [MAX_COMMITMENTS][32]u8,
+            bit_lengths: [MAX_COMMITMENTS]u8,
+
+            fn init(
+                commitments: []const pedersen.Commitment,
+                amounts: []const u64,
+                bit_lengths: []const u64,
+                openings: []const pedersen.Opening,
+            ) !Context {
+                const num_commitments = commitments.len;
+                if (num_commitments > MAX_COMMITMENTS or
+                    num_commitments != amounts.len or
+                    num_commitments != bit_lengths.len or
+                    num_commitments != openings.len)
+                {
+                    return error.IllegalCommitmentLength;
+                }
+
+                var compressed_commitments: [MAX_COMMITMENTS][32]u8 = @splat(@splat(0));
+                for (
+                    compressed_commitments[0..num_commitments],
+                    commitments,
+                ) |*compressed, commitment| {
+                    try commitment.point.rejectIdentity();
+                    compressed.* = commitment.point.toBytes();
+                }
+
+                var compressed_bit_lengths: [MAX_COMMITMENTS]u8 = @splat(0);
+                for (
+                    compressed_bit_lengths[0..num_commitments],
+                    bit_lengths,
+                ) |*compressed, length| {
+                    compressed.* = std.math.cast(u8, length) orelse
+                        return error.IllegalAmountBitLength;
+                }
+
+                return .{
+                    .commitments = compressed_commitments,
+                    .bit_lengths = compressed_bit_lengths,
+                };
+            }
+
+            fn newTranscript(self: Context) Transcript {
+                var transcript = Transcript.init("batched-range-proof-instruction");
+                transcript.appendMessage(
+                    "commitments",
+                    std.mem.sliceAsBytes(&self.commitments),
+                );
+                transcript.appendMessage(
+                    "bit-lengths",
+                    std.mem.sliceAsBytes(&self.bit_lengths),
+                );
+                return transcript;
+            }
+        };
     };
 }
 
@@ -604,7 +771,7 @@ test "proof string" {
 
     // zig fmt: off
     const proof_string = "AvvBQL63pXMXsmuvuNbs/CqXdzeyrMpEIO2O/cI6/SyqU4N+7HUU3LmXai9st+DxqTnuKsm0SgnADfpLpQCEbDDupMb09NY8oHT8Bx8WQhv9eyoBlrPRd7DVhOUsio02gBshe3p2Wj7+yDCpFaZ7/PMypFBX6+E+EqCiPI6yUk4ztslWY0Ksac41eJgcPzXyIx2kvmSTsVBKLb7U01PWBC+AUyUmK3/IdvmJ4DnlS3xFrdg/mxSsYJFd3OZA3cwDb0jePQf/P43/2VVqPRixMVO7+VGoMKPoRTEEVbClsAlW6stGTFPcrimu3c+geASgvwElkIKNGtYcjoj3SS+/VeqIG9Ei1j+TJtPhOE9SG4KNw9xBGwecpliDbQhKjO950EVcnOts+a525/frZV1jHJmOOrZtKRV4pvk37dtQkx4sv+pxRmfVrjwOcKQeg+BzcuF0vaQbqa4SUbzbO9z3RwIMlYIBaz0bqZgJmtPOFuFmNyCJaeB29vlcEAfYbn5gdlgtWP50tKmhoskndulziKZjz4qHSA9rbG2ZtoMHoCsAobHKu2H9OxcaK4Scj1QGwst+zXBEY8uePNbxvU5DMJLVFORtLUXkVdPCmCSsm1Bz4TRbnls8LOVW6wqTgShQMhjNM3RtwdHXENPn5uDnhyvfduAcL+DtI8AIJyRneROefk7i7gjal8dLdMM/QnXT7ctpMQU6uNlpsNzq65xlOQKXO71vQ3c2mE/DmxVJi6BTS5WCzavvhiqdhQyRL61ESCALQpaP0/d0DLwLikVH3ypuDLEnVXe9Pmkxdd0xCzO6QcfyK50CPnV/dVgHeLg8EVag2O83+/7Ys5oLxrDad9TJTDcrT2xsRqECFnSA+z9uZtDPujhQL0ogS5RH4agnQN4mVGTwOLV8OKpn+AvWq6+j1/9EXFkLPBTU5wT0FQuT2VZ8xp5GeqdI13Zey1uPrxc6CZZ407y9OINED4IdBQ==";
-    const proof = try Proof(128).fromBase64(736, proof_string);
+    const proof = try Proof(128).fromBase64(proof_string);
     // zig fmt: on
 
     var verification_transcript = Transcript.init("Test");
@@ -612,5 +779,212 @@ test "proof string" {
         &.{ commitment_1, commitment_2, commitment_3 },
         &.{ 64, 32, 32 },
         &verification_transcript,
+    );
+}
+
+test "u64 data" {
+    const amount_1: u64 = std.math.maxInt(u8);
+    const amount_2: u64 = 77;
+    const amount_3: u64 = 99;
+    const amount_4: u64 = 99;
+    const amount_5: u64 = 11;
+    const amount_6: u64 = 33;
+    const amount_7: u64 = 99;
+    const amount_8: u64 = 99;
+
+    const commitment_1, const opening_1 = pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = pedersen.initValue(u64, amount_2);
+    const commitment_3, const opening_3 = pedersen.initValue(u64, amount_3);
+    const commitment_4, const opening_4 = pedersen.initValue(u64, amount_4);
+    const commitment_5, const opening_5 = pedersen.initValue(u64, amount_5);
+    const commitment_6, const opening_6 = pedersen.initValue(u64, amount_6);
+    const commitment_7, const opening_7 = pedersen.initValue(u64, amount_7);
+    const commitment_8, const opening_8 = pedersen.initValue(u64, amount_8);
+
+    const proof_data = try Data(64).init(&.{
+        commitment_1, commitment_2, commitment_3, commitment_4,
+        commitment_5, commitment_6, commitment_7, commitment_8,
+    }, &.{
+        amount_1, amount_2, amount_3, amount_4,
+        amount_5, amount_6, amount_7, amount_8,
+    }, &.{ 8, 8, 8, 8, 8, 8, 8, 8 }, &.{
+        opening_1, opening_2, opening_3, opening_4,
+        opening_5, opening_6, opening_7, opening_8,
+    });
+
+    try proof_data.verify();
+}
+
+test "u64 data too large" {
+    const amount_1: u64 = std.math.maxInt(u8) + 1; // not representable as an 8-bit number
+    const amount_2: u64 = 77;
+    const amount_3: u64 = 99;
+    const amount_4: u64 = 99;
+    const amount_5: u64 = 11;
+    const amount_6: u64 = 33;
+    const amount_7: u64 = 99;
+    const amount_8: u64 = 99;
+
+    const commitment_1, const opening_1 = pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = pedersen.initValue(u64, amount_2);
+    const commitment_3, const opening_3 = pedersen.initValue(u64, amount_3);
+    const commitment_4, const opening_4 = pedersen.initValue(u64, amount_4);
+    const commitment_5, const opening_5 = pedersen.initValue(u64, amount_5);
+    const commitment_6, const opening_6 = pedersen.initValue(u64, amount_6);
+    const commitment_7, const opening_7 = pedersen.initValue(u64, amount_7);
+    const commitment_8, const opening_8 = pedersen.initValue(u64, amount_8);
+
+    const proof_data = try Data(64).init(&.{
+        commitment_1, commitment_2, commitment_3, commitment_4,
+        commitment_5, commitment_6, commitment_7, commitment_8,
+    }, &.{
+        amount_1, amount_2, amount_3, amount_4,
+        amount_5, amount_6, amount_7, amount_8,
+    }, &.{ 8, 8, 8, 8, 8, 8, 8, 8 }, &.{
+        opening_1, opening_2, opening_3, opening_4,
+        opening_5, opening_6, opening_7, opening_8,
+    });
+
+    try std.testing.expectError(
+        error.AlgebraicRelation,
+        proof_data.verify(),
+    );
+}
+
+test "u128 data" {
+    const amount_1: u64 = std.math.maxInt(u16);
+    const amount_2: u64 = 77;
+    const amount_3: u64 = 99;
+    const amount_4: u64 = 99;
+    const amount_5: u64 = 11;
+    const amount_6: u64 = 33;
+    const amount_7: u64 = 99;
+    const amount_8: u64 = 99;
+
+    const commitment_1, const opening_1 = pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = pedersen.initValue(u64, amount_2);
+    const commitment_3, const opening_3 = pedersen.initValue(u64, amount_3);
+    const commitment_4, const opening_4 = pedersen.initValue(u64, amount_4);
+    const commitment_5, const opening_5 = pedersen.initValue(u64, amount_5);
+    const commitment_6, const opening_6 = pedersen.initValue(u64, amount_6);
+    const commitment_7, const opening_7 = pedersen.initValue(u64, amount_7);
+    const commitment_8, const opening_8 = pedersen.initValue(u64, amount_8);
+
+    const proof_data = try Data(128).init(&.{
+        commitment_1, commitment_2, commitment_3, commitment_4,
+        commitment_5, commitment_6, commitment_7, commitment_8,
+    }, &.{
+        amount_1, amount_2, amount_3, amount_4,
+        amount_5, amount_6, amount_7, amount_8,
+    }, &.{ 16, 16, 16, 16, 16, 16, 16, 16 }, &.{
+        opening_1, opening_2, opening_3, opening_4,
+        opening_5, opening_6, opening_7, opening_8,
+    });
+
+    try proof_data.verify();
+}
+
+test "u128 data too large" {
+    const amount_1: u64 = std.math.maxInt(u16) + 1; // not representable as a 16-bit number
+    const amount_2: u64 = 77;
+    const amount_3: u64 = 99;
+    const amount_4: u64 = 99;
+    const amount_5: u64 = 11;
+    const amount_6: u64 = 33;
+    const amount_7: u64 = 99;
+    const amount_8: u64 = 99;
+
+    const commitment_1, const opening_1 = pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = pedersen.initValue(u64, amount_2);
+    const commitment_3, const opening_3 = pedersen.initValue(u64, amount_3);
+    const commitment_4, const opening_4 = pedersen.initValue(u64, amount_4);
+    const commitment_5, const opening_5 = pedersen.initValue(u64, amount_5);
+    const commitment_6, const opening_6 = pedersen.initValue(u64, amount_6);
+    const commitment_7, const opening_7 = pedersen.initValue(u64, amount_7);
+    const commitment_8, const opening_8 = pedersen.initValue(u64, amount_8);
+
+    const proof_data = try Data(128).init(&.{
+        commitment_1, commitment_2, commitment_3, commitment_4,
+        commitment_5, commitment_6, commitment_7, commitment_8,
+    }, &.{
+        amount_1, amount_2, amount_3, amount_4,
+        amount_5, amount_6, amount_7, amount_8,
+    }, &.{ 16, 16, 16, 16, 16, 16, 16, 16 }, &.{
+        opening_1, opening_2, opening_3, opening_4,
+        opening_5, opening_6, opening_7, opening_8,
+    });
+
+    try std.testing.expectError(
+        error.AlgebraicRelation,
+        proof_data.verify(),
+    );
+}
+
+test "u256 data" {
+    const amount_1: u64 = std.math.maxInt(u32);
+    const amount_2: u64 = 77;
+    const amount_3: u64 = 99;
+    const amount_4: u64 = 99;
+    const amount_5: u64 = 11;
+    const amount_6: u64 = 33;
+    const amount_7: u64 = 99;
+    const amount_8: u64 = 99;
+
+    const commitment_1, const opening_1 = pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = pedersen.initValue(u64, amount_2);
+    const commitment_3, const opening_3 = pedersen.initValue(u64, amount_3);
+    const commitment_4, const opening_4 = pedersen.initValue(u64, amount_4);
+    const commitment_5, const opening_5 = pedersen.initValue(u64, amount_5);
+    const commitment_6, const opening_6 = pedersen.initValue(u64, amount_6);
+    const commitment_7, const opening_7 = pedersen.initValue(u64, amount_7);
+    const commitment_8, const opening_8 = pedersen.initValue(u64, amount_8);
+
+    const proof_data = try Data(256).init(&.{
+        commitment_1, commitment_2, commitment_3, commitment_4,
+        commitment_5, commitment_6, commitment_7, commitment_8,
+    }, &.{
+        amount_1, amount_2, amount_3, amount_4,
+        amount_5, amount_6, amount_7, amount_8,
+    }, &.{ 32, 32, 32, 32, 32, 32, 32, 32 }, &.{
+        opening_1, opening_2, opening_3, opening_4,
+        opening_5, opening_6, opening_7, opening_8,
+    });
+
+    try proof_data.verify();
+}
+
+test "u256 data too large" {
+    const amount_1: u64 = std.math.maxInt(u32) + 1; // not representable as a 32-bit number
+    const amount_2: u64 = 77;
+    const amount_3: u64 = 99;
+    const amount_4: u64 = 99;
+    const amount_5: u64 = 11;
+    const amount_6: u64 = 33;
+    const amount_7: u64 = 99;
+    const amount_8: u64 = 99;
+
+    const commitment_1, const opening_1 = pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = pedersen.initValue(u64, amount_2);
+    const commitment_3, const opening_3 = pedersen.initValue(u64, amount_3);
+    const commitment_4, const opening_4 = pedersen.initValue(u64, amount_4);
+    const commitment_5, const opening_5 = pedersen.initValue(u64, amount_5);
+    const commitment_6, const opening_6 = pedersen.initValue(u64, amount_6);
+    const commitment_7, const opening_7 = pedersen.initValue(u64, amount_7);
+    const commitment_8, const opening_8 = pedersen.initValue(u64, amount_8);
+
+    const proof_data = try Data(256).init(&.{
+        commitment_1, commitment_2, commitment_3, commitment_4,
+        commitment_5, commitment_6, commitment_7, commitment_8,
+    }, &.{
+        amount_1, amount_2, amount_3, amount_4,
+        amount_5, amount_6, amount_7, amount_8,
+    }, &.{ 32, 32, 32, 32, 32, 32, 32, 32 }, &.{
+        opening_1, opening_2, opening_3, opening_4,
+        opening_5, opening_6, opening_7, opening_8,
+    });
+
+    try std.testing.expectError(
+        error.AlgebraicRelation,
+        proof_data.verify(),
     );
 }

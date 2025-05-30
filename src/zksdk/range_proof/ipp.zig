@@ -49,6 +49,7 @@ pub fn Proof(bit_size: comptime_int) type {
         b: Scalar,
 
         const Self = @This();
+        pub const BYTE_LEN = (2 * logn * 32) + 64;
 
         pub fn init(
             Q: Ristretto255,
@@ -402,7 +403,7 @@ pub fn Proof(bit_size: comptime_int) type {
             };
         }
 
-        pub fn fromBytes(bytes: [(2 * logn * 32) + 64]u8) !Self {
+        pub fn fromBytes(bytes: [BYTE_LEN]u8) !Self {
             var L_vec: [logn]Ristretto255 = undefined;
             var R_vec: [logn]Ristretto255 = undefined;
             for (&L_vec, &R_vec, 0..) |*l, *r, i| {
