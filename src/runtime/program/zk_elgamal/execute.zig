@@ -33,6 +33,11 @@ pub fn execute(
             try tc.log("VerifyCiphertextCiphertextEquality", .{});
             try processVerifyProof(zksdk.CiphertextCiphertextEqualityData, ic);
         },
+        .verify_ciphertext_commitment_equality => {
+            try tc.consumeCompute(zk_elgamal.VERIFY_CIPHERTEXT_COMMITMENT_EQUALITY_COMPUTE_UNITS);
+            try tc.log("VerifyCiphertextCommitmentEquality", .{});
+            try processVerifyProof(zksdk.CiphertextCommitmentEqualityData, ic);
+        },
         .verify_pubkey_validity => {
             try tc.consumeCompute(zk_elgamal.VERIFY_PUBKEY_VALIDITY_COMPUTE_UNITS);
             try tc.log("VerifyPubkeyValidity", .{});
@@ -42,6 +47,16 @@ pub fn execute(
             try tc.consumeCompute(zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U64_COMPUTE_UNITS);
             try tc.log("VerifyBatchedRangeProofU64", .{});
             try processVerifyProof(zksdk.RangeProofU64Data, ic);
+        },
+        .verify_batched_range_proof_u128 => {
+            try tc.consumeCompute(zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U128_COMPUTE_UNITS);
+            try tc.log("VerifyBatchedRangeProofU128", .{});
+            try processVerifyProof(zksdk.RangeProofU128Data, ic);
+        },
+        .verify_batched_range_proof_u256 => {
+            try tc.consumeCompute(zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U256_COMPUTE_UNITS);
+            try tc.log("VerifyBatchedRangeProofU256", .{});
+            try processVerifyProof(zksdk.RangeProofU256Data, ic);
         },
         else => @panic("TODO"),
     }
