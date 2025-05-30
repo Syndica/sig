@@ -10,6 +10,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const GroupedElGamalCiphertext = el_gamal.GroupedElGamalCiphertext;
 
 pub const Proof = struct {
     Y_0: Ristretto255,
@@ -273,6 +274,11 @@ pub const Proof = struct {
         };
     }
 
+    fn toBytes(self: Proof) [160]u8 {
+        return self.Y_0.toBytes() ++ self.Y_1.toBytes() ++
+            self.Y_2.toBytes() ++ self.z_r.toBytes() ++ self.z_x.toBytes();
+    }
+
     pub fn fromBase64(string: []const u8) !Proof {
         const base64 = std.base64.standard;
         var buffer: [160]u8 = .{0} ** 160;
@@ -282,6 +288,123 @@ pub const Proof = struct {
             string,
         );
         return fromBytes(buffer);
+    }
+};
+
+pub const Data = struct {
+    context: Context,
+    proof: Proof,
+
+    pub const BYTE_LEN = 320;
+
+    pub fn init(
+        first_pubkey: *const ElGamalPubkey,
+        second_pubkey: *const ElGamalPubkey,
+        grouped_ciphertext: *const GroupedElGamalCiphertext(2),
+        amount: u64,
+        opening: *const pedersen.Opening,
+    ) Data {
+        const context: Context = .{
+            .first_pubkey = first_pubkey.*,
+            .second_pubkey = second_pubkey.*,
+            .grouped_ciphertext = grouped_ciphertext.*,
+        };
+        var transcript = context.newTranscript();
+        const proof = Proof.init(
+            first_pubkey,
+            second_pubkey,
+            amount,
+            opening,
+            &transcript,
+        );
+        return .{ .context = context, .proof = proof };
+    }
+
+    pub fn fromBytes(data: []const u8) !Data {
+        if (data.len != BYTE_LEN) return error.InvalidLength;
+        return .{
+            .context = try Context.fromBytes(data[0..160].*),
+            .proof = try Proof.fromBytes(data[160..][0..160].*),
+        };
+    }
+
+    pub fn toBytes(self: Data) [BYTE_LEN]u8 {
+        return self.context.toBytes() ++ self.proof.toBytes();
+    }
+
+    pub fn verify(self: Data) !void {
+        var transcript = self.context.newTranscript();
+
+        const grouped_ciphertext = self.context.grouped_ciphertext;
+        const first_handle = grouped_ciphertext.handles[0];
+        const second_handle = grouped_ciphertext.handles[1];
+
+        try self.proof.verify(
+            false,
+            .{
+                .commitment = &grouped_ciphertext.commitment,
+                .first_pubkey = &self.context.first_pubkey,
+                .second_pubkey = &self.context.second_pubkey,
+                .first_handle = &first_handle,
+                .second_handle = &second_handle,
+            },
+            &transcript,
+        );
+    }
+
+    test "correctness" {
+        const first_kp = ElGamalKeypair.random();
+        const first_pubkey = first_kp.public;
+
+        const second_kp = ElGamalKeypair.random();
+        const second_pubkey = second_kp.public;
+
+        const amount: u64 = 55;
+        const opening = pedersen.Opening.random();
+        const grouped_ciphertext = el_gamal.GroupedElGamalCiphertext(2).encryptWithOpening(
+            .{ first_pubkey, second_pubkey },
+            amount,
+            &opening,
+        );
+
+        const proof = Data.init(
+            &first_pubkey,
+            &second_pubkey,
+            &grouped_ciphertext,
+            amount,
+            &opening,
+        );
+
+        try proof.verify();
+    }
+};
+
+const Context = struct {
+    first_pubkey: ElGamalPubkey,
+    second_pubkey: ElGamalPubkey,
+    grouped_ciphertext: GroupedElGamalCiphertext(2),
+
+    // TODO: is it a problem that we error on invalid point here?
+    pub fn fromBytes(bytes: [160]u8) !Context {
+        return .{
+            .first_pubkey = try .fromBytes(bytes[0..32].*),
+            .second_pubkey = try .fromBytes(bytes[32..64].*),
+            .grouped_ciphertext = try .fromBytes(bytes[64..][0..96].*),
+        };
+    }
+
+    pub fn toBytes(self: Context) [160]u8 {
+        return self.first_pubkey.toBytes() ++
+            self.second_pubkey.toBytes() ++
+            self.grouped_ciphertext.toBytes();
+    }
+
+    fn newTranscript(self: Context) Transcript {
+        var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
+        transcript.appendPubkey("first-pubkey", self.first_pubkey);
+        transcript.appendPubkey("second-pubkey", self.second_pubkey);
+        transcript.appendMessage("grouped-ciphertext", &self.grouped_ciphertext.toBytes());
+        return transcript;
     }
 };
 

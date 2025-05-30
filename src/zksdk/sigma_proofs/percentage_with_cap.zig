@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const el_gamal = sig.zksdk.el_gamal;
 const pedersen = sig.zksdk.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
