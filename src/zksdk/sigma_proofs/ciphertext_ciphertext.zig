@@ -3,10 +3,10 @@ const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const el_gamal = sig.zksdk.el_gamal;
+const pedersen = sig.zksdk.pedersen;
 const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
-const pedersen = el_gamal.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
@@ -36,7 +36,7 @@ pub const Proof = struct {
         const P_second = second_pubkey.p;
 
         const s = first_kp.secret.scalar;
-        const x = el_gamal.scalarFromInt(u64, amount);
+        const x = pedersen.scalarFromInt(u64, amount);
         const r = second_opening.scalar;
 
         var y_s = Scalar.random();
@@ -51,12 +51,12 @@ pub const Proof = struct {
         const Y_0 = weak_mul.mul(P_first.p, y_s.toBytes());
         const Y_1 = weak_mul.mulMulti(
             2,
-            .{ el_gamal.G.p, D_first.p },
+            .{ pedersen.G.p, D_first.p },
             .{ y_x.toBytes(), y_s.toBytes() },
         );
         const Y_2 = weak_mul.mulMulti(
             2,
-            .{ el_gamal.G.p, el_gamal.H.p },
+            .{ pedersen.G.p, pedersen.H.p },
             .{ y_x.toBytes(), y_r.toBytes() },
         );
         const Y_3 = weak_mul.mul(P_second.p, y_r.toBytes());
@@ -146,8 +146,8 @@ pub const Proof = struct {
 
         // zig fmt: off
         const check = weak_mul.mulMulti(11, .{
-            el_gamal.G.p,
-            el_gamal.H.p,
+            pedersen.G.p,
+            pedersen.H.p,
             P_first.p,
             D_first.p,
             Y_1.p,

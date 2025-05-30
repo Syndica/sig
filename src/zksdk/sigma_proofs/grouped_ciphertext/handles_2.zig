@@ -3,9 +3,9 @@ const sig = @import("../../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const el_gamal = sig.zksdk.el_gamal;
+const pedersen = sig.zksdk.pedersen;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
-const pedersen = el_gamal.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
@@ -32,8 +32,8 @@ pub const Proof = struct {
 
         const t = transcript.challengeScalar("t");
 
-        const scalar_lo = el_gamal.scalarFromInt(u64, amount_lo);
-        const scalar_hi = el_gamal.scalarFromInt(u64, amount_hi);
+        const scalar_lo = pedersen.scalarFromInt(u64, amount_lo);
+        const scalar_hi = pedersen.scalarFromInt(u64, amount_hi);
 
         const batched_message = scalar_hi.mul(t).add(scalar_lo);
         const batched_opening: pedersen.Opening = .{
@@ -64,7 +64,7 @@ pub const Proof = struct {
 
         const x: Scalar = switch (@TypeOf(amount)) {
             Scalar => amount,
-            u64 => el_gamal.scalarFromInt(u64, amount),
+            u64 => pedersen.scalarFromInt(u64, amount),
             else => unreachable,
         };
         const r = opening.scalar;
@@ -78,7 +78,7 @@ pub const Proof = struct {
 
         const Y_0: Ristretto255 = .{ .p = weak_mul.mulMulti(
             2,
-            .{ el_gamal.H.p, el_gamal.G.p },
+            .{ pedersen.H.p, pedersen.G.p },
             .{ y_r.toBytes(), y_x.toBytes() },
         ) };
         const Y_1: Ristretto255 = .{ .p = weak_mul.mul(P_first.p, y_r.toBytes()) };
@@ -186,8 +186,8 @@ pub const Proof = struct {
         var scalars: std.BoundedArray([32]u8, 12) = .{};
 
         try points.appendSlice(&.{
-            el_gamal.G.p,
-            el_gamal.H.p,
+            pedersen.G.p,
+            pedersen.H.p,
             self.Y_1.p,
             self.Y_2.p,
             params.first_pubkey.p.p,

@@ -1,10 +1,12 @@
+const std = @import("std");
+
 pub const el_gamal = @import("el_gamal.zig");
+pub const pedersen = @import("pedersen.zig");
 pub const merlin = @import("merlin.zig");
 
 pub const ElGamalCiphertext = el_gamal.Ciphertext;
 pub const ElGamalKeypair = el_gamal.Keypair;
 pub const ElGamalPubkey = el_gamal.Pubkey;
-pub const pedersen = el_gamal.pedersen;
 pub const Strobe128 = merlin.Strobe128;
 pub const Transcript = merlin.Transcript;
 
