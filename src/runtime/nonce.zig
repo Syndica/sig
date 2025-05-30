@@ -17,6 +17,9 @@ pub const Versions = union(enum) {
     legacy: State,
     current: State,
 
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/51e1da20ab83511563bd400cb448c2fee4ac4db6/nonce/src/state.rs#L104
+    pub const SERIALIZED_SIZE = 80;
+
     pub fn getState(self: Versions) State {
         switch (self) {
             .legacy => |state| return state,
