@@ -275,7 +275,7 @@ const Context = struct {
         var transcript = Transcript.init("ciphertext-commitment-equality-instruction");
         transcript.appendPubkey("pubkey", self.pubkey);
         transcript.appendCiphertext("ciphertext", self.ciphertext);
-        transcript.appendMessage("commitment", &self.commitment.point.toBytes());
+        transcript.appendCommitment("commitment", self.commitment);
         return transcript;
     }
 };
