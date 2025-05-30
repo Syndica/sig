@@ -6,14 +6,17 @@ const zk_elgamal = sig.runtime.program.zk_elgamal;
 const program = sig.runtime.program;
 const ElGamalKeypair = zksdk.ElGamalKeypair;
 
-const CiphertextCiphertextEqualityData = zksdk.CiphertextCiphertextEqualityData;
-const CiphertextCommitmentEqualityData = zksdk.CiphertextCommitmentEqualityData;
-const GroupedCiphertext2HandlesValidityData = zksdk.GroupedCiphertext2HandlesValidityData;
-const PubkeyValidityProofData = zksdk.PubkeyValidityProofData;
+const CiphertextCiphertextData = zksdk.CiphertextCiphertextData;
+const CiphertextCommitmentData = zksdk.CiphertextCommitmentData;
+const GroupedCiphertext2HandlesData = zksdk.GroupedCiphertext2HandlesData;
+const GroupedCiphertext3HandlesData = zksdk.GroupedCiphertext3HandlesData;
+const BatchedGroupedCiphertext2HandlesData = zksdk.BatchedGroupedCiphertext2HandlesData;
+const BatchedGroupedCiphertext3HandlesData = zksdk.BatchedGroupedCiphertext3HandlesData;
+const PubkeyProofData = zksdk.PubkeyProofData;
 const RangeProofU128Data = zksdk.RangeProofU128Data;
 const RangeProofU256Data = zksdk.RangeProofU256Data;
 const RangeProofU64Data = zksdk.RangeProofU64Data;
-const ZeroCiphertextData = zksdk.ZeroCiphertextProofData;
+const ZeroCiphertextData = zksdk.ZeroCiphertextData;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
@@ -66,7 +69,7 @@ test "ciphertext ciphertext equality" {
         &dest_opening,
     );
 
-    const success_proof_data = CiphertextCiphertextEqualityData.init(
+    const success_proof_data = CiphertextCiphertextData.init(
         &source_kp,
         &dest_kp.public,
         &source_ciphertext,
@@ -80,7 +83,7 @@ test "ciphertext ciphertext equality" {
         .secret = .random(),
     };
 
-    const fail_proof_data = CiphertextCiphertextEqualityData.init(
+    const fail_proof_data = CiphertextCiphertextData.init(
         &incorrect_keypair,
         &dest_kp.public,
         &source_ciphertext,
@@ -90,7 +93,7 @@ test "ciphertext ciphertext equality" {
     );
 
     try testVerifyProofWithoutContext(
-        CiphertextCiphertextEqualityData,
+        CiphertextCiphertextData,
         allocator,
         .verify_ciphertext_ciphertext_equality,
         zk_elgamal.VERIFY_CIPHERTEXT_CIPHERTEXT_EQUALITY_COMPUTE_UNITS,
@@ -103,16 +106,16 @@ test "pubkey validity" {
     const allocator = std.testing.allocator;
     const kp = ElGamalKeypair.random();
 
-    const success_proof_data = PubkeyValidityProofData.init(&kp);
+    const success_proof_data = PubkeyProofData.init(&kp);
 
     const incorrect_kp: ElGamalKeypair = .{
         .public = kp.public,
         .secret = .random(),
     };
-    const fail_proof_data = PubkeyValidityProofData.init(&incorrect_kp);
+    const fail_proof_data = PubkeyProofData.init(&incorrect_kp);
 
     try testVerifyProofWithoutContext(
-        PubkeyValidityProofData,
+        PubkeyProofData,
         allocator,
         .verify_pubkey_validity,
         zk_elgamal.VERIFY_PUBKEY_VALIDITY_COMPUTE_UNITS,
@@ -231,7 +234,7 @@ test "ciphertext commitment equality" {
     const ciphertext = zksdk.el_gamal.encrypt(u64, amount, &kp.public);
     const commitment, const opening = zksdk.pedersen.initValue(u64, amount);
 
-    const success_proof_data = CiphertextCommitmentEqualityData.init(
+    const success_proof_data = CiphertextCommitmentData.init(
         &kp,
         &ciphertext,
         &commitment,
@@ -244,7 +247,7 @@ test "ciphertext commitment equality" {
         .secret = .random(),
     };
 
-    const fail_proof_data = CiphertextCommitmentEqualityData.init(
+    const fail_proof_data = CiphertextCommitmentData.init(
         &incorrect_kp,
         &ciphertext,
         &commitment,
@@ -253,7 +256,7 @@ test "ciphertext commitment equality" {
     );
 
     try testVerifyProofWithoutContext(
-        CiphertextCommitmentEqualityData,
+        CiphertextCommitmentData,
         allocator,
         .verify_ciphertext_commitment_equality,
         zk_elgamal.VERIFY_CIPHERTEXT_COMMITMENT_EQUALITY_COMPUTE_UNITS,
@@ -279,7 +282,7 @@ test "grouped ciphertext 2 handles" {
         &opening,
     );
 
-    const success_proof_data = GroupedCiphertext2HandlesValidityData.init(
+    const success_proof_data = GroupedCiphertext2HandlesData.init(
         &dest_public,
         &auditor_public,
         &grouped_ciphertext,
@@ -288,7 +291,7 @@ test "grouped ciphertext 2 handles" {
     );
 
     const incorrect_opening = zksdk.pedersen.Opening.random();
-    const fail_proof_data = GroupedCiphertext2HandlesValidityData.init(
+    const fail_proof_data = GroupedCiphertext2HandlesData.init(
         &dest_public,
         &auditor_public,
         &grouped_ciphertext,
@@ -297,10 +300,179 @@ test "grouped ciphertext 2 handles" {
     );
 
     try testVerifyProofWithoutContext(
-        GroupedCiphertext2HandlesValidityData,
+        GroupedCiphertext2HandlesData,
         allocator,
         .verify_grouped_ciphertext2_handles_validity,
         zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+}
+
+test "batched grouped ciphertext 2 handles" {
+    const allocator = std.testing.allocator;
+    const dest_kp = ElGamalKeypair.random();
+    const dest_public = dest_kp.public;
+
+    const auditor_kp = ElGamalKeypair.random();
+    const auditor_public = auditor_kp.public;
+
+    const amount_lo: u64 = 55;
+    const amount_hi: u64 = 22;
+
+    const opening_lo = zksdk.pedersen.Opening.random();
+    const opening_hi = zksdk.pedersen.Opening.random();
+
+    const grouped_ciphertext_lo = zksdk.GroupedElGamalCiphertext(2).encryptWithOpening(
+        .{ dest_public, auditor_public },
+        amount_lo,
+        &opening_lo,
+    );
+    const grouped_ciphertext_hi = zksdk.GroupedElGamalCiphertext(2).encryptWithOpening(
+        .{ dest_public, auditor_public },
+        amount_hi,
+        &opening_hi,
+    );
+
+    const success_proof_data = BatchedGroupedCiphertext2HandlesData.init(
+        &dest_public,
+        &auditor_public,
+        &grouped_ciphertext_lo,
+        &grouped_ciphertext_hi,
+        amount_lo,
+        amount_hi,
+        &opening_lo,
+        &opening_hi,
+    );
+
+    const incorrect_opening = zksdk.pedersen.Opening.random();
+    const fail_proof_data = BatchedGroupedCiphertext2HandlesData.init(
+        &dest_public,
+        &auditor_public,
+        &grouped_ciphertext_lo,
+        &grouped_ciphertext_hi,
+        amount_lo,
+        amount_hi,
+        &incorrect_opening,
+        &opening_hi,
+    );
+
+    try testVerifyProofWithoutContext(
+        BatchedGroupedCiphertext2HandlesData,
+        allocator,
+        .verify_batched_grouped_ciphertext2_handles_validity,
+        zk_elgamal.VERIFY_BATCHED_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+}
+
+test "grouped ciphertext 3 handles" {
+    const allocator = std.testing.allocator;
+    const source_kp = ElGamalKeypair.random();
+    const source_public = source_kp.public;
+
+    const dest_kp = ElGamalKeypair.random();
+    const dest_public = dest_kp.public;
+
+    const auditor_kp = ElGamalKeypair.random();
+    const auditor_public = auditor_kp.public;
+
+    const amount: u64 = 55;
+    const opening = zksdk.pedersen.Opening.random();
+    const grouped_ciphertext = zksdk.GroupedElGamalCiphertext(3).encryptWithOpening(
+        .{ source_public, dest_public, auditor_public },
+        amount,
+        &opening,
+    );
+
+    const success_proof_data = GroupedCiphertext3HandlesData.init(
+        &source_public,
+        &dest_public,
+        &auditor_public,
+        &grouped_ciphertext,
+        amount,
+        &opening,
+    );
+
+    const incorrect_opening = zksdk.pedersen.Opening.random();
+    const fail_proof_data = GroupedCiphertext3HandlesData.init(
+        &source_public,
+        &dest_public,
+        &auditor_public,
+        &grouped_ciphertext,
+        amount,
+        &incorrect_opening,
+    );
+
+    try testVerifyProofWithoutContext(
+        GroupedCiphertext3HandlesData,
+        allocator,
+        .verify_grouped_ciphertext3_handles_validity,
+        zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_3_HANDLES_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+}
+
+test "batched grouped ciphertext 3 handles" {
+    const allocator = std.testing.allocator;
+    const source_kp = ElGamalKeypair.random();
+    const source_public = source_kp.public;
+
+    const dest_kp = ElGamalKeypair.random();
+    const dest_public = dest_kp.public;
+
+    const auditor_kp = ElGamalKeypair.random();
+    const auditor_public = auditor_kp.public;
+
+    const amount_lo: u64 = 55;
+    const amount_hi: u64 = 22;
+
+    const opening_lo = zksdk.pedersen.Opening.random();
+    const opening_hi = zksdk.pedersen.Opening.random();
+
+    const grouped_ciphertext_lo = zksdk.GroupedElGamalCiphertext(3).encryptWithOpening(
+        .{ source_public, dest_public, auditor_public },
+        amount_lo,
+        &opening_lo,
+    );
+    const grouped_ciphertext_hi = zksdk.GroupedElGamalCiphertext(3).encryptWithOpening(
+        .{ source_public, dest_public, auditor_public },
+        amount_hi,
+        &opening_hi,
+    );
+
+    const success_proof_data = BatchedGroupedCiphertext3HandlesData.init(
+        &source_public,
+        &dest_public,
+        &auditor_public,
+        &grouped_ciphertext_lo,
+        &grouped_ciphertext_hi,
+        amount_lo,
+        amount_hi,
+        &opening_lo,
+        &opening_hi,
+    );
+
+    const incorrect_opening = zksdk.pedersen.Opening.random();
+    const fail_proof_data = BatchedGroupedCiphertext3HandlesData.init(
+        &source_public,
+        &dest_public,
+        &auditor_public,
+        &grouped_ciphertext_lo,
+        &grouped_ciphertext_hi,
+        amount_lo,
+        amount_hi,
+        &incorrect_opening,
+        &opening_hi,
+    );
+
+    try testVerifyProofWithoutContext(
+        BatchedGroupedCiphertext3HandlesData,
+        allocator,
+        .verify_batched_grouped_ciphertext3_handles_validity,
+        zk_elgamal.VERIFY_BATCHED_GROUPED_CIPHERTEXT_3_HANDLES_VALIDITY_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
     );
@@ -314,12 +486,11 @@ const verify_instruction_types = [_]zk_elgamal.ProofInstruction{
     .verify_batched_range_proof_u128,
     .verify_batched_range_proof_u256,
     .verify_ciphertext_commitment_equality,
-    // TODO:
-    // .verify_grouped_ciphertext2_handles_validity,
-    // .verify_batched_grouped_ciphertext2_handles_validity,
+    .verify_grouped_ciphertext2_handles_validity,
+    .verify_batched_grouped_ciphertext2_handles_validity,
     // .verify_percentage_with_cap,
-    // .verify_grouped_ciphertext3_handles_validity,
-    // .verify_batched_grouped_ciphertext3_handles_validity,
+    .verify_grouped_ciphertext3_handles_validity,
+    .verify_batched_grouped_ciphertext3_handles_validity,
 };
 
 fn testVerifyProofWithoutContext(

@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
+const el_gamal = sig.zksdk.el_gamal;
 const pedersen = sig.zksdk.pedersen;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
@@ -9,6 +10,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const GroupedElGamalCiphertext = sig.zksdk.GroupedElGamalCiphertext;
 
 pub const Proof = struct {
     Y_0: Ristretto255,
@@ -277,6 +279,11 @@ pub const Proof = struct {
         };
     }
 
+    fn toBytes(self: Proof) [192]u8 {
+        return self.Y_0.toBytes() ++ self.Y_1.toBytes() ++ self.Y_2.toBytes() ++
+            self.Y_3.toBytes() ++ self.z_r.toBytes() ++ self.z_x.toBytes();
+    }
+
     pub fn fromBase64(string: []const u8) !Proof {
         const base64 = std.base64.standard;
         var buffer: [192]u8 = .{0} ** 192;
@@ -286,6 +293,299 @@ pub const Proof = struct {
             string,
         );
         return fromBytes(buffer);
+    }
+};
+
+pub const Data = struct {
+    context: Context,
+    proof: Proof,
+
+    pub const BYTE_LEN = 416;
+
+    pub fn init(
+        first_pubkey: *const ElGamalPubkey,
+        second_pubkey: *const ElGamalPubkey,
+        third_pubkey: *const ElGamalPubkey,
+        grouped_ciphertext: *const GroupedElGamalCiphertext(3),
+        amount: u64,
+        opening: *const pedersen.Opening,
+    ) Data {
+        const context: Context = .{
+            .first_pubkey = first_pubkey.*,
+            .second_pubkey = second_pubkey.*,
+            .third_pubkey = third_pubkey.*,
+            .grouped_ciphertext = grouped_ciphertext.*,
+        };
+        var transcript = context.newTranscript();
+        const proof = Proof.init(
+            first_pubkey,
+            second_pubkey,
+            third_pubkey,
+            amount,
+            opening,
+            &transcript,
+        );
+        return .{ .context = context, .proof = proof };
+    }
+
+    pub fn fromBytes(data: []const u8) !Data {
+        if (data.len != BYTE_LEN) return error.InvalidLength;
+        return .{
+            .context = try Context.fromBytes(data[0..224].*),
+            .proof = try Proof.fromBytes(data[224..][0..192].*),
+        };
+    }
+
+    pub fn toBytes(self: Data) [BYTE_LEN]u8 {
+        return self.context.toBytes() ++ self.proof.toBytes();
+    }
+
+    pub fn verify(self: Data) !void {
+        var transcript = self.context.newTranscript();
+
+        const grouped_ciphertext = self.context.grouped_ciphertext;
+        const first_handle = grouped_ciphertext.handles[0];
+        const second_handle = grouped_ciphertext.handles[1];
+        const third_handle = grouped_ciphertext.handles[2];
+
+        try self.proof.verify(
+            false,
+            .{
+                .commitment = &grouped_ciphertext.commitment,
+                .first_pubkey = &self.context.first_pubkey,
+                .second_pubkey = &self.context.second_pubkey,
+                .third_pubkey = &self.context.third_pubkey,
+                .first_handle = &first_handle,
+                .second_handle = &second_handle,
+                .third_handle = &third_handle,
+            },
+            &transcript,
+        );
+    }
+
+    const Context = struct {
+        first_pubkey: ElGamalPubkey,
+        second_pubkey: ElGamalPubkey,
+        third_pubkey: ElGamalPubkey,
+        grouped_ciphertext: GroupedElGamalCiphertext(3),
+
+        // TODO: is it a problem that we error on invalid point here?
+        pub fn fromBytes(bytes: [224]u8) !Context {
+            return .{
+                .first_pubkey = try .fromBytes(bytes[0..32].*),
+                .second_pubkey = try .fromBytes(bytes[32..64].*),
+                .third_pubkey = try .fromBytes(bytes[64..96].*),
+                .grouped_ciphertext = try .fromBytes(bytes[96..][0..128].*),
+            };
+        }
+
+        pub fn toBytes(self: Context) [224]u8 {
+            return self.first_pubkey.toBytes() ++
+                self.second_pubkey.toBytes() ++
+                self.third_pubkey.toBytes() ++
+                self.grouped_ciphertext.toBytes();
+        }
+
+        fn newTranscript(self: Context) Transcript {
+            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
+            transcript.appendPubkey("first-pubkey", self.first_pubkey);
+            transcript.appendPubkey("second-pubkey", self.second_pubkey);
+            transcript.appendMessage("grouped-ciphertext", &self.grouped_ciphertext.toBytes());
+            return transcript;
+        }
+    };
+
+    test "correctness" {
+        const first_kp = ElGamalKeypair.random();
+        const first_pubkey = first_kp.public;
+
+        const second_kp = ElGamalKeypair.random();
+        const second_pubkey = second_kp.public;
+
+        const third_kp = ElGamalKeypair.random();
+        const third_pubkey = third_kp.public;
+
+        const amount: u64 = 55;
+        const opening = pedersen.Opening.random();
+        const grouped_ciphertext = el_gamal.GroupedElGamalCiphertext(3).encryptWithOpening(
+            .{ first_pubkey, second_pubkey, third_pubkey },
+            amount,
+            &opening,
+        );
+
+        const proof = Data.init(
+            &first_pubkey,
+            &second_pubkey,
+            &third_pubkey,
+            &grouped_ciphertext,
+            amount,
+            &opening,
+        );
+
+        try proof.verify();
+    }
+};
+
+pub const BatchedData = struct {
+    context: Context,
+    proof: Proof,
+
+    pub const BYTE_LEN = 544;
+
+    pub fn init(
+        first_pubkey: *const ElGamalPubkey,
+        second_pubkey: *const ElGamalPubkey,
+        third_pubkey: *const ElGamalPubkey,
+        grouped_ciphertext_lo: *const GroupedElGamalCiphertext(3),
+        grouped_ciphertext_hi: *const GroupedElGamalCiphertext(3),
+        amount_lo: u64,
+        amount_hi: u64,
+        opening_lo: *const pedersen.Opening,
+        opening_hi: *const pedersen.Opening,
+    ) BatchedData {
+        const context: Context = .{
+            .first_pubkey = first_pubkey.*,
+            .second_pubkey = second_pubkey.*,
+            .third_pubkey = third_pubkey.*,
+            .grouped_ciphertext_lo = grouped_ciphertext_lo.*,
+            .grouped_ciphertext_hi = grouped_ciphertext_hi.*,
+        };
+        var transcript = context.newTranscript();
+        const proof = Proof.initBatched(
+            first_pubkey,
+            second_pubkey,
+            third_pubkey,
+            amount_lo,
+            amount_hi,
+            opening_lo,
+            opening_hi,
+            &transcript,
+        );
+        return .{ .context = context, .proof = proof };
+    }
+
+    pub fn fromBytes(data: []const u8) !BatchedData {
+        if (data.len != BYTE_LEN) return error.InvalidLength;
+        return .{
+            .context = try Context.fromBytes(data[0..352].*),
+            .proof = try Proof.fromBytes(data[352..][0..192].*),
+        };
+    }
+
+    pub fn toBytes(self: BatchedData) [BYTE_LEN]u8 {
+        return self.context.toBytes() ++ self.proof.toBytes();
+    }
+
+    pub fn verify(self: BatchedData) !void {
+        var transcript = self.context.newTranscript();
+
+        const grouped_ciphertext_lo = self.context.grouped_ciphertext_lo;
+        const grouped_ciphertext_hi = self.context.grouped_ciphertext_hi;
+
+        const first_handle_lo = grouped_ciphertext_lo.handles[0];
+        const second_handle_lo = grouped_ciphertext_lo.handles[1];
+        const third_handle_lo = grouped_ciphertext_lo.handles[2];
+
+        const first_handle_hi = grouped_ciphertext_hi.handles[0];
+        const second_handle_hi = grouped_ciphertext_hi.handles[1];
+        const third_handle_hi = grouped_ciphertext_hi.handles[2];
+
+        try self.proof.verify(
+            true,
+            .{
+                .commitment = &grouped_ciphertext_lo.commitment,
+                .commitment_hi = &grouped_ciphertext_hi.commitment,
+                .first_pubkey = &self.context.first_pubkey,
+                .second_pubkey = &self.context.second_pubkey,
+                .third_pubkey = &self.context.third_pubkey,
+                .first_handle = &first_handle_lo,
+                .second_handle = &second_handle_lo,
+                .third_handle = &third_handle_lo,
+                .first_handle_hi = &first_handle_hi,
+                .second_handle_hi = &second_handle_hi,
+                .third_handle_hi = &third_handle_hi,
+            },
+            &transcript,
+        );
+    }
+
+    const Context = struct {
+        first_pubkey: ElGamalPubkey,
+        second_pubkey: ElGamalPubkey,
+        third_pubkey: ElGamalPubkey,
+        grouped_ciphertext_lo: GroupedElGamalCiphertext(3),
+        grouped_ciphertext_hi: GroupedElGamalCiphertext(3),
+
+        // TODO: is it a problem that we error on invalid point here?
+        pub fn fromBytes(bytes: [352]u8) !Context {
+            return .{
+                .first_pubkey = try .fromBytes(bytes[0..32].*),
+                .second_pubkey = try .fromBytes(bytes[32..64].*),
+                .third_pubkey = try .fromBytes(bytes[64..96].*),
+                .grouped_ciphertext_lo = try .fromBytes(bytes[96..][0..128].*),
+                .grouped_ciphertext_hi = try .fromBytes(bytes[224..][0..128].*),
+            };
+        }
+
+        pub fn toBytes(self: Context) [352]u8 {
+            return self.first_pubkey.toBytes() ++
+                self.second_pubkey.toBytes() ++
+                self.third_pubkey.toBytes() ++
+                self.grouped_ciphertext_lo.toBytes() ++
+                self.grouped_ciphertext_hi.toBytes();
+        }
+
+        fn newTranscript(self: Context) Transcript {
+            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
+            transcript.appendPubkey("first-pubkey", self.first_pubkey);
+            transcript.appendPubkey("second-pubkey", self.second_pubkey);
+            transcript.appendPubkey("third-pubkey", self.third_pubkey);
+            transcript.appendMessage("grouped-ciphertext-lo", &self.grouped_ciphertext_lo.toBytes());
+            transcript.appendMessage("grouped-ciphertext-hi", &self.grouped_ciphertext_hi.toBytes());
+            return transcript;
+        }
+    };
+
+    test "correctness" {
+        const first_kp = ElGamalKeypair.random();
+        const first_pubkey = first_kp.public;
+
+        const second_kp = ElGamalKeypair.random();
+        const second_pubkey = second_kp.public;
+
+        const third_kp = ElGamalKeypair.random();
+        const third_pubkey = third_kp.public;
+
+        const amount_lo: u64 = 11;
+        const amount_hi: u64 = 22;
+
+        const opening_lo = pedersen.Opening.random();
+        const opening_hi = pedersen.Opening.random();
+
+        const grouped_ciphertext_lo = el_gamal.GroupedElGamalCiphertext(3).encryptWithOpening(
+            .{ first_pubkey, second_pubkey, third_pubkey },
+            amount_lo,
+            &opening_lo,
+        );
+        const grouped_ciphertext_hi = el_gamal.GroupedElGamalCiphertext(3).encryptWithOpening(
+            .{ first_pubkey, second_pubkey, third_pubkey },
+            amount_hi,
+            &opening_hi,
+        );
+
+        const proof = BatchedData.init(
+            &first_pubkey,
+            &second_pubkey,
+            &third_pubkey,
+            &grouped_ciphertext_lo,
+            &grouped_ciphertext_hi,
+            amount_lo,
+            amount_hi,
+            &opening_lo,
+            &opening_hi,
+        );
+
+        try proof.verify();
     }
 };
 

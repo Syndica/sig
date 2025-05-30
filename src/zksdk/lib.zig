@@ -16,19 +16,20 @@ const percentage = @import("sigma_proofs/percentage_with_cap.zig");
 const pubkey_validity = @import("sigma_proofs/pubkey_validity.zig");
 const zero_ciphertext = @import("sigma_proofs/zero_ciphertext.zig");
 
-pub const CiphertextCiphertextEqualityData = ciphertext_ciphertext.Data;
-pub const CiphertextCommitmentEqualityData = ciphertext_commitment.Data;
+pub const CiphertextCiphertextData = ciphertext_ciphertext.Data;
+pub const CiphertextCommitmentData = ciphertext_commitment.Data;
 pub const PercentageWithCapProof = percentage.Proof;
-pub const PubkeyValidityProofData = pubkey_validity.Data;
-pub const ZeroCiphertextProofData = zero_ciphertext.Data;
+pub const PubkeyProofData = pubkey_validity.Data;
+pub const ZeroCiphertextData = zero_ciphertext.Data;
 
 // grouped ciphertext validity
 const grouped_cipher_handles_2 = @import("sigma_proofs/grouped_ciphertext/handles_2.zig");
 const grouped_cipher_handles_3 = @import("sigma_proofs/grouped_ciphertext/handles_3.zig");
 
-pub const GroupedCiphertext2HandlesValidityProof = grouped_cipher_handles_2.Proof;
-pub const GroupedCiphertext2HandlesValidityData = grouped_cipher_handles_2.Data;
-pub const GroupedCiphertext3HandlesValidityProof = grouped_cipher_handles_3.Proof;
+pub const GroupedCiphertext2HandlesData = grouped_cipher_handles_2.Data;
+pub const BatchedGroupedCiphertext2HandlesData = grouped_cipher_handles_2.BatchedData;
+pub const GroupedCiphertext3HandlesData = grouped_cipher_handles_3.Data;
+pub const BatchedGroupedCiphertext3HandlesData = grouped_cipher_handles_3.BatchedData;
 
 // range proof
 pub const bulletproofs = @import("range_proof/bulletproofs.zig");
