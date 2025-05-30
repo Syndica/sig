@@ -7,6 +7,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     max_proof: MaxProof,
@@ -378,7 +379,40 @@ pub const Data = struct {
     context: Context,
     proof: Proof,
 
+    pub const TYPE: ProofType = .percentage_with_cap;
     pub const BYTE_LEN = 360;
+
+    pub const Context = struct {
+        percentage_commitment: pedersen.Commitment,
+        delta_commitment: pedersen.Commitment,
+        claimed_commitment: pedersen.Commitment,
+        max_value: u64,
+
+        pub const BYTE_LEN = 104;
+
+        pub fn fromBytes(bytes: [104]u8) !Context {
+            return .{
+                .percentage_commitment = try pedersen.Commitment.fromBytes(bytes[0..32].*),
+                .delta_commitment = try pedersen.Commitment.fromBytes(bytes[32..64].*),
+                .claimed_commitment = try pedersen.Commitment.fromBytes(bytes[64..96].*),
+                .max_value = @bitCast(bytes[96..][0..8].*),
+            };
+        }
+
+        pub fn toBytes(self: Context) [104]u8 {
+            return self.percentage_commitment.toBytes() ++ self.delta_commitment.toBytes() ++
+                self.claimed_commitment.toBytes() ++ @as([8]u8, @bitCast(self.max_value));
+        }
+
+        fn newTranscript(self: Context) Transcript {
+            var transcript = Transcript.init("percentage-with-cap-instruction");
+            transcript.appendCommitment("percentage-commitment", self.percentage_commitment);
+            transcript.appendCommitment("delta-commitment", self.delta_commitment);
+            transcript.appendCommitment("claimed-commitment", self.claimed_commitment);
+            transcript.appendU64("max-value", self.max_value);
+            return transcript;
+        }
+    };
 
     pub fn init(
         percentage_commitment: *const pedersen.Commitment,
@@ -459,7 +493,8 @@ pub const Data = struct {
         const delta_opening: pedersen.Opening = d: {
             const a = percentage_opening.scalar.mul(ten_thousand);
             const b = base_opening.scalar.mul(scalar_rate);
-            break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
+            const c = Edwards25519.scalar.sub(a.toBytes(), b.toBytes());
+            break :d .{ .scalar = Scalar.fromBytes(c) };
         };
 
         const claimed_commitment, const claimed_opening = pedersen.initValue(u64, delta_amount);
@@ -501,7 +536,8 @@ pub const Data = struct {
         const delta_opening: pedersen.Opening = d: {
             const a = percentage_opening.scalar.mul(ten_thousand);
             const b = transfer_opening.scalar.mul(scalar_rate);
-            break :d .{ .scalar = Scalar.fromBytes(Edwards25519.scalar.sub(a.toBytes(), b.toBytes())) };
+            const c = Edwards25519.scalar.sub(a.toBytes(), b.toBytes());
+            break :d .{ .scalar = Scalar.fromBytes(c) };
         };
 
         const claimed_commitment, const claimed_opening = pedersen.initValue(u64, 0);
@@ -519,36 +555,6 @@ pub const Data = struct {
         );
 
         try proof_data.verify();
-    }
-};
-
-const Context = struct {
-    percentage_commitment: pedersen.Commitment,
-    delta_commitment: pedersen.Commitment,
-    claimed_commitment: pedersen.Commitment,
-    max_value: u64,
-
-    pub fn fromBytes(bytes: [104]u8) !Context {
-        return .{
-            .percentage_commitment = try pedersen.Commitment.fromBytes(bytes[0..32].*),
-            .delta_commitment = try pedersen.Commitment.fromBytes(bytes[32..64].*),
-            .claimed_commitment = try pedersen.Commitment.fromBytes(bytes[64..96].*),
-            .max_value = @bitCast(bytes[96..][0..8].*),
-        };
-    }
-
-    pub fn toBytes(self: Context) [104]u8 {
-        return self.percentage_commitment.toBytes() ++ self.delta_commitment.toBytes() ++
-            self.claimed_commitment.toBytes() ++ @as([8]u8, @bitCast(self.max_value));
-    }
-
-    fn newTranscript(self: Context) Transcript {
-        var transcript = Transcript.init("percentage-with-cap-instruction");
-        transcript.appendCommitment("percentage-commitment", self.percentage_commitment);
-        transcript.appendCommitment("delta-commitment", self.delta_commitment);
-        transcript.appendCommitment("claimed-commitment", self.claimed_commitment);
-        transcript.appendU64("max-value", self.max_value);
-        return transcript;
     }
 };
 

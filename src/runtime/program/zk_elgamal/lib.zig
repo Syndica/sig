@@ -1,5 +1,22 @@
 const sig = @import("../../../sig.zig");
 
+pub const ProofType = enum(u8) {
+    /// Empty proof type used to distinguish if a proof context account is initialized
+    uninitialized,
+    zero_ciphertext,
+    ciphertext_ciphertext_equality,
+    ciphertext_commitment_equality,
+    pubkey_validity,
+    percentage_with_cap,
+    batched_range_proof_u64,
+    batched_range_proof_u128,
+    batched_range_proof_u256,
+    grouped_ciphertext2_handles_validity,
+    batched_grouped_ciphertext2_handles_validity,
+    grouped_ciphertext3_handles_validity,
+    batched_grouped_ciphertext3_handles_validity,
+};
+
 pub const ID =
     sig.core.Pubkey.parseBase58String(
         "ZkE1Gama1Proof11111111111111111111111111111",
