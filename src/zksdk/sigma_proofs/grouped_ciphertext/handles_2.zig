@@ -306,7 +306,6 @@ pub const Data = struct {
 
         pub const BYTE_LEN = 160;
 
-        // TODO: is it a problem that we error on invalid point here?
         pub fn fromBytes(bytes: [160]u8) !Context {
             return .{
                 .first_pubkey = try .fromBytes(bytes[0..32].*),
@@ -427,7 +426,6 @@ pub const BatchedData = struct {
 
         pub const BYTE_LEN = 256;
 
-        // TODO: is it a problem that we error on invalid point here?
         pub fn fromBytes(bytes: [256]u8) !Context {
             return .{
                 .first_pubkey = try .fromBytes(bytes[0..32].*),

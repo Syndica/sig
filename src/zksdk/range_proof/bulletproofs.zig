@@ -143,7 +143,7 @@ pub fn Proof(bit_size: comptime_int) type {
                     G_points.appendAssumeCapacity(G.p);
                     H_points.appendAssumeCapacity(H.p);
 
-                    // TODO: needs to be constant time?
+                    // init functions aren't exposed, so doesn't need to be constant time.
                     const v = (amount >> @intCast(j)) & 0b1 != 0;
                     const point = if (v) G.p else Edwards25519.neg(H.p);
                     A = A.add(.{ .p = point });
@@ -464,7 +464,8 @@ pub fn Proof(bit_size: comptime_int) type {
         }
 
         fn sumOfPowers(n: u64, x: Scalar) Scalar {
-            // TODO: use O(2log(n)) algorithm instead
+            // TODO: use O(2log(n)) algorithm instead when `n` is a power of
+            // two
             var acc = ZERO;
             var next_exp = ONE;
             for (0..n) |_| {

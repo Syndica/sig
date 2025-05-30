@@ -46,9 +46,6 @@ pub const Proof = struct {
             &transcript_percentage_below_max,
         );
 
-        // TODO: do these really need to be made constant time? check agave impl.
-        // not sure if these init functions are actually exposed to SVM.
-
         // Chooses between `proof_below_max` and `proof_above_max` depending
         // on whether the percentage amount is above the max amount.
         const below_max = percentage_amount <= max_value;
