@@ -295,7 +295,7 @@ const lookup_table_provider = struct {
     }
 };
 
-test "resolve lookups" {
+test resolveBatchGeneric {
     var rng = std.Random.DefaultPrng.init(0);
 
     // concisely represents all the expected account metas within an InstructionInfo
