@@ -3,7 +3,7 @@ const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const el_gamal = sig.zksdk.el_gamal;
-const pedersen = el_gamal.pedersen;
+const pedersen = sig.zksdk.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
@@ -91,8 +91,8 @@ pub const Proof = struct {
         const c_equality = Scalar.random();
 
         const Y_delta = weak_mul.mulMulti(3, .{
-            el_gamal.G.p,
-            el_gamal.H.p,
+            pedersen.G.p,
+            pedersen.H.p,
             C_delta.p,
         }, .{
             z_x.toBytes(),
@@ -101,8 +101,8 @@ pub const Proof = struct {
         });
 
         const Y_claimed = weak_mul.mulMulti(3, .{
-            el_gamal.G.p,
-            el_gamal.H.p,
+            pedersen.G.p,
+            pedersen.H.p,
             C_claimed.p,
         }, .{
             z_x.toBytes(),
@@ -122,7 +122,7 @@ pub const Proof = struct {
 
         const y_max_proof = Scalar.random();
         // Scalar.random() cannot return zero, and H isn't an identity.
-        const Y_max_proof = el_gamal.H.mul(y_max_proof.toBytes()) catch unreachable;
+        const Y_max_proof = pedersen.H.mul(y_max_proof.toBytes()) catch unreachable;
 
         transcript.appendPoint("Y_max_proof", Y_max_proof);
         transcript.appendPoint("Y_delta", .{ .p = Y_delta });
@@ -155,16 +155,16 @@ pub const Proof = struct {
         max_value: u64,
         transcript: *Transcript,
     ) Proof {
-        const m = el_gamal.scalarFromInt(u64, max_value);
+        const m = pedersen.scalarFromInt(u64, max_value);
         const C_percentage = percentage_commitment.point;
 
         const z_max_proof = Scalar.random();
         const c_max_proof = Scalar.random();
 
         const Y_max_proof = weak_mul.mulMulti(3, .{
-            el_gamal.H.p,
+            pedersen.H.p,
             C_percentage.p,
-            el_gamal.G.p,
+            pedersen.G.p,
         }, .{
             z_max_proof.toBytes(),
             Edwards25519.scalar.neg(c_max_proof.toBytes()),
@@ -177,7 +177,7 @@ pub const Proof = struct {
             .c_max_proof = c_max_proof,
         };
 
-        const x = el_gamal.scalarFromInt(u64, delta_amount);
+        const x = pedersen.scalarFromInt(u64, delta_amount);
 
         const r_delta = delta_opening.scalar;
         const r_claimed = claimed_opening.scalar;
@@ -187,16 +187,16 @@ pub const Proof = struct {
         const y_claimed = Scalar.random();
 
         const Y_delta = weak_mul.mulMulti(2, .{
-            el_gamal.G.p,
-            el_gamal.H.p,
+            pedersen.G.p,
+            pedersen.H.p,
         }, .{
             y_x.toBytes(),
             y_delta.toBytes(),
         });
 
         const Y_claimed = weak_mul.mulMulti(2, .{
-            el_gamal.G.p,
-            el_gamal.H.p,
+            pedersen.G.p,
+            pedersen.H.p,
         }, .{
             y_x.toBytes(),
             y_claimed.toBytes(),
@@ -239,7 +239,7 @@ pub const Proof = struct {
     ) !void {
         transcript.appendDomSep("percentage-with-cap-proof");
 
-        const m = el_gamal.scalarFromInt(u64, max_value);
+        const m = pedersen.scalarFromInt(u64, max_value);
 
         const C_max = percentage_commitment.point;
         const C_delta = delta_commitment.point;
@@ -299,8 +299,8 @@ pub const Proof = struct {
         };
 
         const check = weak_mul.mulMulti(7, .{
-            el_gamal.G.p,
-            el_gamal.H.p,
+            pedersen.G.p,
+            pedersen.H.p,
             C_max.p,
             Y_delta_real.p,
             C_delta.p,
@@ -394,8 +394,8 @@ test "above max proof" {
     const transfer_commitment, const transfer_opening = pedersen.initValue(u64, transfer_amount);
     const percentage_commitment, const percentage_opening = pedersen.initValue(u64, max_value);
 
-    const scalar_rate = el_gamal.scalarFromInt(u64, percentage_rate);
-    const constant_scalar = el_gamal.scalarFromInt(u64, 10_000);
+    const scalar_rate = pedersen.scalarFromInt(u64, percentage_rate);
+    const constant_scalar = pedersen.scalarFromInt(u64, 10_000);
 
     const delta_commitment: pedersen.Commitment = d: {
         const a = try percentage_commitment.point.mul(constant_scalar.toBytes());
@@ -448,8 +448,8 @@ test "below max proof" {
     const percentage_commitment, const percentage_opening =
         pedersen.initValue(u64, percentage_amount);
 
-    const scalar_rate = el_gamal.scalarFromInt(u64, percentage_rate);
-    const constant_scalar = el_gamal.scalarFromInt(u64, 10_000);
+    const scalar_rate = pedersen.scalarFromInt(u64, percentage_rate);
+    const constant_scalar = pedersen.scalarFromInt(u64, 10_000);
 
     const delta_commitment: pedersen.Commitment = d: {
         const a = try percentage_commitment.point.mul(constant_scalar.toBytes());
@@ -466,10 +466,10 @@ test "below max proof" {
     const claimed_commitment, const claimed_opening = pedersen.initValue(u64, delta);
 
     {
-        const a = try el_gamal.H.mul(delta_opening.scalar.toBytes());
+        const a = try pedersen.H.mul(delta_opening.scalar.toBytes());
         const b: Ristretto255 = .{ .p = delta_commitment.point.p.sub(a.p) };
 
-        const c = try el_gamal.H.mul(claimed_opening.scalar.toBytes());
+        const c = try pedersen.H.mul(claimed_opening.scalar.toBytes());
         const d: Ristretto255 = .{ .p = claimed_commitment.point.p.sub(c.p) };
 
         try std.testing.expect(b.equivalent(d));
@@ -513,8 +513,8 @@ test "is zero" {
     const percentage_commitment, const percentage_opening =
         pedersen.initValue(u64, percentage_amount);
 
-    const scalar_rate = el_gamal.scalarFromInt(u64, percentage_rate);
-    const constant_scalar = el_gamal.scalarFromInt(u64, 10_000);
+    const scalar_rate = pedersen.scalarFromInt(u64, percentage_rate);
+    const constant_scalar = pedersen.scalarFromInt(u64, 10_000);
 
     const delta_commitment: pedersen.Commitment = d: {
         const a = try percentage_commitment.point.mul(constant_scalar.toBytes());

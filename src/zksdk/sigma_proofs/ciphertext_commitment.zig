@@ -3,10 +3,10 @@ const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const el_gamal = sig.zksdk.el_gamal;
+const pedersen = sig.zksdk.pedersen;
 const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
-const pedersen = el_gamal.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
@@ -33,7 +33,7 @@ pub const Proof = struct {
         const D = ciphertext.handle.point;
 
         const s = kp.secret.scalar;
-        const x = el_gamal.scalarFromInt(u64, amount);
+        const x = pedersen.scalarFromInt(u64, amount);
         const r = opening.scalar;
 
         var y_s = Scalar.random();
@@ -48,12 +48,12 @@ pub const Proof = struct {
         const Y_0 = weak_mul.mul(P.p.p, y_s.toBytes());
         const Y_1 = weak_mul.mulMulti(
             2,
-            .{ el_gamal.G.p, D.p },
+            .{ pedersen.G.p, D.p },
             .{ y_x.toBytes(), y_s.toBytes() },
         );
         const Y_2 = weak_mul.mulMulti(
             2,
-            .{ el_gamal.G.p, el_gamal.H.p },
+            .{ pedersen.G.p, pedersen.H.p },
             .{ y_x.toBytes(), y_r.toBytes() },
         );
 
@@ -118,8 +118,8 @@ pub const Proof = struct {
 
         // zig fmt: off
         const check = weak_mul.mulMulti(8, .{
-            el_gamal.G.p,
-            el_gamal.H.p,
+            pedersen.G.p,
+            pedersen.H.p,
             self.Y_0.p,
             self.Y_1.p,
             P.p,
@@ -285,7 +285,7 @@ test "success case" {
     const message: u64 = 55;
 
     const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
-    const commitment, const opening = el_gamal.pedersen.initValue(u64, message);
+    const commitment, const opening = pedersen.initValue(u64, message);
 
     var prover_transcript = Transcript.init("Test");
     var verifier_transcript = Transcript.init("Test");
@@ -311,7 +311,7 @@ test "fail case" {
     const committed_message: u64 = 77;
 
     const ciphertext = el_gamal.encrypt(u64, encrypted_message, &kp.public);
-    const commitment, const opening = el_gamal.pedersen.initValue(u64, committed_message);
+    const commitment, const opening = pedersen.initValue(u64, committed_message);
 
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
@@ -343,7 +343,7 @@ test "public key zeroed" {
 
     const message: u64 = 55;
     const ciphertext = el_gamal.encrypt(u64, message, &kp.public);
-    const commitment, const opening = el_gamal.pedersen.initValue(u64, message);
+    const commitment, const opening = pedersen.initValue(u64, message);
 
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");
@@ -432,7 +432,7 @@ test "ciphertext zeroed" {
 
     const message: u64 = 0;
     const ciphertext = try ElGamalCiphertext.fromBytes(.{0} ** 64);
-    const commitment, const opening = el_gamal.pedersen.initValue(u64, message);
+    const commitment, const opening = pedersen.initValue(u64, message);
 
     var prover_transcript = Transcript.init("test");
     var verifier_transcript = Transcript.init("test");

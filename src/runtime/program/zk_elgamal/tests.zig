@@ -261,6 +261,38 @@ test "ciphertext commitment equality" {
     );
 }
 
+// test "grouped ciphertext 2 handles" {
+//     const dest_kp = ElGamalKeypair.random();
+//     const dest_public = dest_kp.public;
+//     _ = dest_public; // autofix
+
+//     const auditor_kp = ElGamalKeypair.random();
+//     const auditor_public = auditor_kp.public;
+//     _ = auditor_public; // autofix
+
+//     const amount: u64 = 55;
+//     _ = amount; // autofix
+//     const opening = zksdk.pedersen.Opening.random();
+//     _ = opening; // autofix
+
+// }
+
+const verify_instruction_types = [_]zk_elgamal.ProofInstruction{
+    .verify_zero_ciphertext,
+    .verify_ciphertext_ciphertext_equality,
+    .verify_pubkey_validity,
+    .verify_batched_range_proof_u64,
+    .verify_batched_range_proof_u128,
+    .verify_batched_range_proof_u256,
+    .verify_ciphertext_commitment_equality,
+    // TODO:
+    // .verify_grouped_ciphertext2_handles_validity,
+    // .verify_batched_grouped_ciphertext2_handles_validity,
+    // .verify_percentage_with_cap,
+    // .verify_grouped_ciphertext3_handles_validity,
+    // .verify_batched_grouped_ciphertext3_handles_validity,
+};
+
 fn testVerifyProofWithoutContext(
     comptime Proof: type,
     allocator: std.mem.Allocator,
@@ -295,6 +327,31 @@ fn testVerifyProofWithoutContext(
             },
             .{},
         );
+
+        // try to run a valid input data, but with the wrong instruction type
+        for (verify_instruction_types) |wrong_type| {
+            if (wrong_type == instruction) continue; // skip the same one
+
+            var wrong_data: [Proof.BYTE_LEN + 1]u8 = undefined;
+            wrong_data[0] = @intFromEnum(wrong_type);
+            @memcpy(wrong_data[1..], &success_proof_data.toBytes());
+
+            try expectProgramExecuteError(
+                error.InvalidInstructionData,
+                allocator,
+                zk_elgamal.ID,
+                wrong_data,
+                &.{},
+                .{
+                    .accounts = &.{.{
+                        .pubkey = zk_elgamal.ID,
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    }},
+                    .compute_meter = 500_000,
+                },
+                .{},
+            );
+        }
     }
 
     {
