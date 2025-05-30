@@ -11,6 +11,7 @@ const ElGamalKeypair = zksdk.ElGamalKeypair;
 const ZeroCiphertextData = zksdk.ZeroCiphertextProofData;
 const CiphertextCiphertextEqualityData = zksdk.CiphertextCiphertextEqualityData;
 const PubkeyValidityProofData = zksdk.PubkeyValidityProofData;
+const RangeProofU64Data = zksdk.RangeProofU64Data;
 
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
@@ -113,6 +114,39 @@ test "pubkey validity" {
         allocator,
         .verify_pubkey_validity,
         zk_elgamal.VERIFY_PUBKEY_VALIDITY_COMPUTE_UNITS,
+        success_proof_data,
+        fail_proof_data,
+    );
+}
+
+test "batched range proof u64" {
+    const allocator = std.testing.allocator;
+    const amount_1: u64 = 23;
+    const amount_2: u64 = 24;
+
+    const commitment_1, const opening_1 = zksdk.pedersen.initValue(u64, amount_1);
+    const commitment_2, const opening_2 = zksdk.pedersen.initValue(u64, amount_2);
+
+    const success_proof_data = try RangeProofU64Data.init(
+        &.{ commitment_1, commitment_2 },
+        &.{ amount_1, amount_2 },
+        &.{ 32, 32 },
+        &.{ opening_1, opening_2 },
+    );
+
+    const incorrect_opening = zksdk.pedersen.Opening.random();
+    const fail_proof_data = try RangeProofU64Data.init(
+        &.{ commitment_1, commitment_2 },
+        &.{ amount_1, amount_2 },
+        &.{ 32, 32 },
+        &.{ opening_1, incorrect_opening },
+    );
+
+    try testVerifyProofWithoutContext(
+        RangeProofU64Data,
+        allocator,
+        .verify_batched_range_proof_u64,
+        zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U64_COMPUTE_UNITS,
         success_proof_data,
         fail_proof_data,
     );

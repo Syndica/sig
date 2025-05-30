@@ -196,7 +196,9 @@ pub const Transcript = struct {
         return transcript;
     }
 
-    fn appendMessage(
+    /// NOTE: be very careful with this function, there are only a specific few
+    /// usages of it. generally speaking, use the a helper function if it exists.
+    pub fn appendMessage(
         t: *Transcript,
         comptime label: []const u8,
         message: []const u8,
