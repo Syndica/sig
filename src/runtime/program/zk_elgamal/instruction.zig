@@ -25,7 +25,7 @@ pub const ProofInstruction = enum(u8) {
     ///   2. `[]` (Optional) The proof context account owner
     ///
     /// The instruction expects either:
-    ///   i. `ZeroCiphertextProofData` if proof is provided as instruction data
+    ///   i. `ZeroCiphertextData` if proof is provided as instruction data
     ///   ii. `u32` byte offset if proof is provided as an account
     ///
     verify_zero_ciphertext,
@@ -212,7 +212,7 @@ pub const ProofInstruction = enum(u8) {
     ///     None
     ///
     /// The instruction expects either:
-    ///   i. `GroupedCiphertext3HandlesValidityProofData` if proof is provided as instruction data
+    ///   i. `GroupedCiphertext3HandlesProofData` if proof is provided as instruction data
     ///   ii. `u32` byte offset if proof is provided as an account
     ///
     verify_grouped_ciphertext3_handles_validity,
@@ -235,7 +235,7 @@ pub const ProofInstruction = enum(u8) {
     ///     None
     ///
     /// The instruction expects either:
-    ///   i. `BatchedGroupedCiphertext3HandlesValidityProofData` if proof is provided as instruction data
+    ///   i. `BatchedGroupedCiphertext3HandlesProofData` if proof is provided as instruction data
     ///   ii. `u32` byte offset if proof is provided as an account
     ///
     verify_batched_grouped_ciphertext3_handles_validity,

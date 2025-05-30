@@ -26,22 +26,22 @@ pub fn execute(
         .verify_zero_ciphertext => {
             try tc.consumeCompute(zk_elgamal.VERIFY_ZERO_BALANCE_COMPUTE_UNITS);
             try tc.log("VerifyZeroBalance", .{});
-            try processVerifyProof(zksdk.ZeroCiphertextProofData, ic);
+            try processVerifyProof(zksdk.ZeroCiphertextData, ic);
         },
         .verify_ciphertext_ciphertext_equality => {
             try tc.consumeCompute(zk_elgamal.VERIFY_CIPHERTEXT_CIPHERTEXT_EQUALITY_COMPUTE_UNITS);
             try tc.log("VerifyCiphertextCiphertextEquality", .{});
-            try processVerifyProof(zksdk.CiphertextCiphertextEqualityData, ic);
+            try processVerifyProof(zksdk.CiphertextCiphertextData, ic);
         },
         .verify_ciphertext_commitment_equality => {
             try tc.consumeCompute(zk_elgamal.VERIFY_CIPHERTEXT_COMMITMENT_EQUALITY_COMPUTE_UNITS);
             try tc.log("VerifyCiphertextCommitmentEquality", .{});
-            try processVerifyProof(zksdk.CiphertextCommitmentEqualityData, ic);
+            try processVerifyProof(zksdk.CiphertextCommitmentData, ic);
         },
         .verify_pubkey_validity => {
             try tc.consumeCompute(zk_elgamal.VERIFY_PUBKEY_VALIDITY_COMPUTE_UNITS);
             try tc.log("VerifyPubkeyValidity", .{});
-            try processVerifyProof(zksdk.PubkeyValidityProofData, ic);
+            try processVerifyProof(zksdk.PubkeyProofData, ic);
         },
         .verify_batched_range_proof_u64 => {
             try tc.consumeCompute(zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U64_COMPUTE_UNITS);
@@ -63,7 +63,28 @@ pub fn execute(
                 zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
             );
             try tc.log("VerifyGroupedCiphertext2HandlesValidity", .{});
-            try processVerifyProof(zksdk.GroupedCiphertext2HandlesValidityData, ic);
+            try processVerifyProof(zksdk.GroupedCiphertext2HandlesData, ic);
+        },
+        .verify_batched_grouped_ciphertext2_handles_validity => {
+            try tc.consumeCompute(
+                zk_elgamal.VERIFY_BATCHED_GROUPED_CIPHERTEXT_2_HANDLES_VALIDITY_COMPUTE_UNITS,
+            );
+            try tc.log("VerifyBatchedGroupedCiphertext2HandlesValidity", .{});
+            try processVerifyProof(zksdk.BatchedGroupedCiphertext2HandlesData, ic);
+        },
+        .verify_grouped_ciphertext3_handles_validity => {
+            try tc.consumeCompute(
+                zk_elgamal.VERIFY_GROUPED_CIPHERTEXT_3_HANDLES_VALIDITY_COMPUTE_UNITS,
+            );
+            try tc.log("VerifyGroupedCiphertext3HandlesValidity", .{});
+            try processVerifyProof(zksdk.GroupedCiphertext3HandlesData, ic);
+        },
+        .verify_batched_grouped_ciphertext3_handles_validity => {
+            try tc.consumeCompute(
+                zk_elgamal.VERIFY_BATCHED_GROUPED_CIPHERTEXT_3_HANDLES_VALIDITY_COMPUTE_UNITS,
+            );
+            try tc.log("VerifyBatchedGroupedCiphertext3HandlesValidity", .{});
+            try processVerifyProof(zksdk.BatchedGroupedCiphertext3HandlesData, ic);
         },
         else => @panic("TODO"),
     }
