@@ -312,7 +312,6 @@ pub const Data = struct {
 
         pub const BYTE_LEN = 224;
 
-        // TODO: is it a problem that we error on invalid point here?
         pub fn fromBytes(bytes: [224]u8) !Context {
             return .{
                 .first_pubkey = try .fromBytes(bytes[0..32].*),
@@ -330,9 +329,10 @@ pub const Data = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
+            var transcript = Transcript.init("grouped-ciphertext-validity-3-handles-instruction");
             transcript.appendPubkey("first-pubkey", self.first_pubkey);
             transcript.appendPubkey("second-pubkey", self.second_pubkey);
+            transcript.appendPubkey("third-pubkey", self.third_pubkey);
             transcript.appendMessage("grouped-ciphertext", &self.grouped_ciphertext.toBytes());
             return transcript;
         }
@@ -466,7 +466,9 @@ pub const BatchedData = struct {
         }
 
         fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
+            var transcript = Transcript.init(
+                "batched-grouped-ciphertext-validity-3-handles-instruction",
+            );
             transcript.appendPubkey("first-pubkey", self.first_pubkey);
             transcript.appendPubkey("second-pubkey", self.second_pubkey);
             transcript.appendPubkey("third-pubkey", self.third_pubkey);

@@ -119,7 +119,7 @@ fn processVerifyProof(
         accessed_accounts += 1;
 
         const start: u32 = @bitCast(instruction_data[1..5].*);
-        const end = start + Proof.BYTE_LEN;
+        const end = @as(u64, start) + Proof.BYTE_LEN;
 
         if (start >= proof_data_len) return InstructionError.InvalidAccountData;
         if (end > proof_data_len) return InstructionError.InvalidAccountData;
@@ -210,9 +210,22 @@ fn processCloseContextState(
         break :pubkey owner_account.pubkey;
     };
 
+    const proof_context_pubkey = pubkey: {
+        const proof_context_account = try ic.borrowInstructionAccount(0);
+        defer proof_context_account.release();
+        break :pubkey proof_context_account.pubkey;
+    };
+    const destination_account_pubkey = pubkey: {
+        const destination_account = try ic.borrowInstructionAccount(1);
+        defer destination_account.release();
+        break :pubkey destination_account.pubkey;
+    };
+    if (proof_context_pubkey.equals(&destination_account_pubkey)) {
+        return InstructionError.InvalidInstructionData;
+    }
+
     const proof_context_account = try ic.borrowInstructionAccount(0);
     defer proof_context_account.release();
-
     const proof_context_data = proof_context_account.constAccountData();
     const proof_context_meta = sig.bincode.readFromSlice(
         allocator,
@@ -229,7 +242,6 @@ fn processCloseContextState(
 
     const destination_account = try ic.borrowInstructionAccount(1);
     defer destination_account.release();
-
     try destination_account.addLamports(proof_context_account.account.lamports);
     try proof_context_account.setLamports(0);
     try proof_context_account.setDataLength(
