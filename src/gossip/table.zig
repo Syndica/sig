@@ -131,16 +131,25 @@ pub const GossipTable = struct {
     }
 
     pub const InsertResult = union(enum) {
-        // possible values returned from insert()
-        InsertedNewEntry: void,
-        OverwroteExistingEntry: GossipData, // the overwritten value
-        IgnoredOldValue: void,
-        IgnoredDuplicateValue: void,
-        IgnoredTimeout: void,
-        GossipTableFull: void,
+        InsertedNewEntry,
+        /// the overwritten value
+        OverwroteExistingEntry: GossipData,
+        IgnoredOldValue,
+        IgnoredDuplicateValue,
+        IgnoredTimeout,
+        GossipTableFull,
 
         pub fn wasInserted(self: InsertResult) bool {
             return self == .InsertedNewEntry or self == .OverwroteExistingEntry;
+        }
+
+        /// Must be called using the same allocator used to allocate gossip values in order
+        /// to properly de-allocate any returned data (like a previous, now overwritten entry).
+        pub fn deinit(self: InsertResult, allocator: std.mem.Allocator) void {
+            switch (self) {
+                .OverwroteExistingEntry => |existing| existing.deinit(allocator),
+                else => {},
+            }
         }
     };
 

@@ -401,7 +401,7 @@ pub const MockTransferService = struct {
         try writer.writeInt(u32, 2, .little);
         try writer.writeInt(u64, lamports, .little);
 
-        const instructions = try allocator.alloc(sig.core.transaction.TransactionInstruction, 1);
+        const instructions = try allocator.alloc(sig.core.transaction.Instruction, 1);
         errdefer allocator.free(instructions);
         instructions[0] = .{
             .program_index = 2,
