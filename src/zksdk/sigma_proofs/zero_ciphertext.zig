@@ -164,7 +164,7 @@ pub const Data = struct {
         };
     }
 
-    pub fn toBytes(self: Data) [192]u8 {
+    pub fn toBytes(self: Data) [BYTE_LEN]u8 {
         return self.context.toBytes() ++ self.proof.toBytes();
     }
 
@@ -173,6 +173,26 @@ pub const Data = struct {
         const pubkey = self.context.pubkey;
         const ciphertext = self.context.ciphertext;
         try self.proof.verify(&pubkey, &ciphertext, &transcript);
+    }
+
+    test "correctness" {
+        const kp = ElGamalKeypair.random();
+
+        {
+            // general case: encryption of 0
+            const ciphertext = el_gamal.encrypt(u64, 0, &kp.public);
+            const zero_ciphertext_proof_data: Data = .init(&kp, &ciphertext);
+            try zero_ciphertext_proof_data.verify();
+        }
+        {
+            // general case: encryption of > 0
+            const ciphertext = el_gamal.encrypt(u64, 1, &kp.public);
+            const zero_ciphertext_proof_data: Data = .init(&kp, &ciphertext);
+            try std.testing.expectError(
+                error.AlgebraicRelation,
+                zero_ciphertext_proof_data.verify(),
+            );
+        }
     }
 };
 

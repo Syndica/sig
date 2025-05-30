@@ -15,10 +15,10 @@ const percentage = @import("sigma_proofs/percentage_with_cap.zig");
 const pubkey_validity = @import("sigma_proofs/pubkey_validity.zig");
 const zero_ciphertext = @import("sigma_proofs/zero_ciphertext.zig");
 
-pub const CiphertextCiphertextEqualityProof = ciphertext_ciphertext.Proof;
+pub const CiphertextCiphertextEqualityData = ciphertext_ciphertext.Data;
 pub const CiphertextCommitmentEqualityProof = ciphertext_commitment.Proof;
 pub const PercentageWithCapProof = percentage.Proof;
-pub const PubkeyValidityProof = pubkey_validity.Proof;
+pub const PubkeyValidityProofData = pubkey_validity.Data;
 pub const ZeroCiphertextProofData = zero_ciphertext.Data;
 
 // grouped ciphertext validity
