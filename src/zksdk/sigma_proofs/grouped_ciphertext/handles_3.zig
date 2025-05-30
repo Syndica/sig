@@ -11,6 +11,7 @@ const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 const GroupedElGamalCiphertext = sig.zksdk.GroupedElGamalCiphertext;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     Y_0: Ristretto255,
@@ -300,7 +301,42 @@ pub const Data = struct {
     context: Context,
     proof: Proof,
 
+    pub const TYPE: ProofType = .grouped_ciphertext3_handles_validity;
     pub const BYTE_LEN = 416;
+
+    pub const Context = struct {
+        first_pubkey: ElGamalPubkey,
+        second_pubkey: ElGamalPubkey,
+        third_pubkey: ElGamalPubkey,
+        grouped_ciphertext: GroupedElGamalCiphertext(3),
+
+        pub const BYTE_LEN = 224;
+
+        // TODO: is it a problem that we error on invalid point here?
+        pub fn fromBytes(bytes: [224]u8) !Context {
+            return .{
+                .first_pubkey = try .fromBytes(bytes[0..32].*),
+                .second_pubkey = try .fromBytes(bytes[32..64].*),
+                .third_pubkey = try .fromBytes(bytes[64..96].*),
+                .grouped_ciphertext = try .fromBytes(bytes[96..][0..128].*),
+            };
+        }
+
+        pub fn toBytes(self: Context) [224]u8 {
+            return self.first_pubkey.toBytes() ++
+                self.second_pubkey.toBytes() ++
+                self.third_pubkey.toBytes() ++
+                self.grouped_ciphertext.toBytes();
+        }
+
+        fn newTranscript(self: Context) Transcript {
+            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
+            transcript.appendPubkey("first-pubkey", self.first_pubkey);
+            transcript.appendPubkey("second-pubkey", self.second_pubkey);
+            transcript.appendMessage("grouped-ciphertext", &self.grouped_ciphertext.toBytes());
+            return transcript;
+        }
+    };
 
     pub fn init(
         first_pubkey: *const ElGamalPubkey,
@@ -363,38 +399,6 @@ pub const Data = struct {
         );
     }
 
-    const Context = struct {
-        first_pubkey: ElGamalPubkey,
-        second_pubkey: ElGamalPubkey,
-        third_pubkey: ElGamalPubkey,
-        grouped_ciphertext: GroupedElGamalCiphertext(3),
-
-        // TODO: is it a problem that we error on invalid point here?
-        pub fn fromBytes(bytes: [224]u8) !Context {
-            return .{
-                .first_pubkey = try .fromBytes(bytes[0..32].*),
-                .second_pubkey = try .fromBytes(bytes[32..64].*),
-                .third_pubkey = try .fromBytes(bytes[64..96].*),
-                .grouped_ciphertext = try .fromBytes(bytes[96..][0..128].*),
-            };
-        }
-
-        pub fn toBytes(self: Context) [224]u8 {
-            return self.first_pubkey.toBytes() ++
-                self.second_pubkey.toBytes() ++
-                self.third_pubkey.toBytes() ++
-                self.grouped_ciphertext.toBytes();
-        }
-
-        fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
-            transcript.appendPubkey("first-pubkey", self.first_pubkey);
-            transcript.appendPubkey("second-pubkey", self.second_pubkey);
-            transcript.appendMessage("grouped-ciphertext", &self.grouped_ciphertext.toBytes());
-            return transcript;
-        }
-    };
-
     test "correctness" {
         const first_kp = ElGamalKeypair.random();
         const first_pubkey = first_kp.public;
@@ -430,7 +434,47 @@ pub const BatchedData = struct {
     context: Context,
     proof: Proof,
 
+    pub const TYPE: ProofType = .batched_grouped_ciphertext3_handles_validity;
     pub const BYTE_LEN = 544;
+
+    pub const Context = struct {
+        first_pubkey: ElGamalPubkey,
+        second_pubkey: ElGamalPubkey,
+        third_pubkey: ElGamalPubkey,
+        grouped_ciphertext_lo: GroupedElGamalCiphertext(3),
+        grouped_ciphertext_hi: GroupedElGamalCiphertext(3),
+
+        pub const BYTE_LEN = 352;
+
+        // TODO: is it a problem that we error on invalid point here?
+        pub fn fromBytes(bytes: [352]u8) !Context {
+            return .{
+                .first_pubkey = try .fromBytes(bytes[0..32].*),
+                .second_pubkey = try .fromBytes(bytes[32..64].*),
+                .third_pubkey = try .fromBytes(bytes[64..96].*),
+                .grouped_ciphertext_lo = try .fromBytes(bytes[96..][0..128].*),
+                .grouped_ciphertext_hi = try .fromBytes(bytes[224..][0..128].*),
+            };
+        }
+
+        pub fn toBytes(self: Context) [352]u8 {
+            return self.first_pubkey.toBytes() ++
+                self.second_pubkey.toBytes() ++
+                self.third_pubkey.toBytes() ++
+                self.grouped_ciphertext_lo.toBytes() ++
+                self.grouped_ciphertext_hi.toBytes();
+        }
+
+        fn newTranscript(self: Context) Transcript {
+            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
+            transcript.appendPubkey("first-pubkey", self.first_pubkey);
+            transcript.appendPubkey("second-pubkey", self.second_pubkey);
+            transcript.appendPubkey("third-pubkey", self.third_pubkey);
+            transcript.appendMessage("grouped-ciphertext-lo", &self.grouped_ciphertext_lo.toBytes());
+            transcript.appendMessage("grouped-ciphertext-hi", &self.grouped_ciphertext_hi.toBytes());
+            return transcript;
+        }
+    };
 
     pub fn init(
         first_pubkey: *const ElGamalPubkey,
@@ -508,43 +552,6 @@ pub const BatchedData = struct {
             &transcript,
         );
     }
-
-    const Context = struct {
-        first_pubkey: ElGamalPubkey,
-        second_pubkey: ElGamalPubkey,
-        third_pubkey: ElGamalPubkey,
-        grouped_ciphertext_lo: GroupedElGamalCiphertext(3),
-        grouped_ciphertext_hi: GroupedElGamalCiphertext(3),
-
-        // TODO: is it a problem that we error on invalid point here?
-        pub fn fromBytes(bytes: [352]u8) !Context {
-            return .{
-                .first_pubkey = try .fromBytes(bytes[0..32].*),
-                .second_pubkey = try .fromBytes(bytes[32..64].*),
-                .third_pubkey = try .fromBytes(bytes[64..96].*),
-                .grouped_ciphertext_lo = try .fromBytes(bytes[96..][0..128].*),
-                .grouped_ciphertext_hi = try .fromBytes(bytes[224..][0..128].*),
-            };
-        }
-
-        pub fn toBytes(self: Context) [352]u8 {
-            return self.first_pubkey.toBytes() ++
-                self.second_pubkey.toBytes() ++
-                self.third_pubkey.toBytes() ++
-                self.grouped_ciphertext_lo.toBytes() ++
-                self.grouped_ciphertext_hi.toBytes();
-        }
-
-        fn newTranscript(self: Context) Transcript {
-            var transcript = Transcript.init("grouped-ciphertext-validity-2-handles-instruction");
-            transcript.appendPubkey("first-pubkey", self.first_pubkey);
-            transcript.appendPubkey("second-pubkey", self.second_pubkey);
-            transcript.appendPubkey("third-pubkey", self.third_pubkey);
-            transcript.appendMessage("grouped-ciphertext-lo", &self.grouped_ciphertext_lo.toBytes());
-            transcript.appendMessage("grouped-ciphertext-hi", &self.grouped_ciphertext_hi.toBytes());
-            return transcript;
-        }
-    };
 
     test "correctness" {
         const first_kp = ElGamalKeypair.random();

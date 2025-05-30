@@ -9,6 +9,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     Y: Ristretto255,
@@ -100,7 +101,28 @@ pub const Data = struct {
     context: Context,
     proof: Proof,
 
+    pub const TYPE: ProofType = .pubkey_validity;
     pub const BYTE_LEN = 96;
+
+    pub const Context = struct {
+        pubkey: ElGamalPubkey,
+
+        pub const BYTE_LEN = 32;
+
+        pub fn fromBytes(bytes: [32]u8) !Context {
+            return .{ .pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*) };
+        }
+
+        pub fn toBytes(self: Context) [32]u8 {
+            return self.pubkey.toBytes();
+        }
+
+        fn newTranscript(self: Context) Transcript {
+            var transcript = Transcript.init("pubkey-validity-instruction");
+            transcript.appendPubkey("pubkey", self.pubkey);
+            return transcript;
+        }
+    };
 
     pub fn init(kp: *const ElGamalKeypair) Data {
         const context: Context = .{ .pubkey = kp.public };
@@ -136,24 +158,6 @@ pub const Data = struct {
         const kp = ElGamalKeypair.random();
         const pubkey_validity_data = Data.init(&kp);
         try pubkey_validity_data.verify();
-    }
-};
-
-const Context = struct {
-    pubkey: ElGamalPubkey,
-
-    pub fn fromBytes(bytes: [32]u8) !Context {
-        return .{ .pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*) };
-    }
-
-    pub fn toBytes(self: Context) [32]u8 {
-        return self.pubkey.toBytes();
-    }
-
-    fn newTranscript(self: Context) Transcript {
-        var transcript = Transcript.init("pubkey-validity-instruction");
-        transcript.appendPubkey("pubkey", self.pubkey);
-        return transcript;
     }
 };
 
