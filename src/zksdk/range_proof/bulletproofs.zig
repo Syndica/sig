@@ -130,7 +130,7 @@ pub fn Proof(bit_size: comptime_int) type {
 
             // bit-decompose values and generate their Pedersen vector commitment
             const a_blinding: Scalar = .random();
-            var A = el_gamal.H.mul(a_blinding.toBytes()) catch unreachable;
+            var A = pedersen.H.mul(a_blinding.toBytes()) catch unreachable;
 
             var G_points: std.BoundedArray(Edwards25519, bit_size) = .{};
             var H_points: std.BoundedArray(Edwards25519, bit_size) = .{};
@@ -162,7 +162,7 @@ pub fn Proof(bit_size: comptime_int) type {
 
             const S: Ristretto255 = .{ .p = Edwards25519.mulMulti(
                 1 + bit_size * 2,
-                .{el_gamal.H.p} ++ G_points.buffer ++ H_points.buffer,
+                .{pedersen.H.p} ++ G_points.buffer ++ H_points.buffer,
                 .{s_blinding} ++ s_L ++ s_R,
             ) catch unreachable };
 
@@ -242,7 +242,7 @@ pub fn Proof(bit_size: comptime_int) type {
             // compute the inner product argument on the commitment:
             // P = <l(x), G> + <r(x), H'> + <l(x), r(x)>*Q
             const w = transcript.challengeScalar("w");
-            const Q = weak_mul.mul(el_gamal.G.p, w.toBytes());
+            const Q = weak_mul.mul(pedersen.G.p, w.toBytes());
 
             const G_factors: [bit_size]Scalar = @splat(ONE);
             const H_factors = genPowers(bit_size, y.invert());
@@ -347,8 +347,8 @@ pub fn Proof(bit_size: comptime_int) type {
             };
 
             points.appendSliceAssumeCapacity(&.{
-                el_gamal.G.p,
-                el_gamal.H.p,
+                pedersen.G.p,
+                pedersen.H.p,
                 self.S.p,
                 self.T_1.p,
                 self.T_2.p,
@@ -720,7 +720,7 @@ pub fn genPowers(comptime n: usize, x: Scalar) [n]Scalar {
 }
 
 test "single rangeproof" {
-    const commitment, const opening = el_gamal.pedersen.initValue(u64, 55);
+    const commitment, const opening = pedersen.initValue(u64, 55);
 
     var creation_transcript = Transcript.init("Test");
     var verification_transcript = Transcript.init("Test");
@@ -740,9 +740,9 @@ test "single rangeproof" {
 }
 
 test "aggregated rangeproof" {
-    const comm1, const opening1 = el_gamal.pedersen.initValue(u64, 55);
-    const comm2, const opening2 = el_gamal.pedersen.initValue(u64, 77);
-    const comm3, const opening3 = el_gamal.pedersen.initValue(u64, 99);
+    const comm1, const opening1 = pedersen.initValue(u64, 55);
+    const comm2, const opening2 = pedersen.initValue(u64, 77);
+    const comm3, const opening3 = pedersen.initValue(u64, 99);
 
     var creation_transcript = Transcript.init("Test");
     var verification_transcript = Transcript.init("Test");

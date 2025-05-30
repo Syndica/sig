@@ -3,6 +3,7 @@ const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const el_gamal = sig.zksdk.el_gamal;
+const pedersen = sig.zksdk.pedersen;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
@@ -28,7 +29,7 @@ pub const Proof = struct {
         defer std.crypto.utils.secureZero(u64, &y.limbs);
 
         // Scalar.random() cannot return zero, and H isn't an identity
-        const Y = el_gamal.H.mul(y.toBytes()) catch unreachable;
+        const Y = pedersen.H.mul(y.toBytes()) catch unreachable;
 
         transcript.appendPoint("Y", Y);
         const c = transcript.challengeScalar("c");
@@ -58,7 +59,7 @@ pub const Proof = struct {
         //     Y
 
         const check = weak_mul.mulMulti(2, .{
-            el_gamal.H.p,
+            pedersen.H.p,
             pubkey.p.p,
         }, .{
             self.z.toBytes(),

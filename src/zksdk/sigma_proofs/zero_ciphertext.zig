@@ -3,10 +3,10 @@ const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const el_gamal = sig.zksdk.el_gamal;
+const pedersen = sig.zksdk.pedersen;
 const ElGamalCiphertext = sig.zksdk.ElGamalCiphertext;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
-const pedersen = el_gamal.pedersen;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
@@ -90,7 +90,7 @@ pub const Proof = struct {
         // on producing identity points in order to indicate that the proof was valid.
         // zig fmt: off
         const check =  weak_mul.mulMulti(5, .{
-            el_gamal.H.p,
+            pedersen.H.p,
             P.p,
             C.p,
             D.p,
