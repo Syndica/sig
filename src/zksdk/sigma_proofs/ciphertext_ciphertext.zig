@@ -11,6 +11,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     Y_0: Ristretto255,
@@ -224,7 +225,41 @@ pub const Data = struct {
     context: Context,
     proof: Proof,
 
+    pub const TYPE: ProofType = .ciphertext_ciphertext_equality;
     pub const BYTE_LEN = 416;
+
+    pub const Context = struct {
+        first_pubkey: ElGamalPubkey,
+        second_pubkey: ElGamalPubkey,
+        first_ciphertext: ElGamalCiphertext,
+        second_ciphertext: ElGamalCiphertext,
+
+        pub const BYTE_LEN = (2 * 32) + (2 * 64);
+
+        // TODO: is it a problem that we error on invalid point here?
+        pub fn fromBytes(bytes: [192]u8) !Context {
+            return .{
+                .first_pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*),
+                .second_pubkey = try ElGamalPubkey.fromBytes(bytes[32..64].*),
+                .first_ciphertext = try ElGamalCiphertext.fromBytes(bytes[64..128].*),
+                .second_ciphertext = try ElGamalCiphertext.fromBytes(bytes[128..192].*),
+            };
+        }
+
+        pub fn toBytes(self: Context) [192]u8 {
+            return self.first_pubkey.toBytes() ++ self.second_pubkey.toBytes() ++
+                self.first_ciphertext.toBytes() ++ self.second_ciphertext.toBytes();
+        }
+
+        fn newTranscript(self: Context) Transcript {
+            var transcript = Transcript.init("ciphertext-ciphertext-equality-instruction");
+            transcript.appendPubkey("first-pubkey", self.first_pubkey);
+            transcript.appendPubkey("second-pubkey", self.second_pubkey);
+            transcript.appendCiphertext("first-ciphertext", self.first_ciphertext);
+            transcript.appendCiphertext("second-ciphertext", self.second_ciphertext);
+            return transcript;
+        }
+    };
 
     pub fn init(
         first_keypair: *const ElGamalKeypair,
@@ -347,37 +382,6 @@ pub const Data = struct {
             );
             try proof_data.verify();
         }
-    }
-};
-
-const Context = struct {
-    first_pubkey: ElGamalPubkey,
-    second_pubkey: ElGamalPubkey,
-    first_ciphertext: ElGamalCiphertext,
-    second_ciphertext: ElGamalCiphertext,
-
-    // TODO: is it a problem that we error on invalid point here?
-    pub fn fromBytes(bytes: [192]u8) !Context {
-        return .{
-            .first_pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*),
-            .second_pubkey = try ElGamalPubkey.fromBytes(bytes[32..64].*),
-            .first_ciphertext = try ElGamalCiphertext.fromBytes(bytes[64..128].*),
-            .second_ciphertext = try ElGamalCiphertext.fromBytes(bytes[128..192].*),
-        };
-    }
-
-    pub fn toBytes(self: Context) [192]u8 {
-        return self.first_pubkey.toBytes() ++ self.second_pubkey.toBytes() ++
-            self.first_ciphertext.toBytes() ++ self.second_ciphertext.toBytes();
-    }
-
-    fn newTranscript(self: Context) Transcript {
-        var transcript = Transcript.init("ciphertext-ciphertext-equality-instruction");
-        transcript.appendPubkey("first-pubkey", self.first_pubkey);
-        transcript.appendPubkey("second-pubkey", self.second_pubkey);
-        transcript.appendCiphertext("first-ciphertext", self.first_ciphertext);
-        transcript.appendCiphertext("second-ciphertext", self.second_ciphertext);
-        return transcript;
     }
 };
 

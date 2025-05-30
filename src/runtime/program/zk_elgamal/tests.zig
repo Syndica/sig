@@ -21,7 +21,7 @@ const ZeroCiphertextData = zksdk.ZeroCiphertextData;
 const expectProgramExecuteResult = program.testing.expectProgramExecuteResult;
 const expectProgramExecuteError = program.testing.expectProgramExecuteError;
 
-test "zero balance" {
+test "zero ciphertext" {
     const allocator = std.testing.allocator;
 
     const kp = ElGamalKeypair.random();
@@ -501,11 +501,15 @@ fn testVerifyProofWithoutContext(
     success_proof_data: Proof,
     fail_proof_data: Proof,
 ) !void {
-    {
-        var success_data: [Proof.BYTE_LEN + 1]u8 = undefined;
-        success_data[0] = @intFromEnum(instruction);
-        @memcpy(success_data[1..], &success_proof_data.toBytes());
+    var prng = std.Random.DefaultPrng.init(123);
+    const random = prng.random();
 
+    var success_data: [Proof.BYTE_LEN + 1]u8 = undefined;
+    success_data[0] = @intFromEnum(instruction);
+    @memcpy(success_data[1..], &success_proof_data.toBytes());
+
+    // case where you put the proof into the instruction data
+    {
         try expectProgramExecuteResult(
             allocator,
             zk_elgamal.ID,
@@ -554,6 +558,56 @@ fn testVerifyProofWithoutContext(
         }
     }
 
+    // case where the instruction data is a offset to an account containing the proof data
+    {
+        const account_0_key = sig.core.Pubkey.initRandom(random);
+        const owner_key = sig.core.Pubkey.initRandom(random);
+
+        var success_account_data: [4 + 1]u8 = undefined;
+        success_account_data[0] = @intFromEnum(instruction);
+        success_account_data[1..][0..4].* = @splat(0); // 0 byte offset
+
+        try expectProgramExecuteResult(
+            allocator,
+            zk_elgamal.ID,
+            success_account_data,
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = account_0_key,
+                        .owner = owner_key,
+                        .lamports = 1_000_000_000,
+                        .data = &success_proof_data.toBytes(),
+                    },
+                    .{
+                        .pubkey = zk_elgamal.ID,
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = compute_budget,
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = account_0_key,
+                        .owner = owner_key,
+                        .lamports = 1_000_000_000,
+                        .data = &success_proof_data.toBytes(),
+                    },
+                    .{
+                        .pubkey = zk_elgamal.ID,
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = 0,
+            },
+            .{},
+        );
+    }
+
     {
         var fail_data: [Proof.BYTE_LEN + 1]u8 = undefined;
         fail_data[0] = @intFromEnum(instruction);
@@ -570,6 +624,41 @@ fn testVerifyProofWithoutContext(
                     .pubkey = zk_elgamal.ID,
                     .owner = sig.runtime.ids.NATIVE_LOADER_ID,
                 }},
+                .compute_meter = compute_budget,
+            },
+            .{},
+        );
+    }
+
+    {
+        const account_0_key = sig.core.Pubkey.initRandom(random);
+        const owner_key = sig.core.Pubkey.initRandom(random);
+
+        var fail_account_data: [4 + 1]u8 = undefined;
+        fail_account_data[0] = @intFromEnum(instruction);
+        fail_account_data[1..][0..4].* = @splat(0); // 0 byte offset
+
+        try expectProgramExecuteError(
+            error.InvalidInstructionData,
+            allocator,
+            zk_elgamal.ID,
+            fail_account_data,
+            &.{
+                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+            },
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = account_0_key,
+                        .owner = owner_key,
+                        .lamports = 1_000_000_000,
+                        .data = &fail_proof_data.toBytes(),
+                    },
+                    .{
+                        .pubkey = zk_elgamal.ID,
+                        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                    },
+                },
                 .compute_meter = compute_budget,
             },
             .{},

@@ -11,6 +11,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const Transcript = sig.zksdk.Transcript;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const Proof = struct {
     Y_0: Ristretto255,
@@ -187,7 +188,38 @@ pub const Data = struct {
     context: Context,
     proof: Proof,
 
+    pub const TYPE: ProofType = .ciphertext_commitment_equality;
     pub const BYTE_LEN = 320;
+
+    pub const Context = struct {
+        pubkey: ElGamalPubkey,
+        ciphertext: ElGamalCiphertext,
+        commitment: pedersen.Commitment,
+
+        pub const BYTE_LEN = 128;
+
+        fn fromBytes(bytes: [128]u8) !Context {
+            return .{
+                .pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*),
+                .ciphertext = try ElGamalCiphertext.fromBytes(bytes[32..96].*),
+                .commitment = try pedersen.Commitment.fromBytes(bytes[96..128].*),
+            };
+        }
+
+        pub fn toBytes(self: Context) [128]u8 {
+            return self.pubkey.toBytes() ++
+                self.ciphertext.toBytes() ++
+                self.commitment.point.toBytes();
+        }
+
+        fn newTranscript(self: Context) Transcript {
+            var transcript = Transcript.init("ciphertext-commitment-equality-instruction");
+            transcript.appendPubkey("pubkey", self.pubkey);
+            transcript.appendCiphertext("ciphertext", self.ciphertext);
+            transcript.appendCommitment("commitment", self.commitment);
+            return transcript;
+        }
+    };
 
     pub fn init(
         kp: *const ElGamalKeypair,
@@ -249,34 +281,6 @@ pub const Data = struct {
         );
 
         try proof_data.verify();
-    }
-};
-
-const Context = struct {
-    pubkey: ElGamalPubkey,
-    ciphertext: ElGamalCiphertext,
-    commitment: pedersen.Commitment,
-
-    fn fromBytes(bytes: [128]u8) !Context {
-        return .{
-            .pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*),
-            .ciphertext = try ElGamalCiphertext.fromBytes(bytes[32..96].*),
-            .commitment = try pedersen.Commitment.fromBytes(bytes[96..128].*),
-        };
-    }
-
-    fn toBytes(self: Context) [128]u8 {
-        return self.pubkey.toBytes() ++
-            self.ciphertext.toBytes() ++
-            self.commitment.point.toBytes();
-    }
-
-    fn newTranscript(self: Context) Transcript {
-        var transcript = Transcript.init("ciphertext-commitment-equality-instruction");
-        transcript.appendPubkey("pubkey", self.pubkey);
-        transcript.appendCiphertext("ciphertext", self.ciphertext);
-        transcript.appendCommitment("commitment", self.commitment);
-        return transcript;
     }
 };
 

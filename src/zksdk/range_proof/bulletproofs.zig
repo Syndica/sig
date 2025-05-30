@@ -15,6 +15,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
 const Transcript = sig.zksdk.Transcript;
+const ProofType = sig.runtime.program.zk_elgamal.ProofType;
 
 pub const ZERO = Scalar.fromBytes(Edwards25519.scalar.zero);
 pub const ONE = Scalar.fromBytes(.{1} ++ .{0} ** 31);
@@ -541,6 +542,12 @@ pub fn Data(bit_size: comptime_int) type {
 
         const P = Proof(bit_size);
         const Self = @This();
+        pub const TYPE: ProofType = switch (bit_size) {
+            64 => .batched_range_proof_u64,
+            128 => .batched_range_proof_u128,
+            256 => .batched_range_proof_u256,
+            else => unreachable,
+        };
         pub const BYTE_LEN = P.BYTE_LEN + @sizeOf(Context);
 
         pub fn init(
@@ -582,14 +589,13 @@ pub fn Data(bit_size: comptime_int) type {
         pub fn fromBytes(data: []const u8) !Self {
             if (data.len != BYTE_LEN) return error.InvalidLength;
             return .{
-                .context = @bitCast(data[0..@sizeOf(Context)].*),
-                .proof = try P.fromBytes(data[@sizeOf(Context)..][0..P.BYTE_LEN].*),
+                .context = @bitCast(data[0..Context.BYTE_LEN].*),
+                .proof = try P.fromBytes(data[Context.BYTE_LEN..][0..P.BYTE_LEN].*),
             };
         }
 
         pub fn toBytes(self: Self) [BYTE_LEN]u8 {
-            const context: [264]u8 = @bitCast(self.context);
-            return context ++ self.proof.toBytes();
+            return self.context.toBytes() ++ self.proof.toBytes();
         }
 
         pub fn verify(self: Self) !void {
@@ -613,7 +619,7 @@ pub fn Data(bit_size: comptime_int) type {
             );
         }
 
-        const Context = extern struct {
+        pub const Context = extern struct {
             // commitments and bit_lengths are stored as "null terminated", where
             // the next-after-last element is an identity point. 0 is allowed
             // in the bit lengths, so the length there is derived from the
@@ -621,6 +627,8 @@ pub fn Data(bit_size: comptime_int) type {
             // important to have for constant size serialization in `toBytes()`.
             commitments: [MAX_COMMITMENTS][32]u8,
             bit_lengths: [MAX_COMMITMENTS]u8,
+
+            pub const BYTE_LEN = (MAX_COMMITMENTS * 32) + MAX_COMMITMENTS;
 
             fn init(
                 commitments: []const pedersen.Commitment,
@@ -659,6 +667,10 @@ pub fn Data(bit_size: comptime_int) type {
                     .commitments = compressed_commitments,
                     .bit_lengths = compressed_bit_lengths,
                 };
+            }
+
+            pub fn toBytes(self: Context) [Context.BYTE_LEN]u8 {
+                return @bitCast(self);
             }
 
             fn newTranscript(self: Context) Transcript {
