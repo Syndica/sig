@@ -446,7 +446,6 @@ pub const BatchedData = struct {
 
         pub const BYTE_LEN = 352;
 
-        // TODO: is it a problem that we error on invalid point here?
         pub fn fromBytes(bytes: [352]u8) !Context {
             return .{
                 .first_pubkey = try .fromBytes(bytes[0..32].*),

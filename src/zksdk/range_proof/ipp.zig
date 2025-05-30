@@ -189,11 +189,11 @@ pub fn Proof(bit_size: comptime_int) type {
                 const c_L = bp.innerProduct(a_L, b_R);
                 const c_R = bp.innerProduct(a_R, b_L);
 
-                // TODO: if we're here after the first round, then the size has already been
-                // divided by two, meaning we should be able to limit the bounded arrays to
-                // bit_size / 2 + 1 instead, will need to do some testing.
-                var scalars: std.BoundedArray([32]u8, bit_size + 1) = .{};
-                var points: std.BoundedArray(Edwards25519, bit_size + 1) = .{};
+                // after the first round, the size has been divded by two, meaning we
+                // only need to have bit_size / 2 + 1 elements in the arrays.
+                const len = (bit_size / 2) + 1;
+                var scalars: std.BoundedArray([32]u8, len) = .{};
+                var points: std.BoundedArray(Edwards25519, len) = .{};
 
                 for (a_L) |ai| scalars.appendAssumeCapacity(ai.toBytes());
                 for (b_R) |bi| scalars.appendAssumeCapacity(bi.toBytes());
@@ -218,7 +218,7 @@ pub fn Proof(bit_size: comptime_int) type {
                             points.constSlice()[0..N].*,
                             scalars.constSlice()[0..N].*,
                         ),
-                        else => unreachable, // TODO
+                        else => unreachable,
                     },
                 };
 
@@ -248,7 +248,7 @@ pub fn Proof(bit_size: comptime_int) type {
                             points.constSlice()[0..N].*,
                             scalars.constSlice()[0..N].*,
                         ),
-                        else => unreachable, // TODO
+                        else => unreachable,
                     },
                 };
 
