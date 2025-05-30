@@ -30,3 +30,7 @@ pub const GroupedCiphertext3HandlesValidityProof = grouped_cipher_handles_3.Proo
 
 // range proof
 pub const bulletproofs = @import("range_proof/bulletproofs.zig");
+
+pub const RangeProofU64Data = bulletproofs.Data(64);
+pub const RangeProofU128Data = bulletproofs.Data(128);
+pub const RangeProofU256Data = bulletproofs.Data(256);

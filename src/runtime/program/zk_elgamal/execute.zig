@@ -38,6 +38,11 @@ pub fn execute(
             try tc.log("VerifyPubkeyValidity", .{});
             try processVerifyProof(zksdk.PubkeyValidityProofData, ic);
         },
+        .verify_batched_range_proof_u64 => {
+            try tc.consumeCompute(zk_elgamal.VERIFY_BATCHED_RANGE_PROOF_U64_COMPUTE_UNITS);
+            try tc.log("VerifyBatchedRangeProofU64", .{});
+            try processVerifyProof(zksdk.RangeProofU64Data, ic);
+        },
         else => @panic("TODO"),
     }
 }
