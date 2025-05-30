@@ -13,7 +13,6 @@ pub const Proof = struct {
     max_proof: MaxProof,
     equality_proof: EqualityProof,
 
-    /// TODO: simplify params to take in ciphertexts instead of commitment/opening pair
     pub fn init(
         percentage_commitment: *const pedersen.Commitment,
         percentage_opening: *const pedersen.Opening,

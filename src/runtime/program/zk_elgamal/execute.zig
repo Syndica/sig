@@ -6,29 +6,37 @@ const zk_elgamal = sig.runtime.program.zk_elgamal;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 
+const INSTRUCTION_DATA_LENGTH_WITH_PROOF_ACCOUNT = 5;
+
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    _ = allocator; // autofix
     const tc = ic.tc;
+    const instruction_data = ic.ixn_info.instruction_data;
 
-    const instruction = try ic.ixn_info.deserializeInstruction(
-        allocator,
+    if (instruction_data.len < 1) return InstructionError.InvalidInstructionData;
+    const instruction = std.meta.intToEnum(
         zk_elgamal.ProofInstruction,
-    );
-
-    if (tc.instruction_stack.len != 1 and
-        instruction != .close_context_state)
-    {
-        // Proof verification instructions are not supported as an inner instruction
-        return InstructionError.UnsupportedProgramId;
-    }
+        instruction_data[0],
+    ) catch return InstructionError.InvalidInstructionData;
 
     switch (instruction) {
         .verify_zero_ciphertext => {
             try tc.consumeCompute(zk_elgamal.VERIFY_ZERO_BALANCE_COMPUTE_UNITS);
             try tc.log("VerifyZeroBalance", .{});
             try processVerifyProof(zksdk.ZeroCiphertextProofData, ic);
+        },
+        .verify_ciphertext_ciphertext_equality => {
+            try tc.consumeCompute(zk_elgamal.VERIFY_CIPHERTEXT_CIPHERTEXT_EQUALITY_COMPUTE_UNITS);
+            try tc.log("VerifyCiphertextCiphertextEquality", .{});
+            try processVerifyProof(zksdk.CiphertextCiphertextEqualityData, ic);
+        },
+        .verify_pubkey_validity => {
+            try tc.consumeCompute(zk_elgamal.VERIFY_PUBKEY_VALIDITY_COMPUTE_UNITS);
+            try tc.log("VerifyPubkeyValidity", .{});
+            try processVerifyProof(zksdk.PubkeyValidityProofData, ic);
         },
         else => @panic("TODO"),
     }
@@ -41,8 +49,9 @@ fn processVerifyProof(
     const tc = ic.tc;
     const instruction_data = ic.ixn_info.instruction_data;
 
-    // if instruction data is exactly 5 bytes, then read proof from an account
-    if (instruction_data.len == 5) {
+    // if instruction data is exactly 5 bytes, then read proof from an account,
+    // first byte is the instruction enum, next 4 bytes make up a u32 for the byte offset.
+    if (instruction_data.len == INSTRUCTION_DATA_LENGTH_WITH_PROOF_ACCOUNT) {
         @panic("TODO");
     } else {
         const proof_data = Proof.fromBytes(instruction_data[1..]) catch {

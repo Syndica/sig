@@ -90,6 +90,71 @@ pub const Proof = struct {
         );
         return fromBytes(buffer);
     }
+
+    pub fn toBytes(self: Proof) [64]u8 {
+        return self.Y.toBytes() ++ self.z.toBytes();
+    }
+};
+
+pub const Data = struct {
+    context: Context,
+    proof: Proof,
+
+    pub const BYTE_LEN = 96;
+
+    pub fn init(kp: *const ElGamalKeypair) Data {
+        const context: Context = .{ .pubkey = kp.public };
+        var transcript = context.newTranscript();
+        const proof = Proof.init(
+            kp,
+            &transcript,
+        );
+        return .{ .context = context, .proof = proof };
+    }
+
+    pub fn fromBytes(data: []const u8) !Data {
+        if (data.len != BYTE_LEN) return error.InvalidLength;
+        return .{
+            .context = try Context.fromBytes(data[0..32].*),
+            .proof = try Proof.fromBytes(data[32..][0..64].*),
+        };
+    }
+
+    pub fn toBytes(self: Data) [BYTE_LEN]u8 {
+        return self.context.toBytes() ++ self.proof.toBytes();
+    }
+
+    pub fn verify(self: Data) !void {
+        var transcript = self.context.newTranscript();
+        try self.proof.verify(
+            &self.context.pubkey,
+            &transcript,
+        );
+    }
+
+    test "correctness" {
+        const kp = ElGamalKeypair.random();
+        const pubkey_validity_data = Data.init(&kp);
+        try pubkey_validity_data.verify();
+    }
+};
+
+const Context = struct {
+    pubkey: ElGamalPubkey,
+
+    pub fn fromBytes(bytes: [32]u8) !Context {
+        return .{ .pubkey = try ElGamalPubkey.fromBytes(bytes[0..32].*) };
+    }
+
+    pub fn toBytes(self: Context) [32]u8 {
+        return self.pubkey.toBytes();
+    }
+
+    fn newTranscript(self: Context) Transcript {
+        var transcript = Transcript.init("pubkey-validity-instruction");
+        transcript.appendPubkey("pubkey", self.pubkey);
+        return transcript;
+    }
 };
 
 test "correctness" {

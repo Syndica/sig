@@ -393,6 +393,8 @@ pub fn expectTransactionContextEqual(
         return error.AccountsResizeDeltaMismatch;
 
     if (expected.compute_meter != actual.compute_meter) {
+        std.debug.print("actual: {d}\n", .{actual.compute_meter});
+
         return error.ComputeMeterMismatch;
     }
 
