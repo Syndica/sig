@@ -4,6 +4,7 @@ const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
 const ThreadPool = sig.sync.ThreadPool;
 
@@ -21,6 +22,7 @@ const Hash = sig.core.Hash;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const LeaderScheduleCache = sig.core.leader_schedule.LeaderScheduleCache;
 
+const SlotTracker = sig.replay.trackers.SlotTracker;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
 
@@ -34,6 +36,10 @@ const SwitchForkDecision = sig.consensus.replay_tower.SwitchForkDecision;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
+
+pub const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
+pub const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
@@ -131,6 +137,7 @@ const ConsensusDependencies = struct {
     allocator: Allocator,
     replay_tower: *ReplayTower,
     progress_map: *ProgressMap,
+    slot_tracker: *SlotTracker,
     fork_choice: *ForkChoice,
     blockstore: *BlockstoreReader,
 };
@@ -142,13 +149,15 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         return error.Todo;
     for (newly_computed_slot_stats) |slot| {
         const fork_stats = deps.progress_map.getForkStats(slot) orelse
-            return error.Todo;
-        const duplicate_confirmed_forks = towerDuplicateConfirmedForks(
-            deps.replay_tower,
+            return error.MissingSlot;
+
+        const duplicate_confirmed_forks = try towerDuplicateConfirmedForks(
+            deps.allocator,
             deps.progress_map,
-            slot,
+            deps.slot_tracker,
             fork_stats.voted_stakes,
             fork_stats.total_stake,
+            slot,
         );
         markSlotsDuplicateConfirmed(
             deps.blockstore,
@@ -272,20 +281,49 @@ fn maybeRefreshLastVote(
 }
 
 fn towerDuplicateConfirmedForks(
-    replay_tower: *const ReplayTower,
+    allocator: std.mem.Allocator,
     progress_map: *const ProgressMap,
-    slot: Slot,
-    vote_stake: VotedStakes,
+    slot_tracker: *const SlotTracker,
+    vote_stakes: VotedStakes,
     total_stake: u64,
-    // mising BankForks or alternative
-) []SlotAndHash {
-    _ = &replay_tower;
-    _ = &progress_map;
-    _ = &slot;
-    _ = &vote_stake;
-    _ = &total_stake;
+    slot: Slot,
+) ![]const SlotAndHash {
+    var duplicate_confirmed_forks: ArrayListUnmanaged(SlotAndHash) = .{};
 
-    return &[0]SlotAndHash{};
+    var it = progress_map.map.iterator();
+    while (it.next()) |entry| {
+        const entry_slot = entry.key_ptr.*;
+        const fork_progress = entry.value_ptr.*;
+        if (fork_progress.fork_stats.duplicate_confirmed_hash != null) continue;
+
+        var found_slot = slot_tracker.slots.get(entry_slot) orelse
+            return error.MissingSlot;
+
+        //TODO should found_slot.state.hash be a mutex
+        const found_slot_hash = found_slot.state.hash.read().get().* orelse
+            return error.MissingSlotInTracker;
+        var state = found_slot.state;
+        if (!state.isFrozen()) {
+            continue;
+        }
+
+        const is_slot_duplicate_confirmed = if (vote_stakes.get(slot)) |voted_stake|
+            (@as(f64, @floatFromInt(voted_stake)) / @as(f64, @floatFromInt(total_stake))) >
+                DUPLICATE_THRESHOLD
+        else
+            false;
+
+        if (is_slot_duplicate_confirmed) {
+            try duplicate_confirmed_forks.append(
+                allocator,
+                SlotAndHash{
+                    .slot = slot,
+                    .hash = found_slot_hash,
+                },
+            );
+        }
+    }
+    return try duplicate_confirmed_forks.toOwnedSlice(allocator);
 }
 
 // TODO complete
@@ -324,7 +362,7 @@ fn markSlotsDuplicateConfirmed(
     blockstore: *BlockstoreReader,
     progress_map: *ProgressMap,
     fork_choice: *ForkChoice,
-    confirmed_slots: []SlotAndHash,
+    confirmed_slots: []const SlotAndHash,
     root_slot: Slot,
     duplicate_slot_tracker: stubs.DuplicateSlotsTracker,
     epoch_slots_frozen_slots: stubs.EpochSlotsFrozenSlots,
