@@ -732,6 +732,12 @@ pub const RAISE_BLOCK_LIMITS_TO_60M =
 pub const MASK_OUT_RENT_EPOCH_IN_VM_SERIALIZATION =
     Pubkey.parseBase58String("RENtePQcDLrAbxAsP3k8dwVcnNYQ466hi2uKvALjnXx") catch unreachable;
 
+pub const ENSHRINE_SLASHING_PROGRAM =
+    Pubkey.parseBase58String("sProgVaNWkYdP2eTRAy1CPrgb3b9p8yXCASrPEqo6VJ") catch unreachable;
+
+pub const ENABLE_EXTEND_PROGRAM_CHECKED =
+    Pubkey.parseBase58String("2oMRZEDWT2tqtYMofhmmfQ8SsjqUFzT6sYXppQDavxwz") catch unreachable;
+
 pub const FEATURES = [_]Pubkey{
     DEPRECATE_REWARDS_SYSVAR,
     PICO_INFLATION,
@@ -965,4 +971,6 @@ pub const FEATURES = [_]Pubkey{
     REQUIRE_STATIC_NONCE_ACCOUNT,
     RAISE_BLOCK_LIMITS_TO_60M,
     MASK_OUT_RENT_EPOCH_IN_VM_SERIALIZATION,
+    ENSHRINE_SLASHING_PROGRAM,
+    ENABLE_EXTEND_PROGRAM_CHECKED,
 };
