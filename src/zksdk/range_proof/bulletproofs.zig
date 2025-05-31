@@ -7,6 +7,7 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
+const pippenger = @import("../pippenger.zig");
 
 const pedersen = sig.zksdk.pedersen;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -339,12 +340,8 @@ pub fn Proof(bit_size: comptime_int) type {
             // ------------------------------------------------------ MSM
             //       -A
 
-            var points: std.BoundedArray(Edwards25519, max) = .{
-                .buffer = @splat(Edwards25519.identityElement),
-            };
-            var scalars: std.BoundedArray([32]u8, max) = .{
-                .buffer = @splat(ONE.toBytes()),
-            };
+            var points: std.BoundedArray(Edwards25519, max) = .{};
+            var scalars: std.BoundedArray([32]u8, max) = .{};
 
             points.appendSliceAssumeCapacity(&.{
                 pedersen.G.p,
@@ -425,16 +422,10 @@ pub fn Proof(bit_size: comptime_int) type {
             const basepoint_scalar = delta_tx.add(abw_tx);
             scalars.insert(0, basepoint_scalar.toBytes()) catch unreachable; // G
 
-            // Since our MSM implementation requires a comptime-known size,
-            // and for now it would be too much work to write a variable time
-            // implementation, we're going to pad the buffers with ZERO points,
-            // so that those are cancelled out.
-            // TODO: this should be a variable time MSM , since it's much faster
-            // than doing a bunch of pointless calculations.
-            const check: Ristretto255 = .{ .p = weak_mul.mulMulti(
+            const check: Ristretto255 = .{ .p = pippenger.mulMulti(
                 max,
-                points.buffer,
-                scalars.buffer,
+                scalars.constSlice(),
+                points.constSlice(),
             ) };
 
             if (!check.equivalent(.{ .p = self.A.p.neg() })) {
