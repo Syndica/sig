@@ -425,7 +425,7 @@ pub fn executeV3DeployWithMaxDataLen(
         );
     }
 
-    // Update the PorgramData account and record the program bits
+    // Update the ProgramData account and record the program bits
     // https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L704-L726
     {
         var program_data_account = try ic.borrowInstructionAccount(
