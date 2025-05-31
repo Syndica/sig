@@ -2075,7 +2075,7 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_stray_restored_slot"
     var fork_choice = try forkChoiceForTest(test_allocator, tree[0..]);
     defer fork_choice.deinit();
 
-    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    var replay_tower = try createTestReplayTower(10, 0.9);
     defer replay_tower.deinit(test_allocator);
     _ = try replay_tower.recordBankVote(test_allocator, 1, Hash.ZEROES);
 
@@ -2116,7 +2116,7 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_last_voted_not_found
     var fork_choice = try forkChoiceForTest(test_allocator, fork_tuples[0..]);
     defer fork_choice.deinit();
 
-    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    var replay_tower = try createTestReplayTower(10, 0.9);
     defer replay_tower.deinit(test_allocator);
 
     try std.testing.expectEqualDeep(
@@ -2145,7 +2145,7 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_use_deepest_slot" {
     defer fork_choice.deinit();
 
     // Create a tower that voted on slot 1.
-    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    var replay_tower = try createTestReplayTower(10, 0.9);
     defer replay_tower.deinit(test_allocator);
     _ = try replay_tower.recordBankVote(test_allocator, 1, Hash.ZEROES);
 
@@ -2186,7 +2186,7 @@ test "HeaviestSubtreeForkChoice.heaviestSlotOnSameVotedFork_missing_candidate" {
     defer fork_choice.deinit();
 
     // Create a tower that voted on slot 2 which doesn't exist in the fork choice.
-    var replay_tower = try createTestReplayTower(test_allocator, 10, 0.9);
+    var replay_tower = try createTestReplayTower(10, 0.9);
     defer replay_tower.deinit(test_allocator);
     _ = try replay_tower.recordBankVote(test_allocator, 2, Hash.ZEROES);
 
