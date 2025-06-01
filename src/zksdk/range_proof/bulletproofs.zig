@@ -7,8 +7,8 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
-const pippenger = @import("../pippenger.zig");
 
+const pippenger = sig.crypto.pippenger;
 const pedersen = sig.zksdk.pedersen;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Shake256 = std.crypto.hash.sha3.Shake256;

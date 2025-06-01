@@ -12,3 +12,4 @@ const use_avx512 = builtin.cpu.arch == .x86_64 and
 const namespace = if (use_avx512) avx512 else vector;
 pub const ExtendedPoint = namespace.ExtendedPoint;
 pub const CachedPoint = namespace.CachedPoint;
+pub const pippenger = @import("pippenger.zig");
