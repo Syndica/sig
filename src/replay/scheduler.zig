@@ -12,8 +12,8 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountLocks = replay.account_locks.AccountLocks;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
-const ResolvedTransaction = replay.resolve.ResolvedTransaction;
-const ResolvedBatch = replay.resolve.ResolvedBatch;
+const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
+const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay-batcher");
 

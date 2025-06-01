@@ -23,12 +23,10 @@ const SlotTracker = replay.trackers.SlotTracker;
 
 const confirmSlot = replay.confirm_slot.confirmSlot;
 
-const ScopedLogger = sig.trace.ScopedLogger("replay-execution");
-
 /// State used for replaying and validating data from blockstore/accountsdb/svm
 pub const ReplayExecutionState = struct {
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: sig.trace.ScopedLogger("replay-execution"),
     my_identity: Pubkey,
     vote_account: ?Pubkey,
     accounts_db: *AccountsDB,
@@ -49,7 +47,7 @@ pub const ReplayExecutionState = struct {
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
-            .logger = ScopedLogger.from(logger),
+            .logger = .from(logger),
             .my_identity = my_identity,
             .vote_account = null, // voting not currently supported
             .accounts_db = accounts_db,
@@ -171,7 +169,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     return .{ .confirm = try confirmSlot(
         state.allocator,
-        replay.confirm_slot.ScopedLogger.from(state.logger),
+        .from(state.logger),
         state.accounts_db,
         state.thread_pool,
         entries.items,

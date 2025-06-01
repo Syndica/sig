@@ -11,8 +11,6 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 
-const ScopedLogger = sig.trace.ScopedLogger("replay");
-
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
 
@@ -33,7 +31,7 @@ pub const ReplayDependencies = struct {
 
 const ReplayState = struct {
     allocator: Allocator,
-    logger: ScopedLogger,
+    logger: sig.trace.ScopedLogger("replay"),
     thread_pool: *ThreadPool,
     execution: ReplayExecutionState,
 
@@ -44,7 +42,7 @@ const ReplayState = struct {
 
         return .{
             .allocator = deps.allocator,
-            .logger = ScopedLogger.from(deps.logger),
+            .logger = .from(deps.logger),
             .thread_pool = thread_pool,
             .execution = try ReplayExecutionState.init(
                 deps.allocator,

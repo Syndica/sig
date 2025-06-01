@@ -17,11 +17,11 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 const AccountsDB = sig.accounts_db.AccountsDB;
 
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
-const resolveBatch = replay.resolve.resolveBatch;
+const resolveBatch = replay.resolve_lookup.resolveBatch;
 
 const assert = std.debug.assert;
 
-pub const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
+const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
 
 /// Asynchronously validate and execute entries from a slot.
 ///
