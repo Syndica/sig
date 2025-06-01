@@ -348,16 +348,22 @@ pub fn curveMultiscalarMul(
 
     switch (curve_id) {
         inline .edwards, .ristretto => |id| {
-            const T = switch (id) {
-                .edwards => Edwards25519,
-                .ristretto => Ristretto255,
-            };
+            for (scalars) |scalar| {
+                Edwards25519.scalar.rejectNonCanonical(scalar) catch {
+                    registers.set(.r0, 1);
+                    return;
+                };
+            }
 
-            const result = multiScalarMultiply(T, scalars, point_data) catch {
+            const msm = sig.crypto.pippenger.mulMulti(512, false, point_data, scalars) catch {
                 registers.set(.r0, 1);
                 return;
             };
 
+            const result = switch (id) {
+                .edwards => msm,
+                .ristretto => Ristretto255{ .p = msm },
+            };
             const result_point_data = try memory_map.translateType(
                 [32]u8,
                 .mutable,

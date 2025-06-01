@@ -4,7 +4,8 @@
 
 const std = @import("std");
 const sig = @import("../sig.zig");
-const Ed25519 = std.crypto.ecc.Edwards25519;
+const crypto = std.crypto;
+const Ed25519 = crypto.ecc.Edwards25519;
 const CompressedScalar = Ed25519.scalar.CompressedScalar;
 
 const ExtendedPoint = sig.crypto.ExtendedPoint;
@@ -12,9 +13,10 @@ const CachedPoint = sig.crypto.CachedPoint;
 
 pub fn mulMulti(
     comptime max_elements: comptime_int,
-    ed_points: []const Ed25519,
+    comptime encoded: bool,
+    ed_points: []const if (encoded) Ed25519 else [32]u8,
     compressed_scalars: []const CompressedScalar,
-) Ed25519 {
+) if (encoded) Ed25519 else crypto.errors.EncodingError!Ed25519 {
     std.debug.assert(compressed_scalars.len == ed_points.len);
     std.debug.assert(compressed_scalars.len <= max_elements);
 
@@ -39,8 +41,12 @@ pub fn mulMulti(
     for (compressed_scalars) |s| {
         scalars.appendAssumeCapacity(asRadix(s, w));
     }
-    for (ed_points) |p| {
-        points.appendAssumeCapacity(.fromExtended(.fromPoint(p)));
+    for (ed_points) |l| {
+        const decompressed = switch (encoded) {
+            true => l,
+            else => try Ed25519.fromBytes(l),
+        };
+        points.appendAssumeCapacity(.fromExtended(.fromPoint(decompressed)));
     }
 
     var columns: [digits_count]ExtendedPoint = undefined;
