@@ -5,6 +5,7 @@ const ids = sig.runtime.ids;
 const program = sig.runtime.program;
 const stable_log = sig.runtime.stable_log;
 const features = sig.runtime.features;
+const bpf_loader_program = sig.runtime.program.bpf_loader;
 
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -25,6 +26,9 @@ pub fn executeInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L475
     processNextInstruction(allocator, tc) catch |err| {
+        std.debug.print("process: {any}\n", .{err});
+        if (@errorReturnTrace()) |t| std.debug.dumpStackTrace(t.*);
+
         popInstruction(tc) catch {};
         return err;
     };
@@ -135,16 +139,25 @@ fn processNextInstruction(
     const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
     // Lookup the program id
-    // [agave] https://github.com/anza-xyz/agave/blob/a1ed2b1052bde05e79c31388b399dba9da10f7de/program-runtime/src/invoke_context.rs#L518-L529
+    // [agave] https://github.com/anza-xyz/agave/blob/1ceeab0548d5db0bbcf7dab7726c2ffb4180fa76/program-runtime/src/invoke_context.rs#L509-L533
     const program_id = blk: {
         const program_account = ic.borrowProgramAccount() catch
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
-        break :blk if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
-            program_account.pubkey
-        else
-            program_account.account.owner;
+        if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
+            break :blk program_account.pubkey;
+
+        const owner_id = program_account.account.owner;
+        if (ic.tc.feature_set.active.contains(features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS)) {
+            if (bpf_loader_program.v1.ID.equals(&owner_id) or
+                bpf_loader_program.v2.ID.equals(&owner_id) or
+                bpf_loader_program.v3.ID.equals(&owner_id) or
+                bpf_loader_program.v4.ID.equals(&owner_id)) break :blk owner_id;
+            return InstructionError.UnsupportedProgramId;
+        } else {
+            break :blk owner_id;
+        }
     };
 
     // Lookup native program function
