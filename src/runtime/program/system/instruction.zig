@@ -1,3 +1,4 @@
+const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const bincode = sig.bincode;
@@ -64,9 +65,11 @@ pub const Instruction = union(enum) {
         /// Owner program account address
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
-            .deserializer = bincode.readUtf8String,
-        };
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec([]const u8);
+
+        pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.seed);
+        }
     },
 
     /// Consumes a stored nonce, replacing it with a successor
@@ -141,9 +144,11 @@ pub const Instruction = union(enum) {
         /// Owner program account
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
-            .deserializer = bincode.readUtf8String,
-        };
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec([]const u8);
+
+        pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.seed);
+        }
     },
 
     /// Assign account to a program based on a seed
@@ -161,9 +166,11 @@ pub const Instruction = union(enum) {
         /// Owner program account
         owner: Pubkey,
 
-        pub const @"!bincode-config:seed": bincode.FieldConfig([]const u8) = .{
-            .deserializer = bincode.readUtf8String,
-        };
+        pub const @"!bincode-config:seed" = bincode.utf8StringCodec([]const u8);
+
+        pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.seed);
+        }
     },
 
     /// Transfer lamports from a derived address
@@ -182,9 +189,11 @@ pub const Instruction = union(enum) {
         /// Owner to use to derive the funding account address
         from_owner: Pubkey,
 
-        pub const @"!bincode-config:from_seed": bincode.FieldConfig([]const u8) = .{
-            .deserializer = bincode.readUtf8String,
-        };
+        pub const @"!bincode-config:from_seed" = bincode.utf8StringCodec([]const u8);
+
+        pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.from_seed);
+        }
     },
 
     /// One-time idempotent upgrade of legacy nonce versions in order to bump
@@ -193,4 +202,25 @@ pub const Instruction = union(enum) {
     /// # Account references
     ///   0. `[WRITE]` Nonce account
     upgrade_nonce_account,
+
+    pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .create_account => {},
+            .assign => {},
+            .transfer => {},
+            .advance_nonce_account => {},
+            .withdraw_nonce_account => {},
+            .initialize_nonce_account => {},
+            .authorize_nonce_account => {},
+            .allocate => {},
+            .upgrade_nonce_account => {},
+
+            inline //
+            .create_account_with_seed,
+            .allocate_with_seed,
+            .assign_with_seed,
+            .transfer_with_seed,
+            => |inst| inst.deinit(allocator),
+        }
+    }
 };

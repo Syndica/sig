@@ -153,9 +153,9 @@ pub const Transaction = struct {
         return TransactionMessage.hash(serialized_message.slice());
     }
 
-    /// Count the number of accounts in the entries, including accounts from lookup tables
+    /// Count the number of accounts in the slice of transactions,
+    /// including accounts from lookup tables
     pub fn numAccounts(transactions: []const Transaction) usize {
-        // TODO: should this include the lookup table accounts themselves???
         var total_accounts: usize = 0;
         for (transactions) |transaction| {
             total_accounts += transaction.msg.account_keys.len;

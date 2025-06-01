@@ -345,14 +345,23 @@ pub fn readIntAsLength(comptime T: type, reader: anytype, params: bincode.Params
     return @intCast(len_u64);
 }
 
-pub fn readUtf8String(allocator: std.mem.Allocator, reader: anytype, _: bincode.Params) ![]const u8 {
-    const len = try reader.readInt(u64, .little);
-    const str = try allocator.alloc(u8, len);
-    errdefer allocator.free(str);
-    const bytes_read = try reader.readAll(str);
-    if (bytes_read != len) return error.NoBytesLeft;
-    if (!std.unicode.utf8ValidateSlice(str)) return error.InvalidUtf8;
-    return str;
+pub fn utf8StringCodec(
+    /// Should be a slice or array of bytes (ie `[16]u8` `[]const u8`, `[]u8`, etc).
+    comptime Str: type,
+) FieldConfig(Str) {
+    const S = struct {
+        fn deserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) !Str {
+            const str = try bincode.read(allocator, Str, reader, params);
+            errdefer bincode.free(allocator, str);
+            if (!std.unicode.utf8ValidateSlice(str[0..])) return error.InvalidUtf8;
+            return str;
+        }
+    };
+    return .{ .deserializer = S.deserialize };
 }
 
 pub fn readFieldWithConfig(

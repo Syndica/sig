@@ -191,6 +191,29 @@ pub const ProgressMap = struct {
         const fork_progress = self.map.get(slot) orelse return null;
         return fork_progress.fork_stats.bank_hash;
     }
+
+    pub fn getLeaderPropagationSlotMustExist(
+        self: *const ProgressMap,
+        slot: Slot,
+    ) !struct { bool, ?Slot } {
+        const fork_progress = self.map.get(slot) orelse {
+            // Slot not found in progress map - leader is considered confirmed
+            return .{ true, null };
+        };
+
+        const leader_slot = if (fork_progress.propagated_stats.is_leader_slot)
+            slot
+        else
+            fork_progress.propagated_stats.prev_leader_slot;
+
+        // If we got here, we have a leader slot
+        const is_propagated = if (self.map.get(slot)) |stats|
+            stats.propagated_stats.is_propagated
+        else
+            true;
+
+        return .{ is_propagated, leader_slot };
+    }
 };
 
 pub const ForkProgress = struct {
@@ -345,6 +368,19 @@ pub const ForkProgress = struct {
         num_dropped_blocks_on_fork: u64,
     };
 
+    pub fn zeroes(
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!ForkProgress {
+        return ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+            .last_entry = Hash.ZEROES,
+            .prev_leader_slot = 0,
+            .validator_stake_info = ValidatorStakeInfo.DEFAULT,
+            .num_blocks_on_fork = 0,
+            .num_dropped_blocks_on_fork = 0,
+        });
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         params: InitParams,
@@ -431,7 +467,7 @@ pub const ForkStats = struct {
     computed: bool,
     lockout_intervals: LockoutIntervals,
     bank_hash: Hash,
-    my_latest_landed_vote: Slot,
+    my_latest_landed_vote: ?Slot,
 
     pub const VoteThreshold = std.ArrayListUnmanaged(consensus.ThresholdDecision);
 
@@ -492,6 +528,10 @@ pub const ForkStats = struct {
             .bank_hash = self.bank_hash,
             .my_latest_landed_vote = self.my_latest_landed_vote,
         };
+    }
+
+    pub fn forkWeight(self: *const ForkStats) f64 {
+        return @as(f64, @floatFromInt(self.fork_stake)) / @as(f64, @floatFromInt(self.total_stake));
     }
 };
 

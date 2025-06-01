@@ -54,7 +54,12 @@ pub fn run(args: *std.process.ArgIterator) !void {
         try bincode.write(bytes_buffer.writer(), manifest_original, .{});
         const original_bytes_end = bytes_buffer.items.len;
 
-        const snapshot_deserialized = try bincode.readFromSlice(allocator, SnapshotManifest, bytes_buffer.items[original_bytes_start..original_bytes_end], .{});
+        const snapshot_deserialized = try bincode.readFromSlice(
+            allocator,
+            SnapshotManifest,
+            bytes_buffer.items[original_bytes_start..original_bytes_end],
+            .{},
+        );
         defer snapshot_deserialized.deinit(allocator);
 
         const serialized_bytes_start = bytes_buffer.items.len;
@@ -141,7 +146,11 @@ fn randomAccountsDbFields(
     var total_data_len: u64 = 0;
     var max_slot: Slot = 0;
 
-    const file_map_len = random.intRangeAtMost(usize, params.file_map_len.min, params.file_map_len.max);
+    const file_map_len = random.intRangeAtMost(
+        usize,
+        params.file_map_len.min,
+        params.file_map_len.max,
+    );
 
     var file_map: AccountsDbFields.FileMap = .{};
     errdefer file_map.deinit(allocator);
@@ -157,7 +166,11 @@ fn randomAccountsDbFields(
         if (slot_gop.found_existing) continue;
 
         const new_id: FileId = while (true) {
-            const new_id = FileId.fromInt(random.intRangeAtMost(FileId.Int, params.file_id.min.toInt(), params.file_id.max.toInt()));
+            const new_id = FileId.fromInt(random.intRangeAtMost(
+                FileId.Int,
+                params.file_id.min.toInt(),
+                params.file_id.max.toInt(),
+            ));
             const id_gop = file_id_set.getOrPutAssumeCapacityAdapted(new_id, FileIdAdapter{
                 .file_map = &file_map,
             });
@@ -167,7 +180,11 @@ fn randomAccountsDbFields(
 
         const account_file_info: AccountFileInfo = .{
             .id = new_id,
-            .length = random.intRangeAtMost(usize, params.file_len.min, @min(std.math.maxInt(u64) - total_data_len, params.file_len.max)),
+            .length = random.intRangeAtMost(
+                usize,
+                params.file_len.min,
+                @min(std.math.maxInt(u64) - total_data_len, params.file_len.max),
+            ),
         };
         slot_gop.value_ptr.* = account_file_info;
         max_slot = @max(max_slot, new_slot);
@@ -183,11 +200,23 @@ fn randomAccountsDbFields(
             .accounts_delta_hash = Hash.initRandom(random),
             .accounts_hash = Hash.initRandom(random),
             .stats = .{
-                .num_updated_accounts = random.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
-                .num_removed_accounts = random.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
+                .num_updated_accounts = random.intRangeAtMost(
+                    u64,
+                    params.file_map_len.min,
+                    params.file_map_len.max,
+                ),
+                .num_removed_accounts = random.intRangeAtMost(
+                    u64,
+                    params.file_map_len.min,
+                    params.file_map_len.max,
+                ),
                 .num_lamports_stored = random.int(u64),
                 .total_data_len = total_data_len,
-                .num_executable_accounts = random.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
+                .num_executable_accounts = random.intRangeAtMost(
+                    u64,
+                    params.file_map_len.min,
+                    params.file_map_len.max,
+                ),
             },
         },
         // NOTE: see field comment about these always being empty

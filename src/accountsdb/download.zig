@@ -76,7 +76,10 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         SlotAndHash, // full snapshot hash
         std.AutoHashMap(SlotAndHash, void), // set of incremental snapshots
     );
-    var maybe_trusted_snapshot_hashes: ?TrustedMapType = if (trusted_validators != null) TrustedMapType.init(allocator) else null;
+    var maybe_trusted_snapshot_hashes: ?TrustedMapType = if (trusted_validators != null)
+        TrustedMapType.init(allocator)
+    else
+        null;
     defer {
         if (maybe_trusted_snapshot_hashes) |*ts| ts.deinit();
     }
@@ -86,7 +89,9 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         var trusted_count: usize = 0;
         // SAFE: the perf is safe because maybe_ is non null only if trusted_validators is non-null
         for (trusted_validators.?) |trusted_validator| {
-            const gossip_data = table.getData(.{ .SnapshotHashes = trusted_validator }) orelse continue;
+            const gossip_data = table.getData(.{
+                .SnapshotHashes = trusted_validator,
+            }) orelse continue;
             const trusted_hashes = gossip_data.SnapshotHashes;
             trusted_count += 1;
 
@@ -110,7 +115,9 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             continue;
         }
 
-        const matching_shred_version = my_shred_version == peer_contact_info.shred_version or my_shred_version == 0;
+        const matching_shred_version =
+            my_shred_version == peer_contact_info.shred_version or
+            my_shred_version == 0;
         if (!matching_shred_version) {
             result.invalid_shred_version += 1;
             continue;
@@ -208,7 +215,10 @@ pub fn downloadSnapshotsFromGossip(
         std.time.sleep(5 * std.time.ns_per_s); // wait while gossip table updates
 
         if (download_attempts > max_number_of_download_attempts) {
-            logger.err().logf("exceeded max download attempts: {d}", .{max_number_of_download_attempts});
+            logger.err().logf(
+                "exceeded max download attempts: {d}",
+                .{max_number_of_download_attempts},
+            );
             return error.UnableToDownloadSnapshot;
         }
 
@@ -243,7 +253,11 @@ pub fn downloadSnapshotsFromGossip(
             var i: usize = 0;
             inline for (@typeInfo(PeerSearchResult).@"struct".fields) |field| {
                 if (@field(result, field.name) != 0) {
-                    const r = try std.fmt.bufPrint(write_buf[i..], "{s}: {d} ", .{ field.name, @field(result, field.name) });
+                    const r = try std.fmt.bufPrint(
+                        write_buf[i..],
+                        "{s}: {d} ",
+                        .{ field.name, @field(result, field.name) },
+                    );
                     i += r.len;
                 }
             }
@@ -411,17 +425,21 @@ fn downloadFile(
         const elapsed_since_start = full_timer.read();
         const elapsed_since_prev_lap = lap_timer.read();
         if (elapsed_since_prev_lap.asNanos() <= DOWNLOAD_WARMUP_TIME.asNanos()) continue;
-        defer lap_timer.reset(); // reset at the end of the iteration, after the update, right before the next read & write.
+        // reset at the end of the iteration, after the update, right before the next read & write.
+        defer lap_timer.reset();
 
         const total_bytes_left = download_size - total_bytes_read;
         const time_left_ns = total_bytes_left * (elapsed_since_start.asNanos() / total_bytes_read);
-        logger.info().logf("[download progress]: {d}% done ({:.4}/s - {:.4}/{:.4}) (time left: {d})", .{
-            total_bytes_read * 100 / download_size,
-            std.fmt.fmtIntSizeBin(total_bytes_read / elapsed_since_start.asSecs()),
-            std.fmt.fmtIntSizeBin(total_bytes_read),
-            std.fmt.fmtIntSizeBin(download_size),
-            std.fmt.fmtDuration(time_left_ns),
-        });
+        logger.info().logf(
+            "[download progress]: {d}% done ({:.4}/s - {:.4}/{:.4}) (time left: {d})",
+            .{
+                total_bytes_read * 100 / download_size,
+                std.fmt.fmtIntSizeBin(total_bytes_read / elapsed_since_start.asSecs()),
+                std.fmt.fmtIntSizeBin(total_bytes_read),
+                std.fmt.fmtIntSizeBin(download_size),
+                std.fmt.fmtDuration(time_left_ns),
+            },
+        );
 
         if (checked_speed) continue;
         checked_speed = true;
@@ -438,7 +456,10 @@ fn downloadFile(
             return error.TooSlow;
         }
 
-        logger.info().logf("[download progress]: speed is ok ({:.4}/s) -- maintaining", .{std.fmt.fmtIntSizeBin(actual_bytes_per_second)});
+        logger.info().logf(
+            "[download progress]: speed is ok ({:.4}/s) -- maintaining",
+            .{std.fmt.fmtIntSizeBin(actual_bytes_per_second)},
+        );
     }
 
     try buffered_out.flush();
@@ -554,7 +575,10 @@ pub fn getOrDownloadAndUnpackSnapshot(
     };
 
     var timer = try std.time.Timer.start();
-    const should_unpack_snapshot = force_unpack_snapshot or !snapshot_exists or !valid_accounts_folder;
+    const should_unpack_snapshot =
+        force_unpack_snapshot or
+        !snapshot_exists or
+        !valid_accounts_folder;
     if (should_unpack_snapshot) {
         const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
         if (snapshot_files.incremental_info == null) {
@@ -575,7 +599,10 @@ pub fn getOrDownloadAndUnpackSnapshot(
         logger.info().log("unpacking snapshots...");
 
         timer.reset();
-        logger.info().logf("unpacking {s}...", .{snapshot_files.full.snapshotArchiveName().constSlice()});
+        logger.info().logf(
+            "unpacking {s}...",
+            .{snapshot_files.full.snapshotArchiveName().constSlice()},
+        );
         {
             const archive_file = try snapshot_dir.openFile(
                 snapshot_files.full.snapshotArchiveName().constSlice(),
@@ -596,7 +623,10 @@ pub fn getOrDownloadAndUnpackSnapshot(
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_files.incremental()) |incremental_snapshot| {
             timer.reset();
-            logger.info().logf("unpacking {s}...", .{incremental_snapshot.snapshotArchiveName().constSlice()});
+            logger.info().logf(
+                "unpacking {s}...",
+                .{incremental_snapshot.snapshotArchiveName().constSlice()},
+            );
 
             const archive_file = try snapshot_dir.openFile(
                 incremental_snapshot.snapshotArchiveName().constSlice(),

@@ -10,6 +10,8 @@ const Hash = sig.core.Hash;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const Epoch = sig.core.Epoch;
+const EpochStakeMap = sig.core.stake.EpochStakeMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -41,6 +43,50 @@ const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 
 pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
+
+pub const HeaviestForkFailures = union(enum) {
+    LockedOut: u64,
+    FailedThreshold: struct {
+        slot: Slot,
+        vote_depth: u64,
+        observed_stake: u64,
+        total_stake: u64,
+    },
+    /// Failed to meet stake threshold for switching forks
+    FailedSwitchThreshold: struct {
+        slot: Slot,
+        observed_stake: u64,
+        total_stake: u64,
+    },
+    NoPropagatedConfirmation: struct {
+        slot: Slot,
+        observed_stake: u64,
+        total_stake: u64,
+    },
+};
+
+pub const CandidateVoteAndResetSlots = struct {
+    // A slot that the validator will vote on given it passes all
+    // remaining vote checks
+    // Note: In Agave this is a Bank
+    candidate_vote_slot: ?Slot,
+
+    // A slot that the validator will reset its PoH to regardless
+    // of voting behavior
+    // Note: In Agave this is a Bank
+    reset_slot: ?Slot,
+
+    switch_fork_decision: SwitchForkDecision,
+};
+
+pub const SelectVoteAndResetForkResult = struct {
+    vote_slot: ?struct {
+        slot: Slot,
+        decision: SwitchForkDecision,
+    },
+    reset_slot: ?Slot,
+    heaviest_fork_failures: std.ArrayListUnmanaged(HeaviestForkFailures),
+};
 
 // TODO Come up with a better name?
 // Consensus? Given this contains the logic of deciding what to vote or fork-switch into,
@@ -490,7 +536,10 @@ pub const ReplayTower = struct {
                 // stray slots (which should always be empty_ancestors).
                 //
                 // This is covered by test_future_tower_* in local_cluster
-                return SwitchForkDecision{ .failed_switch_threshold = .{ 0, total_stake } };
+                return SwitchForkDecision{ .failed_switch_threshold = .{
+                    .switch_proof_stake = 0,
+                    .total_stake = total_stake,
+                } };
             } else return error.NoAncestorsFoundForLastVote;
         }
 
@@ -504,6 +553,7 @@ pub const ReplayTower = struct {
         while (iterator.next()) |descendant| {
             const candidate_slot = descendant.key_ptr.*;
             var candidate_descendants = descendant.value_ptr.*;
+
             // 1) Don't consider any banks that haven't been frozen yet
             //    because the needed stats are unavailable
             // 2) Only consider lockouts at the latest `frozen` bank
@@ -553,7 +603,7 @@ pub const ReplayTower = struct {
             else
                 is_candidate_less_eq_root;
 
-            if (!is_valid_switch) {
+            if (is_valid_switch) {
                 continue;
             }
 
@@ -572,6 +622,9 @@ pub const ReplayTower = struct {
                 .fork_stats
                 .lockout_intervals;
 
+            if (lockout_intervals.map.count() == 0) {
+                continue;
+            }
             // Find any locked out intervals for vote accounts in this bank with
             // `lockout_interval_end` >= `last_vote`, which implies they are locked out at
             // `last_vote` on another fork.
@@ -671,7 +724,12 @@ pub const ReplayTower = struct {
         }
         // We have not detected sufficient lockout past the last voted slot to generate
         // a switching proof
-        return SwitchForkDecision{ .failed_switch_threshold = .{ locked_out_stake, total_stake } };
+        return SwitchForkDecision{
+            .failed_switch_threshold = .{
+                .switch_proof_stake = locked_out_stake,
+                .total_stake = total_stake,
+            },
+        };
     }
 
     /// Calls the makeCheckSwitchThresholdDecision and stores the result in
@@ -1023,6 +1081,319 @@ pub const ReplayTower = struct {
 
         return;
     }
+
+    /// [Audit] The implementations below are found in consensus::fork_choice in Agave
+    ///
+    /// Returns whether the last vote is able to land, which determines if we should
+    /// super refresh to vote at the tip.
+    pub fn lastVoteAbleToLand(
+        self: *const ReplayTower,
+        heaviest_bank_on_same_voted_fork: Slot,
+        progress: *const ProgressMap,
+        slot_history: *const SlotHistory,
+    ) bool {
+        const last_voted_slot = self.lastVotedSlot() orelse {
+            // No previous vote.
+            return true;
+        };
+
+        const stats = progress.map.get(heaviest_bank_on_same_voted_fork) orelse {
+            // No stats available (fork pruned, mid-repair, or no votes landed)
+            // => No need to super refresh
+            return true;
+        };
+
+        const my_latest_landed_vote_slot = stats.fork_stats.my_latest_landed_vote orelse {
+            // We've never landed a vote on this fork
+            return true;
+        };
+
+        // Check if our last vote is able to land in order to determine if we should
+        // super refresh to vote at the tip. If any of the following are true, we
+        // don't need to super refresh:
+        return
+        // 1. Last vote has landed
+        (my_latest_landed_vote_slot >= last_voted_slot) or
+            // 2. Already voting at the tip
+            (last_voted_slot >= heaviest_bank_on_same_voted_fork) or
+            // 3. Last vote is within slot hashes, regular refresh is enough
+            slot_history.check(last_voted_slot) == .found;
+    }
+
+    /// Handles candidate selection when fork switching fails threshold checks
+    pub fn selectCandidatesFailedSwitch(
+        self: *const ReplayTower,
+        allocator: std.mem.Allocator,
+        heaviest_slot: Slot,
+        heaviest_slot_on_same_voted_fork: ?Slot,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        switch_proof_stake: u64,
+        total_stake: u64,
+        initial_switch_fork_decision: SwitchForkDecision,
+        slot_history: *const SlotHistory,
+    ) !CandidateVoteAndResetSlots {
+        // If our last vote is unable to land (even through normal refresh), then we
+        // temporarily "super" refresh our vote to the tip of our last voted fork.
+        const can_land_last_vote = if (heaviest_slot_on_same_voted_fork) |slot|
+            self.lastVoteAbleToLand(
+                slot,
+                progress,
+                slot_history,
+            )
+        else
+            // No reset slot means we are in the middle of dump & repair. Last vote
+            // landing is irrelevant. So set to true to not trigger a super refresh below,
+            // and to keep the initial switch fork decision and only record the failure.
+            true;
+
+        const final_switch_fork_decision = if (!can_land_last_vote) blk: {
+            // Decision rationale:
+            // 1. We can't switch due to threshold constraints
+            // 2. Our last vote is now outside the slot hashes history of the fork's tip
+            //    (no possibility of this vote landing again)
+            //
+            // Action: Obey threshold while trying to register our vote on the current fork.
+            // Voting at the tip of the current fork won't cause longer lockout
+            // (lockout doesn't double after 512 slots) and might help achieve majority.
+            break :blk SwitchForkDecision.same_fork;
+        } else blk: {
+            // Record the failed switch attempt with details
+            const failure_detail = HeaviestForkFailures{
+                .FailedSwitchThreshold = .{
+                    .slot = heaviest_slot,
+                    .observed_stake = switch_proof_stake,
+                    .total_stake = total_stake,
+                },
+            };
+            try failure_reasons.append(allocator, failure_detail);
+            break :blk initial_switch_fork_decision;
+        };
+
+        const candidate_vote_slot = if (final_switch_fork_decision.canVote())
+            // We need to "super" refresh our vote to the tip of our last voted fork
+            // because our last vote is unable to land. This is inferred by
+            // initially determining we can't vote but then determining we can vote
+            // on the same fork.
+            heaviest_slot_on_same_voted_fork
+        else
+            // Return original vote candidate for logging purposes (can't actually vote)
+            heaviest_slot;
+
+        return CandidateVoteAndResetSlots{
+            .candidate_vote_slot = if (candidate_vote_slot) |slot| slot else null,
+            .reset_slot = if (heaviest_slot_on_same_voted_fork) |slot| slot else null,
+            .switch_fork_decision = final_switch_fork_decision,
+        };
+    }
+
+    /// Selects appropriate banks for voting and reset based on fork decision
+    pub fn selectCandidateVoteAndResetBanks(
+        self: *const ReplayTower,
+        allocator: std.mem.Allocator,
+        heaviest_slot: Slot,
+        heaviest_slot_on_same_voted_fork: ?Slot,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        initial_switch_fork_decision: SwitchForkDecision,
+        slot_history: *const SlotHistory,
+    ) !CandidateVoteAndResetSlots {
+        return switch (initial_switch_fork_decision) {
+            .failed_switch_threshold => |failed_switch_threshold| try self
+                .selectCandidatesFailedSwitch(
+                allocator,
+                heaviest_slot,
+                heaviest_slot_on_same_voted_fork,
+                progress,
+                failure_reasons,
+                failed_switch_threshold.switch_proof_stake,
+                failed_switch_threshold.total_stake,
+                initial_switch_fork_decision,
+                slot_history,
+            ),
+            .failed_switch_duplicate_rollback => |latest_duplicate_ancestor| blk: {
+                break :blk try selectCandidatesFailedSwitchDuplicateRollback(
+                    allocator,
+                    latest_duplicate_ancestor,
+                    failure_reasons,
+                    initial_switch_fork_decision,
+                );
+            },
+            .same_fork, .switch_proof => blk: {
+                break :blk CandidateVoteAndResetSlots{
+                    .candidate_vote_slot = heaviest_slot,
+                    .reset_slot = heaviest_slot,
+                    .switch_fork_decision = initial_switch_fork_decision,
+                };
+            },
+        };
+    }
+
+    /// Checks for all possible reasons we might not be able to vote on the candidate
+    /// bank. Records any failure reasons, and doesn't early return so we can be sure
+    /// to record all possible reasons.
+    pub fn canVoteOnCandidateSlot(
+        self: *const ReplayTower,
+        allocator: std.mem.Allocator,
+        candidate_vote_bank_slot: Slot,
+        progress: *const ProgressMap,
+        failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+        switch_fork_decision: *const SwitchForkDecision,
+    ) !bool {
+        const fork_stats = progress.getForkStats(candidate_vote_bank_slot) orelse
+            return error.ForkStatsNotFound;
+
+        const fork_progress = progress.map.get(candidate_vote_bank_slot) orelse
+            return error.PropagatedStatsNotFound;
+
+        const propagated_stats = fork_progress.propagated_stats;
+
+        const is_locked_out = fork_stats.is_locked_out;
+        const vote_thresholds = &fork_stats.vote_threshold;
+        const propagated_stake = propagated_stats.propagated_validators_stake;
+        const is_leader_slot = propagated_stats.is_leader_slot;
+        const fork_weight = fork_stats.forkWeight();
+        const total_threshold_stake = fork_stats.total_stake;
+        const total_epoch_stake = propagated_stats.total_epoch_stake;
+
+        // Check if we are locked out
+        if (is_locked_out) {
+            try failure_reasons.append(
+                allocator,
+                .{ .LockedOut = candidate_vote_bank_slot },
+            );
+        }
+
+        // Check vote thresholds
+        var threshold_passed = true;
+        for (vote_thresholds.items) |threshold_failure| {
+            if (threshold_failure != .failed_threshold) continue;
+
+            const vote_depth = threshold_failure.failed_threshold.vote_depth;
+            const fork_stake = threshold_failure.failed_threshold.observed_stake;
+            try failure_reasons.append(allocator, .{ .FailedThreshold = .{
+                .slot = candidate_vote_bank_slot,
+                .vote_depth = vote_depth,
+                .observed_stake = fork_stake,
+                .total_stake = total_threshold_stake,
+            } });
+
+            // Ignore shallow checks for voting purposes
+            if (vote_depth >= self.threshold_depth) {
+                threshold_passed = false;
+            }
+        }
+
+        // Check leader slot propagation
+        const propagation_confirmed = is_leader_slot or
+            (try progress.getLeaderPropagationSlotMustExist(candidate_vote_bank_slot))[0];
+        if (!propagation_confirmed) {
+            try failure_reasons.append(allocator, .{ .NoPropagatedConfirmation = .{
+                .slot = candidate_vote_bank_slot,
+                .observed_stake = propagated_stake,
+                .total_stake = total_epoch_stake,
+            } });
+        }
+
+        // Final decision
+        const can_vote = !is_locked_out and
+            threshold_passed and
+            propagation_confirmed and
+            switch_fork_decision.canVote();
+
+        if (can_vote) {
+            self.logger.info().logf(
+                "voting: {d} {d:.1}%",
+                .{ candidate_vote_bank_slot, 100.0 * fork_weight },
+            );
+        }
+
+        return can_vote;
+    }
+
+    /// Selects banks for voting and reset based on fork selection rules.
+    /// Returns a result containing:
+    /// - Optional slot to vote on (with decision)
+    /// - Optional slot to reset PoH to
+    /// - List of any fork selection failures
+    pub fn selectVoteAndResetForks(
+        self: *ReplayTower,
+        allocator: std.mem.Allocator,
+        heaviest_slot: Slot,
+        heaviest_slot_on_same_voted_fork: ?Slot,
+        heaviest_epoch: Epoch,
+        ancestors: *const AutoHashMapUnmanaged(u64, SortedSet(u64)),
+        descendants: *const AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
+        progress: *const ProgressMap,
+        latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
+        fork_choice: *const HeaviestSubtreeForkChoice,
+        epoch_stakes: EpochStakeMap,
+        slot_history: *const SlotHistory,
+    ) !SelectVoteAndResetForkResult {
+        // Initialize result with failure list
+        var failure_reasons = try std.ArrayListUnmanaged(HeaviestForkFailures).initCapacity(
+            allocator,
+            0,
+        );
+
+        const epoch_stake = epoch_stakes.get(heaviest_epoch) orelse return error.StakeNotFound;
+        // Check switch threshold conditions
+        const initial_decision = try self.checkSwitchThreshold(
+            allocator,
+            heaviest_slot,
+            ancestors,
+            descendants,
+            progress,
+            epoch_stake.total_stake,
+            &epoch_stake.stakes.vote_accounts.accounts,
+            latest_validator_votes_for_frozen_banks,
+            fork_choice,
+        );
+
+        // Select candidate slots
+        const candidate_slots = try self.selectCandidateVoteAndResetBanks(
+            allocator,
+            heaviest_slot,
+            heaviest_slot_on_same_voted_fork,
+            progress,
+            &failure_reasons,
+            initial_decision,
+            slot_history,
+        );
+
+        // Handle no viable candidate case
+        const candidate_vote_slot = candidate_slots.candidate_vote_slot orelse {
+            return SelectVoteAndResetForkResult{
+                .vote_slot = null,
+                .reset_slot = candidate_slots.reset_slot.?,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        };
+
+        if (try self.canVoteOnCandidateSlot(
+            allocator,
+            candidate_vote_slot,
+            progress,
+            &failure_reasons,
+            &candidate_slots.switch_fork_decision,
+        )) {
+            return SelectVoteAndResetForkResult{
+                .vote_slot = .{
+                    .slot = candidate_vote_slot,
+                    .decision = candidate_slots.switch_fork_decision,
+                },
+                .reset_slot = candidate_vote_slot,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        } else {
+            // Unable to vote on the candidate bank.
+            return SelectVoteAndResetForkResult{
+                .vote_slot = null,
+                .reset_slot = if (candidate_slots.reset_slot) |slot| slot else null,
+                .heaviest_fork_failures = failure_reasons,
+            };
+        }
+    }
 };
 
 const BlockhashStatus = union(enum) {
@@ -1041,12 +1412,46 @@ const SwitchForkDecision = union(enum) {
     same_fork,
     failed_switch_threshold: struct {
         /// Switch proof stake
-        Slot,
+        switch_proof_stake: u64,
         /// Total stake
-        Slot,
+        total_stake: u64,
     },
     failed_switch_duplicate_rollback: Slot,
+
+    pub fn canVote(self: *const SwitchForkDecision) bool {
+        return switch (self.*) {
+            .failed_switch_threshold => false,
+            .failed_switch_duplicate_rollback => false,
+            .same_fork => true,
+            .switch_proof => true,
+        };
+    }
 };
+
+/// Handles fork selection when switch fails due to duplicate rollback
+pub fn selectCandidatesFailedSwitchDuplicateRollback(
+    allocator: std.mem.Allocator,
+    heaviest_slot: Slot,
+    failure_reasons: *std.ArrayListUnmanaged(HeaviestForkFailures),
+    initial_switch_fork_decision: SwitchForkDecision,
+) !CandidateVoteAndResetSlots {
+    // If we can't switch and our last vote was on an unconfirmed duplicate slot,
+    // we reset to the heaviest bank (even if not descendant of last vote)
+    try failure_reasons.append(allocator, .{
+        .FailedSwitchThreshold = .{
+            .slot = heaviest_slot,
+            .observed_stake = 0,
+            .total_stake = 0,
+        },
+    });
+
+    const reset_slot: ?Slot = heaviest_slot;
+    return CandidateVoteAndResetSlots{
+        .candidate_vote_slot = null,
+        .reset_slot = reset_slot,
+        .switch_fork_decision = initial_switch_fork_decision,
+    };
+}
 
 /// Returns `Some(gca)` where `gca` is the greatest (by slot number)
 /// common ancestor of both `slot_a` and `slot_b`.
@@ -2611,6 +3016,344 @@ test "greatestCommonAncestor" {
     }
 }
 
+test "selectVoteAndResetForks stake not found" {
+    const allocator = std.testing.allocator;
+    const fork_tuples = sig.consensus.fork_choice.fork_tuples;
+
+    var fork_choice = try sig.consensus.fork_choice.forkChoiceForTest(
+        allocator,
+        fork_tuples[0..],
+    );
+    defer fork_choice.deinit();
+
+    var tower = try createTestReplayTower(allocator, 8, 0.66);
+    defer tower.deinit(allocator);
+
+    const latest = LatestValidatorVotesForFrozenBanks{
+        .max_gossip_frozen_votes = .{},
+    };
+
+    var slot_history = try createTestSlotHistory(std.testing.allocator);
+    defer slot_history.deinit(allocator);
+
+    try std.testing.expectError(
+        error.StakeNotFound,
+        tower.selectVoteAndResetForks(
+            std.testing.allocator,
+            100,
+            null,
+            100,
+            &.{},
+            &.{},
+            &ProgressMap.INIT,
+            &latest,
+            &fork_choice,
+            .{},
+            &slot_history,
+        ),
+    );
+}
+
+const TreeNode = sig.consensus.fork_choice.TreeNode;
+const ForkStats = sig.consensus.progress_map.ForkStats;
+const ForkProgress = sig.consensus.progress_map.ForkProgress;
+const EpochStakes = sig.core.stake.EpochStakes;
+const Stakes = sig.core.stake.Stakes;
+const splitOff = sig.consensus.fork_choice.splitOff;
+
+test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    const root = SlotAndHash{ .slot = 0, .hash = Hash.initRandom(random) };
+
+    const hash4 = SlotAndHash{ .slot = 4, .hash = Hash.initRandom(random) };
+    const hash3 = SlotAndHash{ .slot = 3, .hash = Hash.initRandom(random) };
+    const hash2 = SlotAndHash{ .slot = 2, .hash = Hash.initRandom(random) };
+    const hash5 = SlotAndHash{ .slot = 5, .hash = Hash.initRandom(random) };
+    const hash1 = SlotAndHash{ .slot = 1, .hash = Hash.initRandom(random) };
+
+    const hash6 = SlotAndHash{ .slot = 6, .hash = Hash.initRandom(random) };
+    const hash7 = SlotAndHash{ .slot = 7, .hash = Hash.initRandom(random) };
+    const hash8 = SlotAndHash{ .slot = 8, .hash = Hash.initRandom(random) };
+    const hash9 = SlotAndHash{ .slot = 9, .hash = Hash.initRandom(random) };
+    const hash10 = SlotAndHash{ .slot = 10, .hash = Hash.initRandom(random) };
+
+    var fixture = try TestFixture.init(allocator, root);
+    defer fixture.deinit(allocator);
+
+    var fp = try ForkProgress.zeroes(allocator);
+    defer fp.deinit(allocator);
+    fp.fork_stats.computed = true;
+    try fixture.progress.map.put(allocator, 0, fp);
+
+    // Build fork structure:
+    //
+    //      slot 0
+    //        |
+    //      slot 1
+    //      /    \
+    // slot 2    |
+    //    |      |
+    // slot 3    |
+    //    |      |
+    // slot 4    |
+    //         slot 5
+
+    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    trees1.appendSliceAssumeCapacity(&[5]TreeNode{
+        .{ hash1, root },
+        .{ hash5, hash1 },
+        .{ hash2, hash1 },
+        .{ hash3, hash2 },
+        .{ hash4, hash3 },
+    });
+
+    try fixture.fill_fork(allocator, .{ .root = root, .data = trees1 });
+    try fixture.fill_epoch_stake_random(allocator, random);
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    // the directory into which the snapshots will be unpacked and copied to.
+    var unpacked_snap_dir = try tmp_dir.makeOpenPath("snapshot", .{});
+    defer unpacked_snap_dir.close();
+
+    var accountsdb = try sig.accounts_db.AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = .noop,
+        .snapshot_dir = unpacked_snap_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = .ram,
+        .number_of_index_shards = 1,
+    });
+    defer accountsdb.deinit();
+
+    var replay_tower = try ReplayTower.init(
+        allocator,
+        .noop,
+        Pubkey.ZEROES,
+        Pubkey.ZEROES,
+        root.slot,
+        &accountsdb,
+    );
+    defer replay_tower.deinit(allocator);
+
+    var ancestors: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    defer ancestors.deinit(allocator);
+    for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
+        try ancestors.put(allocator, key, value);
+    }
+    const descendants = fixture.descendants;
+    const bits = try DynamicArrayBitSet(u64).initEmpty(allocator, 10);
+    defer bits.deinit(allocator);
+
+    const forks1 = try fixture.select_fork_slots(&replay_tower);
+    const result = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        forks1.heaviest,
+        forks1.heaviest_on_same_fork,
+        0, // heaviest_epoch
+        &ancestors,
+        &descendants,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        fixture.epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
+    try std.testing.expectEqual(4, result.reset_slot.?);
+    try std.testing.expectEqual(4, result.vote_slot.?.slot);
+    try std.testing.expectEqual(.same_fork, result.vote_slot.?.decision);
+    try std.testing.expectEqual(0, result.heaviest_fork_failures.items.len);
+
+    // Record the vote for 5 which is not on the heaviest fork.
+    _ = try replay_tower.recordBankVote(allocator, hash5.slot, hash5.hash);
+    const forks2 = try fixture.select_fork_slots(&replay_tower);
+    var result2 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        forks2.heaviest,
+        forks2.heaviest_on_same_fork,
+        0, // heaviest_epoch
+        &ancestors,
+        &descendants,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        fixture.epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
+
+    defer {
+        result2.heaviest_fork_failures.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(null, result2.vote_slot);
+    try std.testing.expectEqual(5, result2.reset_slot);
+
+    // TODO: IN Agave this state update is done in ReplayStage::compute_bank_stats
+    fixture.update_fork_stat_lockout(4, true);
+
+    const forks3 = try fixture.select_fork_slots(&replay_tower);
+    var result3 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        forks3.heaviest,
+        forks3.heaviest_on_same_fork,
+        0, // heaviest_epoch
+        &ancestors,
+        &descendants,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        fixture.epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
+
+    defer {
+        result3.heaviest_fork_failures.deinit(allocator);
+    }
+
+    try std.testing.expect(result3.heaviest_fork_failures.items.len == 2);
+
+    switch (result3.heaviest_fork_failures.items[0]) {
+        .FailedSwitchThreshold => |data| {
+            try std.testing.expectEqual(4, data.slot);
+            try std.testing.expectEqual(0, data.observed_stake);
+            try std.testing.expectEqual(1000, data.total_stake);
+        },
+        else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+    }
+
+    // Check second item is LockedOut with expected value
+    switch (result3.heaviest_fork_failures.items[1]) {
+        .LockedOut => |slot| {
+            try std.testing.expectEqual(4, slot);
+        },
+        else => try std.testing.expect(false), // Fail if not LockedOut
+    }
+
+    // Continue building on 5
+    //
+    // Build fork structure:
+    //         slot 5
+    //           |
+    //         slot 6
+    //         /    \
+    //    slot 7     slot 10
+    //      |
+    //    slot 8
+    //      |
+    //    slot 9
+    var trees = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    trees.appendSliceAssumeCapacity(&[5]TreeNode{
+        .{ hash6, hash5 },
+        .{ hash7, hash6 },
+        .{ hash8, hash7 },
+        .{ hash9, hash8 },
+        .{ hash10, hash6 },
+    });
+
+    try fixture.fill_fork(allocator, .{ .root = hash5, .data = trees });
+
+    var ancestors2: AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    defer ancestors2.deinit(allocator);
+    for (fixture.ancestors.keys(), fixture.ancestors.values()) |key, value| {
+        try ancestors2.put(allocator, key, value);
+    }
+    const descendants2 = fixture.descendants;
+
+    // 4 is still the heaviest slot, but not votable because of lockout.
+    // 9 is the deepest slot from our last voted fork (5), so it is what we should
+    // reset to.
+    const forks4 = try fixture.select_fork_slots(&replay_tower);
+
+    var result4 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        forks4.heaviest,
+        forks4.heaviest_on_same_fork,
+        0, // heaviest_epoch
+        &ancestors2,
+        &descendants2,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        fixture.epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
+
+    defer {
+        result4.heaviest_fork_failures.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(null, result4.vote_slot);
+    try std.testing.expectEqual(9, result4.reset_slot);
+
+    switch (result4.heaviest_fork_failures.items[0]) {
+        .FailedSwitchThreshold => |data| {
+            try std.testing.expectEqual(4, data.slot);
+            try std.testing.expectEqual(0, data.observed_stake);
+            try std.testing.expectEqual(1000, data.total_stake);
+        },
+        else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+    }
+
+    // Check second item is LockedOut with expected value
+    switch (result4.heaviest_fork_failures.items[1]) {
+        .LockedOut => |slot| {
+            try std.testing.expectEqual(4, slot);
+        },
+        else => try std.testing.expect(false), // Fail if not LockedOut
+    }
+
+    try splitOff(allocator, &fixture.fork_choice, hash6);
+
+    const forks5 = try fixture.select_fork_slots(&replay_tower);
+
+    var result5 = try replay_tower.selectVoteAndResetForks(
+        allocator,
+        forks5.heaviest,
+        forks5.heaviest_on_same_fork,
+        0, // heaviest_epoch
+        &ancestors2,
+        &descendants2,
+        &fixture.progress,
+        &.{ .max_gossip_frozen_votes = .{} },
+        &fixture.fork_choice,
+        fixture.epoch_stake_map,
+        &SlotHistory{ .bits = bits, .next_slot = 0 },
+    );
+
+    defer {
+        result5.heaviest_fork_failures.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(null, result5.vote_slot);
+    try std.testing.expectEqual(5, result5.reset_slot);
+
+    switch (result5.heaviest_fork_failures.items[0]) {
+        .FailedSwitchThreshold => |data| {
+            try std.testing.expectEqual(4, data.slot);
+            try std.testing.expectEqual(0, data.observed_stake);
+            try std.testing.expectEqual(1000, data.total_stake);
+        },
+        else => try std.testing.expect(false), // Fail if not FailedSwitchThreshold
+    }
+
+    // Check second item is LockedOut with expected value
+    switch (result4.heaviest_fork_failures.items[1]) {
+        .LockedOut => |slot| {
+            try std.testing.expectEqual(4, slot);
+        },
+        else => try std.testing.expect(false), // Fail if not LockedOut
+    }
+}
+
+test "test tower sync from bank failed lockout" {}
+
 const builtin = @import("builtin");
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
@@ -2732,4 +3475,321 @@ fn createSet(allocator: std.mem.Allocator, slots: []const Slot) !SortedSet(Slot)
         try set.put(slot);
     }
     return set;
+}
+
+fn fillProgressMapForkStats(
+    allocator: std.mem.Allocator,
+    progress_map: *ProgressMap,
+    inputs: []struct { Slot, ForkStats },
+) !void {
+    for (inputs) |input| {
+        progress_map.map.put(allocator, input[0], input[1]);
+    }
+}
+
+const MAX_TEST_TREE_LEN = 100;
+const Tree = struct { root: SlotAndHash, data: std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
+const TestFixture = struct {
+    fork_choice: HeaviestSubtreeForkChoice,
+    ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
+    descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
+    progress: ProgressMap = ProgressMap.INIT,
+    epoch_stake_map: EpochStakeMap,
+
+    pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
+        return .{
+            .fork_choice = try HeaviestSubtreeForkChoice.init(allocator, .noop, root),
+            .epoch_stake_map = .{},
+        };
+    }
+
+    pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
+        self.fork_choice.deinit();
+        self.progress.map.deinit(allocator);
+
+        {
+            var it = self.epoch_stake_map.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.stakes.deinit(allocator);
+                entry.value_ptr.epoch_authorized_voters.deinit(allocator);
+            }
+            self.epoch_stake_map.deinit(allocator);
+        }
+
+        {
+            var it = self.descendants.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            self.descendants.deinit(allocator);
+        }
+        {
+            var it = self.ancestors.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            self.ancestors.deinit(allocator);
+        }
+    }
+
+    pub fn update_fork_stat_lockout(self: *TestFixture, slot: Slot, locked_out: bool) void {
+        // TODO: IN Agave this state update is done in ReplayStage::compute_bank_stats
+        self.progress.getForkStats(slot).?.is_locked_out = locked_out;
+    }
+
+    pub fn select_fork_slots(self: *const TestFixture, replay_tower: *const ReplayTower) !struct {
+        heaviest: Slot,
+        heaviest_on_same_fork: ?Slot,
+    } {
+        const heaviest_on_same_fork =
+            (try self.fork_choice.heaviestSlotOnSameVotedFork(replay_tower)) orelse null;
+
+        return .{
+            .heaviest = self.fork_choice.heaviestOverallSlot().slot,
+            .heaviest_on_same_fork = if (heaviest_on_same_fork == null)
+                null
+            else
+                heaviest_on_same_fork.?.slot,
+        };
+    }
+
+    pub fn fill_fork(
+        self: *TestFixture,
+        allocator: std.mem.Allocator,
+        input_tree: Tree,
+    ) !void {
+        // TODO check that root fork exist already and it is being extended
+        for (input_tree.data.constSlice()) |tree| {
+            // Populate forkchoice
+            try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
+            // Populate progress map
+            var fp = try ForkProgress.zeroes(allocator);
+            defer fp.deinit(allocator);
+            fp.fork_stats.computed = true;
+            fp.fork_stats.my_latest_landed_vote = null;
+            _ = try self.progress.map.getOrPutValue(
+                allocator,
+                tree[0].slot,
+                fp,
+            );
+        }
+
+        try self.descendants.ensureTotalCapacity(allocator, input_tree.data.len);
+        try self.ancestors.ensureTotalCapacity(allocator, input_tree.data.len);
+        // Populate ancenstors
+        var extended_ancestors = try getAncestors(allocator, input_tree);
+        defer {
+            var it = extended_ancestors.iterator();
+            while (it.next()) |child| {
+                child.value_ptr.deinit();
+            }
+            extended_ancestors.deinit(allocator);
+        }
+        try extendForkTree(allocator, &self.ancestors, extended_ancestors);
+
+        // Populate decendants
+        var extended_descendants = try getDescendants(allocator, input_tree);
+        defer {
+            var it = extended_descendants.iterator();
+            while (it.next()) |child| {
+                child.value_ptr.deinit();
+            }
+            extended_descendants.deinit(allocator);
+        }
+        try extendForkTree(allocator, &self.descendants, extended_descendants);
+    }
+
+    pub fn fill_epoch_stake_random(
+        self: *TestFixture,
+        allocator: std.mem.Allocator,
+        random: std.Random,
+    ) !void {
+        var epoch_stakes: EpochStakes = try EpochStakes.initRandom(
+            allocator,
+            random,
+            1,
+        );
+        epoch_stakes.total_stake = 1000;
+        epoch_stakes.stakes.deinit(allocator);
+        epoch_stakes.stakes = try Stakes(.delegation).initRandom(
+            allocator,
+            random,
+            1,
+        );
+
+        // Always resest for now.
+        self.epoch_stake_map = .{};
+        try self.epoch_stake_map.put(allocator, 0, epoch_stakes);
+    }
+};
+
+fn getDescendants(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapUnmanaged(
+    Slot,
+    SortedSet(Slot),
+) {
+    if (!builtin.is_test) {
+        @compileError("getDescendants should only be used in test");
+    }
+    var descendants = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
+
+    var children_map = std.AutoHashMap(Slot, std.ArrayList(Slot)).init(allocator);
+    defer {
+        var it = children_map.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        children_map.deinit();
+    }
+
+    try children_map.put(tree.root.slot, std.ArrayList(Slot).init(allocator));
+    for (tree.data.constSlice()) |node| {
+        try children_map.put(node[0].slot, std.ArrayList(Slot).init(allocator));
+        if (node[1]) |parent| {
+            try children_map.put(parent.slot, std.ArrayList(Slot).init(allocator));
+        }
+    }
+
+    for (tree.data.constSlice()) |node| {
+        if (node[1]) |parent| {
+            try children_map.getPtr(parent.slot).?.append(node[0].slot);
+        }
+    }
+
+    var visited = std.AutoHashMap(Slot, void).init(allocator);
+    defer visited.deinit();
+
+    var stack = std.ArrayList(struct { slot: Slot, processed: bool }).init(allocator);
+    defer stack.deinit();
+
+    try stack.append(.{ .slot = tree.root.slot, .processed = false });
+
+    while (stack.items.len > 0) {
+        var current = &stack.items[stack.items.len - 1];
+        if (current.processed) {
+            _ = stack.pop();
+
+            var descendant_list = SortedSet(Slot).init(allocator);
+
+            if (children_map.get(current.slot)) |children| {
+                for (children.items) |item| {
+                    try descendant_list.put(item);
+                }
+
+                for (children.items) |child| {
+                    if (descendants.get(child)) |child_descendants| {
+                        var cd = child_descendants;
+                        for (cd.items()) |item| {
+                            try descendant_list.put(item);
+                        }
+                    }
+                }
+            }
+
+            try descendants.put(allocator, current.slot, descendant_list);
+        } else {
+            if (visited.contains(current.slot)) {
+                _ = stack.pop();
+                continue;
+            }
+            try visited.put(current.slot, {});
+
+            current.processed = true;
+
+            if (children_map.get(current.slot)) |children| {
+                var i = children.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(.{ .slot = children.items[i], .processed = false });
+                }
+            }
+        }
+    }
+
+    return descendants;
+}
+
+fn getAncestors(allocator: std.mem.Allocator, tree: Tree) !std.AutoArrayHashMapUnmanaged(
+    Slot,
+    SortedSet(Slot),
+) {
+    if (!builtin.is_test) {
+        @compileError("getAncestors should only be used in test");
+    }
+    var ancestors = std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)){};
+
+    const root_list = SortedSet(Slot).init(allocator);
+    try ancestors.put(allocator, tree.root.slot, root_list);
+
+    var parent_map = std.AutoHashMap(Slot, Slot).init(allocator);
+    defer parent_map.deinit();
+
+    for (tree.data.constSlice()) |node| {
+        const child = node[0];
+        if (node[1]) |parent| {
+            try parent_map.put(child.slot, parent.slot);
+        }
+    }
+
+    var visited = std.AutoHashMap(Slot, void).init(allocator);
+    defer visited.deinit();
+
+    var queue = std.ArrayList(Slot).init(allocator);
+    defer queue.deinit();
+    try queue.append(tree.root.slot);
+    try visited.put(tree.root.slot, {});
+
+    while (queue.items.len > 0) {
+        const current = queue.orderedRemove(0);
+
+        for (tree.data.constSlice()) |node| {
+            if (node[1]) |parent| {
+                if (parent.slot == current) {
+                    const child = node[0];
+                    if (!visited.contains(child.slot)) {
+                        try queue.append(child.slot);
+                        try visited.put(child.slot, {});
+
+                        var child_ancestors = SortedSet(Slot).init(allocator);
+                        try child_ancestors.put(current);
+
+                        if (ancestors.get(current)) |parent_ancestors| {
+                            var pa = parent_ancestors;
+                            for (pa.items()) |item| {
+                                try child_ancestors.put(item);
+                            }
+                        }
+
+                        try ancestors.put(allocator, child.slot, child_ancestors);
+                    }
+                }
+            }
+        }
+    }
+
+    return ancestors;
+}
+
+pub fn extendForkTree(
+    allocator: std.mem.Allocator,
+    original: *std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+    extension: std.AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)),
+) !void {
+    if (!builtin.is_test) {
+        @compileError("extendForkTree should only be used in test");
+    }
+    if (extension.count() == 0) {
+        return;
+    }
+
+    for (extension.keys(), extension.values()) |slot, e_children| {
+        var extension_children = e_children;
+        var original_children = original.getPtr(slot) orelse {
+            try original.put(allocator, slot, try extension_children.clone());
+            continue;
+        };
+
+        for (extension_children.items()) |extension_child| {
+            try original_children.put(extension_child);
+        }
+    }
 }

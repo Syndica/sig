@@ -7,6 +7,8 @@ const Pubkey = sig.core.Pubkey;
 
 pub const LockableAccount = struct { address: Pubkey, writable: bool };
 
+/// Only interact with this struct using its public methods. Directly mutating
+/// the fields may result in undefined behavior.
 pub const AccountLocks = struct {
     write_locks: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .{},
     readonly_locks: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .{},
@@ -102,44 +104,28 @@ pub const AccountLocks = struct {
         var already_unlocked: u64 = 0;
         for (accounts) |account| {
             const locks = if (account.writable) &self.write_locks else &self.readonly_locks;
-            already_unlocked += unlockOneGeneric(locks, account.address);
+
+            const index = locks.getIndex(account.address) orelse {
+                already_unlocked += 1;
+                continue;
+            };
+            const value = &locks.entries.slice().items(.value)[index];
+
+            if (value.* == 0) {
+                // This is not reachable because the next line of code will
+                // remove the item before this number would ever reach zero.
+                // This line could only be reached if the functions in this
+                // struct are edited to introduce a bug, or if the map's
+                // internal state is otherwise mutated into a corrupted state.
+                unreachable;
+            } else if (value.* == 1) {
+                locks.swapRemoveAt(index);
+            } else {
+                value.* -= 1;
+            }
         }
+
         return already_unlocked;
-    }
-
-    /// assumes that
-    fn lockOneGeneric(
-        allocator: Allocator,
-        locks: *std.AutoArrayHashMapUnmanaged(Pubkey, u64),
-        address: Pubkey,
-    ) u64 {
-        const entry = try locks.getOrPut(allocator, address);
-        if (entry.found_existing) {
-            entry.value_ptr.* = 1;
-        } else {
-            entry.value_ptr.* += 1;
-        }
-    }
-
-    /// returns 0 if it was still locked, 1 if it was already unlocked.
-    fn unlockOneGeneric(locks: *std.AutoArrayHashMapUnmanaged(Pubkey, u64), address: Pubkey) u64 {
-        const index = locks.getIndex(address) orelse {
-            return 1;
-        };
-
-        const value = &locks.entries.slice().items(.value)[index];
-        if (value.* == 0) {
-            // this means there is an internal bug within the unlock
-            // method, since the next block here should remove the item
-            // before this number would ever reach zero.
-            unreachable;
-        } else if (value.* == 1) {
-            locks.swapRemoveAt(index);
-        } else {
-            value.* -= 1;
-        }
-
-        return 0;
     }
 };
 
@@ -157,7 +143,7 @@ const test_keys = [_]Pubkey{
     Pubkey.parseBase58String("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA") catch unreachable,
 };
 
-test "locking/unlocking basically works" {
+test "lockStrict + lockPermissive + unlock: simple happy paths and failure modes" {
     const allocator = std.testing.allocator;
     var locks = AccountLocks{};
     defer locks.deinit(allocator);
