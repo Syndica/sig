@@ -426,6 +426,7 @@ pub fn Proof(bit_size: comptime_int) type {
 
             const check: Ristretto255 = .{ .p = pippenger.mulMulti(
                 max,
+                true,
                 points.constSlice(),
                 scalars.constSlice(),
             ) };
