@@ -491,11 +491,9 @@ pub const CachedPoint = struct {
 
     pub fn fromExtended(fe: ExtendedPoint) CachedPoint {
         var x = fe;
-
         x = x.blend(x.diffSum(), .AB);
         x = x.reduce().mulConstants(.{ 121666, 121666, 2 * 121666, 2 * 121665 });
         x = x.blend(x.negateLazy(), .D);
-
         return x.reduce();
     }
 };
