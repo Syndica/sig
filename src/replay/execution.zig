@@ -32,8 +32,8 @@ pub const ReplayExecutionState = struct {
     accounts_db: *AccountsDB,
     thread_pool: *ThreadPool,
     blockstore_reader: *BlockstoreReader,
-    slot_tracker: SlotTracker,
-    epochs: EpochTracker,
+    slot_tracker: *SlotTracker,
+    epochs: *EpochTracker,
     progress_map: ProgressMap,
 
     pub fn init(
@@ -41,9 +41,10 @@ pub const ReplayExecutionState = struct {
         logger: sig.trace.Logger,
         my_identity: Pubkey,
         thread_pool: *ThreadPool,
-        epoch_schedule: core.EpochSchedule,
         accounts_db: *AccountsDB,
         blockstore_reader: *BlockstoreReader,
+        slot_tracker: *SlotTracker,
+        epochs: *EpochTracker,
     ) Allocator.Error!ReplayExecutionState {
         return .{
             .allocator = allocator,
@@ -53,8 +54,8 @@ pub const ReplayExecutionState = struct {
             .accounts_db = accounts_db,
             .thread_pool = thread_pool,
             .blockstore_reader = blockstore_reader,
-            .slot_tracker = .{},
-            .epochs = .{ .schedule = epoch_schedule },
+            .slot_tracker = slot_tracker,
+            .epochs = epochs,
             .progress_map = ProgressMap.INIT,
         };
     }

@@ -125,6 +125,14 @@ pub fn Mux(comptime T: type) type {
                 .valid = true,
             };
         }
+
+        /// Acquires the lock just long enough to shallow copy the item, and
+        /// returns the copy.
+        pub fn readCopy(self: *Self) T {
+            self.private.m.lock();
+            defer self.private.m.unlock();
+            return self.private.v;
+        }
     };
 }
 
@@ -270,10 +278,22 @@ pub fn RwMux(comptime T: type) type {
             return .{ t, lock_guard };
         }
 
+        /// Acquires the lock just long enough to shallow copy the item, and
+        /// returns the copy.
         pub fn readCopy(self: *Self) T {
             self.private.r.lockShared();
             defer self.private.r.unlockShared();
             return self.private.v;
+        }
+
+        /// Acquires the lock just long enough to clone the item using the
+        /// item's `clone` method, and returns the clone.
+        ///
+        /// Will not compile unless T.clone(T, Allocator) exists.
+        pub fn readClone(self: *Self, allocator: std.mem.Allocator) !T {
+            self.private.r.lockShared();
+            defer self.private.r.unlockShared();
+            return self.private.v.clone(allocator);
         }
 
         pub fn writeWithLock(self: *Self) struct { Mutable(T), WLockGuard } {

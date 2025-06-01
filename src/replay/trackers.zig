@@ -21,7 +21,8 @@ const SlotState = sig.core.SlotState;
 /// This struct is *not* thread safe, and the lifetimes of the returned pointers
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
-    slots: std.AutoArrayHashMapUnmanaged(Slot, *Element) = .{},
+    slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
+    root: std.atomic.Value(Slot),
 
     const Element = struct {
         constants: SlotConstants,
@@ -32,6 +33,13 @@ pub const SlotTracker = struct {
         constants: *const SlotConstants,
         state: *SlotState,
     };
+
+    pub fn init(root_slot: Slot) SlotTracker {
+        return .{
+            .slots = .{},
+            .root = .init(root_slot),
+        };
+    }
 
     pub fn put(
         self: *SlotTracker,
@@ -53,6 +61,10 @@ pub const SlotTracker = struct {
         };
     }
 
+    pub fn contains(self: *const SlotTracker, slot: Slot) bool {
+        return self.slots.contains(slot);
+    }
+
     pub fn activeSlots(
         self: *const SlotTracker,
         allocator: Allocator,
@@ -65,6 +77,23 @@ pub const SlotTracker = struct {
             }
         }
         return try list.toOwnedSlice(allocator);
+    }
+
+    pub fn frozenSlots(
+        self: *const SlotTracker,
+        allocator: Allocator,
+    ) Allocator.Error!std.AutoArrayHashMapUnmanaged(Slot, Reference) {
+        var frozen_slots = std.AutoArrayHashMapUnmanaged(Slot, Reference).empty;
+        var iter = self.slots.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.*.state.isFrozen()) {
+                try frozen_slots.put(allocator, entry.key_ptr.*, .{
+                    .constants = &entry.value_ptr.*.constants,
+                    .state = &entry.value_ptr.*.state,
+                });
+            }
+        }
+        return frozen_slots;
     }
 };
 
@@ -79,5 +108,10 @@ pub const EpochTracker = struct {
 
     pub fn getForSlot(self: *const EpochTracker, slot: Slot) ?EpochConstants {
         return self.epochs.get(self.schedule.getEpoch(slot));
+    }
+
+    /// lifetime ends as soon as the map is modified
+    pub fn getPtrForSlot(self: *const EpochTracker, slot: Slot) ?*const EpochConstants {
+        return self.epochs.getPtr(self.schedule.getEpoch(slot));
     }
 };

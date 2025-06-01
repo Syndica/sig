@@ -1177,6 +1177,8 @@ fn validator(
             .blockstore_reader = blockstore_reader,
             .accounts_db = &loaded_snapshot.accounts_db,
             .epoch_schedule = bank_fields.epoch_schedule,
+            .slot_leaders = epoch_context_manager.slotLeaders(),
+            .root_slot = loaded_snapshot.collapsed_manifest.bank_fields.slot,
         }},
     );
 
