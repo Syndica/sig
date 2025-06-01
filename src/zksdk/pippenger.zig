@@ -5,7 +5,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const Ed25519 = std.crypto.ecc.Edwards25519;
-const Fe = Ed25519.Fe;
 const CompressedScalar = Ed25519.scalar.CompressedScalar;
 
 const ExtendedPoint = sig.crypto.ExtendedPoint;
