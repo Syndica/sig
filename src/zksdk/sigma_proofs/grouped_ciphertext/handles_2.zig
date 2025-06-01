@@ -61,8 +61,8 @@ pub const Proof = struct {
         transcript.appendDomSep("validity-proof");
         transcript.appendU64("handles", 2);
 
-        const P_first = first_pubkey.p;
-        const P_second = second_pubkey.p;
+        const P_first = first_pubkey.point;
+        const P_second = second_pubkey.point;
 
         const x: Scalar = switch (@TypeOf(amount)) {
             Scalar => amount,
@@ -74,8 +74,8 @@ pub const Proof = struct {
         var y_r = Scalar.random();
         var y_x = Scalar.random();
         defer {
-            std.crypto.utils.secureZero(u64, &y_r.limbs);
-            std.crypto.utils.secureZero(u64, &y_x.limbs);
+            std.crypto.secureZero(u64, &y_r.limbs);
+            std.crypto.secureZero(u64, &y_x.limbs);
         }
 
         const Y_0: Ristretto255 = .{ .p = weak_mul.mulMulti(
@@ -171,7 +171,7 @@ pub const Proof = struct {
         //      Y_0
 
         var second_pubkey_not_zero: bool = true;
-        if (params.second_pubkey.p.p.x.isZero()) {
+        if (params.second_pubkey.point.p.x.isZero()) {
             second_pubkey_not_zero = false;
 
             // if second_pubkey is zero, then second_handle, second_handle_hi, and Y_2
@@ -192,7 +192,7 @@ pub const Proof = struct {
             pedersen.H.p,
             self.Y_1.p,
             self.Y_2.p,
-            params.first_pubkey.p.p,
+            params.first_pubkey.point.p,
             params.commitment.point.p,
             params.first_handle.point.p,
         });
@@ -220,7 +220,7 @@ pub const Proof = struct {
 
         if (second_pubkey_not_zero) {
             try points.appendSlice(&.{
-                params.second_pubkey.p.p,
+                params.second_pubkey.point.p,
                 params.second_handle.point.p,
             });
             try scalars.appendSlice(&.{

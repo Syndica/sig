@@ -138,15 +138,15 @@ pub fn Proof(bit_size: comptime_int) type {
 
             for (amounts, bit_lengths) |amount, n| {
                 for (0..n) |j| {
-                    const G = G_gen.next();
-                    const H = H_gen.next();
+                    const G = G_gen.next().p;
+                    const H = H_gen.next().p;
 
-                    G_points.appendAssumeCapacity(G.p);
-                    H_points.appendAssumeCapacity(H.p);
+                    G_points.appendAssumeCapacity(G);
+                    H_points.appendAssumeCapacity(H);
 
                     // init functions aren't exposed, so doesn't need to be constant time.
                     const v = (amount >> @intCast(j)) & 0b1 != 0;
-                    const point = if (v) G.p else Edwards25519.neg(H.p);
+                    const point = if (v) G else H.neg();
                     A = A.add(.{ .p = point });
                 }
             }
@@ -159,18 +159,18 @@ pub fn Proof(bit_size: comptime_int) type {
                 l.* = Scalar.random().toBytes();
                 r.* = Scalar.random().toBytes();
             }
-            const s_blinding = Scalar.random().toBytes();
+            const s_blinding = Scalar.random();
 
             const S: Ristretto255 = .{ .p = Edwards25519.mulMulti(
                 1 + bit_size * 2,
                 .{pedersen.H.p} ++ G_points.buffer ++ H_points.buffer,
-                .{s_blinding} ++ s_L ++ s_R,
+                .{s_blinding.toBytes()} ++ s_L ++ s_R,
             ) catch unreachable };
 
             transcript.appendPoint("A", A);
             transcript.appendPoint("S", S);
 
-            // y and z are used to merge multiple inner product  relations into one inner product
+            // y and z are used to merge multiple inner product relations into one inner product
             const y = transcript.challengeScalar("y");
             const z = transcript.challengeScalar("z");
 
@@ -235,9 +235,7 @@ pub fn Proof(bit_size: comptime_int) type {
             transcript.appendScalar("t_x_blinding", t_x_blinding);
 
             // homomorphically compuate the openings for A + x*S
-            const e_blinding = Scalar.fromBytes(s_blinding).mul(x).add(a_blinding);
-            const l_vec = l_poly.eval(x);
-            const r_vec = r_poly.eval(x);
+            const e_blinding = s_blinding.mul(x).add(a_blinding);
             transcript.appendScalar("e_blinding", e_blinding);
 
             // compute the inner product argument on the commitment:
@@ -250,14 +248,16 @@ pub fn Proof(bit_size: comptime_int) type {
 
             _ = transcript.challengeScalar("c");
 
+            var l_vec = l_poly.eval(x);
+            var r_vec = r_poly.eval(x);
             const ipp_proof = InnerProductProof(bit_size).init(
                 .{ .p = Q },
-                G_factors,
-                H_factors,
-                G_points.buffer,
-                H_points.buffer,
-                l_vec,
-                r_vec,
+                &G_factors,
+                &H_factors,
+                &G_points.buffer,
+                &H_points.buffer,
+                &l_vec,
+                &r_vec,
                 transcript,
             );
 
@@ -317,34 +317,35 @@ pub fn Proof(bit_size: comptime_int) type {
 
             // (numbers use u128 as the example)
             //        points                scalars
-            //   0    G                     basepoint_scalar
-            //   1    H                     -(e_blinding + d * t_x_blinding)
-            //   2    S                     x
-            //   3    T_1                   d * x
-            //   4    T_2                   d * x * x
-            //   5    commitments[ 0 ]      c z^2
+            //   0    H                     -(e_blinding + d * t_x_blinding)
+            //   1    S                     x
+            //   2    T_1                   d * x
+            //   3    T_2                   d * x * x
+            //   4    commitments[ 0 ]      c z^2
             //        ...                   ...
-            //   8    commitments[ 3 ]      c z^6
-            //   9    L_vec[ 0 ]            x_sq[ 0 ]
+            //   9    commitments[ 3 ]      c z^6
+            //   8    L_vec[ 0 ]            x_sq[ 0 ]
             //        ...                   ...
-            //  15    L_vec[ 6 ]            x_sq[ 6 ]
-            //  16    R_vec[ 0 ]            x_sq_inv[ 0 ]
+            //  14    L_vec[ 6 ]            x_sq[ 6 ]
+            //  15    R_vec[ 0 ]            x_sq_inv[ 0 ]
             //        ...                   ...
-            //  22    R_vec[ 6 ]            x_sq_inv[ 6 ]
-            //  23    generators_H[ 0 ]     TODO
+            //  21    R_vec[ 6 ]            x_sq_inv[ 6 ]
+            //  22    generators_H[ 0 ]     TODO
             //        ...                   ...
-            // 150    generators_H[ 127 ]   TODO
-            // 151    generators_G[ 0 ]     (-a * s_0) + (-z)
+            // 149    generators_H[ 127 ]   TODO
+            // 150    generators_G[ 0 ]     (-a * s_0) + (-z)
             //        ...                   ...
-            // 278    generators_G[ 127 ]   (-a * s_127) + (-z)
+            // 277    generators_G[ 127 ]   (-a * s_127) + (-z)
+            // 278    G                     basepoint_scalar
             // ------------------------------------------------------ MSM
             //       -A
+            //
+            // basepoint_scalar depends on a bunch of values computed beforehand so it's added last
 
             var points: std.BoundedArray(Edwards25519, max) = .{};
             var scalars: std.BoundedArray([32]u8, max) = .{};
 
             points.appendSliceAssumeCapacity(&.{
-                pedersen.G.p,
                 pedersen.H.p,
                 self.S.p,
                 self.T_1.p,
@@ -401,7 +402,7 @@ pub fn Proof(bit_size: comptime_int) type {
                     z_and_2 = exp_z;
                 }
                 if (j != 0) z_and_2 = z_and_2.add(z_and_2);
-                exp_y_inv = exp_y_inv.mul(y.invert()); // NOTE
+                exp_y_inv = exp_y_inv.mul(y.invert());
                 const result = s[bit_size - 1 - i].mul(minus_b).add(z_and_2);
                 scalars.appendAssumeCapacity(result.mul(exp_y_inv).add(z).toBytes());
             }
@@ -420,12 +421,13 @@ pub fn Proof(bit_size: comptime_int) type {
             )).mul(d);
             const abw_tx = a_negated.mul(b).add(self.t_x).mul(w);
             const basepoint_scalar = delta_tx.add(abw_tx);
-            scalars.insert(0, basepoint_scalar.toBytes()) catch unreachable; // G
+            scalars.appendAssumeCapacity(basepoint_scalar.toBytes()); // G
+            points.appendAssumeCapacity(pedersen.G.p);
 
             const check: Ristretto255 = .{ .p = pippenger.mulMulti(
                 max,
-                scalars.constSlice(),
                 points.constSlice(),
+                scalars.constSlice(),
             ) };
 
             if (!check.equivalent(.{ .p = self.A.p.neg() })) {
@@ -704,9 +706,7 @@ pub const GeneratorsChain = struct {
 pub fn innerProduct(a: []const Scalar, b: []const Scalar) Scalar {
     std.debug.assert(a.len == b.len);
     var out = Scalar.fromBytes(Edwards25519.scalar.zero);
-    for (a, b) |c, d| {
-        out = out.add(c.mul(d));
-    }
+    for (a, b) |c, d| out = out.add(c.mul(d));
     return out;
 }
 

@@ -22,22 +22,22 @@ const Scalar = Edwards25519.scalar.Scalar;
 const pedersen = sig.zksdk.pedersen;
 
 pub const Pubkey = struct {
-    p: Ristretto255,
+    point: Ristretto255,
 
     /// Derives a `Pubkey` that uniquely relates to a `Secret`.
     pub fn fromSecret(secret: Keypair.Secret) Pubkey {
         const scalar = secret.scalar;
         std.debug.assert(!scalar.isZero());
         // unreachable because `H` is known to not be an identity and `scalar` cannot be zero.
-        return .{ .p = Ristretto255.mul(pedersen.H, scalar.invert().toBytes()) catch unreachable };
+        return .{ .point = Ristretto255.mul(pedersen.H, scalar.invert().toBytes()) catch unreachable };
     }
 
     pub fn fromBytes(bytes: [32]u8) !Pubkey {
-        return .{ .p = try Ristretto255.fromBytes(bytes) };
+        return .{ .point = try Ristretto255.fromBytes(bytes) };
     }
 
     pub fn toBytes(self: Pubkey) [32]u8 {
-        return self.p.toBytes();
+        return self.point.toBytes();
     }
 
     pub fn fromBase64(string: []const u8) !Pubkey {
@@ -73,9 +73,8 @@ pub const Keypair = struct {
     /// Generates a cryptographically secure random keypair.
     pub fn random() Keypair {
         var scalar = Scalar.random();
-        const keypair = Keypair.fromScalar(scalar);
-        std.crypto.utils.secureZero(u64, &scalar.limbs);
-        return keypair;
+        defer std.crypto.secureZero(u64, &scalar.limbs);
+        return Keypair.fromScalar(scalar);
     }
 };
 
@@ -175,57 +174,3 @@ pub fn GroupedElGamalCiphertext(comptime N: u64) type {
         }
     };
 }
-
-// TODO: don't have a need for the decryption side of twisted elgamal yet, might need it later?
-
-/// Represents the Discrete Log Problem needed to decrypt the twisted ElGamal ciphertext
-///
-/// Recovers x ∈ ℤₚ such that x · G = P.
-const DiscreteLog = struct {
-    generator: Ristretto255,
-    target: Ristretto255,
-    step_point: Ristretto255,
-    batch_size: u32,
-
-    /// Solves the discrete log problem under the assumption that the solution is a positive number
-    /// withing the range `0..max_bound`.
-    fn findRange(
-        dl: DiscreteLog,
-        comptime max_bound: u64,
-    ) ?std.math.IntFittingRange(0, max_bound) {
-        comptime std.debug.assert(max_bound <= std.math.maxInt(u32));
-        _ = dl;
-        @compileError("TODO");
-    }
-};
-
-/// Returns a representation of the discrete log problem necassary to solve the original scalar used
-/// to create the twisted ElGamal ciphertext.
-fn decrypt(secret: *const Keypair.Secret, ciphertext: *const Ciphertext) ?DiscreteLog {
-    const p = ciphertext.commitment.point.p;
-    // The handle point can never be zero, so this function cannot fail.
-    const c = ciphertext.handle.point.mul(secret.scalar.toBytes()) catch unreachable;
-    const target = p.sub(c.p);
-    return .{
-        .generator = pedersen.G,
-        .target = .{ .p = target },
-        .step_point = pedersen.G,
-        .batch_size = 32,
-    };
-}
-
-// test "encrypt decrypt" {
-//     const kp = Keypair.random();
-//     const amount: u32 = 57;
-
-//     const ciphertext = encrypt(u32, amount, &kp.public);
-
-//     const expected = try G.mul(scalarFromInt(u32, amount).toBytes());
-//     const result = try decrypt(&kp.secret, &ciphertext);
-
-//     try std.testing.expectEqualSlices(
-//         u8,
-//         &expected.toBytes(),
-//         &result.toBytes(),
-//     );
-// }

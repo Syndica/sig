@@ -263,7 +263,7 @@ pub const Transcript = struct {
         comptime label: []const u8,
         pubkey: sig.zksdk.ElGamalPubkey,
     ) void {
-        t.appendPoint(label, pubkey.p);
+        t.appendPoint(label, pubkey.point);
     }
 
     pub fn appendCiphertext(

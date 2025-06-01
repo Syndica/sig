@@ -23,18 +23,16 @@ pub const Proof = struct {
 
         const s = kp.secret.scalar;
         std.debug.assert(!s.isZero());
-        const s_inv = s.invert();
 
         var y = Scalar.random();
-        defer std.crypto.utils.secureZero(u64, &y.limbs);
+        defer std.crypto.secureZero(u64, &y.limbs);
 
         // Scalar.random() cannot return zero, and H isn't an identity
         const Y = pedersen.H.mul(y.toBytes()) catch unreachable;
-
         transcript.appendPoint("Y", Y);
-        const c = transcript.challengeScalar("c");
 
-        const z = c.mul(s_inv).add(y);
+        const c = transcript.challengeScalar("c");
+        const z = c.mul(s.invert()).add(y);
 
         return .{
             .Y = Y,
@@ -60,7 +58,7 @@ pub const Proof = struct {
 
         const check = weak_mul.mulMulti(2, .{
             pedersen.H.p,
-            pubkey.p.p,
+            pubkey.point.p,
         }, .{
             self.z.toBytes(),
             Edwards25519.scalar.neg(c.toBytes()),
@@ -127,10 +125,7 @@ pub const Data = struct {
     pub fn init(kp: *const ElGamalKeypair) Data {
         const context: Context = .{ .pubkey = kp.public };
         var transcript = context.newTranscript();
-        const proof = Proof.init(
-            kp,
-            &transcript,
-        );
+        const proof = Proof.init(kp, &transcript);
         return .{ .context = context, .proof = proof };
     }
 
@@ -169,6 +164,21 @@ test "correctness" {
 
     const proof = Proof.init(&kp, &prover_transcript);
     try proof.verify(&kp.public, &verifier_transcript);
+}
+
+test "incorrect pubkey" {
+    const kp = ElGamalKeypair.random();
+    const incorrect_kp = ElGamalKeypair.random();
+
+    var prover_transcript = Transcript.init("test");
+    var verifier_transcript = Transcript.init("test");
+
+    const proof = Proof.init(&kp, &prover_transcript);
+
+    try std.testing.expectError(
+        error.AlgebraicRelation,
+        proof.verify(&incorrect_kp.public, &verifier_transcript),
+    );
 }
 
 test "proof string" {

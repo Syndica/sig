@@ -10,14 +10,10 @@ const CompressedScalar = Ed25519.scalar.CompressedScalar;
 const ExtendedPoint = sig.crypto.ExtendedPoint;
 const CachedPoint = sig.crypto.CachedPoint;
 
-const u32x8 = @Vector(8, u32);
-const i32x8 = @Vector(8, i32);
-const u64x4 = @Vector(4, u64);
-
 pub fn mulMulti(
     comptime max_elements: comptime_int,
-    compressed_scalars: []const CompressedScalar,
     ed_points: []const Ed25519,
+    compressed_scalars: []const CompressedScalar,
 ) Ed25519 {
     std.debug.assert(compressed_scalars.len == ed_points.len);
     std.debug.assert(compressed_scalars.len <= max_elements);
@@ -30,8 +26,12 @@ pub fn mulMulti(
         8;
 
     const max_digit = @as(u64, 1) << w;
-    const digits_count = radixSizeHint(w);
     const buckets_count = max_digit / 2;
+    const digits_count = (@as(u64, 256) + w - 1) / switch (w) {
+        4...7 => w,
+        8 => w + 1,
+        else => unreachable,
+    };
 
     var scalars: std.BoundedArray([64]i8, max_elements) = .{};
     var points: std.BoundedArray(CachedPoint, max_elements) = .{};
@@ -51,8 +51,7 @@ pub fn mulMulti(
         @memset(&buckets, .identityElement);
 
         for (scalars.constSlice(), points.constSlice()) |digits, pt| {
-            const digit = digits[digit_index];
-
+            const digit: i16 = digits[digit_index]; // avoid issues when w is 8
             switch (std.math.order(digit, 0)) {
                 .gt => {
                     const b: u64 = @intCast(digit - 1);
@@ -66,15 +65,15 @@ pub fn mulMulti(
             }
         }
 
-        var buckets_interm_sum = buckets[buckets_count - 1];
-        var buckets_sum = buckets[buckets_count - 1];
+        var interm_sum = buckets[buckets_count - 1];
+        var sum = buckets[buckets_count - 1];
         for (0..buckets_count - 1) |bucket_fwd| {
             const i = buckets_count - 2 - bucket_fwd;
-            buckets_interm_sum = buckets_interm_sum.addCached(.fromExtended(buckets[i]));
-            buckets_sum = buckets_sum.addCached(.fromExtended(buckets_interm_sum));
+            interm_sum = interm_sum.addCached(.fromExtended(buckets[i]));
+            sum = sum.addCached(.fromExtended(interm_sum));
         }
 
-        column.* = buckets_sum;
+        column.* = sum;
     }
 
     var hi_column = columns[0];
@@ -90,14 +89,6 @@ inline fn mulByPow2(p: ExtendedPoint, k: u32) ExtendedPoint {
     return s;
 }
 
-inline fn radixSizeHint(w: u64) u64 {
-    return switch (w) {
-        4...7 => (@as(u64, 256) + w - 1) / w,
-        8 => (@as(u64, 256) + w - 1) / w + 1,
-        else => unreachable,
-    };
-}
-
 fn asRadix(c: CompressedScalar, w: u6) [64]i8 {
     var scalars: [4]u64 = @splat(0);
     @memcpy(scalars[0..4], std.mem.bytesAsSlice(u64, &c));
@@ -106,25 +97,28 @@ fn asRadix(c: CompressedScalar, w: u6) [64]i8 {
     const window_mask = radix - 1;
 
     var carry: u64 = 0;
-    var digits: [64]i8 = @splat(0);
     const digits_count = (@as(u64, 256) + w - 1) / w;
+    var digits: [64]i8 = @splat(0);
 
     for (0..digits_count) |i| {
         const bit_offset = i * w;
         const u64_idx = bit_offset / 64;
         const bit_idx: u6 = @truncate(bit_offset);
-        const shifted = scalars[u64_idx] >> bit_idx;
+        const element = scalars[u64_idx] >> bit_idx;
 
-        const bit_buf: u64 = if (bit_idx < @as(u64, 64) - w or u64_idx == 3)
-            shifted
-        else
-            shifted | (scalars[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx));
+        const below = bit_idx < @as(u64, 64) - w or u64_idx == 3;
+        const bit_buf: u64 = switch (below) {
+            true => element,
+            else => element | (scalars[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx)),
+        };
 
         const coef = carry + (bit_buf & window_mask);
         carry = (coef + (radix / 2)) >> w;
         const signed_coef: i64 = @bitCast(coef);
-        digits[i] = @truncate(signed_coef - @as(i64, @bitCast(carry << w)));
+        const cindex: i64 = @bitCast(carry << w);
+        digits[i] = @truncate(signed_coef - cindex);
     }
+
     switch (w) {
         8 => digits[digits_count] += @intCast(@as(i64, @bitCast(carry))),
         else => digits[digits_count - 1] += @intCast(@as(i64, @bitCast(carry << w))),

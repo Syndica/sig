@@ -41,12 +41,12 @@ pub const Proof = struct {
         var y_x = Scalar.random();
         var y_r = Scalar.random();
         defer {
-            std.crypto.utils.secureZero(u64, &y_s.limbs);
-            std.crypto.utils.secureZero(u64, &y_x.limbs);
-            std.crypto.utils.secureZero(u64, &y_r.limbs);
+            std.crypto.secureZero(u64, &y_s.limbs);
+            std.crypto.secureZero(u64, &y_x.limbs);
+            std.crypto.secureZero(u64, &y_r.limbs);
         }
 
-        const Y_0 = weak_mul.mul(P.p.p, y_s.toBytes());
+        const Y_0 = weak_mul.mul(P.point.p, y_s.toBytes());
         const Y_1 = weak_mul.mulMulti(
             2,
             .{ pedersen.G.p, D.p },
@@ -88,7 +88,7 @@ pub const Proof = struct {
     ) !void {
         transcript.appendDomSep("ciphertext-commitment-equality-proof");
 
-        const P = pubkey.p;
+        const P = pubkey.point;
         const C_ciphertext = ciphertext.commitment.point;
         const D = ciphertext.handle.point;
         const C_commitment = commitment.point;

@@ -1,3 +1,5 @@
+//! This implementation takes inspirtion from
+
 const std = @import("std");
 const Ed25519 = std.crypto.ecc.Edwards25519;
 const Fe = Ed25519.Fe;
@@ -24,12 +26,7 @@ pub const ExtendedPoint = struct {
         .{ 0, 0, 0, 0 },
     } };
 
-    pub fn init(
-        x0: Fe,
-        x1: Fe,
-        x2: Fe,
-        x3: Fe,
-    ) ExtendedPoint {
+    pub fn init(x0: Fe, x1: Fe, x2: Fe, x3: Fe) ExtendedPoint {
         return .{ .limbs = .{
             .{ x0.limbs[0], x1.limbs[0], x2.limbs[0], x3.limbs[0] },
             .{ x0.limbs[1], x1.limbs[1], x2.limbs[1], x3.limbs[1] },
@@ -180,7 +177,7 @@ pub const ExtendedPoint = struct {
 pub const CachedPoint = struct {
     limbs: [5]u64x4,
 
-    inline fn mul(a: CachedPoint, b: CachedPoint) ExtendedPoint {
+    fn mul(a: CachedPoint, b: CachedPoint) ExtendedPoint {
         const x = a.limbs;
         const y = b.limbs;
 
