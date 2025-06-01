@@ -84,6 +84,12 @@ pub fn mulMulti(
     return hi_column.toPoint();
 }
 
+inline fn mulByPow2(p: ExtendedPoint, k: u32) ExtendedPoint {
+    var s = p;
+    for (0..k) |_| s = s.dbl();
+    return s;
+}
+
 inline fn radixSizeHint(w: u64) u64 {
     return switch (w) {
         4...7 => (@as(u64, 256) + w - 1) / w,
@@ -92,15 +98,9 @@ inline fn radixSizeHint(w: u64) u64 {
     };
 }
 
-inline fn mulByPow2(p: ExtendedPoint, k: u32) ExtendedPoint {
-    var s = p;
-    for (0..k) |_| s = s.dbl();
-    return s;
-}
-
 fn asRadix(c: CompressedScalar, w: u6) [64]i8 {
-    var scalar64x4: [4]u64 = @splat(0);
-    @memcpy(scalar64x4[0..4], std.mem.bytesAsSlice(u64, &c));
+    var scalars: [4]u64 = @splat(0);
+    @memcpy(scalars[0..4], std.mem.bytesAsSlice(u64, &c));
 
     const radix = @as(u64, 1) << w;
     const window_mask = radix - 1;
@@ -112,12 +112,14 @@ fn asRadix(c: CompressedScalar, w: u6) [64]i8 {
     for (0..digits_count) |i| {
         const bit_offset = i * w;
         const u64_idx = bit_offset / 64;
-        const bit_idx: u6 = @intCast(bit_offset % 64);
+        const bit_idx: u6 = @truncate(bit_offset);
+        const shifted = scalars[u64_idx] >> bit_idx;
+
         const bit_buf: u64 = if (bit_idx < @as(u64, 64) - w or u64_idx == 3)
-            scalar64x4[u64_idx] >> bit_idx
+            shifted
         else
-            (scalar64x4[u64_idx] >> bit_idx) |
-                (scalar64x4[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx));
+            shifted | (scalars[1 + u64_idx] << @intCast(@as(u64, 64) - bit_idx));
+
         const coef = carry + (bit_buf & window_mask);
         carry = (coef + (radix / 2)) >> w;
         const signed_coef: i64 = @bitCast(coef);
