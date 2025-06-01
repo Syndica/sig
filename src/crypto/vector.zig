@@ -11,49 +11,52 @@ const u32x8 = @Vector(8, u32);
 const i32x8 = @Vector(8, i32);
 const u64x4 = @Vector(4, u64);
 
-const p_times_2_lo: u32x8 = .{
-    67108845 << 1,
-    67108845 << 1,
-    33554431 << 1,
-    33554431 << 1,
-    67108845 << 1,
-    67108845 << 1,
-    33554431 << 1,
-    33554431 << 1,
+const P_TIMES_2_LO: u32x8 = .{
+    0x3FFFFED << 1,
+    0x3FFFFED << 1,
+    0x1FFFFFF << 1,
+    0x1FFFFFF << 1,
+    0x3FFFFED << 1,
+    0x3FFFFED << 1,
+    0x1FFFFFF << 1,
+    0x1FFFFFF << 1,
 };
 
-const p_times_2_hi: u32x8 = .{
-    67108863 << 1,
-    67108863 << 1,
-    33554431 << 1,
-    33554431 << 1,
-    67108863 << 1,
-    67108863 << 1,
-    33554431 << 1,
-    33554431 << 1,
+const P_TIMES_2_HI: u32x8 = .{
+    0x3FFFFFF << 1,
+    0x3FFFFFF << 1,
+    0x1FFFFFF << 1,
+    0x1FFFFFF << 1,
+    0x3FFFFFF << 1,
+    0x3FFFFFF << 1,
+    0x1FFFFFF << 1,
+    0x1FFFFFF << 1,
 };
 
-const p_times_16_lo: u32x8 = .{
-    67108845 << 4,
-    67108845 << 4,
-    33554431 << 4,
-    33554431 << 4,
-    67108845 << 4,
-    67108845 << 4,
-    33554431 << 4,
-    33554431 << 4,
+const P_TIMES_16_LO: u32x8 = .{
+    0x3FFFFED << 4,
+    0x3FFFFED << 4,
+    0x1FFFFFF << 4,
+    0x1FFFFFF << 4,
+    0x3FFFFED << 4,
+    0x3FFFFED << 4,
+    0x1FFFFFF << 4,
+    0x1FFFFFF << 4,
 };
 
-const p_times_16_hi: u32x8 = .{
-    67108863 << 4,
-    67108863 << 4,
-    33554431 << 4,
-    33554431 << 4,
-    67108863 << 4,
-    67108863 << 4,
-    33554431 << 4,
-    33554431 << 4,
+const P_TIMES_16_HI: u32x8 = .{
+    0x3FFFFFF << 4,
+    0x3FFFFFF << 4,
+    0x1FFFFFF << 4,
+    0x1FFFFFF << 4,
+    0x3FFFFFF << 4,
+    0x3FFFFFF << 4,
+    0x1FFFFFF << 4,
+    0x1FFFFFF << 4,
 };
+
+const LOW_25_BITS: u64x4 = @splat((@as(u64, 1) << 25) - 1);
+const LOW_26_BITS: u64x4 = @splat((@as(u64, 1) << 26) - 1);
 
 /// A vector of four field elements.
 pub const ExtendedPoint = struct {
@@ -107,12 +110,12 @@ pub const ExtendedPoint = struct {
     }
 
     pub fn toPoint(fe: ExtendedPoint) Ed25519 {
-        const tmp = fe.split();
+        const splits = fe.split();
         return .{
-            .x = tmp[0],
-            .y = tmp[1],
-            .z = tmp[2],
-            .t = tmp[3],
+            .x = splits[0],
+            .y = splits[1],
+            .z = splits[2],
+            .t = splits[3],
         };
     }
 
@@ -156,9 +159,6 @@ pub const ExtendedPoint = struct {
     }
 
     fn reduce64(input: [10]u64x4) ExtendedPoint {
-        const LOW_25_BITS: u64x4 = @splat((@as(u64, 1) << 25) - 1);
-        const LOW_26_BITS: u64x4 = @splat((@as(u64, 1) << 26) - 1);
-
         const S = struct {
             inline fn carry(z: *[10]u64x4, i: u64) void {
                 std.debug.assert(i < 9);
@@ -224,14 +224,34 @@ pub const ExtendedPoint = struct {
         const a = @shuffle(
             u32,
             src,
-            u32x8{ 0, 0, undefined, undefined, 0, 0, undefined, undefined },
-            i32x8{ 0, ~@as(i32, 0), 1, ~@as(i32, 1), 4, ~@as(i32, 4), 5, ~@as(i32, 5) },
+            u32x8{
+                0,         0,
+                undefined, undefined,
+                0,         0,
+                undefined, undefined,
+            },
+            i32x8{
+                0, ~@as(i32, 0),
+                1, ~@as(i32, 1),
+                4, ~@as(i32, 4),
+                5, ~@as(i32, 5),
+            },
         );
         const b = @shuffle(
             u32,
             src,
-            u32x8{ undefined, undefined, 0, 0, undefined, undefined, 0, 0 },
-            i32x8{ 2, ~@as(i32, 2), 3, ~@as(i32, 3), 6, ~@as(i32, 6), 7, ~@as(i32, 7) },
+            u32x8{
+                undefined, undefined,
+                0,         0,
+                undefined, undefined,
+                0,         0,
+            },
+            i32x8{
+                2, ~@as(i32, 2),
+                3, ~@as(i32, 3),
+                6, ~@as(i32, 6),
+                7, ~@as(i32, 7),
+            },
         );
         return .{ a, b };
     }
@@ -246,9 +266,10 @@ pub const ExtendedPoint = struct {
     /// (a0, b0, a1, b1, c0, d0, c1, d1)
     /// ```
     fn repackPair(x: u32x8, y: u32x8) u32x8 {
-        const x_shuffled = @shuffle(u32, x, undefined, i32x8{ 0, 2, 1, 3, 4, 6, 5, 7 });
-        const y_shuffled = @shuffle(u32, y, undefined, i32x8{ 1, 3, 0, 2, 5, 7, 4, 6 });
-        return combine(x_shuffled, y_shuffled);
+        return combine(
+            @shuffle(u32, x, undefined, i32x8{ 0, 2, 1, 3, 4, 6, 5, 7 }),
+            @shuffle(u32, y, undefined, i32x8{ 1, 3, 0, 2, 5, 7, 4, 6 }),
+        );
     }
 
     fn rotatedCarryout(v: u32x8) u32x8 {
@@ -258,12 +279,12 @@ pub const ExtendedPoint = struct {
     }
 
     fn combine(v_lo: u32x8, v_hi: u32x8) u32x8 {
-        return @shuffle(
-            u32,
-            v_lo,
-            v_hi,
-            i32x8{ 0, 1, ~@as(i32, 2), ~@as(i32, 3), 4, 5, ~@as(i32, 6), ~@as(i32, 7) },
-        );
+        return @shuffle(u32, v_lo, v_hi, i32x8{
+            0,            1,
+            ~@as(i32, 2), ~@as(i32, 3),
+            4,            5,
+            ~@as(i32, 6), ~@as(i32, 7),
+        });
     }
 
     fn mul32(a: u32x8, b: u32x8) u64x4 {
@@ -491,21 +512,21 @@ pub const ExtendedPoint = struct {
     /// Given `(A, B, C, D)` computes `(-A, -B, -C, -D)` without performing a reduction.
     fn negateLazy(fe: ExtendedPoint) ExtendedPoint {
         return .{ .limbs = .{
-            p_times_2_lo - fe.limbs[0],
-            p_times_2_hi - fe.limbs[1],
-            p_times_2_hi - fe.limbs[2],
-            p_times_2_hi - fe.limbs[3],
-            p_times_2_hi - fe.limbs[4],
+            P_TIMES_2_LO - fe.limbs[0],
+            P_TIMES_2_HI - fe.limbs[1],
+            P_TIMES_2_HI - fe.limbs[2],
+            P_TIMES_2_HI - fe.limbs[3],
+            P_TIMES_2_HI - fe.limbs[4],
         } };
     }
 
     fn neg(fe: ExtendedPoint) ExtendedPoint {
         const element: ExtendedPoint = .{ .limbs = .{
-            p_times_16_lo - fe.limbs[0],
-            p_times_16_hi - fe.limbs[1],
-            p_times_16_hi - fe.limbs[2],
-            p_times_16_hi - fe.limbs[3],
-            p_times_16_hi - fe.limbs[4],
+            P_TIMES_16_LO - fe.limbs[0],
+            P_TIMES_16_HI - fe.limbs[1],
+            P_TIMES_16_HI - fe.limbs[2],
+            P_TIMES_16_HI - fe.limbs[3],
+            P_TIMES_16_HI - fe.limbs[4],
         } };
         return element.reduce();
     }
