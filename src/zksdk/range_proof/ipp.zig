@@ -203,6 +203,7 @@ pub fn Proof(bit_size: comptime_int) type {
                 const L: Ristretto255 = .{
                     .p = sig.crypto.pippenger.mulMulti(
                         129, // 64 + 64  +1
+                        true,
                         points.constSlice(),
                         scalars.constSlice(),
                     ),
@@ -223,6 +224,7 @@ pub fn Proof(bit_size: comptime_int) type {
                 const R: Ristretto255 = .{
                     .p = sig.crypto.pippenger.mulMulti(
                         129, // 64 + 64  +1
+                        true,
                         points.constSlice(),
                         scalars.constSlice(),
                     ),
@@ -312,6 +314,7 @@ pub fn Proof(bit_size: comptime_int) type {
 
             const check = sig.crypto.pippenger.mulMulti(
                 max_elements,
+                true,
                 points.constSlice(),
                 scalars.constSlice(),
             );

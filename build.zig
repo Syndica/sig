@@ -243,7 +243,6 @@ pub fn build(b: *Build) void {
         .sanitize_thread = config.enable_tsan,
     });
     fuzz_exe.linkLibC();
-    fuzz_exe.root_module.addOptions("build-options", build_options);
     switch (config.blockstore_db) {
         .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
         .hashmap => {},
