@@ -143,7 +143,7 @@ const test_keys = [_]Pubkey{
     Pubkey.parseBase58String("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA") catch unreachable,
 };
 
-test "locking/unlocking basically works" {
+test "lockStrict + lockPermissive + unlock: simple happy paths and failure modes" {
     const allocator = std.testing.allocator;
     var locks = AccountLocks{};
     defer locks.deinit(allocator);
