@@ -25,13 +25,13 @@ pub const Proof = struct {
     ) Proof {
         transcript.appendDomSep("zero-ciphertext-proof");
 
-        const P = kp.public.p;
+        const P = kp.public.point;
         const s = kp.secret.scalar;
         const D = ciphertext.handle.point;
 
         // masking factor
         var y = Scalar.random();
-        defer std.crypto.utils.secureZero(u64, &y.limbs);
+        defer std.crypto.secureZero(u64, &y.limbs);
 
         // random() guarantees that y isn't zero and P must not be zero.
         const Y_P = P.mul(y.toBytes()) catch unreachable;
@@ -61,7 +61,7 @@ pub const Proof = struct {
     ) !void {
         transcript.appendDomSep("zero-ciphertext-proof");
 
-        const P = pubkey.p;
+        const P = pubkey.point;
         const C = ciphertext.commitment.point;
         const D = ciphertext.handle.point;
         const Y_P = self.P;
@@ -311,7 +311,7 @@ test "edge case" {
         var prover_transcript = Transcript.init("test");
         var verifier_transcript = Transcript.init("test");
 
-        const public: ElGamalPubkey = .{ .p = try Ristretto255.fromBytes(.{0} ** 32) };
+        const public: ElGamalPubkey = .{ .point = try Ristretto255.fromBytes(.{0} ** 32) };
         const ciphertext = el_gamal.encrypt(u64, 0, &public);
 
         const proof = Proof.init(&kp, &ciphertext, &prover_transcript);

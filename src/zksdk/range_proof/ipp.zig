@@ -51,25 +51,22 @@ pub fn Proof(bit_size: comptime_int) type {
         const Self = @This();
         pub const BYTE_LEN = (2 * logn * 32) + 64;
 
+        /// Modifies the mutable array pointers in undefined ways, so don't rely on the value
+        /// of them after `init`.
         pub fn init(
             Q: Ristretto255,
-            G_factors: [bit_size]Scalar,
-            H_factors: [bit_size]Scalar,
-            G_vec: [bit_size]Edwards25519,
-            H_vec: [bit_size]Edwards25519,
-            a_vec: [bit_size]Scalar,
-            b_vec: [bit_size]Scalar,
+            G_factors: *const [bit_size]Scalar,
+            H_factors: *const [bit_size]Scalar,
+            G_vec: *[bit_size]Edwards25519,
+            H_vec: *[bit_size]Edwards25519,
+            a_vec: *[bit_size]Scalar,
+            b_vec: *[bit_size]Scalar,
             transcript: *Transcript,
         ) Self {
-            var G_buffer = G_vec;
-            var H_buffer = H_vec;
-            var a_buffer = a_vec;
-            var b_buffer = b_vec;
-
-            var G: []Edwards25519 = &G_buffer;
-            var H: []Edwards25519 = &H_buffer;
-            var a: []Scalar = &a_buffer;
-            var b: []Scalar = &b_buffer;
+            var G: []Edwards25519 = G_vec;
+            var H: []Edwards25519 = H_vec;
+            var a: []Scalar = a_vec;
+            var b: []Scalar = b_vec;
 
             transcript.appendDomSep("inner-product");
             transcript.appendU64("n", bit_size);
@@ -204,24 +201,14 @@ pub fn Proof(bit_size: comptime_int) type {
                 points.appendAssumeCapacity(Q.p);
 
                 const L: Ristretto255 = .{
-                    .p = switch (points.len) {
-                        inline //
-                        3, // 1 + 1 + 1
-                        5, // 2 + 2 + 1
-                        9, // 4 + 4 + 1
-                        17, // 8 + 8 + 1
-                        33, // 16 + 16 + 1
-                        65, // 32 + 32 + 1
-                        129, // 64 + 64 + 1
-                        => |N| weak_mul.mulMulti(
-                            N,
-                            points.constSlice()[0..N].*,
-                            scalars.constSlice()[0..N].*,
-                        ),
-                        else => unreachable,
-                    },
+                    .p = sig.crypto.pippenger.mulMulti(
+                        129, // 64 + 64  +1
+                        points.constSlice(),
+                        scalars.constSlice(),
+                    ),
                 };
 
+                // reset the arrays
                 points.len = 0;
                 scalars.len = 0;
 
@@ -234,22 +221,11 @@ pub fn Proof(bit_size: comptime_int) type {
                 points.appendAssumeCapacity(Q.p);
 
                 const R: Ristretto255 = .{
-                    .p = switch (points.len) {
-                        inline //
-                        3, // 1 + 1 + 1
-                        5, // 2 + 2 + 1
-                        9, // 4 + 4 + 1
-                        17, // 8 + 8 + 1
-                        33, // 16 + 16 + 1
-                        65, // 32 + 32 + 1
-                        129, // 64 + 64 + 1
-                        => |N| weak_mul.mulMulti(
-                            N,
-                            points.constSlice()[0..N].*,
-                            scalars.constSlice()[0..N].*,
-                        ),
-                        else => unreachable,
-                    },
+                    .p = sig.crypto.pippenger.mulMulti(
+                        129, // 64 + 64  +1
+                        points.constSlice(),
+                        scalars.constSlice(),
+                    ),
                 };
 
                 L_vec.appendAssumeCapacity(L);
@@ -334,10 +310,10 @@ pub fn Proof(bit_size: comptime_int) type {
             for (self.L_vec) |l| points.appendAssumeCapacity(l.p);
             for (self.R_vec) |r| points.appendAssumeCapacity(r.p);
 
-            const check = weak_mul.mulMulti(
+            const check = sig.crypto.pippenger.mulMulti(
                 max_elements,
-                points.constSlice()[0..max_elements].*,
-                scalars.constSlice()[0..max_elements].*,
+                points.constSlice(),
+                scalars.constSlice(),
             );
 
             if (!P.equivalent(.{ .p = check })) {
@@ -483,14 +459,17 @@ test "basic correctness" {
     var prover_transcript = Transcript.init("innerproducttest");
     var verifier_transcript = Transcript.init("innerproducttest");
 
+    const G_copy = G;
+    const H_copy = H;
+
     const proof = Proof(32).init(
         Q,
-        G_factors,
-        H_factors,
-        G,
-        H,
-        a,
-        b,
+        &G_factors,
+        &H_factors,
+        &G,
+        &H,
+        &a,
+        &b,
         &prover_transcript,
     );
 
@@ -499,8 +478,8 @@ test "basic correctness" {
         &H_factors,
         P,
         Q,
-        &G,
-        &H,
+        &G_copy,
+        &H_copy,
         &verifier_transcript,
     );
 }
