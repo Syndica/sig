@@ -72,7 +72,7 @@ pub const DecryptHandle = struct {
     point: Ristretto255,
 
     pub fn init(pubkey: *const Pubkey, opening: *const Opening) DecryptHandle {
-        const point = weak_mul.mul(pubkey.p.p, opening.scalar.toBytes());
+        const point = weak_mul.mul(pubkey.point.p, opening.scalar.toBytes());
         return .{ .point = .{ .p = point } };
     }
 

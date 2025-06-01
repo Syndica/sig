@@ -17,6 +17,16 @@ pub const Benchmark = struct {
         return start.read();
     }
 
+    pub fn zeroCiphertext() !sig.time.Duration {
+        const kp = zksdk.ElGamalKeypair.random();
+        const ciphertext = zksdk.el_gamal.encrypt(u64, 0, &kp.public);
+        const proof_data = zksdk.ZeroCiphertextData.init(&kp, &ciphertext);
+
+        var start = try sig.time.Timer.start();
+        std.mem.doNotOptimizeAway(proof_data.verify());
+        return start.read();
+    }
+
     pub fn rangeProofU64() !sig.time.Duration {
         const amount_1: u64 = std.math.maxInt(u8);
         const amount_2: u64 = 77;

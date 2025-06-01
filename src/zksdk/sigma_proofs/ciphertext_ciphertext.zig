@@ -32,9 +32,9 @@ pub const Proof = struct {
     ) Proof {
         transcript.appendDomSep("ciphertext-ciphertext-equality-proof");
 
-        const P_first = first_kp.public.p;
+        const P_first = first_kp.public.point;
         const D_first = first_ciphertext.handle.point;
-        const P_second = second_pubkey.p;
+        const P_second = second_pubkey.point;
 
         const s = first_kp.secret.scalar;
         const x = pedersen.scalarFromInt(u64, amount);
@@ -44,9 +44,9 @@ pub const Proof = struct {
         var y_x = Scalar.random();
         var y_r = Scalar.random();
         defer {
-            std.crypto.utils.secureZero(u64, &y_s.limbs);
-            std.crypto.utils.secureZero(u64, &y_x.limbs);
-            std.crypto.utils.secureZero(u64, &y_r.limbs);
+            std.crypto.secureZero(u64, &y_s.limbs);
+            std.crypto.secureZero(u64, &y_x.limbs);
+            std.crypto.secureZero(u64, &y_r.limbs);
         }
 
         const Y_0 = weak_mul.mul(P_first.p, y_s.toBytes());
@@ -95,11 +95,11 @@ pub const Proof = struct {
     ) !void {
         transcript.appendDomSep("ciphertext-ciphertext-equality-proof");
 
-        const P_first = first_pubkey.p;
+        const P_first = first_pubkey.point;
         const C_first = first_ciphertext.commitment.point;
         const D_first = first_ciphertext.handle.point;
 
-        const P_second = second_pubkey.p;
+        const P_second = second_pubkey.point;
         const C_second = second_ciphertext.commitment.point;
         const D_second = second_ciphertext.handle.point;
 

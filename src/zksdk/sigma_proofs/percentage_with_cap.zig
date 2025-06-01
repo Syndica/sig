@@ -49,27 +49,18 @@ pub const Proof = struct {
         // Chooses between `proof_below_max` and `proof_above_max` depending
         // on whether the percentage amount is above the max amount.
         const below_max = percentage_amount <= max_value;
+        const active = if (below_max) proof_below_max else proof_above_max;
 
-        const max_proof: MaxProof = if (below_max)
-            proof_below_max.max_proof
-        else
-            proof_above_max.max_proof;
-
-        const equality_proof: EqualityProof = if (below_max)
-            proof_below_max.equality_proof
-        else
-            proof_above_max.equality_proof;
-
-        transcript.appendPoint("Y_max_proof", max_proof.Y_max_proof);
-        transcript.appendPoint("Y_delta", equality_proof.Y_delta);
-        transcript.appendPoint("Y_claimed", equality_proof.Y_claimed);
+        transcript.appendPoint("Y_max_proof", active.max_proof.Y_max_proof);
+        transcript.appendPoint("Y_delta", active.equality_proof.Y_delta);
+        transcript.appendPoint("Y_claimed", active.equality_proof.Y_claimed);
 
         _ = transcript.challengeScalar("c");
         _ = transcript.challengeScalar("w");
 
         return .{
-            .max_proof = max_proof,
-            .equality_proof = equality_proof,
+            .max_proof = active.max_proof,
+            .equality_proof = active.equality_proof,
         };
     }
 

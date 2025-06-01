@@ -65,9 +65,9 @@ pub const Proof = struct {
         transcript.appendDomSep("validity-proof");
         transcript.appendU64("handles", 3);
 
-        const P_first = first_pubkey.p;
-        const P_second = second_pubkey.p;
-        const P_third = third_pubkey.p;
+        const P_first = first_pubkey.point;
+        const P_second = second_pubkey.point;
+        const P_third = third_pubkey.point;
 
         const x: Scalar = switch (@TypeOf(amount)) {
             u64 => pedersen.scalarFromInt(u64, amount),
@@ -79,8 +79,8 @@ pub const Proof = struct {
         var y_r = Scalar.random();
         var y_x = Scalar.random();
         defer {
-            std.crypto.utils.secureZero(u64, &y_r.limbs);
-            std.crypto.utils.secureZero(u64, &y_x.limbs);
+            std.crypto.secureZero(u64, &y_r.limbs);
+            std.crypto.secureZero(u64, &y_x.limbs);
         }
 
         const Y_0: Ristretto255 = .{ .p = weak_mul.mulMulti(
@@ -200,28 +200,28 @@ pub const Proof = struct {
             pedersen.G.p,
             pedersen.H.p,
             params.commitment.point.p,
-            params.first_pubkey.p.p,
+            params.first_pubkey.point.p,
             self.Y_1.p,
             params.first_handle.point.p,
-            params.second_pubkey.p.p,
+            params.second_pubkey.point.p,
             self.Y_2.p,
             params.second_handle.point.p,
-            params.third_pubkey.p.p,
+            params.third_pubkey.point.p,
             self.Y_3.p,
             params.third_handle.point.p,
         });
         // zig fmt: off
         try scalars.appendSlice(&.{
-            self.z_x.toBytes(),           // z_x
-            self.z_r.toBytes(),           // z_r
+            self.z_x.toBytes(),           //  z_x
+            self.z_r.toBytes(),           //  z_r
             c_negated.toBytes(),          // -c
-            w.mul(self.z_r).toBytes(),    // w * z_r
+            w.mul(self.z_r).toBytes(),    //  w * z_r
             w_negated.toBytes(),          // -w
             w_negated.mul(c).toBytes(),   // -w * c
-            ww.mul(self.z_r).toBytes(),   // ww * z_r
+            ww.mul(self.z_r).toBytes(),   //  ww * z_r
             ww_negated.toBytes(),         // -ww,
             ww_negated.mul(c).toBytes(),  // -ww * c
-            www.mul(self.z_r).toBytes(),  // www * z_r
+            www.mul(self.z_r).toBytes(),  //  www * z_r
             www_negated.toBytes(),        // -www
             www_negated.mul(c).toBytes(), // -www * c
         });
