@@ -64,6 +64,13 @@ pub const VoteAuthorizeWithSeedArgs = struct {
         /// `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
         current_base_authority = 2,
     };
+
+    pub fn deinit(
+        self: VoteAuthorizeWithSeedArgs,
+        allocator: std.mem.Allocator,
+    ) void {
+        allocator.free(self.current_authority_derived_key_seed);
+    }
 };
 
 pub const VoteAuthorizeCheckedWithSeedArgs = struct {
@@ -84,6 +91,13 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
         /// `[SIGNER]` New vote or withdraw authority
         new_authority = 3,
     };
+
+    pub fn deinit(
+        self: VoteAuthorizeCheckedWithSeedArgs,
+        allocator: std.mem.Allocator,
+    ) void {
+        allocator.free(self.current_authority_derived_key_seed);
+    }
 };
 
 pub const VoteAuthorize = enum {
@@ -439,11 +453,11 @@ pub const Instruction = union(enum(u32)) {
             .update_validator_identity,
             .update_commission,
             .authorize_checked,
-            .authorize_with_seed,
-            .authorize_checked_with_seed,
             => {},
 
             inline //
+            .authorize_with_seed,
+            .authorize_checked_with_seed,
             .vote,
             .vote_switch,
             .update_vote_state,
@@ -730,6 +744,214 @@ pub fn createWithdraw(
     });
 }
 
+fn executeRoundTrip(
+    allocator: std.mem.Allocator,
+    instruction: Instruction,
+) !struct { Instruction, Instruction } {
+    const serialized = try sig.bincode.writeAlloc(allocator, instruction, .{});
+    defer allocator.free(serialized);
+
+    const deserialized = try sig.bincode.readFromSlice(
+        allocator,
+        Instruction,
+        serialized,
+        .{},
+    );
+
+    return .{ instruction, deserialized };
+}
+
+test "InitializeAccount: roundtrip" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{
+            .initialize_account = .{
+                .node_pubkey = Pubkey.initRandom(prng.random()),
+                .authorized_voter = Pubkey.initRandom(prng.random()),
+                .authorized_withdrawer = Pubkey.initRandom(prng.random()),
+                .commission = 10,
+            },
+        },
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.initialize_account.node_pubkey.data,
+        &post.initialize_account.node_pubkey.data,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.initialize_account.authorized_voter.data,
+        &post.initialize_account.authorized_voter.data,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.initialize_account.authorized_withdrawer.data,
+        &post.initialize_account.authorized_withdrawer.data,
+    );
+    try std.testing.expectEqual(
+        pre.initialize_account.commission,
+        post.initialize_account.commission,
+    );
+}
+
+test "Authorize: roundtrip" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{
+            .authorize = .{
+                .new_authority = Pubkey.initRandom(prng.random()),
+                .vote_authorize = .voter,
+            },
+        },
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.authorize.new_authority.data,
+        &post.authorize.new_authority.data,
+    );
+    try std.testing.expectEqual(
+        pre.authorize.vote_authorize,
+        post.authorize.vote_authorize,
+    );
+}
+
+test "VoteAuthorizeWithSeedArgs: roundtrip" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{
+            .authorize_with_seed = .{
+                .authorization_type = .voter,
+                .current_authority_derived_key_owner = Pubkey.initRandom(prng.random()),
+                .current_authority_derived_key_seed = try allocator.dupe(u8, "test_seed"),
+                .new_authority = Pubkey.initRandom(prng.random()),
+            },
+        },
+    );
+    defer {
+        pre.deinit(allocator);
+        post.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(
+        pre.authorize_with_seed.authorization_type,
+        post.authorize_with_seed.authorization_type,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.authorize_with_seed.current_authority_derived_key_owner.data,
+        &post.authorize_with_seed.current_authority_derived_key_owner.data,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        pre.authorize_with_seed.current_authority_derived_key_seed,
+        post.authorize_with_seed.current_authority_derived_key_seed,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.authorize_with_seed.new_authority.data,
+        &post.authorize_with_seed.new_authority.data,
+    );
+}
+
+test "VoteAuthorizeCheckedWithSeedArgs: roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{
+            .authorize_checked_with_seed = .{
+                .authorization_type = .voter,
+                .current_authority_derived_key_owner = Pubkey.ZEROES,
+                .current_authority_derived_key_seed = try allocator.dupe(u8, "test_seed"),
+            },
+        },
+    );
+    defer {
+        pre.deinit(allocator);
+        post.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(
+        pre.authorize_checked_with_seed.authorization_type,
+        post.authorize_checked_with_seed.authorization_type,
+    );
+    try std.testing.expect(
+        pre.authorize_checked_with_seed.current_authority_derived_key_owner.equals(
+            &post.authorize_checked_with_seed.current_authority_derived_key_owner,
+        ),
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        pre.authorize_checked_with_seed.current_authority_derived_key_seed,
+        post.authorize_checked_with_seed.current_authority_derived_key_seed,
+    );
+}
+
+test "UpdateCommission: roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{ .update_commission = 20 },
+    );
+
+    try std.testing.expectEqual(pre.update_commission, post.update_commission);
+}
+
+test "Withdraw: roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{ .withdraw = 1000 },
+    );
+
+    try std.testing.expectEqual(pre.withdraw, post.withdraw);
+}
+
+test "Vote: roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{ .vote = .{ .vote = .{
+            .slots = try allocator.dupe(u64, &[_]Slot{ 1, 2, 3 }),
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        } } },
+    );
+    defer {
+        pre.deinit(allocator);
+        post.deinit(allocator);
+    }
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.vote.vote.hash.data,
+        &post.vote.vote.hash.data,
+    );
+    try std.testing.expectEqualSlices(
+        u64,
+        pre.vote.vote.slots,
+        post.vote.vote.slots,
+    );
+    try std.testing.expectEqual(
+        pre.vote.vote.timestamp,
+        post.vote.vote.timestamp,
+    );
+}
+
 test "CompactVoteStateUpdate.serialize" {
     const allocator = std.testing.allocator;
 
@@ -858,4 +1080,313 @@ test "TowerSyncSwitch.serialize" {
     defer allocator.free(sig_bytes);
 
     try std.testing.expectEqualSlices(u8, agave_bytes, sig_bytes);
+}
+
+test createInitializeAccount {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createInitializeAccount(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        .{
+            .node_pubkey = Pubkey.initRandom(prng.random()),
+            .authorized_voter = Pubkey.initRandom(prng.random()),
+            .authorized_withdrawer = Pubkey.initRandom(prng.random()),
+            .commission = 10,
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createAuthorize {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createAuthorize(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .new_authority = Pubkey.initRandom(prng.random()),
+            .vote_authorize = .voter,
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createVote {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createVote(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{ .vote = .{
+            .slots = &[_]Slot{ 1, 2, 3 },
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        } },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createWithdraw {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createWithdraw(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        1000,
+        Pubkey.initRandom(prng.random()),
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createUpdateValidatorIdentity {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createUpdateValidatorIdentity(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createUpdateCommission {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createUpdateCommission(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        20,
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createVoteSwitch {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createVoteSwitch(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .vote = .{
+                .slots = &[_]Slot{ 1, 2, 3 },
+                .hash = Hash.ZEROES,
+                .timestamp = null,
+            },
+            .hash = Hash.initRandom(prng.random()),
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createAuthorizeChecked {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createAuthorizeChecked(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .voter,
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createUpdateVoteState {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createUpdateVoteState(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{ .vote_state_update = .{
+            .lockouts = .{},
+            .root = 42,
+            .hash = Hash.initRandom(prng.random()),
+            .timestamp = null,
+        } },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createUpdateVoteStateSwitch {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createUpdateVoteStateSwitch(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .vote_state_update = .{
+                .lockouts = .{},
+                .root = 42,
+                .hash = Hash.initRandom(prng.random()),
+                .timestamp = null,
+            },
+            .hash = Hash.initRandom(prng.random()),
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createAuthorizeWithSeed {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createAuthorizeWithSeed(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        "test_seed",
+        Pubkey.initRandom(prng.random()),
+        .voter,
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createAuthorizeCheckedWithSeed {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createAuthorizeCheckedWithSeed(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        "test_seed",
+        Pubkey.initRandom(prng.random()),
+        .voter,
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createCompactUpdateVoteState {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createCompactUpdateVoteState(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{ .vote_state_update = .{
+            .lockouts = .{},
+            .root = 42,
+            .hash = Hash.initRandom(prng.random()),
+            .timestamp = null,
+        } },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createCompactUpdateVoteStateSwitch {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createCompactUpdateVoteStateSwitch(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .vote_state_update = .{
+                .lockouts = .{},
+                .root = 42,
+                .hash = Hash.initRandom(prng.random()),
+                .timestamp = null,
+            },
+            .hash = Hash.initRandom(prng.random()),
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createTowerSync {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createTowerSync(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .tower_sync = .{
+                .lockouts = .{},
+                .root = null,
+                .hash = Hash.initRandom(prng.random()),
+                .timestamp = null,
+                .block_id = Hash.initRandom(prng.random()),
+            },
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
+}
+
+test createTowerSyncSwitch {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createTowerSyncSwitch(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .tower_sync = .{
+                .lockouts = .{},
+                .root = null,
+                .hash = Hash.initRandom(prng.random()),
+                .timestamp = null,
+                .block_id = Hash.initRandom(prng.random()),
+            },
+            .hash = Hash.initRandom(prng.random()),
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    // TODO: Check instruction contents
 }
