@@ -29,7 +29,10 @@ pub const Pubkey = struct {
         const scalar = secret.scalar;
         std.debug.assert(!scalar.isZero());
         // unreachable because `H` is known to not be an identity and `scalar` cannot be zero.
-        return .{ .point = Ristretto255.mul(pedersen.H, scalar.invert().toBytes()) catch unreachable };
+        return .{ .point = Ristretto255.mul(
+            pedersen.H,
+            scalar.invert().toBytes(),
+        ) catch unreachable };
     }
 
     pub fn fromBytes(bytes: [32]u8) !Pubkey {
