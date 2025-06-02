@@ -262,6 +262,7 @@ pub const ForkProgress = struct {
         };
     }
 
+    // TODO: remove this in favor of initFromParent
     pub fn initFromBank(
         allocator: std.mem.Allocator,
         params: struct {
@@ -299,6 +300,59 @@ pub const ForkProgress = struct {
 
         if (params.bank.isFrozen()) {
             new_progress.fork_stats.bank_hash = params.bank.data.hash;
+        }
+
+        return new_progress;
+    }
+
+    /// Helper init function to init the progress from the parent progress and
+    /// other data about the current slot that agave stores in its bank.
+    /// Analogous to [new_from_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/consensus/progress_map.rs#L143)
+    pub fn initFromParent(
+        allocator: std.mem.Allocator,
+        params: struct {
+            now: sig.time.Instant,
+            slot: Slot,
+            parent_slot: Slot,
+            parent: *const ForkProgress,
+            validator_vote_pubkey: ?Pubkey,
+            slot_hash: ?Hash,
+            last_entry: Hash,
+            i_am_leader: bool,
+            epoch_stakes: *const sig.core.stake.EpochStakes,
+        },
+    ) !ForkProgress {
+        const parent = params.parent;
+
+        var new_progress = try ForkProgress.init(allocator, .{
+            .now = sig.time.Instant.now(),
+
+            .last_entry = params.last_entry,
+
+            .prev_leader_slot = if (parent.propagated_stats.is_leader_slot)
+                params.parent_slot
+            else
+                parent.propagated_stats.prev_leader_slot,
+
+            .validator_stake_info = if (!params.i_am_leader) null else .{
+                .validator_vote_pubkey = params.validator_vote_pubkey orelse
+                    return error.MissingLeaderVoteAccount,
+                .stake = blk: {
+                    const stake, _ = params.epoch_stakes.stakes.vote_accounts.accounts
+                        .get(params.validator_vote_pubkey.?) orelse break :blk 0;
+                    break :blk stake;
+                },
+                .total_epoch_stake = params.epoch_stakes.total_stake,
+            },
+
+            .num_blocks_on_fork = parent.num_blocks_on_fork + 1,
+
+            .num_dropped_blocks_on_fork = parent.num_dropped_blocks_on_fork +
+                params.slot - params.parent_slot - 1,
+        });
+
+        if (params.slot_hash) |hash| {
+            new_progress.fork_stats.bank_hash = hash;
         }
 
         return new_progress;

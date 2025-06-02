@@ -57,6 +57,61 @@ pub const FeeRateGovernor = struct {
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .skip = true };
 
+    pub fn initDerived(
+        base: *const FeeRateGovernor,
+        latest_signatures_per_slot: u64,
+    ) FeeRateGovernor {
+        var self = base.*;
+
+        if (self.target_signatures_per_slot > 0) {
+            // lamports_per_signature can range from 50% to 1000% of
+            // target_lamports_per_signature
+            self.min_lamports_per_signature = @max(1, self.target_lamports_per_signature / 2);
+            self.max_lamports_per_signature = self.target_lamports_per_signature * 10;
+
+            // What the cluster should charge at `latest_signatures_per_slot`
+            const desired_lamports_per_signature =
+                @min(
+                    self.max_lamports_per_signature,
+                    @max(
+                        self.min_lamports_per_signature,
+                        self.target_lamports_per_signature *
+                            @min(latest_signatures_per_slot, @as(u64, std.math.maxInt(u32))) /
+                            self.target_signatures_per_slot,
+                    ),
+                );
+
+            const gap = @as(i64, @intCast(desired_lamports_per_signature)) -
+                @as(i64, @intCast(base.lamports_per_signature));
+
+            if (gap == 0) {
+                self.lamports_per_signature = desired_lamports_per_signature;
+            } else {
+                // Adjust fee by 5% of target_lamports_per_signature to produce a smooth
+                // increase/decrease in fees over time.
+                const gap_adjust =
+                    @as(i64, @intCast(@max(1, self.target_lamports_per_signature / 20))) *
+                    std.math.sign(gap);
+
+                self.lamports_per_signature =
+                    @min(
+                        self.max_lamports_per_signature,
+                        @max(
+                            self.min_lamports_per_signature,
+                            @as(u64, @intCast((@as(i64, @intCast(base.lamports_per_signature)) +
+                                gap_adjust))),
+                        ),
+                    );
+            }
+        } else {
+            self.lamports_per_signature = base.target_lamports_per_signature;
+            self.min_lamports_per_signature = self.target_lamports_per_signature;
+            self.max_lamports_per_signature = self.target_lamports_per_signature;
+        }
+
+        return self;
+    }
+
     pub fn initRandom(random: std.Random) FeeRateGovernor {
         return .{
             .lamports_per_signature = random.int(u64),

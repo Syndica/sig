@@ -19,8 +19,10 @@ const sig = @import("../sig.zig");
 
 const core = sig.core;
 
-const Allocator = std.heap.Allocator;
+const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
+
+const RwMux = sig.sync.RwMux;
 
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
 const Hash = core.hash.Hash;
@@ -35,8 +37,9 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const Stakes = core.stake.Stakes;
+const EpochStakes = core.stake.EpochStakes;
 const EpochStakeMap = core.stake.EpochStakeMap;
+const Stakes = core.stake.Stakes;
 const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
 const epochStakeMapRandom = core.stake.epochStakeMapRandom;
@@ -64,7 +67,8 @@ pub const SlotConstants = struct {
     /// Total number of blocks produced up to this slot
     block_height: u64,
 
-    hard_forks: HardForks,
+    /// The pubkey to send transactions fees to.
+    collector_id: Pubkey,
 
     /// A tick height above this should not be allowed during this slot.
     max_tick_height: u64,
@@ -76,7 +80,6 @@ pub const SlotConstants = struct {
     epoch_reward_status: EpochRewardStatus,
 
     pub fn deinit(self: SlotConstants, allocator: Allocator) void {
-        self.hard_forks.deinit(allocator);
         self.epoch_reward_status.deinit(allocator);
     }
 };
@@ -90,14 +93,20 @@ pub const SlotConstants = struct {
 /// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
 /// [fd_slot_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L2270)
 pub const SlotState = struct {
+    /// FIFO queue of `recent_blockhash` items
+    blockhash_queue: RwMux(BlockhashQueue),
+
     /// Hash of this Bank's state. Only meaningful after freezing.
-    hash: sig.sync.RwMux(?Hash),
+    hash: RwMux(?Hash),
 
     /// Total capitalization, used to calculate inflation.
     capitalization: Atomic(u64),
 
     /// The number of committed transactions since genesis.
     transaction_count: Atomic(u64),
+
+    /// The number of signatures from valid transactions in this slot
+    signature_count: Atomic(u64),
 
     /// Total number of ticks in history including those from this slot.
     tick_height: Atomic(u64),
@@ -110,8 +119,28 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(LtHash),
 
-    pub fn isFrozen(self: *const SlotState) bool {
-        return self.hash.read().get() != null;
+    pub fn deinit(self: *SlotState, allocator: Allocator) void {
+        var blockhash_queue = self.blockhash_queue.write();
+        defer blockhash_queue.unlock();
+        blockhash_queue.get().deinit(allocator);
+    }
+
+    pub fn fromFrozenParent(allocator: Allocator, parent: *SlotState) !SlotState {
+        if (!parent.isFrozen()) return error.SlotNotFrozen;
+        return .{
+            .blockhash_queue = .init(try parent.blockhash_queue.readClone(allocator)),
+            .hash = .init(null),
+            .capitalization = .init(parent.capitalization.load(.monotonic)),
+            .transaction_count = .init(parent.transaction_count.load(.monotonic)),
+            .signature_count = .init(0),
+            .tick_height = .init(parent.tick_height.load(.monotonic)),
+            .collected_rent = .init(0),
+            .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
+        };
+    }
+
+    pub fn isFrozen(self: *SlotState) bool {
+        return self.hash.read().get().* != null;
     }
 
     pub fn tickHeight(self: *const SlotState) u64 {
@@ -143,11 +172,8 @@ pub const EpochConstants = struct {
     /// The number of slots per year, used for inflation.
     slots_per_year: f64,
 
-    /// The schedule describing all epochs.
-    schedule: EpochSchedule,
-
     /// The pre-determined stakes assigned to this epoch.
-    stakes: Stakes(.delegation),
+    stakes: EpochStakes,
 
     pub fn deinit(self: EpochConstants, allocator: Allocator) void {
         self.stakes.deinit(allocator);
@@ -422,22 +448,22 @@ pub const BlockhashQueue = struct {
     /// hashes older than `max_age` will be dropped from the queue
     max_age: usize,
 
-    pub fn deinit(bhq: BlockhashQueue, allocator: std.mem.Allocator) void {
-        var ages = bhq.ages;
+    pub fn deinit(self: BlockhashQueue, allocator: std.mem.Allocator) void {
+        var ages = self.ages;
         ages.deinit(allocator);
     }
 
     pub fn clone(
-        bhq: BlockhashQueue,
+        self: BlockhashQueue,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!BlockhashQueue {
-        var ages = try bhq.ages.clone(allocator);
+        var ages = try self.ages.clone(allocator);
         errdefer ages.deinit(allocator);
         return .{
-            .last_hash_index = bhq.last_hash_index,
-            .last_hash = bhq.last_hash,
+            .last_hash_index = self.last_hash_index,
+            .last_hash = self.last_hash,
             .ages = ages,
-            .max_age = bhq.max_age,
+            .max_age = self.max_age,
         };
     }
 
@@ -646,19 +672,47 @@ pub const EpochRewardStatus = union(enum) {
             .inactive => {},
         }
     }
+
+    pub fn clone(self: EpochRewardStatus, allocator: Allocator) Allocator.Error!EpochRewardStatus {
+        return switch (self) {
+            .active => |s| .{ .active = try s.clone(allocator) },
+            .inactive => .inactive,
+        };
+    }
 };
 
 pub const StartBlockHeightAndRewards = struct {
     /// the block height of the slot at which rewards distribution began
     distribution_starting_block_height: u64,
     /// calculated epoch rewards pending distribution, outer Vec is by partition (one partition per block)
-    stake_rewards_by_partition: []const []const PartitionedStakeReward, // TODO lifetime
+    stake_rewards_by_partition: []const []const PartitionedStakeReward,
 
     pub fn deinit(self: StartBlockHeightAndRewards, allocator: Allocator) void {
         for (self.stake_rewards_by_partition) |buf| {
             allocator.free(buf);
         }
         allocator.free(self.stake_rewards_by_partition);
+    }
+
+    pub fn clone(
+        self: StartBlockHeightAndRewards,
+        allocator: Allocator,
+    ) Allocator.Error!StartBlockHeightAndRewards {
+        const stake_rewards_by_partition = try allocator
+            .alloc([]const PartitionedStakeReward, self.stake_rewards_by_partition.len);
+        errdefer allocator.free(stake_rewards_by_partition);
+
+        for (self.stake_rewards_by_partition, stake_rewards_by_partition, 0..) |old, *new, i| {
+            errdefer for (stake_rewards_by_partition[0..i]) |x| allocator.free(x);
+            const slice = try allocator.alloc(PartitionedStakeReward, old.len);
+            @memcpy(slice, old);
+            new.* = slice;
+        }
+
+        return .{
+            .distribution_starting_block_height = self.distribution_starting_block_height,
+            .stake_rewards_by_partition = stake_rewards_by_partition,
+        };
     }
 };
 

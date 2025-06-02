@@ -17,13 +17,53 @@ const SlotState = sig.core.SlotState;
 /// kitchen-sink style approach of storing everything under the sun.
 ///
 /// [BankForks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank_forks.rs#L75)
+///
+/// This struct is *not* thread safe, and the lifetimes of the returned pointers
+/// will end as soon as the items are removed.
 pub const SlotTracker = struct {
-    slots: std.AutoArrayHashMapUnmanaged(Slot, Element) = .{},
+    slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
+    root: std.atomic.Value(Slot),
 
     const Element = struct {
         constants: SlotConstants,
-        state: SlotState, // TODO properly handle mutations and lifetime
+        state: SlotState,
     };
+
+    const Reference = struct {
+        constants: *const SlotConstants,
+        state: *SlotState,
+    };
+
+    pub fn init(root_slot: Slot) SlotTracker {
+        return .{
+            .slots = .{},
+            .root = .init(root_slot),
+        };
+    }
+
+    pub fn put(
+        self: *SlotTracker,
+        allocator: Allocator,
+        slot: Slot,
+        constants: SlotConstants,
+        state: SlotState,
+    ) !void {
+        const elem = try allocator.create(Element);
+        elem.* = .{ .constants = constants, .state = state };
+        try self.slots.put(allocator, slot, elem);
+    }
+
+    pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
+        const elem = self.slots.get(slot) orelse return null;
+        return .{
+            .constants = &elem.constants,
+            .state = &elem.state,
+        };
+    }
+
+    pub fn contains(self: *const SlotTracker, slot: Slot) bool {
+        return self.slots.contains(slot);
+    }
 
     pub fn activeSlots(
         self: *const SlotTracker,
@@ -32,11 +72,28 @@ pub const SlotTracker = struct {
         var list = std.ArrayListUnmanaged(Slot){};
         var iter = self.slots.iterator();
         while (iter.next()) |entry| {
-            if (!entry.value_ptr.state.isFrozen()) {
+            if (!entry.value_ptr.*.state.isFrozen()) {
                 try list.append(allocator, entry.key_ptr.*);
             }
         }
         return try list.toOwnedSlice(allocator);
+    }
+
+    pub fn frozenSlots(
+        self: *const SlotTracker,
+        allocator: Allocator,
+    ) Allocator.Error!std.AutoArrayHashMapUnmanaged(Slot, Reference) {
+        var frozen_slots = std.AutoArrayHashMapUnmanaged(Slot, Reference).empty;
+        var iter = self.slots.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.*.state.isFrozen()) {
+                try frozen_slots.put(allocator, entry.key_ptr.*, .{
+                    .constants = &entry.value_ptr.*.constants,
+                    .state = &entry.value_ptr.*.state,
+                });
+            }
+        }
+        return frozen_slots;
     }
 };
 
@@ -51,5 +108,10 @@ pub const EpochTracker = struct {
 
     pub fn getForSlot(self: *const EpochTracker, slot: Slot) ?EpochConstants {
         return self.epochs.get(self.schedule.getEpoch(slot));
+    }
+
+    /// lifetime ends as soon as the map is modified
+    pub fn getPtrForSlot(self: *const EpochTracker, slot: Slot) ?*const EpochConstants {
+        return self.epochs.getPtr(self.schedule.getEpoch(slot));
     }
 };
