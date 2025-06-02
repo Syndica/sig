@@ -248,6 +248,12 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         );
     }
 
+    if (deps.replay_tower.tower.isRecent(heaviest_slot) and
+        result.heaviest_fork_failures.items.len != 0)
+    {
+        // Implemented the log
+    }
+
     // TODO: if reset_bank: Reset onto a fork
 }
 
@@ -428,6 +434,7 @@ fn checkForVoteOnlyMode(
 
 // TODO The parameter list is humongous. Try to simplify
 fn handleVotableBank(
+    allocator: std.mem.Allocator,
     vote_slot: Slot,
     vote_hash: Hash, // vote_slot and vote_hash replaces Bank
     switch_fork_decision: *const SwitchForkDecision,
@@ -456,6 +463,19 @@ fn handleVotableBank(
     drop_bank_sender: *const stubs.Sender(std.ArrayList(stubs.BankWithScheduler)),
     wait_to_vote_slot: ?Slot,
 ) !void {
+    const maybe_new_root = try tower.recordBankVote(
+        allocator,
+        vote_slot,
+        vote_hash,
+    );
+
+    if (maybe_new_root) |new_root| {
+        _ = &new_root;
+        // TODO check_and_handle_new_root
+    }
+
+    // TODO update_commitment_cache
+    // TODO push_vote
     _ = &vote_slot;
     _ = &vote_hash;
     _ = &switch_fork_decision;
