@@ -342,24 +342,24 @@ pub fn Proof(bit_size: comptime_int) type {
             //
             // basepoint_scalar depends on a bunch of values computed beforehand so it's added last
 
-            var points: std.BoundedArray(Edwards25519, max) = .{};
+            var points: std.BoundedArray(Ristretto255, max) = .{};
             var scalars: std.BoundedArray([32]u8, max) = .{};
 
             points.appendSliceAssumeCapacity(&.{
-                pedersen.H.p,
-                self.S.p,
-                self.T_1.p,
-                self.T_2.p,
+                pedersen.H,
+                self.S,
+                self.T_1,
+                self.T_2,
             });
 
-            for (commitments) |commitment| points.appendAssumeCapacity(commitment.point.p);
-            for (self.ipp.L_vec) |l| points.appendAssumeCapacity(l.p);
-            for (self.ipp.R_vec) |r| points.appendAssumeCapacity(r.p);
+            for (commitments) |commitment| points.appendAssumeCapacity(commitment.point);
+            for (self.ipp.L_vec) |l| points.appendAssumeCapacity(l);
+            for (self.ipp.R_vec) |r| points.appendAssumeCapacity(r);
 
             var H_gen = GeneratorsChain.init("H");
-            for (0..bit_size) |_| points.appendAssumeCapacity(H_gen.next().p);
+            for (0..bit_size) |_| points.appendAssumeCapacity(H_gen.next());
             var G_gen = GeneratorsChain.init("G");
-            for (0..bit_size) |_| points.appendAssumeCapacity(G_gen.next().p);
+            for (0..bit_size) |_| points.appendAssumeCapacity(G_gen.next());
 
             const d_txb = d.mul(self.t_x_blinding);
             const H = Edwards25519.scalar.neg(d_txb.add(self.e_blinding).toBytes());
@@ -422,14 +422,15 @@ pub fn Proof(bit_size: comptime_int) type {
             const abw_tx = a_negated.mul(b).add(self.t_x).mul(w);
             const basepoint_scalar = delta_tx.add(abw_tx);
             scalars.appendAssumeCapacity(basepoint_scalar.toBytes()); // G
-            points.appendAssumeCapacity(pedersen.G.p);
+            points.appendAssumeCapacity(pedersen.G);
 
-            const check: Ristretto255 = .{ .p = pippenger.mulMulti(
+            const check: Ristretto255 = pippenger.mulMulti(
                 max,
+                false,
                 true,
                 points.constSlice(),
                 scalars.constSlice(),
-            ) };
+            );
 
             if (!check.equivalent(.{ .p = self.A.p.neg() })) {
                 return error.AlgebraicRelation;

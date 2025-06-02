@@ -116,7 +116,8 @@ pub fn Proof(bit_size: comptime_int) type {
                 const L: Ristretto255 = .{
                     .p = sig.crypto.pippenger.mulMulti(
                         257, // 128 + 128 + 1
-                        true,
+                        false,
+                        false,
                         points.constSlice(),
                         scalars.constSlice(),
                     ),
@@ -146,7 +147,8 @@ pub fn Proof(bit_size: comptime_int) type {
                 const R: Ristretto255 = .{
                     .p = sig.crypto.pippenger.mulMulti(
                         257, // 128 + 128 + 1
-                        true,
+                        false,
+                        false,
                         points.constSlice(),
                         scalars.constSlice(),
                     ),
@@ -216,7 +218,7 @@ pub fn Proof(bit_size: comptime_int) type {
             const u_sq, const u_inv_sq, const s = try self.verificationScalars(transcript);
 
             var scalars: std.BoundedArray([32]u8, max_elements) = .{};
-            var points: std.BoundedArray(Edwards25519, max_elements) = .{};
+            var points: std.BoundedArray(Ristretto255, max_elements) = .{};
 
             scalars.appendAssumeCapacity(self.a.mul(self.b).toBytes());
             for (G_factors, s) |gi, si| {
@@ -238,20 +240,21 @@ pub fn Proof(bit_size: comptime_int) type {
                 scalars.appendAssumeCapacity(neg);
             }
 
-            points.appendAssumeCapacity(Q.p);
-            for (G) |g| points.appendAssumeCapacity(g);
-            for (H) |h| points.appendAssumeCapacity(h);
-            for (self.L_vec) |l| points.appendAssumeCapacity(l.p);
-            for (self.R_vec) |r| points.appendAssumeCapacity(r.p);
+            points.appendAssumeCapacity(Q);
+            for (G) |g| points.appendAssumeCapacity(.{ .p = g });
+            for (H) |h| points.appendAssumeCapacity(.{ .p = h });
+            for (self.L_vec) |l| points.appendAssumeCapacity(l);
+            for (self.R_vec) |r| points.appendAssumeCapacity(r);
 
             const check = sig.crypto.pippenger.mulMulti(
                 max_elements,
+                false,
                 true,
                 points.constSlice(),
                 scalars.constSlice(),
             );
 
-            if (!P.equivalent(.{ .p = check })) {
+            if (!P.equivalent(check)) {
                 return error.AlgebraicRelation;
             }
         }
