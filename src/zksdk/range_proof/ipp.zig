@@ -74,104 +74,9 @@ pub fn Proof(bit_size: comptime_int) type {
             var L_vec: std.BoundedArray(Ristretto255, logn) = .{};
             var R_vec: std.BoundedArray(Ristretto255, logn) = .{};
 
-            // If it's the first iteration, unroll the Hprime = H*y_inv scalar mults
-            // into multiscalar muls, for performance.
             var n: u64 = bit_size;
-            if (bit_size != 1) {
-                n = n / 2;
-
-                const a_L = a[0..n];
-                const a_R = a[n..];
-                const b_L = b[0..n];
-                const b_R = b[n..];
-                const G_L = G[0..n];
-                const G_R = G[n..];
-                const H_L = H[0..n];
-                const H_R = H[n..];
-
-                const c_L = bp.innerProduct(a_L, b_R);
-                const c_R = bp.innerProduct(a_R, b_L);
-
-                var scalars: std.BoundedArray([32]u8, bit_size + 1) = .{};
-                var points: std.BoundedArray(Edwards25519, bit_size + 1) = .{};
-
-                for (a_L, G_factors[n .. n * 2]) |ai, gi| {
-                    scalars.appendAssumeCapacity(ai.mul(gi).toBytes());
-                }
-                for (b_R, H_factors[0..n]) |bi, hi| {
-                    scalars.appendAssumeCapacity(bi.mul(hi).toBytes());
-                }
-                scalars.appendAssumeCapacity(c_L.toBytes());
-
-                for (G_R) |gi| points.appendAssumeCapacity(gi);
-                for (H_L) |hi| points.appendAssumeCapacity(hi);
-                points.appendAssumeCapacity(Q.p);
-
-                const L: Ristretto255 = .{ .p = weak_mul.mulMulti(
-                    bit_size + 1,
-                    points.constSlice()[0 .. bit_size + 1].*,
-                    scalars.constSlice()[0 .. bit_size + 1].*,
-                ) };
-
-                points.len = 0;
-                scalars.len = 0;
-
-                for (a_R, G_factors[0..n]) |ai, gi| {
-                    scalars.appendAssumeCapacity(ai.mul(gi).toBytes());
-                }
-                for (b_L, H_factors[n .. n * 2]) |bi, hi| {
-                    scalars.appendAssumeCapacity(bi.mul(hi).toBytes());
-                }
-                scalars.appendAssumeCapacity(c_R.toBytes());
-
-                for (G_L) |gi| points.appendAssumeCapacity(gi);
-                for (H_R) |hi| points.appendAssumeCapacity(hi);
-                points.appendAssumeCapacity(Q.p);
-
-                const R: Ristretto255 = .{ .p = weak_mul.mulMulti(
-                    bit_size + 1,
-                    points.constSlice()[0 .. bit_size + 1].*,
-                    scalars.constSlice()[0 .. bit_size + 1].*,
-                ) };
-
-                L_vec.appendAssumeCapacity(L);
-                R_vec.appendAssumeCapacity(R);
-
-                transcript.appendPoint("L", L);
-                transcript.appendPoint("R", R);
-
-                const u = transcript.challengeScalar("u");
-                const u_inv = u.invert();
-
-                // Reduce round
-                for (0..n) |i| {
-                    a_L[i] = a_L[i].mul(u).add(u_inv.mul(a_R[i]));
-                    b_L[i] = b_L[i].mul(u_inv).add(u.mul(b_R[i]));
-                    G_L[i] = weak_mul.mulMulti(
-                        2,
-                        .{ G_L[i], G_R[i] },
-                        .{
-                            u_inv.mul(G_factors[i]).toBytes(),
-                            u.mul(G_factors[n + i]).toBytes(),
-                        },
-                    );
-                    H_L[i] = weak_mul.mulMulti(
-                        2,
-                        .{ H_L[i], H_R[i] },
-                        .{
-                            u.mul(H_factors[i]).toBytes(),
-                            u_inv.mul(H_factors[n + i]).toBytes(),
-                        },
-                    );
-                }
-
-                a = a_L;
-                b = b_L;
-                G = G_L;
-                H = H_L;
-            }
-
             while (n != 1) {
+                const first_round = n == bit_size;
                 n = n / 2;
 
                 const a_L = a[0..n];
@@ -188,12 +93,20 @@ pub fn Proof(bit_size: comptime_int) type {
 
                 // after the first round, the size has been divded by two, meaning we
                 // only need to have bit_size / 2 + 1 elements in the arrays.
-                const len = (bit_size / 2) + 1;
-                var scalars: std.BoundedArray([32]u8, len) = .{};
-                var points: std.BoundedArray(Edwards25519, len) = .{};
+                var scalars: std.BoundedArray([32]u8, bit_size + 1) = .{};
+                var points: std.BoundedArray(Edwards25519, bit_size + 1) = .{};
 
-                for (a_L) |ai| scalars.appendAssumeCapacity(ai.toBytes());
-                for (b_R) |bi| scalars.appendAssumeCapacity(bi.toBytes());
+                if (first_round) {
+                    for (a_L, G_factors[n .. n * 2]) |ai, gi| {
+                        scalars.appendAssumeCapacity(ai.mul(gi).toBytes());
+                    }
+                    for (b_R, H_factors[0..n]) |bi, hi| {
+                        scalars.appendAssumeCapacity(bi.mul(hi).toBytes());
+                    }
+                } else {
+                    for (a_L) |ai| scalars.appendAssumeCapacity(ai.toBytes());
+                    for (b_R) |bi| scalars.appendAssumeCapacity(bi.toBytes());
+                }
                 scalars.appendAssumeCapacity(c_L.toBytes());
 
                 for (G_R) |gi| points.appendAssumeCapacity(gi);
@@ -202,7 +115,7 @@ pub fn Proof(bit_size: comptime_int) type {
 
                 const L: Ristretto255 = .{
                     .p = sig.crypto.pippenger.mulMulti(
-                        129, // 64 + 64  +1
+                        257, // 128 + 128 + 1
                         true,
                         points.constSlice(),
                         scalars.constSlice(),
@@ -213,8 +126,17 @@ pub fn Proof(bit_size: comptime_int) type {
                 points.len = 0;
                 scalars.len = 0;
 
-                for (a_R) |ai| scalars.appendAssumeCapacity(ai.toBytes());
-                for (b_L) |bi| scalars.appendAssumeCapacity(bi.toBytes());
+                if (first_round) {
+                    for (a_R, G_factors[0..n]) |ai, gi| {
+                        scalars.appendAssumeCapacity(ai.mul(gi).toBytes());
+                    }
+                    for (b_L, H_factors[n .. n * 2]) |bi, hi| {
+                        scalars.appendAssumeCapacity(bi.mul(hi).toBytes());
+                    }
+                } else {
+                    for (a_R) |ai| scalars.appendAssumeCapacity(ai.toBytes());
+                    for (b_L) |bi| scalars.appendAssumeCapacity(bi.toBytes());
+                }
                 scalars.appendAssumeCapacity(c_R.toBytes());
 
                 for (G_L) |gi| points.appendAssumeCapacity(gi);
@@ -223,7 +145,7 @@ pub fn Proof(bit_size: comptime_int) type {
 
                 const R: Ristretto255 = .{
                     .p = sig.crypto.pippenger.mulMulti(
-                        129, // 64 + 64  +1
+                        257, // 128 + 128 + 1
                         true,
                         points.constSlice(),
                         scalars.constSlice(),
@@ -242,15 +164,25 @@ pub fn Proof(bit_size: comptime_int) type {
                 for (0..n) |i| {
                     a_L[i] = a_L[i].mul(u).add(u_inv.mul(a_R[i]));
                     b_L[i] = b_L[i].mul(u_inv).add(u.mul(b_R[i]));
+
+                    // For the first round, unroll the Hprime = H * y_inv scalar multiplications
+                    // into multiscalar multiplications, for performance.
+                    // zig fmt: off
+                    const first =  if (first_round) u_inv.mul(G_factors[i])     else u_inv;
+                    const second = if (first_round) u.mul(G_factors[n + i])     else u;
+                    const third =  if (first_round) u.mul(H_factors[i])         else u;
+                    const fourth = if (first_round) u_inv.mul(H_factors[n + i]) else u_inv;
+                    // zig fmt: on
+
                     G_L[i] = weak_mul.mulMulti(
                         2,
                         .{ G_L[i], G_R[i] },
-                        .{ u_inv.toBytes(), u.toBytes() },
+                        .{ first.toBytes(), second.toBytes() },
                     );
                     H_L[i] = weak_mul.mulMulti(
                         2,
                         .{ H_L[i], H_R[i] },
-                        .{ u.toBytes(), u_inv.toBytes() },
+                        .{ third.toBytes(), fourth.toBytes() },
                     );
                 }
 
