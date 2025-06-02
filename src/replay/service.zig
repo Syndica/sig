@@ -9,7 +9,6 @@ const ThreadPool = sig.sync.ThreadPool;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 const Slot = sig.core.Slot;
-const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
