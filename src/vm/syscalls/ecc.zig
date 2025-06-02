@@ -354,22 +354,21 @@ pub fn curveMultiscalarMul(
                 };
             }
 
-            const msm = sig.crypto.pippenger.mulMulti(512, false, point_data, scalars) catch {
-                registers.set(.r0, 1);
-                return;
-            };
+            const msm = sig.crypto.pippenger.mulMulti(
+                512,
+                true,
+                id == .ristretto,
+                point_data,
+                scalars,
+            ) catch return registers.set(.r0, 1);
 
-            const result = switch (id) {
-                .edwards => msm,
-                .ristretto => Ristretto255{ .p = msm },
-            };
             const result_point_data = try memory_map.translateType(
                 [32]u8,
                 .mutable,
                 result_point_addr,
                 tc.getCheckAligned(),
             );
-            result_point_data.* = result.toBytes();
+            result_point_data.* = msm.toBytes();
         },
     }
 }
