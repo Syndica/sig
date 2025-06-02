@@ -161,7 +161,8 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
             fork_stats.total_stake,
             slot,
         );
-        markSlotsDuplicateConfirmed(
+
+        try markSlotsDuplicateConfirmed(
             deps.blockstore,
             deps.progress_map,
             deps.fork_choice,
@@ -288,7 +289,7 @@ fn maybeRefreshLastVote(
 /// "Duplicate confirmed" means the slot has received enough stake-weighted votes
 /// from validators to be considered definitively confirmed by the network,
 /// even if there are multiple competing versions of that slot.
-/// 
+///
 /// This means the slot becomes a valid candidate for fork selection and
 /// can influence which chain the validator builds upon.
 ///
@@ -374,11 +375,12 @@ const stubs = struct {
     }
 };
 
+// TODO: Complete
 fn markSlotsDuplicateConfirmed(
     blockstore: *BlockstoreReader,
     progress_map: *ProgressMap,
     fork_choice: *ForkChoice,
-    confirmed_slots: []const SlotAndHash,
+    confirmed_duplicates: []const SlotAndHash,
     root_slot: Slot,
     duplicate_slot_tracker: stubs.DuplicateSlotsTracker,
     epoch_slots_frozen_slots: stubs.EpochSlotsFrozenSlots,
@@ -386,8 +388,21 @@ fn markSlotsDuplicateConfirmed(
     ancestor_hashes_replay_update_sender: stubs.AncestorHashesReplayUpdateSender,
     purge_repair_slot_counter: stubs.PurgeRepairSlotCounter,
     duplicate_confirmed_slots: stubs.DuplicateConfirmedSlots,
-) void {
-    _ = &confirmed_slots;
+) !void {
+    for (confirmed_duplicates) |confirmed| {
+        // TODO confirmed_slot is less than root_slot
+        // Need to find a way to get the root slot.
+
+        if (confirmed.slot <= root_slot) {
+            continue;
+        }
+
+        const slot_progress = progress_map.map.getEntry(confirmed.slot) orelse
+            return error.MissingSlot;
+
+        slot_progress.value_ptr.*.fork_stats.duplicate_confirmed_hash = confirmed.hash;
+    }
+
     _ = &blockstore;
     _ = &root_slot;
     _ = &progress_map;
