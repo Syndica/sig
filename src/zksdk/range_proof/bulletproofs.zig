@@ -535,8 +535,9 @@ pub fn Data(bit_size: comptime_int) type {
         context: Context,
         proof: P,
 
-        const P = Proof(bit_size);
         const Self = @This();
+        const P = Proof(bit_size);
+
         pub const TYPE: ProofType = switch (bit_size) {
             64 => .batched_range_proof_u64,
             128 => .batched_range_proof_u128,
@@ -567,6 +568,7 @@ pub fn Data(bit_size: comptime_int) type {
                 bit_lengths,
                 openings,
             );
+
             var transcript = context.newTranscript();
             const proof = try P.init(
                 amounts,
