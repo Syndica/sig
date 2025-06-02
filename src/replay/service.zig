@@ -282,6 +282,20 @@ fn maybeRefreshLastVote(
     return true;
 }
 
+/// Identifies and returns slots that should be marked as "duplicate confirmed" based on
+/// the validator's voting state and stake distribution.
+///
+/// "Duplicate confirmed" means the slot has received enough stake-weighted votes
+/// from validators to be considered definitively confirmed by the network,
+/// even if there are multiple competing versions of that slot.
+/// 
+/// This means the slot becomes a valid candidate for fork selection and
+/// can influence which chain the validator builds upon.
+///
+/// Note: 1. This is "duplicate confirmed", which is different from "regular" confirmation,
+/// where a slot is simply processed and frozen.
+/// Note: 2. The slot is skipped if it is already duplicate confirmed in the progress map's fork state
+///          or if the slot is not already frozen.
 fn towerDuplicateConfirmedForks(
     allocator: std.mem.Allocator,
     progress_map: *const ProgressMap,
