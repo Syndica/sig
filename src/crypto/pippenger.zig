@@ -6,17 +6,44 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const crypto = std.crypto;
 const Ed25519 = crypto.ecc.Edwards25519;
+const Ristretto255 = crypto.ecc.Ristretto255;
 const CompressedScalar = Ed25519.scalar.CompressedScalar;
 
 const ExtendedPoint = sig.crypto.ExtendedPoint;
 const CachedPoint = sig.crypto.CachedPoint;
 
+fn ReturnType(encoded: bool, ristretto: bool) type {
+    const Base = if (ristretto) Ristretto255 else Ed25519;
+    return if (encoded) (error{NonCanonical} || crypto.errors.EncodingError)!Base else Base;
+}
+
+fn PointType(encoded: bool, ristretto: bool) type {
+    if (encoded) return [32]u8;
+    return if (ristretto) Ristretto255 else Ed25519;
+}
+
 pub fn mulMulti(
     comptime max_elements: comptime_int,
+    /// Set to true if the input is in wire-format. This lets us usually save
+    /// an extra stack copy and loop when buffering the decoding process,
+    /// instead just doing it once here straight into the extended point form.
+    ///
+    /// Changes the return type of the function to an error union, in case
+    /// the encoded points decode into a non-canonical form.
     comptime encoded: bool,
-    ed_points: []const if (encoded) Ed25519 else [32]u8,
+    /// (Option only applies if we're decoding from a wire format).
+    ///
+    /// Set to true if the wire format we're decoding from is Ristretto instead
+    /// of Edwards25519. The actual MSM itself still happens on the underlying
+    /// Edwards25519 element, since there's no difference between the operation
+    /// on Ristretto and Edwards25519, but the decoding is different.
+    comptime ristretto: bool,
+    // TODO: explore accepting ristretto points here as well, not sure of the current
+    // design implications. are there any places where we're going out of our way to
+    // translate to the underlying ed25519 point?
+    ed_points: []const PointType(encoded, ristretto),
     compressed_scalars: []const CompressedScalar,
-) if (encoded) Ed25519 else crypto.errors.EncodingError!Ed25519 {
+) ReturnType(encoded, ristretto) {
     std.debug.assert(compressed_scalars.len == ed_points.len);
     std.debug.assert(compressed_scalars.len <= max_elements);
 
@@ -42,9 +69,16 @@ pub fn mulMulti(
         scalars.appendAssumeCapacity(asRadix(s, w));
     }
     for (ed_points) |l| {
+        // Translate from whatever the input format is to a decompressed Ed25519 point.
         const decompressed = switch (encoded) {
-            true => l,
-            else => try Ed25519.fromBytes(l),
+            true => switch (ristretto) {
+                true => (try Ristretto255.fromBytes(l)).p,
+                else => try Ed25519.fromBytes(l),
+            },
+            else => switch (ristretto) {
+                true => l.p,
+                else => l,
+            },
         };
         points.appendAssumeCapacity(.fromExtended(.fromPoint(decompressed)));
     }
@@ -86,7 +120,11 @@ pub fn mulMulti(
     for (columns[1..]) |p| {
         hi_column = mulByPow2(hi_column, w).addCached(.fromExtended(p));
     }
-    return hi_column.toPoint();
+
+    return switch (ristretto) {
+        true => .{ .p = hi_column.toPoint() },
+        else => hi_column.toPoint(),
+    };
 }
 
 inline fn mulByPow2(p: ExtendedPoint, k: u32) ExtendedPoint {
