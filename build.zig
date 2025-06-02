@@ -139,6 +139,7 @@ pub fn build(b: *Build) void {
     const poseidon_mod = b.dependency("poseidon", dep_opts).module("poseidon");
     const xev_mod = b.dependency("xev", dep_opts).module("xev");
     const pretty_table_mod = b.dependency("prettytable", dep_opts).module("prettytable");
+    const ff_mod = b.dependency("ff", dep_opts).module("ff");
 
     const lsquic_dep = b.dependency("lsquic", .{
         .target = config.target,
@@ -206,6 +207,7 @@ pub fn build(b: *Build) void {
         .{ .name = "xev",           .module = xev_mod },
         .{ .name = "zig-network",   .module = zig_network_mod },
         .{ .name = "zstd",          .module = zstd_mod },
+        .{ .name = "ff",            .module = ff_mod },
     };
     // zig fmt: on
 
