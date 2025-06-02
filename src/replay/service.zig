@@ -41,6 +41,8 @@ pub const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 pub const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
+pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
+
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,
@@ -307,11 +309,11 @@ fn towerDuplicateConfirmedForks(
             continue;
         }
 
-        const is_slot_duplicate_confirmed = if (vote_stakes.get(slot)) |voted_stake|
-            (@as(f64, @floatFromInt(voted_stake)) / @as(f64, @floatFromInt(total_stake))) >
-                DUPLICATE_THRESHOLD
-        else
-            false;
+        const is_slot_duplicate_confirmed = isSlotDuplicateConfirmed(
+            slot,
+            &vote_stakes,
+            total_stake,
+        );
 
         if (is_slot_duplicate_confirmed) {
             try duplicate_confirmed_forks.append(
