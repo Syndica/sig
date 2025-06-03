@@ -752,6 +752,7 @@ test "load accounts rent paid" {
     env.compute_budget_limits.loaded_accounts_bytes = 2_000;
 
     const NATIVE_LOADER_ID = runtime.ids.NATIVE_LOADER_ID;
+
     const fee_payer_address = Pubkey.initRandom(prng.random());
     const instruction_address = Pubkey.initRandom(prng.random());
 
