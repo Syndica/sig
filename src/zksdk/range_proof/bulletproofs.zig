@@ -12,7 +12,6 @@ pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 const pippenger = sig.crypto.pippenger;
 const pedersen = sig.zksdk.pedersen;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const Shake256 = std.crypto.hash.sha3.Shake256;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Scalar = std.crypto.ecc.Edwards25519.scalar.Scalar;
 const weak_mul = sig.vm.syscalls.ecc.weak_mul;
@@ -292,7 +291,10 @@ pub fn Proof(bit_size: comptime_int) type {
             // only left for legacy reasons, use `d` instead
             _ = transcript.challengeScalar("c");
 
-            const x_sq, const x_inv_sq, const s = try self.ipp.verificationScalars(transcript);
+            const x_sq, //
+            const x_inv_sq, //
+            const s //
+            = try self.ipp.verificationScalars(transcript);
 
             const a = self.ipp.a;
             const b = self.ipp.b;
@@ -378,6 +380,7 @@ pub fn Proof(bit_size: comptime_int) type {
             var exp_y_inv = y;
             var j: u64 = 0;
             var m: u64 = 0;
+            const y_inv = y.invert();
             for (0..bit_size) |i| {
                 defer j += 1;
                 if (j == bit_lengths[m]) {
@@ -387,7 +390,7 @@ pub fn Proof(bit_size: comptime_int) type {
                     z_and_2 = exp_z;
                 }
                 if (j != 0) z_and_2 = z_and_2.add(z_and_2);
-                exp_y_inv = exp_y_inv.mul(y.invert());
+                exp_y_inv = exp_y_inv.mul(y_inv);
                 const result = s[bit_size - 1 - i].mul(minus_b).add(z_and_2);
                 scalars.appendAssumeCapacity(result.mul(exp_y_inv).add(z).toBytes());
             }
