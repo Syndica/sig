@@ -152,6 +152,20 @@ pub const Transaction = struct {
 
         return TransactionMessage.hash(serialized_message.slice());
     }
+
+    /// Count the number of accounts in the slice of transactions,
+    /// including accounts from lookup tables
+    pub fn numAccounts(transactions: []const Transaction) usize {
+        var total_accounts: usize = 0;
+        for (transactions) |transaction| {
+            total_accounts += transaction.msg.account_keys.len;
+            for (transaction.msg.address_lookups) |lookup| {
+                total_accounts += lookup.writable_indexes.len;
+                total_accounts += lookup.readonly_indexes.len;
+            }
+        }
+        return total_accounts;
+    }
 };
 
 pub const TransactionVersion = enum(u8) {
@@ -248,10 +262,9 @@ pub const TransactionMessage = struct {
     pub fn isWritable(self: TransactionMessage, index: usize) bool {
         const is_readonly_signed =
             index < self.signature_count and
-            index > self.signature_count - self.readonly_signed_count;
+            index >= self.signature_count - self.readonly_signed_count;
 
-        const is_readonly_unsigned = index >= self.signature_count and
-            index < self.account_keys.len - self.readonly_unsigned_count;
+        const is_readonly_unsigned = index >= self.account_keys.len - self.readonly_unsigned_count;
 
         return !(is_readonly_signed or is_readonly_unsigned);
     }
