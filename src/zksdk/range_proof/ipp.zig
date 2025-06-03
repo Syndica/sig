@@ -267,7 +267,6 @@ pub fn Proof(bit_size: comptime_int) type {
             transcript.appendU64("n", bit_size);
 
             // 1. Recompute x_k,...,x_1 based on the proof transcript
-
             var challenges: [logn]Scalar = undefined;
             for (&challenges, self.L_vec, self.R_vec) |*c, L, R| {
                 try transcript.validateAndAppendPoint("L", L);
@@ -276,27 +275,16 @@ pub fn Proof(bit_size: comptime_int) type {
             }
 
             // 2. Compute 1/(u_k...u_1) and 1/u_k, ..., 1/u_1
-
-            // The inverse of the product of all scalars in the challenge.
-
             var challenges_inv = challenges;
-            // const allinv = batchInvert(logn, &challenges_inv);
-            var allinv = bp.ONE;
-            for (&challenges_inv) |*scalar| {
-                allinv = allinv.mul(scalar.*);
-                scalar.* = scalar.invert();
-            }
-            allinv = allinv.invert();
+            const allinv = batchInvert(logn, &challenges_inv);
 
             // 3. Compute u_i^2 and (1/u_i)^2
-
             for (&challenges, &challenges_inv) |*c, *c_inv| {
                 c.* = c.mul(c.*);
                 c_inv.* = c_inv.mul(c_inv.*);
             }
 
             // 4. Compute s values inductively.
-
             var s: [bit_size]Scalar = undefined;
             s[0] = allinv;
             for (1..bit_size) |i| {
@@ -339,10 +327,10 @@ pub fn Proof(bit_size: comptime_int) type {
 }
 
 fn batchInvert(comptime N: u32, scalars: *[N]Scalar) Scalar {
-    var scratch: [N]Scalar = @splat(bp.ONE);
-    defer std.crypto.secureZero(Scalar, &scratch);
-
     var acc: Scalar = bp.ONE;
+    var scratch: [N]Scalar = @splat(bp.ONE);
+    defer std.crypto.secureZero(u8, std.mem.sliceAsBytes(&scratch));
+
     for (scalars, &scratch) |input, *s| {
         s.* = acc;
         acc = acc.mul(input);
@@ -350,14 +338,19 @@ fn batchInvert(comptime N: u32, scalars: *[N]Scalar) Scalar {
     std.debug.assert(!acc.isZero());
 
     acc = acc.invert();
+    const allinv = acc;
 
-    for (scalars, scratch) |*input, s| {
-        const tmp0 = acc.mul(input.*);
+    for (0..N) |fwd| {
+        const i = N - 1 - fwd;
+        const s = scratch[i];
+        const input = &scalars[i];
+
+        const tmp = acc.mul(input.*);
         input.* = acc.mul(s);
-        acc = tmp0;
+        acc = tmp;
     }
 
-    return acc;
+    return allinv;
 }
 
 test "basic correctness" {
