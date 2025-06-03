@@ -162,6 +162,11 @@ pub fn build(b: *Build) void {
         .optimize = config.optimize,
     });
 
+    // G/H table for Bulletproofs
+    const gh_table = b.createModule(.{
+        .root_source_file = generateTable(b),
+    });
+
     // zig fmt: off
     const imports: []const Build.Module.Import = &.{
         .{ .name = "base58",        .module = base58_mod },
@@ -176,6 +181,7 @@ pub fn build(b: *Build) void {
         .{ .name = "xev",           .module = xev_mod },
         .{ .name = "zig-network",   .module = zig_network_mod },
         .{ .name = "zstd",          .module = zstd_mod },
+        .{ .name = "table",         .module = gh_table },
     };
     // zig fmt: on
 
@@ -346,6 +352,19 @@ fn addInstallAndRun(
             step.dependOn(&run.step);
         }
     }
+}
+
+fn generateTable(b: *Build) Build.LazyPath {
+    const gen = b.addExecutable(.{
+        .name = "generator_chain",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            // Overall it takes longer to compile in debug mode than the perf gain from a release mode at runtime
+            .optimize = .Debug,
+            .root_source_file = b.path("scripts/generator_chain.zig"),
+        }),
+    });
+    return b.addRunArtifact(gen).captureStdOut();
 }
 
 const BlockstoreDB = enum {
