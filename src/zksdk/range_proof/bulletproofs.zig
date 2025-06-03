@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const sig = @import("../../sig.zig");
+const table = @import("table");
 pub const InnerProductProof = @import("ipp.zig").Proof; // pub so tests can run
 
 const pippenger = sig.crypto.pippenger;
@@ -126,32 +127,20 @@ pub fn Proof(bit_size: comptime_int) type {
             transcript.appendDomSep("range-proof");
             transcript.appendU64("n", bit_size);
 
-            var G_gen = GeneratorsChain.init("G");
-            var H_gen = GeneratorsChain.init("H");
-
             // bit-decompose values and generate their Pedersen vector commitment
             const a_blinding: Scalar = .random();
             var A = pedersen.H.mul(a_blinding.toBytes()) catch unreachable;
 
-            var G_points: std.BoundedArray(Edwards25519, bit_size) = .{};
-            var H_points: std.BoundedArray(Edwards25519, bit_size) = .{};
-
+            var bit: u64 = 0;
             for (amounts, bit_lengths) |amount, n| {
                 for (0..n) |j| {
-                    const G = G_gen.next().p;
-                    const H = H_gen.next().p;
-
-                    G_points.appendAssumeCapacity(G);
-                    H_points.appendAssumeCapacity(H);
-
                     // init functions aren't exposed, so doesn't need to be constant time.
                     const v = (amount >> @intCast(j)) & 0b1 != 0;
-                    const point = if (v) G else H.neg();
+                    const point = if (v) table.G[bit] else table.H[bit].neg();
                     A = A.add(.{ .p = point });
+                    bit += 1;
                 }
             }
-            std.debug.assert(G_points.len == bit_size);
-            std.debug.assert(H_points.len == bit_size);
 
             var s_L: [bit_size][32]u8 = undefined;
             var s_R: [bit_size][32]u8 = undefined;
@@ -163,7 +152,7 @@ pub fn Proof(bit_size: comptime_int) type {
 
             const S: Ristretto255 = .{ .p = Edwards25519.mulMulti(
                 1 + bit_size * 2,
-                .{pedersen.H.p} ++ G_points.buffer ++ H_points.buffer,
+                .{pedersen.H.p} ++ table.G[0..bit_size].* ++ table.H[0..bit_size].*,
                 .{s_blinding.toBytes()} ++ s_L ++ s_R,
             ) catch unreachable };
 
@@ -254,8 +243,6 @@ pub fn Proof(bit_size: comptime_int) type {
                 .{ .p = Q },
                 &G_factors,
                 &H_factors,
-                &G_points.buffer,
-                &H_points.buffer,
                 &l_vec,
                 &r_vec,
                 transcript,
@@ -356,10 +343,8 @@ pub fn Proof(bit_size: comptime_int) type {
             for (self.ipp.L_vec) |l| points.appendAssumeCapacity(l);
             for (self.ipp.R_vec) |r| points.appendAssumeCapacity(r);
 
-            var H_gen = GeneratorsChain.init("H");
-            for (0..bit_size) |_| points.appendAssumeCapacity(H_gen.next());
-            var G_gen = GeneratorsChain.init("G");
-            for (0..bit_size) |_| points.appendAssumeCapacity(G_gen.next());
+            points.appendSliceAssumeCapacity(table.H_ristretto[0..bit_size]);
+            points.appendSliceAssumeCapacity(table.G_ristretto[0..bit_size]);
 
             const d_txb = d.mul(self.t_x_blinding);
             const H = Edwards25519.scalar.neg(d_txb.add(self.e_blinding).toBytes());
@@ -686,23 +671,6 @@ pub fn Data(bit_size: comptime_int) type {
         };
     };
 }
-
-pub const GeneratorsChain = struct {
-    shake: Shake256,
-
-    pub fn init(comptime label: []const u8) GeneratorsChain {
-        var shake = Shake256.init(.{});
-        shake.update("GeneratorsChain");
-        shake.update(label);
-        return .{ .shake = shake };
-    }
-
-    pub fn next(self: *GeneratorsChain) Ristretto255 {
-        var bytes: [64]u8 = undefined;
-        self.shake.squeeze(&bytes);
-        return Ristretto255.fromUniform(bytes);
-    }
-};
 
 /// Computes the inner product between two vectors.
 ///
