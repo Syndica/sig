@@ -1,4 +1,5 @@
 const std = @import("std");
+const table = @import("table");
 const sig = @import("../../sig.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
@@ -57,14 +58,14 @@ pub fn Proof(bit_size: comptime_int) type {
             Q: Ristretto255,
             G_factors: *const [bit_size]Scalar,
             H_factors: *const [bit_size]Scalar,
-            G_vec: *[bit_size]Edwards25519,
-            H_vec: *[bit_size]Edwards25519,
             a_vec: *[bit_size]Scalar,
             b_vec: *[bit_size]Scalar,
             transcript: *Transcript,
         ) Self {
-            var G: []Edwards25519 = G_vec;
-            var H: []Edwards25519 = H_vec;
+            var G_buffer = table.G[0..bit_size].*;
+            var H_buffer = table.H[0..bit_size].*;
+            var G: []Edwards25519 = &G_buffer;
+            var H: []Edwards25519 = &H_buffer;
             var a: []Scalar = a_vec;
             var b: []Scalar = b_vec;
 
@@ -211,8 +212,6 @@ pub fn Proof(bit_size: comptime_int) type {
             H_factors: *const [bit_size]Scalar,
             P: Ristretto255,
             Q: Ristretto255,
-            G: *const [bit_size]Edwards25519,
-            H: *const [bit_size]Edwards25519,
             transcript: *Transcript,
         ) !void {
             const u_sq, const u_inv_sq, const s = try self.verificationScalars(transcript);
@@ -241,8 +240,8 @@ pub fn Proof(bit_size: comptime_int) type {
             }
 
             points.appendAssumeCapacity(Q);
-            for (G) |g| points.appendAssumeCapacity(.{ .p = g });
-            for (H) |h| points.appendAssumeCapacity(.{ .p = h });
+            for (table.G[0..bit_size]) |g| points.appendAssumeCapacity(.{ .p = g });
+            for (table.H[0..bit_size]) |h| points.appendAssumeCapacity(.{ .p = h });
             for (self.L_vec) |l| points.appendAssumeCapacity(l);
             for (self.R_vec) |r| points.appendAssumeCapacity(r);
 
@@ -269,19 +268,21 @@ pub fn Proof(bit_size: comptime_int) type {
 
             // 1. Recompute x_k,...,x_1 based on the proof transcript
 
-            var challenges: std.BoundedArray(Scalar, logn) = .{};
-            for (self.L_vec, self.R_vec) |L, R| {
+            var challenges: [logn]Scalar = undefined;
+            for (&challenges, self.L_vec, self.R_vec) |*c, L, R| {
                 try transcript.validateAndAppendPoint("L", L);
                 try transcript.validateAndAppendPoint("R", R);
-                challenges.appendAssumeCapacity(transcript.challengeScalar("u"));
+                c.* = transcript.challengeScalar("u");
             }
 
             // 2. Compute 1/(u_k...u_1) and 1/u_k, ..., 1/u_1
 
             // The inverse of the product of all scalars in the challenge.
-            var allinv = bp.ONE;
+
             var challenges_inv = challenges;
-            for (challenges_inv.slice()) |*scalar| {
+            // const allinv = batchInvert(logn, &challenges_inv);
+            var allinv = bp.ONE;
+            for (&challenges_inv) |*scalar| {
                 allinv = allinv.mul(scalar.*);
                 scalar.* = scalar.invert();
             }
@@ -289,31 +290,26 @@ pub fn Proof(bit_size: comptime_int) type {
 
             // 3. Compute u_i^2 and (1/u_i)^2
 
-            for (challenges.slice(), challenges_inv.slice()) |*c, *c_inv| {
+            for (&challenges, &challenges_inv) |*c, *c_inv| {
                 c.* = c.mul(c.*);
                 c_inv.* = c_inv.mul(c_inv.*);
             }
-            const challenges_sq = challenges;
-            const challenges_inv_sq = challenges_inv;
 
             // 4. Compute s values inductively.
 
-            var s: std.BoundedArray(Scalar, bit_size) = .{};
-            s.appendAssumeCapacity(allinv);
+            var s: [bit_size]Scalar = undefined;
+            s[0] = allinv;
             for (1..bit_size) |i| {
                 const log_i = std.math.log2_int(u64, i);
                 const k = @as(u64, 1) << log_i;
-                const u_lg_i_sq = challenges_sq.constSlice()[logn - 1 - log_i];
-                s.appendAssumeCapacity(s.constSlice()[i - k].mul(u_lg_i_sq));
+                const u_lg_i_sq = challenges[logn - 1 - log_i];
+                s[i] = s[i - k].mul(u_lg_i_sq);
             }
 
-            std.debug.assert(challenges_sq.len == logn);
-            std.debug.assert(challenges_inv_sq.len == logn);
-            std.debug.assert(s.len == bit_size);
             return .{
-                challenges_sq.buffer,
-                challenges_inv_sq.buffer,
-                s.buffer,
+                challenges,
+                challenges_inv,
+                s,
             };
         }
 
@@ -342,17 +338,30 @@ pub fn Proof(bit_size: comptime_int) type {
     };
 }
 
+fn batchInvert(comptime N: u32, scalars: *[N]Scalar) Scalar {
+    var scratch: [N]Scalar = @splat(bp.ONE);
+    defer std.crypto.secureZero(Scalar, &scratch);
+
+    var acc: Scalar = bp.ONE;
+    for (scalars, &scratch) |input, *s| {
+        s.* = acc;
+        acc = acc.mul(input);
+    }
+    std.debug.assert(!acc.isZero());
+
+    acc = acc.invert();
+
+    for (scalars, scratch) |*input, s| {
+        const tmp0 = acc.mul(input.*);
+        input.* = acc.mul(s);
+        acc = tmp0;
+    }
+
+    return acc;
+}
+
 test "basic correctness" {
     const n: u64 = 32;
-
-    var gc = bp.GeneratorsChain.init("G");
-    var hc = bp.GeneratorsChain.init("H");
-    var G: [n]Edwards25519 = undefined;
-    var H: [n]Edwards25519 = undefined;
-    for (&G, &H) |*g, *h| {
-        g.* = gc.next().p;
-        h.* = hc.next().p;
-    }
 
     const Q = Q: {
         var output: [64]u8 = undefined;
@@ -384,8 +393,8 @@ test "basic correctness" {
     try scalars.append(c.toBytes());
 
     var points: std.BoundedArray(Edwards25519, P_len) = .{};
-    for (G) |g| try points.append(g);
-    for (H) |h| try points.append(h);
+    try points.appendSlice(table.G[0..n]);
+    try points.appendSlice(table.H[0..n]);
     try points.append(Q.p);
 
     const P: Ristretto255 = .{ .p = weak_mul.mulMulti(
@@ -397,15 +406,10 @@ test "basic correctness" {
     var prover_transcript = Transcript.init("innerproducttest");
     var verifier_transcript = Transcript.init("innerproducttest");
 
-    const G_copy = G;
-    const H_copy = H;
-
     const proof = Proof(32).init(
         Q,
         &G_factors,
         &H_factors,
-        &G,
-        &H,
         &a,
         &b,
         &prover_transcript,
@@ -416,8 +420,6 @@ test "basic correctness" {
         &H_factors,
         P,
         Q,
-        &G_copy,
-        &H_copy,
         &verifier_transcript,
     );
 }
