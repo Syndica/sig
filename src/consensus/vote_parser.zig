@@ -146,7 +146,7 @@ fn testParseVoteTransaction(input_hash: ?Hash, random: std.Random) !void {
 
     {
         const bank_hash = Hash.ZEROES;
-        const vote_tx = try newVoteTransaction(
+        const vote_tx = try testNewVoteTransaction(
             allocator,
             &.{42},
             bank_hash,
@@ -208,7 +208,7 @@ fn testParseVoteTransaction(input_hash: ?Hash, random: std.Random) !void {
 }
 
 /// Reimplemented locally from Vote program.
-fn newVoteTransaction(
+fn testNewVoteTransaction(
     allocator: std.mem.Allocator,
     slots: []const sig.core.Slot,
     bank_hash: Hash,
@@ -218,6 +218,7 @@ fn newVoteTransaction(
     authorized_voter_keypair: sig.identity.KeyPair,
     maybe_switch_proof_hash: ?Hash,
 ) !Transaction {
+    comptime std.debug.assert(@import("builtin").is_test);
     const vote_ix = try newVoteInstruction(
         allocator,
         slots,
