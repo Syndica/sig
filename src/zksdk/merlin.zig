@@ -54,8 +54,7 @@ pub const Strobe128 = struct {
     pub fn beginOp(self: *Strobe128, flags: Flags, more: bool) void {
         // Check if we're continuing a previous operation.
         if (more) {
-            // TODO(0.14) Switch to compare the packed structs instead of bitcasting.
-            std.debug.assert(@as(u8, @bitCast(self.flags)) == @as(u8, @bitCast(flags)));
+            std.debug.assert(self.flags == flags);
             return;
         }
 
