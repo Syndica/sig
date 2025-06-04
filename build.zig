@@ -233,8 +233,6 @@ pub fn build(b: *Build) void {
             .error_tracing = config.error_tracing,
         }),
         .sanitize_thread = config.enable_tsan,
-        .filters = config.filters orelse &.{},
-        .use_llvm = config.use_llvm,
     });
     unit_tests_exe.linkLibC();
     switch (config.blockstore_db) {
