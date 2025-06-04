@@ -91,6 +91,7 @@ fn advanceReplay(state: *ReplayState) !void {
     // TODO: maybe_start_leader
 }
 
+// -- handleEdgeCases START -- //
 fn handleEdgeCases() void {
     // TODO: process_ancestor_hashes_duplicate_slots
 
@@ -101,8 +102,8 @@ fn handleEdgeCases() void {
     // TODO: process_popular_pruned_forks
 
     // TODO: process_duplicate_slots
-
 }
+// -- handleEdgeCases END -- //
 
 fn processConsensus() void {
     // TODO: for each slot:
