@@ -57,6 +57,11 @@ pub fn execute(
             try ic.tc.consumeCompute(bpf_loader_program.v4.COMPUTE_UNITS);
             return executeBpfLoaderV4ProgramInstruction(allocator, ic);
         } else {
+            if (ic.tc.feature_set.active.contains(
+                features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+            )) {
+                return InstructionError.UnsupportedProgramId;
+            }
             return InstructionError.IncorrectProgramId;
         }
     }
@@ -76,25 +81,53 @@ pub fn execute(
 }
 
 // TODO: v4 loader
-// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/loader-v4/src/lib.rs#L487-L549
+// [agave] https://github.com/anza-xyz/agave/blob/64e19be684046b5569ffd34a25a9d5653a391737/programs/loader-v4/src/lib.rs#L457
 pub fn executeBpfLoaderV4ProgramInstruction(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    const instruction = try ic.ixn_info.limitedDeserializeInstruction(
+        bpf_loader_program.v4.Instruction,
+        sig.net.Packet.DATA_SIZE,
+    );
+
     _ = allocator;
-    _ = ic;
+    _ = instruction;
+    // return switch (instruction) {
+    //     .write => |args| executeV4Write(
+    //         allocator,
+    //         ic,
+    //         args.offset,
+    //         args.bytes,
+    //     ),
+    //     .copy => |args| executeV4Copy(
+    //         allocator,
+    //         ic,
+    //         args.destination_offset,
+    //         args.source_offset,
+    //         args.length,
+    //     ),
+    //     .set_program_length => |args| executeV4SetProgramLength(
+    //         allocator,
+    //         ic,
+    //         args.new_size,
+    //     ),
+    //     .deploy => executeV4Deploy(allocator, ic),
+    //     .retract => executeV4Retract(allocator, ic),
+    //     .transfer_authority => executeV4TransferAuthority(allocator, ic),
+    //     .finalize => executeV4Finalize(allocator, ic),
+    // };
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L486
 pub fn executeBpfLoaderV3ProgramInstruction(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
-
-    // Deserialize the instruction and dispatch to the appropriate handler
-    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L477
-    const instruction =
-        try ic.ixn_info.deserializeInstruction(allocator, bpf_loader_program.v3.Instruction);
-    defer sig.bincode.free(allocator, instruction);
+    const instruction = try ic.ixn_info.limitedDeserializeInstruction(
+        bpf_loader_program.v3.Instruction,
+        sig.net.Packet.DATA_SIZE,
+    );
 
     return switch (instruction) {
         .initialize_buffer => executeV3InitializeBuffer(
@@ -133,6 +166,11 @@ pub fn executeBpfLoaderV3ProgramInstruction(
             ic,
             args.additional_bytes,
         ),
+        .extend_program_checked => |args| executeV3ExtendProgramChecked(
+            allocator,
+            ic,
+            args.additional_bytes,
+        ),
         .migrate => executeV3Migrate(
             allocator,
             ic,
@@ -140,7 +178,7 @@ pub fn executeBpfLoaderV3ProgramInstruction(
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L479-L495
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L496-L513
 pub fn executeV3InitializeBuffer(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -168,7 +206,7 @@ pub fn executeV3InitializeBuffer(
     });
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L496-L526
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L514-L545
 pub fn executeV3Write(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -191,7 +229,7 @@ pub fn executeV3Write(
                     return InstructionError.IncorrectAuthority;
                 }
 
-                if (!try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority))) {
+                if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
                     try ic.tc.log("Buffer authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -206,20 +244,19 @@ pub fn executeV3Write(
         },
     }
 
-    if (buffer_account.checkDataIsMutable()) |err| return err;
-
-    const start = V3State.BUFFER_METADATA_SIZE + @as(usize, offset);
+    const data = try buffer_account.mutableAccountData();
+    const start = V3State.BUFFER_METADATA_SIZE +| @as(usize, offset);
     const end = start +| bytes.len;
 
-    if (end > buffer_account.constAccountData().len) {
+    if (data.len < end) {
         try ic.tc.log("Write overflow: {} < {}", .{ bytes.len, end });
         return InstructionError.AccountDataTooSmall;
     }
 
-    @memcpy(buffer_account.account.data[start..end], bytes);
+    @memcpy(data[start..end], bytes);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L565-L738
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L546-L720
 pub fn executeV3DeployWithMaxDataLen(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -420,6 +457,7 @@ pub fn executeV3DeployWithMaxDataLen(
             ic.tc,
             new_program_id,
             ic.ixn_info.program_meta.pubkey,
+            V3State.PROGRAM_SIZE +| program_data_len,
             buffer_data[V3State.BUFFER_METADATA_SIZE..],
             clock.slot,
         );
@@ -649,6 +687,7 @@ pub fn executeV3Upgrade(
             ic.tc,
             new_program_id,
             ic.ixn_info.program_meta.pubkey,
+            V3State.PROGRAM_SIZE +| progdata.len,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
         );
@@ -1032,18 +1071,46 @@ fn commonCloseAccount(
     try close_account.serializeIntoAccountData(V3State{ .uninitialized = {} });
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1139-L1296
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L1158
 pub fn executeV3ExtendProgram(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     additional_bytes: u32,
 ) (error{OutOfMemory} || InstructionError)!void {
+    if (ic.tc.feature_set.active.contains(features.ENABLE_EXTEND_PROGRAM_CHECKED)) {
+        try ic.tc.log("ExtendProgram was superseded by ExtendProgramChecked", .{});
+        return InstructionError.InvalidInstructionData;
+    }
+    try commonExtendProgram(allocator, ic, additional_bytes, false);
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L1158
+pub fn executeV3ExtendProgramChecked(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    additional_bytes: u32,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (!ic.tc.feature_set.active.contains(features.ENABLE_EXTEND_PROGRAM_CHECKED)) {
+        return InstructionError.InvalidInstructionData;
+    }
+    try commonExtendProgram(allocator, ic, additional_bytes, true);
+}
+
+fn commonExtendProgram(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    additional_bytes: u32,
+    comptime check_authority: bool,
+) (error{OutOfMemory} || InstructionError)!void {
+    const AccountIndex = switch (check_authority) {
+        true => bpf_loader_program.v3.instruction.ExtendProgramChecked.AccountIndex,
+        else => bpf_loader_program.v3.instruction.ExtendProgram.AccountIndex,
+    };
+
     if (additional_bytes == 0) {
         try ic.tc.log("Additional bytes must be greater than 0", .{});
         return InstructionError.InvalidInstructionData;
     }
-
-    const AccountIndex = bpf_loader_program.v3.instruction.ExtendProgram.AccountIndex;
 
     var programdata = try ic.borrowInstructionAccount(
         @intFromEnum(AccountIndex.program_data),
@@ -1057,7 +1124,7 @@ pub fn executeV3ExtendProgram(
         return InstructionError.InvalidAccountOwner;
     }
     if (!programdata.context.is_writable) {
-        try ic.tc.log("ProgramData owner is invalid", .{});
+        try ic.tc.log("ProgramData is not writable", .{});
         return InstructionError.InvalidArgument;
     }
 
@@ -1107,26 +1174,41 @@ pub fn executeV3ExtendProgram(
         return InstructionError.InvalidRealloc;
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
-    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+    const clock_slot = (try ic.tc.sysvar_cache.get(sysvar.Clock)).slot;
 
     const upgrade_authority_address = switch (try programdata.deserializeFromAccountData(
         allocator,
         V3State,
     )) {
         .program_data => |data| blk: {
-            if (clock.slot == data.slot) {
+            if (clock_slot == data.slot) {
                 try ic.tc.log("Program was extended in this block already", .{});
                 return InstructionError.InvalidArgument;
             }
-            if (data.upgrade_authority_address == null) {
+
+            const upgrade_authority_address = data.upgrade_authority_address orelse {
                 try ic.tc.log(
                     "Cannot extend ProgramData accounts that are not upgradeable",
                     .{},
                 );
                 return InstructionError.Immutable;
+            };
+
+            if (check_authority) {
+                const authority = ic.ixn_info.getAccountMetaAtIndex(
+                    @intFromEnum(AccountIndex.authority),
+                ) orelse return InstructionError.NotEnoughAccountKeys;
+
+                if (!upgrade_authority_address.equals(&authority.pubkey)) {
+                    try ic.tc.log("Incorrect upgrade authority provided", .{});
+                    return InstructionError.IncorrectAuthority;
+                }
+                if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+                    try ic.tc.log("Upgrade authority did not sign", .{});
+                    return InstructionError.MissingRequiredSignature;
+                }
             }
-            break :blk data.upgrade_authority_address;
+            break :blk upgrade_authority_address;
         },
         else => {
             try ic.tc.log("ProgramData state is invalid", .{});
@@ -1182,8 +1264,9 @@ pub fn executeV3ExtendProgram(
             ic.tc,
             program_key,
             ic.ixn_info.program_meta.pubkey,
+            V3State.PROGRAM_SIZE +| new_len,
             data[V3State.PROGRAM_DATA_METADATA_SIZE..],
-            clock.slot,
+            clock_slot,
         );
     }
 
@@ -1192,7 +1275,7 @@ pub fn executeV3ExtendProgram(
 
     try programdata.serializeIntoAccountData(V3State{
         .program_data = .{
-            .slot = clock.slot,
+            .slot = clock_slot,
             .upgrade_authority_address = upgrade_authority_address,
         },
     });
@@ -1427,9 +1510,12 @@ pub fn deployProgram(
     tc: *TransactionContext,
     program_id: Pubkey,
     owner_id: Pubkey,
+    account_size: u64,
     data: []const u8,
     slot: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
+    _ = account_size;
+
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var syscalls = vm.syscalls.register(
         allocator,
@@ -1452,6 +1538,7 @@ pub fn deployProgram(
         source,
         &syscalls,
         // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L290
+        // [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed8df53595afb8770531cf4ca938e449cf7/src/vm.rs#L92-L107
         // TODO: This should not be hardcoded
         .{
             .max_call_depth = 64,
@@ -1462,15 +1549,16 @@ pub fn deployProgram(
             .enable_instruction_meter = true,
             .enable_instruction_tracing = false,
             .enable_symbol_and_section_labels = false,
-            .reject_broken_elfs = true,
+            .reject_broken_elfs = false,
             .noop_instruction_rate = 256,
             .sanitize_user_provided_values = true,
-            .optimize_rodata = false,
+            .optimize_rodata = true,
             .aligned_memory_mapping = true,
-            .maximum_version = vm.sbpf.Version.v0,
+            .maximum_version = vm.sbpf.Version.v3,
             .minimum_version = vm.sbpf.Version.v0,
         },
     ) catch |err| {
+        if (@errorReturnTrace()) |t| std.debug.dumpStackTrace(t.*);
         try tc.log("{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };
