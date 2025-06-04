@@ -83,7 +83,7 @@ pub const Config = struct {
             ) orelse false,
             .use_llvm = b.option(
                 bool,
-                "use_llvm",
+                "use-llvm",
                 "If disabled, uses experimental self-hosted backend. Only works for x86_64-linux",
             ) orelse true,
             .force_pic = b.option(
