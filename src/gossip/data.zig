@@ -25,8 +25,6 @@ const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;
 
 const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
-const var_int_config_u16 = sig.bincode.varint.var_int_config_u16;
-const var_int_config_u64 = sig.bincode.varint.var_int_config_u64;
 
 pub const MAX_EPOCH_SLOTS: u8 = 255;
 pub const MAX_VOTES: u8 = 32;
@@ -1271,7 +1269,7 @@ pub const ContactInfo = struct {
     pub const @"!bincode-config:addrs" = bincode.shortvec.arrayListConfig(IpAddr);
     pub const @"!bincode-config:sockets" = bincode.shortvec.arrayListConfig(SocketEntry);
     pub const @"!bincode-config:extensions" = bincode.shortvec.arrayListConfig(Extension);
-    pub const @"!bincode-config:wallclock" = var_int_config_u64;
+    pub const @"!bincode-config:wallclock" = bincode.VarIntConfig(u64);
 
     const Self = @This();
 
@@ -1566,7 +1564,7 @@ pub const SocketEntry = struct {
 
     const Self = @This();
 
-    pub const @"!bincode-config:offset" = var_int_config_u16;
+    pub const @"!bincode-config:offset" = bincode.VarIntConfig(u16);
 
     pub fn eql(self: *const Self, other: *const Self) bool {
         return self.key == other.key and

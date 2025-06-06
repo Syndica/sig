@@ -4,7 +4,6 @@ pub const bounded_array = @import("bounded_array.zig");
 pub const int = @import("int.zig");
 pub const list = @import("list.zig");
 pub const optional = @import("optional.zig");
-pub const varint = @import("varint.zig");
 pub const shortvec = @import("shortvec.zig");
 
 const std = @import("std");
@@ -610,6 +609,30 @@ pub fn freeWithConfig(
         },
         else => {},
     }
+}
+
+pub fn VarIntConfig(comptime T: type) bincode.FieldConfig(T) {
+    const S = struct {
+        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+            _ = params;
+            return std.leb.writeUleb128(writer, data);
+        }
+
+        pub fn deserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) !T {
+            _ = params;
+            _ = allocator;
+            return std.leb.readUleb128(T, reader);
+        }
+    };
+
+    return bincode.FieldConfig(T){
+        .serializer = S.serialize,
+        .deserializer = S.deserialize,
+    };
 }
 
 pub fn FieldConfig(comptime T: type) type {
