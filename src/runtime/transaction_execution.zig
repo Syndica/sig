@@ -279,7 +279,7 @@ pub fn executeTransaction(
 ) error{OutOfMemory}!ExecutedTransaction {
     const compute_budget = compute_budget_limits.intoComputeBudget();
     const log_collector = if (config.log)
-        LogCollector.init(config.log_messages_byte_limit)
+        try LogCollector.init(allocator, config.log_messages_byte_limit)
     else
         null;
 
