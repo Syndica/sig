@@ -27,9 +27,9 @@ pub const LogCollector = struct {
         return LogCollector.init(DEFAULT_MAX_BYTES_LIMIT);
     }
 
-    pub fn deinit(self: LogCollector, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *LogCollector, allocator: std.mem.Allocator) void {
         for (self.messages.items) |message| allocator.free(message);
-        allocator.free(self.messages.allocatedSlice());
+        self.messages.deinit(allocator);
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L43

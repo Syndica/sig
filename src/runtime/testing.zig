@@ -187,7 +187,7 @@ pub fn createTransactionContext(
 
 pub fn deinitTransactionContext(
     allocator: std.mem.Allocator,
-    tc: TransactionContext,
+    tc: *TransactionContext,
 ) void {
     if (!builtin.is_test)
         @compileError("deinitTransactionContext should only be called in test mode");

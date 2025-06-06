@@ -155,8 +155,8 @@ pub const ExecutedTransaction = struct {
     compute_meter: u64,
     accounts_data_len_delta: i64,
 
-    pub fn deinit(self: ExecutedTransaction, allocator: std.mem.Allocator) void {
-        if (self.log_collector) |lc| lc.deinit(allocator);
+    pub fn deinit(self: *ExecutedTransaction, allocator: std.mem.Allocator) void {
+        if (self.log_collector) |*lc| lc.deinit(allocator);
     }
 };
 
@@ -173,9 +173,9 @@ pub const ProcessedTransaction = union(enum(u8)) {
         executed_transaction: ExecutedTransaction,
     },
 
-    pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
-        switch (self) {
-            .executed => |executed| {
+    pub fn deinit(self: *ProcessedTransaction, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .executed => |*executed| {
                 executed.executed_transaction.deinit(allocator);
             },
             else => {},
@@ -528,10 +528,10 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         },
     );
     defer {
-        for (results) |result| {
-            switch (result) {
-                .ok => |ok| ok.deinit(allocator),
-                .err => |err| err.deinit(allocator),
+        for (results) |*result| {
+            switch (result.*) {
+                .ok => |*ok| ok.deinit(allocator),
+                .err => |*err| err.deinit(allocator),
             }
         }
         allocator.free(results);
@@ -706,7 +706,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         &ProgramMap{},
     );
 
-    const processed_transaction = result.ok;
+    var processed_transaction = result.ok;
     defer processed_transaction.deinit(allocator);
 
     const executed_transaction = processed_transaction.executed.executed_transaction;

@@ -1430,7 +1430,7 @@ const TestContext = struct {
             .compute_meter = std.math.maxInt(u64),
         });
         errdefer {
-            testing.deinitTransactionContext(allocator, tc.*);
+            testing.deinitTransactionContext(allocator, tc);
             cache.deinit(allocator);
         }
 
@@ -1452,7 +1452,7 @@ const TestContext = struct {
     }
 
     fn deinit(self: *TestContext, allocator: std.mem.Allocator) void {
-        testing.deinitTransactionContext(allocator, self.tc.*);
+        testing.deinitTransactionContext(allocator, self.tc);
         allocator.destroy(self.tc);
         self.ic.deinit(allocator);
         self.cache.deinit(allocator);

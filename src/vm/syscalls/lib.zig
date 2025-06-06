@@ -707,7 +707,7 @@ test findProgramAddress {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -825,7 +825,7 @@ test createProgramAddress {
         },
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -987,7 +987,7 @@ test allocFree {
         .{},
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1039,7 +1039,7 @@ test getProcessedSiblingInstruction {
         .accounts = &account_params,
     });
     defer {
-        testing.deinitTransactionContext(allocator, tc);
+        testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1202,7 +1202,7 @@ test getEpochStake {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 
@@ -1319,7 +1319,7 @@ test "set and get return data" {
         },
     );
     defer {
-        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
         cache.deinit(allocator);
     }
 

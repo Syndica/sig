@@ -2886,7 +2886,7 @@ test "executeV3ExtendProgram" {
         );
         const tc = &tx[1];
         defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+            sig.runtime.testing.deinitTransactionContext(allocator, tc);
             tx[0].deinit(allocator);
         }
 
@@ -2928,7 +2928,7 @@ test "executeV3ExtendProgram" {
         );
         const tc = &tx[1];
         defer {
-            sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+            sig.runtime.testing.deinitTransactionContext(allocator, tc);
             tx[0].deinit(allocator);
         }
 
