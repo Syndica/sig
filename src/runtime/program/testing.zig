@@ -57,7 +57,7 @@ pub fn expectProgramExecuteResult(
 
     var context_params = initial_context_params;
     if (options.print_logs and initial_context_params.log_collector == null) {
-        context_params.log_collector = LogCollector.init(null);
+        context_params.log_collector = try LogCollector.init(allocator, null);
     }
 
     // Create the initial transaction context

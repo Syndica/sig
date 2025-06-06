@@ -158,7 +158,7 @@ test "stable_log" {
         allocator,
         prng.random(),
         .{
-            .log_collector = LogCollector.default(),
+            .log_collector = try LogCollector.default(allocator),
         },
     );
     defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
