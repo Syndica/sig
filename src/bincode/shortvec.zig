@@ -3,22 +3,19 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 
-const serializeShortU16 = sig.bincode.varint.serializeShortU16;
-const deserializeShortU16 = sig.bincode.varint.deserializeShortU16;
-
 pub fn sliceConfig(comptime Slice: type) bincode.FieldConfig(Slice) {
     const Child = std.meta.Elem(Slice);
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
             const len: u16 = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
-            try serializeShortU16(writer, len);
+            try std.leb.writeUleb128(writer, len);
             for (data) |item| {
                 try bincode.write(writer, item, params);
             }
         }
 
         pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !Slice {
-            const len, _ = try deserializeShortU16(reader);
+            const len = try std.leb.readUleb128(u16, reader);
             const elems = try allocator.alloc(Child, len);
             errdefer allocator.free(elems);
             for (elems, 0..) |*elem, i| {
@@ -46,14 +43,14 @@ pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
             const list: std.ArrayList(Child) = data;
             const len = std.math.cast(u16, list.items.len) orelse return error.DataTooLarge;
-            try serializeShortU16(writer, len);
+            try std.leb.writeUleb128(writer, len);
             for (list.items) |item| {
                 try bincode.write(writer, item, params);
             }
         }
 
         pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
-            const len, _ = try deserializeShortU16(reader);
+            const len = try std.leb.readUleb128(u16, reader);
             var list = try std.ArrayList(Child).initCapacity(allocator, @as(usize, len));
             for (0..len) |_| {
                 const item = try bincode.read(allocator, Child, reader, params);

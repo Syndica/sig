@@ -1,7 +1,5 @@
 const sig = @import("../sig.zig");
 
-const var_int_config_u16 = sig.bincode.varint.var_int_config_u16;
-
 pub const CURRENT_CLIENT_VERSION: ClientVersion = ClientVersion.new(0, 1, 0, 0, 0, 4);
 
 pub const ClientVersion = struct {
@@ -34,8 +32,8 @@ pub const ClientVersion = struct {
         };
     }
 
-    pub const @"!bincode-config:major" = var_int_config_u16;
-    pub const @"!bincode-config:minor" = var_int_config_u16;
-    pub const @"!bincode-config:patch" = var_int_config_u16;
-    pub const @"!bincode-config:client" = var_int_config_u16;
+    pub const @"!bincode-config:major" = sig.bincode.VarIntConfig(u16);
+    pub const @"!bincode-config:minor" = sig.bincode.VarIntConfig(u16);
+    pub const @"!bincode-config:patch" = sig.bincode.VarIntConfig(u16);
+    pub const @"!bincode-config:client" = sig.bincode.VarIntConfig(u16);
 };

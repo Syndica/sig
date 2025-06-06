@@ -164,9 +164,9 @@ pub fn serializeCompactVoteStateUpdate(
 
     // Serialize in compact format
     try writer.writeInt(Slot, data.root orelse 0, .little);
-    try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
+    try std.leb.writeUleb128(writer, @as(u16, @intCast(lockouts.len)));
     for (lockouts.constSlice()) |lockout| {
-        try sig.bincode.varint.serializeShortU16(writer, @intCast(lockout[0]));
+        try std.leb.writeUleb128(writer, @as(u16, @intCast(lockout[0])));
         try writer.writeInt(u8, @intCast(lockout[1]), .little);
     }
     try writer.writeAll(&data.hash.data);
@@ -187,15 +187,11 @@ pub fn deserializeCompactVoteStateUpdate(
     root = if (root == std.math.maxInt(Slot)) 0 else root;
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
-    const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
+    const lockouts_len = try std.leb.readUleb128(u16, reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(
-            allocator,
-            reader,
-            .{},
-        );
+        const offset = try std.leb.readUleb128(u64, reader);
         const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -263,13 +259,9 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
 
     // Serialize in compact format
     try writer.writeInt(Slot, data.root orelse 0, .little);
-    try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
+    try std.leb.writeUleb128(writer, @as(u16, @intCast(lockouts.len)));
     for (lockouts.constSlice()) |lockout| {
-        try sig.bincode.varint.var_int_config_u64.serializer.?(
-            writer,
-            lockout[0],
-            .{},
-        );
+        try std.leb.writeUleb128(writer, lockout[0]);
         try writer.writeInt(u8, lockout[1], .little);
     }
     try writer.writeAll(&data.hash.data);
@@ -290,15 +282,11 @@ pub fn deserializeTowerSync(
     const root = try reader.readInt(Slot, .little);
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
-    const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
+    const lockouts_len = try std.leb.readUleb128(u16, reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(
-            allocator,
-            reader,
-            .{},
-        );
+        const offset = try std.leb.readUleb128(u64, reader);
         const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
