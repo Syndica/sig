@@ -619,15 +619,16 @@ fn testPacketReceiver(chan: anytype, total_recv: usize) void {
 pub const BenchmarkChannel = struct {
     pub const min_iterations = 10;
     pub const max_iterations = 500;
+    pub const name = "channel";
 
-    pub const BenchmarkArgs = struct {
+    pub const BenchmarkInput = struct {
         name: []const u8 = "",
         n_senders: ?usize,
         receives: bool,
         is_unit_test: bool = false,
     };
 
-    pub const args = [_]BenchmarkArgs{
+    pub const inputs = [_]BenchmarkInput{
         .{
             .name = "1_senders-   1_receivers ",
             .n_senders = 1,
@@ -664,47 +665,61 @@ pub const BenchmarkChannel = struct {
         while (!ctx.stop.load(.monotonic)) {
             std.mem.doNotOptimizeAway(ctx.channel.tryReceive() orelse continue);
             // NOTE: should happen-after len() update from tryReceive().
-            ctx.popped.store(ctx.popped.load(.monotonic) + 1, .release);
+            _ = ctx.popped.fetchAdd(1, .release);
         }
     }
 
-    pub fn benchmarkSimplePacketBetterChannel(argss: BenchmarkArgs) !sig.time.Duration {
+    pub fn benchmarkSimplePacketChannel(input: BenchmarkInput) !sig.time.Duration {
         const num_cpus = @max(1, try std.Thread.getCpuCount());
         const allocator = if (@import("builtin").is_test)
             std.testing.allocator
         else
             std.heap.c_allocator;
 
-        var ctx = Context{ .channel = try Channel(Packet).init(allocator) };
+        var ctx: Context = .{ .channel = try Channel(Packet).init(allocator) };
         defer ctx.channel.deinit();
 
-        var threads = std.ArrayList(std.Thread).init(allocator);
+        var threads: std.ArrayListUnmanaged(std.Thread) = .empty;
         defer {
             ctx.stop.store(true, .monotonic);
             for (threads.items) |t| t.join();
-            threads.deinit();
+            threads.deinit(allocator);
         }
 
-        const num_senders = argss.n_senders orelse num_cpus;
+        const num_senders = input.n_senders orelse num_cpus;
         for (0..num_senders) |_| {
-            try threads.append(try std.Thread.spawn(.{}, runSender, .{&ctx}));
+            try threads.append(allocator, try std.Thread.spawn(
+                .{},
+                runSender,
+                .{&ctx},
+            ));
         }
 
-        if (argss.receives) {
-            try threads.append(try std.Thread.spawn(.{}, runReceiver, .{&ctx}));
+        if (input.receives) {
+            try threads.append(allocator, try std.Thread.spawn(
+                .{},
+                runReceiver,
+                .{&ctx},
+            ));
         }
 
         ctx.start.set();
-        std.time.sleep(if (!argss.is_unit_test) std.time.ns_per_s else 10 * std.time.ns_per_ms);
 
-        const popped = ctx.popped.load(.acquire); // NOTE: should happen-before len() read.
+        const time = 10 * std.time.ns_per_ms;
+
+        // run benchmark for 10 milliseconds
+        std.Thread.sleep(time);
+
+        // NOTE: should happen-before len() read.
+        const popped = ctx.popped.load(.acquire);
         const total = popped + ctx.channel.len();
-        return .{ .ns = std.time.ns_per_s / total };
+
+        return .fromNanos(time / @max(1, total));
     }
 };
 
-test "BenchmarkChannel.benchmarkSimplePacketBetterChannel" {
-    _ = try BenchmarkChannel.benchmarkSimplePacketBetterChannel(.{
+test "BenchmarkChannel.benchmarkSimplePacketChannel" {
+    _ = try BenchmarkChannel.benchmarkSimplePacketChannel(.{
         .n_senders = 4,
         .receives = true,
         .is_unit_test = true,
