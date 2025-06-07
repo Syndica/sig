@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 pub const FnvHasher = @import("fnv.zig").FnvHasher;
 pub const bn254 = @import("bn254/lib.zig");
 
-const vector = @import("vector.zig");
+const vector = @import("generic.zig");
 const avx512 = @import("avx512.zig");
 const has_avx512 = builtin.cpu.arch == .x86_64 and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512ifma) and

@@ -397,7 +397,7 @@ fn generateTable(b: *Build) Build.LazyPath {
         .name = "generator_chain",
         .root_module = b.createModule(.{
             .target = b.graph.host,
-            // Overall it takes longer to compile in debug mode than the perf gain from a release mode at runtime
+            // Overall it takes less time to compile in debug mode than the perf gain from a release mode at runtime
             .optimize = .Debug,
             .root_source_file = b.path("scripts/generator_chain.zig"),
         }),
