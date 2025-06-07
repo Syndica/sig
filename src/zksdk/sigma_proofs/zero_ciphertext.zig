@@ -97,11 +97,11 @@ pub const Proof = struct {
             D.p,
             Y_D.p,
         }, .{
-            Edwards25519.scalar.neg(c.toBytes()),                                     // -c
-            self.z.toBytes(),                                               // z
+            Edwards25519.scalar.neg(c.toBytes()),         // -c
+            self.z.toBytes(),                             //  z
             Scalar.fromBytes(w_negated).mul(c).toBytes(), // -w * c
-            w.mul(self.z).toBytes(),                      // w * z
-            w_negated,                                                      // -w
+            w.mul(self.z).toBytes(),                      //  w * z
+            w_negated,                                    // -w
         });
         // zig fmt: on
 
