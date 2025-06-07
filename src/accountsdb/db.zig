@@ -9,7 +9,7 @@ const tracy = @import("tracy");
 const sysvar = sig.runtime.sysvar;
 const snapgen = sig.accounts_db.snapshots.generate;
 
-const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
+const Resolution = @import("../benchmarks.zig").Resolution;
 
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
@@ -3481,10 +3481,11 @@ test "generate snapshot & update gossip snapshot hashes" {
 pub const BenchmarkAccountsDBSnapshotLoad = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
+    pub const name = "AccoutnsDBSnapshotLoad";
 
     pub const SNAPSHOT_DIR_PATH = sig.TEST_DATA_DIR ++ "bench_snapshot/";
 
-    pub const BenchArgs = struct {
+    pub const BenchInputs = struct {
         use_disk: bool,
         n_threads: u32,
         name: []const u8,
@@ -3492,16 +3493,17 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // TODO: support fastloading checks
     };
 
-    pub const args = [_]BenchArgs{
-        BenchArgs{
-            .name = "testnet - ram index - 4 threads",
-            .use_disk = false,
-            .n_threads = 4,
-            .cluster = .testnet,
-        },
-    };
+    pub const inputs = [_]BenchInputs{.{
+        .name = "testnet - ram index - 4 threads",
+        .use_disk = false,
+        .n_threads = 4,
+        .cluster = .testnet,
+    }};
 
-    pub fn loadAndVerifySnapshot(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
+    pub fn loadAndVerifySnapshot(
+        units: Resolution,
+        bench_inputs: BenchInputs,
+    ) !struct {
         load_time: u64,
         validate_time: u64,
         fastload_save_time: u64,
@@ -3551,7 +3553,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .snapshot_dir = snapshot_dir,
                 .geyser_writer = null,
                 .gossip_view = null,
-                .index_allocation = if (bench_args.use_disk) .disk else .ram,
+                .index_allocation = if (bench_inputs.use_disk) .disk else .ram,
                 .number_of_index_shards = 32,
             });
             defer accounts_db.deinit();
@@ -3559,9 +3561,9 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             var load_timer = try sig.time.Timer.start();
             try accounts_db.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
-                bench_args.n_threads,
+                bench_inputs.n_threads,
                 allocator,
-                try getAccountPerFileEstimateFromCluster(bench_args.cluster),
+                try getAccountPerFileEstimateFromCluster(bench_inputs.cluster),
             );
             const loading_duration = load_timer.read();
 
@@ -3601,7 +3603,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .snapshot_dir = snapshot_dir,
                 .geyser_writer = null,
                 .gossip_view = null,
-                .index_allocation = if (bench_args.use_disk) .disk else .ram,
+                .index_allocation = if (bench_inputs.use_disk) .disk else .ram,
                 .number_of_index_shards = 32,
             });
             defer fastload_accounts_db.deinit();
@@ -3626,10 +3628,11 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 pub const BenchmarkAccountsDB = struct {
     pub const min_iterations = 3;
     pub const max_iterations = 10;
+    pub const name = "AccountsDB";
 
     pub const MemoryType = AccountIndex.AllocatorConfig.Tag;
 
-    pub const BenchArgs = struct {
+    pub const BenchInputs = struct {
         /// the number of accounts to store in the database (for each slot)
         n_accounts: usize,
         /// the number of slots to store (each slot is one batch write)
@@ -3645,22 +3648,22 @@ pub const BenchmarkAccountsDB = struct {
         name: []const u8 = "",
     };
 
-    pub const args = [_]BenchArgs{
-        // BenchArgs{
+    pub const inputs = [_]BenchInputs{
+        // .{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .ram,
         //     .index = .ram,
         //     .name = "100k accounts (1_slot - ram index - ram accounts - lru disabled)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .ram,
         //     .index = .disk,
         //     .name = "100k accounts (1_slot - disk index - ram accounts - lru disabled)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
@@ -3668,7 +3671,7 @@ pub const BenchmarkAccountsDB = struct {
         //     .name = "100k accounts (1_slot - disk index - disk accounts - lru disabled)",
         // },
 
-        // BenchArgs{
+        // .{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
@@ -3676,14 +3679,14 @@ pub const BenchmarkAccountsDB = struct {
         //     .name = "100k accounts (1_slot - ram index - disk accounts - lru disabled)",
         // },
 
-        // BenchArgs{
+        // .{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
         //     .name = "100k accounts (1_slot - ram index - disk accounts)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
@@ -3691,7 +3694,7 @@ pub const BenchmarkAccountsDB = struct {
         //     .name = "100k accounts (1_slot - ram index - disk accounts)",
         // },
 
-        // BenchArgs{
+        // .{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
@@ -3700,14 +3703,14 @@ pub const BenchmarkAccountsDB = struct {
         // },
 
         // // test accounts in ram
-        // BenchArgs{
+        // .{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
         //     .accounts = .ram,
         //     .index = .ram,
         //     .name = "100k accounts (1_slot - ram index - ram accounts)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 10_000,
         //     .slot_list_len = 10,
         //     .accounts = .ram,
@@ -3718,14 +3721,14 @@ pub const BenchmarkAccountsDB = struct {
         // tests large number of accounts on disk
         // NOTE: the other tests are useful for understanding performance for but CI,
         // these are the most useful as they are the most similar to production
-        BenchArgs{
+        .{
             .n_accounts = 10_000,
             .slot_list_len = 10,
             .accounts = .disk,
             .index = .ram,
             .name = "10k accounts (10_slots - ram index - disk accounts)",
         },
-        BenchArgs{
+        .{
             .n_accounts = 500_000,
             .slot_list_len = 1,
             .accounts = .disk,
@@ -3733,28 +3736,28 @@ pub const BenchmarkAccountsDB = struct {
             .name = "500k accounts (1_slot - ram index - disk accounts)",
         },
 
-        // BenchArgs{
+        // .{
         //     .n_accounts = 500_000,
         //     .slot_list_len = 3,
         //     .accounts = .disk,
         //     .index = .ram,
         //     .name = "500k accounts (3_slot - ram index - disk accounts)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 3_000_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
         //     .name = "3M accounts (1_slot - ram index - disk accounts)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 3_000_000,
         //     .slot_list_len = 3,
         //     .accounts = .disk,
         //     .index = .ram,
         //     .name = "3M accounts (3_slot - ram index - disk accounts)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 500_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
@@ -3764,21 +3767,21 @@ pub const BenchmarkAccountsDB = struct {
         // },
 
         // // testing disk indexes
-        // BenchArgs{
+        // .{
         //     .n_accounts = 500_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .disk,
         //     .name = "500k accounts (1_slot - disk index - disk accounts)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 3_000_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .disk,
         //     .name = "3m accounts (1_slot - disk index - disk accounts)",
         // },
-        // BenchArgs{
+        // .{
         //     .n_accounts = 500_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
@@ -3789,8 +3792,8 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub fn readWriteAccounts(
-        units: BenchTimeUnit,
-        bench_args: BenchArgs,
+        units: Resolution,
+        bench_args: BenchInputs,
     ) !struct { read_time: u64, write_time: u64 } {
         const n_accounts = bench_args.n_accounts;
         const slot_list_len = bench_args.slot_list_len;

@@ -3339,6 +3339,7 @@ const fuzz_service = sig.gossip.fuzz_service;
 pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 5;
+    pub const name = "GossipServiceGeneral";
 
     pub const MessageCounts = struct {
         n_ping: usize,
@@ -3346,12 +3347,12 @@ pub const BenchmarkGossipServiceGeneral = struct {
         n_pull_response: usize,
     };
 
-    pub const BenchmarkArgs = struct {
+    pub const BenchmarkInputs = struct {
         name: []const u8 = "",
         message_counts: MessageCounts,
     };
 
-    pub const args = [_]BenchmarkArgs{
+    pub const inputs = [_]BenchmarkInputs{
         .{
             .name = "5k_ping_msgs",
             .message_counts = .{
@@ -3378,7 +3379,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         },
     };
 
-    pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !sig.time.Duration {
+    pub fn benchmarkGossipService(bench_args: BenchmarkInputs) !sig.time.Duration {
         const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var keypair = KeyPair.generate();
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -3388,12 +3389,6 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
-        // const logger = Logger.init(allocator, .debug);
-        // defer logger.deinit();
-        // logger.spawn();
-
-        const logger = .noop;
-
         // process incoming packets/messsages
         var gossip_service = try GossipService.create(
             allocator,
@@ -3401,7 +3396,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             contact_info,
             keypair,
             null,
-            logger,
+            .noop,
         );
         defer {
             gossip_service.metrics.reset();
@@ -3473,14 +3468,15 @@ pub const BenchmarkGossipServiceGeneral = struct {
 pub const BenchmarkGossipServicePullRequests = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 5;
+    pub const name = "GossipServicePullRequests";
 
-    pub const BenchmarkArgs = struct {
+    pub const BenchmarkInputs = struct {
         name: []const u8 = "",
         n_data_populated: usize,
         n_pull_requests: usize,
     };
 
-    pub const args = [_]BenchmarkArgs{
+    pub const inputs = [_]BenchmarkInputs{
         .{
             .name = "1k_data_1k_pull_reqs",
             .n_data_populated = 1_000,
@@ -3493,7 +3489,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         },
     };
 
-    pub fn benchmarkPullRequests(bench_args: BenchmarkArgs) !sig.time.Duration {
+    pub fn benchmarkPullRequests(bench_args: BenchmarkInputs) !sig.time.Duration {
         const allocator = if (@import("builtin").is_test) std.testing.allocator else std.heap.c_allocator;
         var keypair = KeyPair.generate();
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);

@@ -35,6 +35,7 @@ pub const BenchmarkLedger = struct {
 
     pub const min_iterations = 25;
     pub const max_iterations = 1_000;
+    pub const name = "Ledger";
 
     /// Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
     ///
@@ -331,6 +332,7 @@ pub const BenchmarkLedgerSlow = struct {
 
     pub const min_iterations = 5;
     pub const max_iterations = 5;
+    pub const name = "LedgerSlow";
 
     pub fn @"BlockstoreReader.slotRangeConnected"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
