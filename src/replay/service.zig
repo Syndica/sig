@@ -226,13 +226,13 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         .{},
         &slot_history,
     );
-    const voted_slot = result.vote_slot;
+    const maybe_voted_slot = result.vote_slot;
     const reset_slot = result.reset_slot;
-    _ = &reset_slot;
     const heaviest_fork_failures = result.heaviest_fork_failures;
     _ = &heaviest_fork_failures;
+    _ = &reset_slot;
 
-    if (voted_slot == null) {
+    if (maybe_voted_slot == null) {
         _ = maybeRefreshLastVote(
             deps.replay_tower,
             deps.progress_map,
@@ -252,6 +252,11 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         result.heaviest_fork_failures.items.len != 0)
     {
         // Implemented the log
+    }
+
+    // Vote on the fork
+    if (maybe_voted_slot) |voted_slot| {
+        _ = &voted_slot;
     }
 
     // TODO: if reset_bank: Reset onto a fork
@@ -381,7 +386,47 @@ const stubs = struct {
     }
 };
 
-// TODO: Complete
+pub const SlotStatus = union(enum) {
+    /// Bank has completed processing and been frozen with a specific hash.
+    /// The hash represents the local validator's view of what the slot's hash should be.
+    frozen: Hash,
+    /// Slot failed to process correctly and should not be considered for consensus.
+    dead,
+    /// The bank/slot has not yet been processed or is still in progress.
+    unprocessed,
+
+    fn canBeFurtherReplayed(self: SlotStatus) bool {
+        return switch (self) {
+            .frozen => |_| true,
+            .dead => false,
+            .unprocessed => false,
+        };
+    }
+};
+
+pub const DuplicateConfirmedState = struct {
+    /// Hash of the slot that has been confirmed as duplicate.
+    /// Note: This hash is cluster-agreed hash for the duplicate confirmed slot
+    /// while the hash in SlotStatus.Frozen(Hash) is local validator's view of
+    /// what the slot's hash should be.
+    duplicate_confirmed_hash: Hash,
+    /// The current status of the bank/slot from the validator's perspective.
+    slot_status: SlotStatus,
+};
+
+pub const SlotStateUpdate = union(enum) {
+    duplicate_confirmed: DuplicateConfirmedState,
+    pub fn canBeFurtherReplayed(self: SlotStateUpdate) bool {
+        switch (self) {
+            .duplicate_confirmed => |duplicate_confirmed_state| {
+                return duplicate_confirmed_state.slot_status.canBeFurtherReplayed();
+            },
+        }
+    }
+};
+
+/// This function helps maintain the validator's view of which slots
+/// have been duplicate confirmed by the cluster.
 fn markSlotsDuplicateConfirmed(
     blockstore: *BlockstoreReader,
     progress_map: *ProgressMap,
@@ -396,17 +441,31 @@ fn markSlotsDuplicateConfirmed(
     duplicate_confirmed_slots: stubs.DuplicateConfirmedSlots,
 ) !void {
     for (confirmed_duplicates) |confirmed| {
-        // TODO confirmed_slot is less than root_slot
-        // Need to find a way to get the root slot.
-
-        if (confirmed.slot <= root_slot) {
+        const slot = confirmed.slot;
+        const hash = confirmed.hash;
+        if (slot <= root_slot) {
             continue;
         }
 
-        const slot_progress = progress_map.map.getEntry(confirmed.slot) orelse
+        const slot_progress = progress_map.map.getEntry(slot) orelse
             return error.MissingSlot;
 
-        slot_progress.value_ptr.*.fork_stats.duplicate_confirmed_hash = confirmed.hash;
+        slot_progress.value_ptr.*.fork_stats.duplicate_confirmed_hash = hash;
+        // TODO Track slot and hash in duplicate_confirmed_slots?
+        // TODO Create DuplicateConfirmedState
+        const duplicate_confirmed_state = DuplicateConfirmedState{
+            .duplicate_confirmed_hash = hash,
+            .slot_status = SlotStatus{ .frozen = hash },
+        };
+
+        checkSlotAgreesWithCluster(
+            root_slot,
+            slot,
+            SlotStateUpdate{
+                .duplicate_confirmed = duplicate_confirmed_state,
+            },
+            fork_choice,
+        );
     }
 
     _ = &blockstore;
@@ -419,6 +478,145 @@ fn markSlotsDuplicateConfirmed(
     _ = &ancestor_hashes_replay_update_sender;
     _ = &purge_repair_slot_counter;
     _ = &duplicate_confirmed_slots;
+}
+
+fn checkSlotAgreesWithCluster(
+    root: Slot,
+    slot: Slot,
+    slot_state_update: SlotStateUpdate,
+    fork_choice: *ForkChoice,
+) void {
+    // Currently implements SlotStateUpdate::DuplicateConfirmed
+    if (slot <= root) {
+        return;
+    }
+
+    switch (slot_state_update) {
+        .duplicate_confirmed => |state| {
+            switch (state.slot_status) {
+                .frozen => |hash| {
+                    // Avoid duplicate work from multiple of the same DuplicateConfirmed signal. This can
+                    // happen if we get duplicate confirmed from gossip and from local replay.
+                    if (fork_choice.isDuplicateConfirmed(
+                        &.{ .slot = slot, .hash = hash },
+                    ) orelse false) {
+                        return;
+                    }
+                },
+                else => {},
+            }
+        },
+    }
+
+    if (slot_state_update.canBeFurtherReplayed()) {
+        // If the bank is still awaiting replay, then there's nothing to do yet
+        return;
+    }
+
+    // Generate state changes
+    const state_changes = generateStateChanges(
+        slot,
+        slot_state_update,
+    );
+
+    _ = &state_changes;
+}
+
+pub const AncestorHashesReplayUpdate = union(enum) {
+    dead: Slot,
+    dead_duplicate_confirmed: Slot,
+    popular_pruned_fork: Slot,
+};
+
+pub const ResultingStateChange = union(enum) {
+    /// Bank was frozen
+    bank_frozen: Hash,
+    /// Hash of our current frozen version of the slot
+    mark_slot_duplicate: Hash,
+    /// Hash of the either:
+    /// 1) Cluster duplicate confirmed slot
+    /// 2) Epoch Slots frozen sampled slot
+    /// that is not equivalent to our frozen version of the slot
+    repair_duplicate_confirmed_version: Hash,
+    /// Hash of our current frozen version of the slot
+    duplicate_confirmed_slot_matches_cluster: Hash,
+    send_ancestor_hashes_replay_update: AncestorHashesReplayUpdate,
+};
+
+fn generateStateChanges(
+    slot: Slot,
+    slot_state_update: SlotStateUpdate,
+) std.BoundedArray(ResultingStateChange, 5) {
+    var state_changes: std.BoundedArray(ResultingStateChange, 5) = .{};
+    switch (slot_state_update) {
+        .duplicate_confirmed => |duplicate_confirmed_state| {
+            switch (duplicate_confirmed_state.slot_status) {
+                .unprocessed => {
+                    return state_changes;
+                },
+                .dead => {
+                    state_changes.appendAssumeCapacity(
+                        ResultingStateChange{
+                            .send_ancestor_hashes_replay_update = .{
+                                .dead_duplicate_confirmed = slot,
+                            },
+                        },
+                    );
+                },
+                .frozen => |_| {},
+            }
+            generateStateChangesBasedOnBankStatus(
+                &state_changes,
+                duplicate_confirmed_state.duplicate_confirmed_hash,
+                duplicate_confirmed_state.slot_status,
+            );
+        },
+    }
+    return state_changes;
+}
+
+/// Generates state changes needed to be applied to the forkchoice
+/// based on checking the duplicate confirmed hash we observed against our local bank status
+///
+/// 1) If we haven't replayed locally do nothing
+/// 2) If our local bank is dead, mark for dump and repair
+/// 3) If our local bank is replayed but mismatch hash, notify fork choice of duplicate and dump and
+///    repair
+/// 4) If our local bank is replayed and matches the `duplicate_confirmed_hash`, notify fork choice
+///    that we have the correct version
+fn generateStateChangesBasedOnBankStatus(
+    state_changes: *std.BoundedArray(ResultingStateChange, 5),
+    duplicate_confirmed_hash: Hash,
+    slot_status: SlotStatus,
+) void {
+    switch (slot_status) {
+        .unprocessed => {},
+        .dead => {
+            state_changes.*.appendAssumeCapacity(
+                .{
+                    .repair_duplicate_confirmed_version = duplicate_confirmed_hash,
+                },
+            );
+        },
+        .frozen => |frozen_hash| {
+            if (duplicate_confirmed_hash.eql(frozen_hash)) {
+                state_changes.*.appendAssumeCapacity(
+                    .{
+                        .duplicate_confirmed_slot_matches_cluster = frozen_hash,
+                    },
+                );
+            }
+            // The duplicate confirmed slot hash does not match our frozen hash.
+            // Modify fork choice rule to exclude our version from being voted
+            // on and also repair the correct version
+            state_changes.*.appendAssumeCapacity(
+                .{ .mark_slot_duplicate = frozen_hash },
+            );
+            state_changes.*.appendAssumeCapacity(
+                .{ .repair_duplicate_confirmed_version = duplicate_confirmed_hash },
+            );
+        },
+    }
 }
 
 // Looks like this is mostly used for logging? So maybe it can be skipped?
