@@ -24,12 +24,12 @@ const bp = sig.zksdk.bulletproofs;
 ///
 /// The protocol works by recursively folding the vectors `a` and `b` into
 /// smaller vectors, committing to linear combinations at each step. This folding
-/// is done in logarthmic rounds, and in each round the prover sends two group
+/// is done in logarithmic rounds, and in each round the prover sends two group
 /// elements (`Lᵢ` and `Rᵢ`) that allow the verifier to reconstruct the
 /// final scalar product from the compressed vectors.
 ///
 /// The security of the proof relies on the discrete logarithm harness assumption,
-/// and the commitment sceheme used (Pedersen commitment) ensures that the
+/// and the commitment scheme used (Pedersen commitment) ensures that the
 /// vectors remain hidden while the correctness of the inner product is verifiable.
 ///
 /// - Bulletproofs paper (Bünz et al., 2018): https://eprint.iacr.org/2017/1066

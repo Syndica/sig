@@ -47,12 +47,11 @@ pub fn mulMulti(
     std.debug.assert(compressed_scalars.len == ed_points.len);
     std.debug.assert(compressed_scalars.len <= max_elements);
 
-    const w: u6 = if (max_elements < 500)
-        6
-    else if (max_elements < 800)
-        7
-    else
-        8;
+    const w: u6 = switch (max_elements) {
+        0...499 => 6,
+        500...799 => 7,
+        else => 8,
+    };
 
     const max_digit = @as(u64, 1) << w;
     const buckets_count = max_digit / 2;
