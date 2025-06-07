@@ -318,7 +318,7 @@ pub fn createInstructionInfo(
 }
 
 pub const InstructionInfoAccountMetaParams = struct {
-    index_in_transaction: u16 = 0,
+    index_in_transaction: u16,
     index_in_caller: ?u16 = null,
     index_in_callee: ?u16 = null,
     is_signer: bool = false,

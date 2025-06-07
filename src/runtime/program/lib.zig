@@ -12,6 +12,7 @@ pub const stake = @import("stake/lib.zig");
 pub const system = @import("system/lib.zig");
 pub const testing = @import("testing.zig");
 pub const vote = @import("vote/lib.zig");
+pub const zk_elgamal = @import("zk_elgamal/lib.zig");
 
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
@@ -35,6 +36,7 @@ fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
         .{ system.ID.base58String().slice(), system.execute },
         .{ vote.ID.base58String().slice(), vote.execute },
         .{ address_lookup_table.ID.base58String().slice(), address_lookup_table.execute },
+        .{ zk_elgamal.ID.base58String().slice(), zk_elgamal.execute },
     });
 }
 
