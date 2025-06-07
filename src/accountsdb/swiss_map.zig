@@ -7,7 +7,7 @@ const sig = @import("../sig.zig");
 
 const accounts_db = sig.accounts_db;
 
-const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
+const Resolution = @import("../benchmarks.zig").Resolution;
 
 pub fn SwissMap(
     comptime Key: type,
@@ -758,20 +758,19 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
 pub const BenchmarkSwissMap = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1_000;
+    pub const name = "SwissMap";
 
-    pub const BenchArgs = struct {
+    pub const BenchInput = struct {
         n_accounts: usize,
         name: []const u8 = "",
     };
 
-    pub const args = [_]BenchArgs{
-        BenchArgs{
-            .n_accounts = 1_000_000,
-            .name = "1m accounts",
-        },
-    };
+    pub const inputs = [_]BenchInput{.{
+        .n_accounts = 1_000_000,
+        .name = "1m accounts",
+    }};
 
-    pub fn swissmapReadWriteBenchmark(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
+    pub fn swissmapReadWriteBenchmark(units: Resolution, bench_args: BenchInput) !struct {
         read_time: u64,
         write_time: u64,
         // // NOTE: these are useful for debugging, but not for CI/CD

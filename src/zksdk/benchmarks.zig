@@ -5,6 +5,7 @@ const zksdk = sig.zksdk;
 const pedersen = zksdk.pedersen;
 
 pub const Benchmark = struct {
+    pub const name = "zksdk";
     pub const min_iterations = 100;
     pub const max_iterations = 1_000;
 
