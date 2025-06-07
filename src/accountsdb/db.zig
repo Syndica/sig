@@ -9,7 +9,7 @@ const tracy = @import("tracy");
 const sysvar = sig.runtime.sysvar;
 const snapgen = sig.accounts_db.snapshots.generate;
 
-const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
+const Resolution = @import("../benchmarks.zig").Resolution;
 
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
@@ -3484,7 +3484,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
     pub const SNAPSHOT_DIR_PATH = sig.TEST_DATA_DIR ++ "bench_snapshot/";
 
-    pub const BenchArgs = struct {
+    pub const BenchInputs = struct {
         use_disk: bool,
         n_threads: u32,
         name: []const u8,
@@ -3492,16 +3492,17 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // TODO: support fastloading checks
     };
 
-    pub const args = [_]BenchArgs{
-        BenchArgs{
-            .name = "testnet - ram index - 4 threads",
-            .use_disk = false,
-            .n_threads = 4,
-            .cluster = .testnet,
-        },
-    };
+    pub const inputs = [_]BenchInputs{.{
+        .name = "testnet - ram index - 4 threads",
+        .use_disk = false,
+        .n_threads = 4,
+        .cluster = .testnet,
+    }};
 
-    pub fn loadAndVerifySnapshot(units: BenchTimeUnit, bench_args: BenchArgs) !struct {
+    pub fn loadAndVerifySnapshot(
+        units: Resolution,
+        bench_inputs: BenchInputs,
+    ) !struct {
         load_time: u64,
         validate_time: u64,
         fastload_save_time: u64,
@@ -3551,7 +3552,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .snapshot_dir = snapshot_dir,
                 .geyser_writer = null,
                 .gossip_view = null,
-                .index_allocation = if (bench_args.use_disk) .disk else .ram,
+                .index_allocation = if (bench_inputs.use_disk) .disk else .ram,
                 .number_of_index_shards = 32,
             });
             defer accounts_db.deinit();
@@ -3559,9 +3560,9 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             var load_timer = try sig.time.Timer.start();
             try accounts_db.loadFromSnapshot(
                 collapsed_manifest.accounts_db_fields,
-                bench_args.n_threads,
+                bench_inputs.n_threads,
                 allocator,
-                try getAccountPerFileEstimateFromCluster(bench_args.cluster),
+                try getAccountPerFileEstimateFromCluster(bench_inputs.cluster),
             );
             const loading_duration = load_timer.read();
 
@@ -3601,7 +3602,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
                 .snapshot_dir = snapshot_dir,
                 .geyser_writer = null,
                 .gossip_view = null,
-                .index_allocation = if (bench_args.use_disk) .disk else .ram,
+                .index_allocation = if (bench_inputs.use_disk) .disk else .ram,
                 .number_of_index_shards = 32,
             });
             defer fastload_accounts_db.deinit();
@@ -3789,7 +3790,7 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub fn readWriteAccounts(
-        units: BenchTimeUnit,
+        units: Resolution,
         bench_args: BenchArgs,
     ) !struct { read_time: u64, write_time: u64 } {
         const n_accounts = bench_args.n_accounts;

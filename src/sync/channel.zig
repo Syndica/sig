@@ -589,6 +589,7 @@ fn testPacketReceiver(chan: anytype, total_recv: usize) void {
 pub const BenchmarkChannel = struct {
     pub const min_iterations = 10;
     pub const max_iterations = 500;
+    pub const name = "channel";
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",
@@ -596,7 +597,7 @@ pub const BenchmarkChannel = struct {
         receives: bool,
     };
 
-    pub const args = [_]BenchmarkArgs{
+    pub const inputs = [_]BenchmarkArgs{
         .{
             .name = "1_senders-   1_receivers ",
             .n_senders = 1,
