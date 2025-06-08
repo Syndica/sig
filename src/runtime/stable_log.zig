@@ -158,7 +158,7 @@ test "stable_log" {
         allocator,
         prng.random(),
         .{
-            .log_collector = LogCollector.default(),
+            .log_collector = try LogCollector.default(allocator),
         },
     );
     defer {
@@ -184,12 +184,12 @@ test "stable_log" {
         "Program SigDefau1tPubkey111111111111111111111111111 success",
         "Program SigDefau1tPubkey111111111111111111111111111 failed: error",
     };
-    const actual = tc.log_collector.?.collect();
+    var actual_iter = tc.log_collector.?.iterator();
 
-    try std.testing.expectEqualSlices(u8, expected[0], actual[0]);
-    try std.testing.expectEqualSlices(u8, expected[1], actual[1]);
-    try std.testing.expectEqualSlices(u8, expected[2], actual[2]);
-    try std.testing.expectEqualSlices(u8, expected[3], actual[3]);
-    try std.testing.expectEqualSlices(u8, expected[4], actual[4]);
-    try std.testing.expectEqualSlices(u8, expected[5], actual[5]);
+    try std.testing.expectEqualSlices(u8, expected[0], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[1], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[2], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[3], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[4], actual_iter.next().?);
+    try std.testing.expectEqualSlices(u8, expected[5], actual_iter.next().?);
 }

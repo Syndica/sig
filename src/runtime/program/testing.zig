@@ -57,7 +57,7 @@ pub fn expectProgramExecuteResult(
 
     var context_params = initial_context_params;
     if (options.print_logs and initial_context_params.log_collector == null) {
-        context_params.log_collector = LogCollector.init(null);
+        context_params.log_collector = try LogCollector.init(allocator, null);
     }
 
     // Create the initial transaction context
@@ -72,8 +72,10 @@ pub fn expectProgramExecuteResult(
         // Log messages before deiniting the transaction context
         if (options.print_logs) {
             std.debug.print("Execution Logs:\n", .{});
-            for (initial_tc.log_collector.?.collect(), 1..) |log, index| {
-                std.debug.print("    {}: {s}\n", .{ index, log });
+            var iter = initial_tc.log_collector.?.iterator();
+            var i: usize = 1;
+            while (iter.next()) |log| : (i += 1) {
+                std.debug.print("    {}: {s}\n", .{ i, log });
             }
         }
         deinitTransactionContext(allocator, &initial_tc);
