@@ -1,11 +1,14 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
+const features = sig.runtime.features;
+
 pub const ed25519 = @import("ed25519.zig");
 pub const secp256k1 = @import("secp256k1.zig");
 pub const secp256r1 = @import("secp256r1.zig");
 
 const Pubkey = sig.core.Pubkey;
+const FeatureSet = features.FeatureSet;
 const Ed25519 = std.crypto.sign.Ed25519;
 const TransactionInstruction = sig.core.transaction.Instruction;
 
@@ -18,10 +21,8 @@ pub const SIGNATURE_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 24;
 pub const SECP256K1_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 223;
 /// Number of compute units for one ed25519 signature verification.
 pub const ED25519_VERIFY_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 76;
-
-// TODO: should be moved to global features file
-pub const SECP256R1_FEATURE_ID =
-    Pubkey.parseBase58String("sr11RdZWgbHTHxSroPALe6zgaT5A1K9LcE4nfsZS4gi") catch unreachable;
+/// Number of compute units for one ed25519 strict signature verification.
+pub const ED25519_VERIFY_STRICT_COST: u64 = COMPUTE_UNIT_TO_US_RATIO * 80;
 
 pub const PRECOMPILES = [_]Precompile{
     .{
@@ -37,19 +38,16 @@ pub const PRECOMPILES = [_]Precompile{
     .{
         .program_id = secp256r1.ID,
         .function = secp256r1.verify,
-        .required_feature = SECP256R1_FEATURE_ID,
+        .required_feature = features.SECP256R1_FEATURE_ID,
     },
 };
 
 // https://github.com/anza-xyz/agave/blob/f9d4939d1d6ad2783efc8ec60db058809bb87f55/cost-model/src/cost_model.rs#L115
 // https://github.com/anza-xyz/agave/blob/6ea38fce866595908486a01c7d6b7182988f3b2d/sdk/program/src/message/sanitized.rs#L378
 pub fn verifyPrecompilesComputeCost(
-    transaction: sig.core.Transaction,
-    feature_set: sig.runtime.FeatureSet,
+    transaction: *const sig.core.Transaction,
+    feature_set: *const FeatureSet,
 ) u64 {
-    // TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
-    _ = feature_set;
-
     var n_secp256k1_instruction_signatures: u64 = 0;
     var n_ed25519_instruction_signatures: u64 = 0;
 
@@ -66,15 +64,21 @@ pub fn verifyPrecompilesComputeCost(
         }
     }
 
+    const strict_verify = feature_set.active.contains(features.ED25519_PRECOMPILE_VERIFY_STRICT);
+    const ed25519_verify_cost = switch (strict_verify) {
+        true => ED25519_VERIFY_STRICT_COST,
+        false => ED25519_VERIFY_COST,
+    };
+
     return transaction.msg.signature_count *| SIGNATURE_COST +|
         n_secp256k1_instruction_signatures *| SECP256K1_VERIFY_COST +|
-        n_ed25519_instruction_signatures *| ED25519_VERIFY_COST;
+        n_ed25519_instruction_signatures *| ed25519_verify_cost;
 }
 
 pub fn verifyPrecompiles(
     allocator: std.mem.Allocator,
-    transaction: sig.core.Transaction,
-    feature_set: sig.runtime.FeatureSet,
+    transaction: *const sig.core.Transaction,
+    feature_set: *const FeatureSet,
 ) (PrecompileProgramError || error{OutOfMemory})!void {
     // could remove this alloc by passing in the transaction in directly, but maybe less clean
     var instruction_datas: ?[]const []const u8 = null;
@@ -96,7 +100,7 @@ pub fn verifyPrecompiles(
                 break :blk buf;
             };
 
-            try precompile.function(instruction.data, datas);
+            try precompile.function(instruction.data, datas, feature_set);
         }
     }
 }
@@ -104,6 +108,7 @@ pub fn verifyPrecompiles(
 pub const PrecompileFn = fn (
     current_instruction_data: []const u8,
     all_instruction_datas: []const []const u8,
+    feature_set: *const FeatureSet,
 ) PrecompileProgramError!void;
 
 pub const Precompile = struct {
@@ -125,8 +130,8 @@ pub const PrecompileProgramError = error{
 test "verify ed25519" {
     try verifyPrecompiles(
         std.testing.allocator,
-        sig.core.Transaction.EMPTY,
-        sig.runtime.FeatureSet.EMPTY,
+        &sig.core.Transaction.EMPTY,
+        &FeatureSet.EMPTY,
     );
 
     const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
@@ -145,14 +150,17 @@ test "verify ed25519" {
 
     try std.testing.expectError(
         error.InvalidInstructionDataSize,
-        verifyPrecompiles(std.testing.allocator, bad_ed25519_tx, sig.runtime.FeatureSet.EMPTY),
+        verifyPrecompiles(std.testing.allocator, &bad_ed25519_tx, &FeatureSet.EMPTY),
     );
 
+    const message = "hello";
     const keypair = Ed25519.KeyPair.generate();
+    const signature = try keypair.sign(message, null);
     const ed25519_instruction = try ed25519.newInstruction(
         std.testing.allocator,
-        keypair,
-        "hello!",
+        &signature,
+        &keypair.public_key,
+        message,
     );
     defer std.testing.allocator.free(ed25519_instruction.data);
 
@@ -171,15 +179,18 @@ test "verify ed25519" {
         .signatures = &.{},
     };
 
-    try verifyPrecompiles(std.testing.allocator, ed25519_tx, sig.runtime.FeatureSet.EMPTY);
+    try verifyPrecompiles(std.testing.allocator, &ed25519_tx, &FeatureSet.EMPTY);
 }
 
 test "verify cost" {
+    const message = "hello";
     const keypair = Ed25519.KeyPair.generate();
+    const signature = try keypair.sign(message, null);
     const ed25519_instruction = try ed25519.newInstruction(
         std.testing.allocator,
-        keypair,
-        "hello!",
+        &signature,
+        &keypair.public_key,
+        message,
     );
     defer std.testing.allocator.free(ed25519_instruction.data);
 
@@ -202,7 +213,7 @@ test "verify cost" {
     // cross-checked with agave (FeatureSet::default())
     try std.testing.expectEqual(3000, expected_cost);
 
-    const compute_units = verifyPrecompilesComputeCost(ed25519_tx, sig.runtime.FeatureSet.EMPTY);
+    const compute_units = verifyPrecompilesComputeCost(&ed25519_tx, &FeatureSet.EMPTY);
     try std.testing.expectEqual(expected_cost, compute_units);
 }
 
@@ -223,6 +234,6 @@ test "verify secp256k1" {
 
     try std.testing.expectError(
         error.InvalidInstructionDataSize,
-        verifyPrecompiles(std.testing.allocator, bad_secp256k1_tx, sig.runtime.FeatureSet.EMPTY),
+        verifyPrecompiles(std.testing.allocator, &bad_secp256k1_tx, &FeatureSet.EMPTY),
     );
 }

@@ -41,6 +41,9 @@ pub const FULL_INFLATION_MAINNET_VOTE =
 pub const FULL_INFLATION_MAINNET_ENABLE =
     Pubkey.parseBase58String("7XRJcS5Ud5vxGB54JbK9N2vBZVwnwdBNeJW1ibRgD9gx") catch unreachable;
 
+pub const SECP256R1_FEATURE_ID =
+    Pubkey.parseBase58String("sr11RdZWgbHTHxSroPALe6zgaT5A1K9LcE4nfsZS4gi") catch unreachable;
+
 pub const SECP256K1_PROGRAM_ENABLED =
     Pubkey.parseBase58String("E3PHP7w8kB7np3CTQ1qQ2tW3KCtjRSXBQgW9vM2mWv2Y") catch unreachable;
 

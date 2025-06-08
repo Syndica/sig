@@ -3,6 +3,7 @@ const sig = @import("../../../sig.zig");
 const precompile_programs = sig.runtime.program.precompiles;
 
 const Pubkey = sig.core.Pubkey;
+const FeatureSet = sig.runtime.FeatureSet;
 const PrecompileProgramError = precompile_programs.PrecompileProgramError;
 
 pub const ID =
@@ -15,6 +16,7 @@ pub const ID =
 pub fn verify(
     current_instruction_data: []const u8,
     all_instruction_datas: []const []const u8,
+    _: *const FeatureSet,
 ) PrecompileProgramError!void {
     _ = current_instruction_data;
     _ = all_instruction_datas;
