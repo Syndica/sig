@@ -416,7 +416,7 @@ pub const ForkChoice = struct {
     }
 
     pub fn isDuplicateConfirmed(
-        self: *ForkChoice,
+        self: ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?bool {
         if (self.fork_infos.get(slot_hash_key.*)) |fork_info| {
