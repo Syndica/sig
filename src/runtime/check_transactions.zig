@@ -158,13 +158,11 @@ fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
 
     if (!program_key.equals(&sig.runtime.program.system.ID)) return null;
 
-    // Serialized value of [`SystemInstruction::AdvanceNonceAccount`].
-    const serialized_advance_nonce_account: [serialized_size]u8 = @bitCast(
-        std.mem.nativeToLittle(u32, 4),
-    );
-
-    if (instruction.instruction_data[0..4] != &serialized_advance_nonce_account) return null;
-    if (!instruction.account_metas.get(0).is_writable) return null;
+    if (!std.mem.eql(
+        u8,
+        instruction.instruction_data[0..4],
+        &.{ 4, 0, 0, 0 }, // SystemInstruction::AdvanceNonceAccount
+    )) return null;
 
     const nonce_meta = instruction.account_metas.get(0);
     if (!nonce_meta.is_writable) return null;
@@ -272,5 +270,138 @@ test "checkAge: recent blockhash" {
         );
 
         try std.testing.expectEqual(TransactionError.BlockhashNotFound, result.err);
+    }
+}
+
+test "checkAge: nonce account" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const nonce_key = Pubkey.initRandom(prng.random());
+    const nonce_authority_key = Pubkey.initRandom(prng.random());
+    const recent_blockhash = Hash.initRandom(prng.random());
+    const next_durable_nonce = Hash.initRandom(prng.random());
+
+    const nonce_account = AccountSharedData{
+        .lamports = 0,
+        .owner = sig.runtime.program.system.ID,
+        .data = try sig.bincode.writeAlloc(
+            allocator,
+            sig.runtime.nonce.Versions{ .current = .{
+                .initialized = .{
+                    .authority = nonce_authority_key,
+                    .durable_nonce = recent_blockhash,
+                    .fee_calculator = .{ .lamports_per_signature = 5000 },
+                },
+            } },
+            .{},
+        ),
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    var account_cache = BatchAccountCache{};
+    defer account_cache.deinit(allocator);
+    try account_cache.account_cache.put(allocator, nonce_key, nonce_account);
+
+    const instruction_data = try sig.bincode.writeAlloc(
+        allocator,
+        sig.runtime.program.system.Instruction.advance_nonce_account,
+        .{},
+    );
+    defer allocator.free(instruction_data);
+
+    var accounts = sig.runtime.transaction_execution.RuntimeTransaction.Accounts{};
+    defer accounts.deinit(allocator);
+    try accounts.append(
+        allocator,
+        .{ .pubkey = sig.runtime.program.system.ID, .is_signer = false, .is_writable = false },
+    );
+    try accounts.append(
+        allocator,
+        .{ .pubkey = nonce_key, .is_signer = false, .is_writable = true },
+    );
+    try accounts.append(
+        allocator,
+        .{ .pubkey = nonce_authority_key, .is_signer = true, .is_writable = false },
+    );
+
+    const transaction = RuntimeTransaction{
+        .signature_count = 0,
+        .fee_payer = Pubkey.ZEROES,
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = recent_blockhash,
+        .instruction_infos = &.{.{
+            .program_meta = .{ .pubkey = sig.runtime.program.system.ID, .index_in_transaction = 0 },
+            .account_metas = try sig.runtime.InstructionInfo.AccountMetas.fromSlice(&.{
+                .{
+                    .pubkey = nonce_key,
+                    .index_in_transaction = 1,
+                    .index_in_caller = 1,
+                    .index_in_callee = 1,
+                    .is_signer = false,
+                    .is_writable = true,
+                },
+                .{
+                    .pubkey = nonce_authority_key,
+                    .index_in_transaction = 2,
+                    .index_in_caller = 2,
+                    .index_in_callee = 2,
+                    .is_signer = true,
+                    .is_writable = false,
+                },
+            }),
+            .instruction_data = instruction_data,
+            .initial_account_lamports = 0,
+        }},
+        .accounts = accounts,
+    };
+
+    var blockhash_queue = BlockhashQueue{
+        .last_hash = null,
+        .max_age = 0,
+        .ages = .{},
+        .last_hash_index = 0,
+    };
+
+    const result = checkAge(
+        &transaction,
+        &account_cache,
+        &blockhash_queue,
+        0,
+        &next_durable_nonce,
+        5001,
+    );
+
+    switch (result) {
+        .ok => |ca| {
+            try std.testing.expectEqualSlices(
+                u8,
+                &nonce_key.data,
+                &ca.?.pubkey.data,
+            );
+            const nv = try sig.bincode.readFromSlice(
+                allocator,
+                sig.runtime.nonce.Versions,
+                ca.?.account.data,
+                .{},
+            );
+            try std.testing.expectEqualSlices(
+                u8,
+                &nv.getState().initialized.authority.data,
+                &nonce_authority_key.data,
+            );
+            try std.testing.expectEqualSlices(
+                u8,
+                &nv.getState().initialized.durable_nonce.data,
+                &next_durable_nonce.data,
+            );
+            try std.testing.expectEqual(
+                5001,
+                nv.getState().initialized.fee_calculator.lamports_per_signature,
+            );
+        },
+        .err => return error.ExpectedOk,
     }
 }
