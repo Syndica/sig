@@ -162,6 +162,8 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
             slot,
         );
 
+        var duplicate_slots_to_repair: replay.service.stubs.DuplicateSlotsToRepair = .{};
+        var purge_repair_slot_counter: replay.service.stubs.PurgeRepairSlotCounter = .{};
         try markSlotsDuplicateConfirmed(
             deps.blockstore,
             deps.progress_map,
@@ -170,9 +172,9 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
             0,
             .{},
             .{},
+            &duplicate_slots_to_repair,
             .{},
-            .{},
-            .{},
+            &purge_repair_slot_counter,
             .{},
         );
     }
@@ -364,12 +366,32 @@ const VoteOp = union(enum) {
 const stubs = struct {
     pub const DuplicateSlotsTracker = struct {};
     pub const EpochSlotsFrozenSlots = struct {};
-    pub const DuplicateSlotsToRepair = struct {};
-    pub const PurgeRepairSlotCounter = struct {};
+    pub const DuplicateSlotsToRepair = struct {
+        pub fn insert(self: @This(), slot: Slot, hash: Hash) void {
+            _ = &self;
+            _ = &slot;
+            _ = &hash;
+        }
+        pub fn remove(self: @This(), slot: Slot) void {
+            _ = &self;
+            _ = &slot;
+        }
+    };
+    pub const PurgeRepairSlotCounter = struct {
+        pub fn remove(self: @This(), slot: Slot) void {
+            _ = &self;
+            _ = &slot;
+        }
+    };
     pub const DuplicateConfirmedSlots = struct {};
     pub const UnfrozenGossipVerifiedVoteHashes = struct {};
     pub const ReplayLoopTiming = struct {};
-    pub const AncestorHashesReplayUpdateSender = struct {};
+    pub const AncestorHashesReplayUpdateSender = struct {
+        pub fn send(self: @This(), update: AncestorHashesReplayUpdate) void {
+            _ = &self;
+            _ = &update;
+        }
+    };
     pub const BankForks = struct {};
     pub const PohRecorder = struct {};
     pub const ClusterInfo = struct {};
@@ -435,9 +457,9 @@ fn markSlotsDuplicateConfirmed(
     root_slot: Slot,
     duplicate_slot_tracker: stubs.DuplicateSlotsTracker,
     epoch_slots_frozen_slots: stubs.EpochSlotsFrozenSlots,
-    duplicate_slots_to_repair: stubs.DuplicateSlotsToRepair,
+    duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
     ancestor_hashes_replay_update_sender: stubs.AncestorHashesReplayUpdateSender,
-    purge_repair_slot_counter: stubs.PurgeRepairSlotCounter,
+    purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
     duplicate_confirmed_slots: stubs.DuplicateConfirmedSlots,
 ) !void {
     for (confirmed_duplicates) |confirmed| {
@@ -458,25 +480,22 @@ fn markSlotsDuplicateConfirmed(
             .slot_status = SlotStatus{ .frozen = hash },
         };
 
-        checkSlotAgreesWithCluster(
+        try checkSlotAgreesWithCluster(
             root_slot,
             slot,
             SlotStateUpdate{
                 .duplicate_confirmed = duplicate_confirmed_state,
             },
             fork_choice,
+            duplicate_slots_to_repair,
+            blockstore,
+            &ancestor_hashes_replay_update_sender,
+            purge_repair_slot_counter,
         );
     }
 
-    _ = &blockstore;
-    _ = &root_slot;
-    _ = &progress_map;
     _ = &duplicate_slot_tracker;
-    _ = &fork_choice;
     _ = &epoch_slots_frozen_slots;
-    _ = &duplicate_slots_to_repair;
-    _ = &ancestor_hashes_replay_update_sender;
-    _ = &purge_repair_slot_counter;
     _ = &duplicate_confirmed_slots;
 }
 
@@ -485,7 +504,11 @@ fn checkSlotAgreesWithCluster(
     slot: Slot,
     slot_state_update: SlotStateUpdate,
     fork_choice: *ForkChoice,
-) void {
+    duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
+    blockstore: *const BlockstoreReader,
+    ancestor_hashes_replay_update_sender: *const stubs.AncestorHashesReplayUpdateSender,
+    purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
+) !void {
     // Currently implements SlotStateUpdate::DuplicateConfirmed
     if (slot <= root) {
         return;
@@ -519,7 +542,15 @@ fn checkSlotAgreesWithCluster(
         slot_state_update,
     );
 
-    _ = &state_changes;
+    try applyStateChanges(
+        slot,
+        fork_choice,
+        duplicate_slots_to_repair,
+        blockstore,
+        ancestor_hashes_replay_update_sender,
+        purge_repair_slot_counter,
+        state_changes,
+    );
 }
 
 pub const AncestorHashesReplayUpdate = union(enum) {
@@ -543,11 +574,13 @@ pub const ResultingStateChange = union(enum) {
     send_ancestor_hashes_replay_update: AncestorHashesReplayUpdate,
 };
 
+const ResultingStateChanges = std.BoundedArray(ResultingStateChange, 5);
+
 fn generateStateChanges(
     slot: Slot,
     slot_state_update: SlotStateUpdate,
-) std.BoundedArray(ResultingStateChange, 5) {
-    var state_changes: std.BoundedArray(ResultingStateChange, 5) = .{};
+) ResultingStateChanges {
+    var state_changes: ResultingStateChanges = .{};
     switch (slot_state_update) {
         .duplicate_confirmed => |duplicate_confirmed_state| {
             switch (duplicate_confirmed_state.slot_status) {
@@ -573,6 +606,71 @@ fn generateStateChanges(
         },
     }
     return state_changes;
+}
+
+fn applyStateChanges(
+    slot: Slot,
+    fork_choice: *ForkChoice,
+    duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
+    blockstore: *const BlockstoreReader,
+    ancestor_hashes_replay_update_sender: *const stubs.AncestorHashesReplayUpdateSender,
+    purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
+    state_changes: ResultingStateChanges,
+) !void {
+    var maybe_not_duplicate_confirmed_frozen_hash: ?Hash = null;
+    for (state_changes.constSlice()) |state_change| {
+        switch (state_change) {
+            .bank_frozen => |frozen_hash| {
+                if (!(fork_choice.isDuplicateConfirmed(
+                    &.{ .slot = slot, .hash = frozen_hash },
+                ) orelse
+                    return error.MissingSlot))
+                {
+                    maybe_not_duplicate_confirmed_frozen_hash = frozen_hash;
+                }
+            },
+            .mark_slot_duplicate => |frozen_hash| {
+                try fork_choice.markForkInvalidCandidate(
+                    &.{ .slot = slot, .hash = frozen_hash },
+                );
+            },
+            .repair_duplicate_confirmed_version => |duplicate_confirmed_hash| {
+                duplicate_slots_to_repair.insert(slot, duplicate_confirmed_hash);
+            },
+            .duplicate_confirmed_slot_matches_cluster => |frozen_hash| {
+                maybe_not_duplicate_confirmed_frozen_hash = null;
+                // When we detect that our frozen slot matches the cluster version (note this
+                // will catch both bank frozen first -> confirmation, or confirmation first ->
+                // bank frozen), mark all the newly duplicate confirmed slots in blockstore
+                const new_duplicate_confirmed_slot_hashes =
+                    try fork_choice.markForkValidCandidate(
+                        &.{
+                            .slot = slot,
+                            .hash = frozen_hash,
+                        },
+                    );
+                // TODO
+                // blockstore
+                // .set_duplicate_confirmed_slots_and_hashes(
+                //     new_duplicate_confirmed_slot_hashes.into_iter(),
+                // )
+                // .unwrap();
+                _ = &new_duplicate_confirmed_slot_hashes;
+                _ = &blockstore;
+                duplicate_slots_to_repair.remove(slot);
+                purge_repair_slot_counter.remove(slot);
+            },
+            .send_ancestor_hashes_replay_update => |ancestor_hashes_replay_update| {
+                ancestor_hashes_replay_update_sender.send(ancestor_hashes_replay_update);
+            },
+        }
+    }
+
+    if (maybe_not_duplicate_confirmed_frozen_hash) |not_duplicate_confirmed_frozen_hash| {
+        // TODO
+        // blockstore.insert_bank_hash(slot, frozen_hash, false);
+        _ = &not_duplicate_confirmed_frozen_hash;
+    }
 }
 
 /// Generates state changes needed to be applied to the forkchoice
