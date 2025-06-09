@@ -658,12 +658,12 @@ pub fn freeWithConfig(
 
 pub fn VarIntConfig(comptime T: type) bincode.FieldConfig(T) {
     const S = struct {
-        pub fn serialize(writer: anytype, data: T, params: bincode.Params) !void {
+        fn serialize(writer: anytype, data: T, params: bincode.Params) !void {
             _ = params;
             return std.leb.writeUleb128(writer, data);
         }
 
-        pub fn deserialize(
+        fn deserialize(
             allocator: std.mem.Allocator,
             reader: anytype,
             params: bincode.Params,
