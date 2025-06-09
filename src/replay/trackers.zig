@@ -18,6 +18,7 @@ const SlotState = sig.core.SlotState;
 ///
 /// [BankForks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank_forks.rs#L75)
 pub const SlotTracker = struct {
+    root: Slot,
     slots: std.AutoArrayHashMapUnmanaged(Slot, Element) = .{},
 
     const Element = struct {
