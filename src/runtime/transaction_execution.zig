@@ -265,7 +265,6 @@ pub fn loadAndExecuteTransaction(
     } };
 }
 
-/// TODO: Follow up PR will remove EpochContext and SlotContext from the TransactionContext
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L909
 pub fn executeTransaction(
     allocator: std.mem.Allocator,

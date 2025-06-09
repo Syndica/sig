@@ -28,7 +28,7 @@ pub fn checkStatusCache(
     ancestors: *const Ancestors,
     status_cache: *const sig.core.StatusCache,
 ) ?TransactionError {
-    if (isTransactionAlreadyProcessed(msg_hash, recent_blockhash, ancestors, status_cache))
+    if (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors) != null)
         return .AlreadyProcessed;
     return null;
 }
@@ -173,11 +173,40 @@ fn getDurableNonce(transaction: *const RuntimeTransaction) ?Pubkey {
     return account_keys[nonce_meta.index_in_transaction];
 }
 
-fn isTransactionAlreadyProcessed(
-    msg_hash: *const Hash,
-    recent_blockhash: *const Hash,
-    ancestors: *const sig.core.status_cache.Ancestors,
-    status_cache: *const sig.core.StatusCache,
-) bool {
-    return status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors) != null;
+test checkStatusCache {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(allocator);
+
+    var status_cache = sig.core.StatusCache.default();
+    defer status_cache.deinit(allocator);
+
+    const msg_hash = Hash.generateSha256("msg hash");
+    const recent_blockhash = Hash.generateSha256("recent blockhash");
+
+    try std.testing.expectEqual(
+        null,
+        checkStatusCache(
+            &msg_hash,
+            &recent_blockhash,
+            &ancestors,
+            &status_cache,
+        ),
+    );
+
+    try ancestors.ancestors.put(allocator, 0, {});
+    try status_cache.insert(allocator, prng.random(), &recent_blockhash, &msg_hash.data, 0);
+
+    try std.testing.expectEqual(
+        .AlreadyProcessed,
+        checkStatusCache(
+            &msg_hash,
+            &recent_blockhash,
+            &ancestors,
+            &status_cache,
+        ),
+    );
 }
