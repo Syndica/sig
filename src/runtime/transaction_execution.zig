@@ -178,7 +178,6 @@ pub fn loadAndExecuteTransaction(
         batch_account_cache,
         environment.blockhash_queue,
         environment.max_age,
-        &environment.last_blockhash,
         &environment.next_durable_nonce,
         environment.next_lamports_per_signature,
     );

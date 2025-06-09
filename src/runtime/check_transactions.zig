@@ -210,38 +210,57 @@ test checkStatusCache {
     );
 }
 
-test checkAge {
+test "checkAge: recent blockhash" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
 
-    { // Check that a transaction with a valid recent blockhash is okay
-        const max_age = 5;
-        const recent_blockhash = Hash.initRandom(prng.random());
+    const max_age = 5;
+    const recent_blockhash = Hash.initRandom(prng.random());
 
-        const transaction = RuntimeTransaction{
-            .signature_count = 0,
-            .fee_payer = Pubkey.ZEROES,
-            .msg_hash = Hash.ZEROES,
-            .recent_blockhash = recent_blockhash,
-            .instruction_infos = &.{},
-        };
+    const transaction = RuntimeTransaction{
+        .signature_count = 0,
+        .fee_payer = Pubkey.ZEROES,
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = recent_blockhash,
+        .instruction_infos = &.{},
+    };
 
-        const blockhash_queue = BlockhashQueue{
-            .last_hash = null,
-            .max_age = max_age,
-            .ages = try .init(
-                allocator,
-                &.{recent_blockhash},
-                &.{.{
-                    .fee_calculator = .{ .lamports_per_signature = 5000 },
-                    .hash_index = 31,
-                    .timestamp = 0,
-                }},
-            ),
-            .last_hash_index = 35,
-        };
-        defer blockhash_queue.deinit(allocator);
+    var blockhash_queue = BlockhashQueue{
+        .last_hash = null,
+        .max_age = 10,
+        .ages = try .init(
+            allocator,
+            &.{recent_blockhash},
+            &.{.{
+                .fee_calculator = .{ .lamports_per_signature = 5000 },
+                .hash_index = 0,
+                .timestamp = 0,
+            }},
+        ),
+        .last_hash_index = 0,
+    };
+    defer blockhash_queue.deinit(allocator);
+
+    { // Check valid recent blockhash ok
+        for (0..max_age) |_| {
+            blockhash_queue.last_hash_index += 1;
+
+            const result = checkAge(
+                &transaction,
+                &BatchAccountCache{},
+                &blockhash_queue,
+                max_age,
+                &Hash.ZEROES,
+                0,
+            );
+
+            try std.testing.expectEqual(null, result.ok);
+        }
+    }
+
+    { // Check invalid recent blockhash err
+        blockhash_queue.last_hash_index += 1;
 
         const result = checkAge(
             &transaction,
@@ -252,6 +271,6 @@ test checkAge {
             0,
         );
 
-        try std.testing.expectEqual(result.ok, null);
+        try std.testing.expectEqual(TransactionError.BlockhashNotFound, result.err);
     }
 }
