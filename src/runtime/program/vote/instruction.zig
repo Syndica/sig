@@ -1098,7 +1098,14 @@ test createInitializeAccount {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createAuthorize {
@@ -1116,7 +1123,14 @@ test createAuthorize {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createVote {
@@ -1135,7 +1149,14 @@ test createVote {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createWithdraw {
@@ -1151,7 +1172,14 @@ test createWithdraw {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createUpdateValidatorIdentity {
@@ -1166,7 +1194,14 @@ test createUpdateValidatorIdentity {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createUpdateCommission {
@@ -1181,7 +1216,14 @@ test createUpdateCommission {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createVoteSwitch {
@@ -1203,7 +1245,14 @@ test createVoteSwitch {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createAuthorizeChecked {
@@ -1219,7 +1268,14 @@ test createAuthorizeChecked {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createUpdateVoteState {
@@ -1239,7 +1295,14 @@ test createUpdateVoteState {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createUpdateVoteStateSwitch {
@@ -1262,7 +1325,14 @@ test createUpdateVoteStateSwitch {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createAuthorizeWithSeed {
@@ -1280,7 +1350,14 @@ test createAuthorizeWithSeed {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createAuthorizeCheckedWithSeed {
@@ -1298,7 +1375,14 @@ test createAuthorizeCheckedWithSeed {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createCompactUpdateVoteState {
@@ -1318,7 +1402,14 @@ test createCompactUpdateVoteState {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createCompactUpdateVoteStateSwitch {
@@ -1341,7 +1432,14 @@ test createCompactUpdateVoteStateSwitch {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createTowerSync {
@@ -1364,7 +1462,14 @@ test createTowerSync {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
 
 test createTowerSyncSwitch {
@@ -1388,5 +1493,12 @@ test createTowerSyncSwitch {
     );
     defer sig.bincode.free(allocator, instruction);
 
-    // TODO: Check instruction contents
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }
