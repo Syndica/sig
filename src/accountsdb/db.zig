@@ -1911,6 +1911,7 @@ pub const AccountsDB = struct {
 
         // update index
         var accounts_dead_count: u64 = 0;
+        try self.account_index.reference_manager.expandCapacity(accounts.len);
         const reference_buf, const global_ref_index = try self.account_index
             .reference_manager.allocOrExpand(accounts.len);
 
