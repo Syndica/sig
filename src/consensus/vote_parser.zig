@@ -115,7 +115,6 @@ fn parseVoteInstructionData(
             .{ .tower_sync = tss.tower_sync },
             tss.hash,
         },
-
         .authorize,
         .authorize_checked,
         .authorize_with_seed,
