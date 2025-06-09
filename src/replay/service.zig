@@ -13,6 +13,7 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
+const Transaction = sig.core.transaction.Transaction;
 const Signature = sig.core.Signature;
 const Keypair = sig.identity.KeyPair;
 const Pubkey = sig.core.Pubkey;
@@ -36,6 +37,9 @@ const SwitchForkDecision = sig.consensus.replay_tower.SwitchForkDecision;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
+// Give at least 4 leaders the chance to pack our vote
+const REFRESH_VOTE_BLOCKHEIGHT: usize = 16;
+const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
 pub const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
 pub const SWITCH_FORK_THRESHOLD: f64 = 0.38;
@@ -195,7 +199,7 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
     var vote_signatures =
         std.ArrayList(Signature).init(deps.allocator);
     const has_new_vote_been_rooted = true;
-    const last_vote_refresh_time: LastVoteRefreshTime = .{
+    var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = sig.time.Instant.now(),
         .last_print_time = sig.time.Instant.now(),
     };
@@ -215,7 +219,7 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         &in_vote_only_mode,
     );
 
-    const result = try deps.replay_tower.selectVoteAndResetForks(
+    const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
         deps.allocator,
         heaviest_slot,
         if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
@@ -228,9 +232,9 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         .{},
         &slot_history,
     );
-    const maybe_voted_slot = result.vote_slot;
-    const reset_slot = result.reset_slot;
-    const heaviest_fork_failures = result.heaviest_fork_failures;
+    const maybe_voted_slot = vote_and_reset_forks.vote_slot;
+    const reset_slot = vote_and_reset_forks.reset_slot;
+    const heaviest_fork_failures = vote_and_reset_forks.heaviest_fork_failures;
     _ = &heaviest_fork_failures;
     _ = &reset_slot;
 
@@ -251,7 +255,7 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
     }
 
     if (deps.replay_tower.tower.isRecent(heaviest_slot) and
-        result.heaviest_fork_failures.items.len != 0)
+        vote_and_reset_forks.heaviest_fork_failures.items.len != 0)
     {
         // Implemented the log
     }
@@ -269,31 +273,143 @@ const LastVoteRefreshTime = struct {
     last_print_time: sig.time.Instant,
 };
 
+/// Determines whether to refresh and submit an updated version of the last vote based on several conditions.
+///
+/// A vote refresh is performed when all of the following conditions are met:
+/// 1. Validator Status:
+///    - Not operating as a hotspare or non-voting validator
+///    - Has attempted to vote at least once previously
+/// 2. Fork Status:
+///    - There exists a heaviest slot (`heaviest_slot_on_same_fork`) on our previously voted fork
+///    - We've successfully landed at least one vote (`latest_landed_vote_slot`) on this fork
+/// 3. Vote Progress:
+///    - Our latest vote attempt (`last_vote_slot`) is still tracked in the progress map
+///    - The latest landed vote is older than our last vote attempt (`latest_landed_vote_slot` < `last_vote_slot`)
+/// 4. Block Progress:
+///    - The heaviest bank is sufficiently ahead of our last vote (by at least `REFRESH_VOTE_BLOCKHEIGHT` blocks)
+/// 5. Timing:
+///    - At least `MAX_VOTE_REFRESH_INTERVAL_MILLIS` milliseconds have passed since last refresh attempt
+///
+/// If all conditions are satisfied:
+/// - Creates a new vote transaction for the same slot (`last_vote_slot`) with:
+///   * Current timestamp
+///   * New blockhash from `heaviest_bank_on_same_fork`
+///   * Fresh signature
+/// - Submits this refreshed vote to the cluster
+///
+/// Returns:
+/// - `true` if a refreshed vote was successfully created and submitted
+/// - `false` if any condition was not met or the refresh failed
+///
+/// Note: This is not simply resending the same vote, but creating a new distinct transaction that:
+/// - Votes for the same slot
+/// - Contains updated metadata (timestamp/blockhash)
+/// - Generates a new signature
+/// - Will be processed as a separate transaction by the network
 fn maybeRefreshLastVote(
     replay_tower: *ReplayTower,
     progress: *const ProgressMap,
-    heaviest_slot_on_same_fork: ?Slot,
+    maybe_heaviest_slot_on_same_fork: ?Slot,
     vote_account_pubkey: *const Pubkey,
     identity_keypair: *const Keypair,
     authorized_voter_keypairs: []Keypair, // TODO Arc
     vote_signatures: *std.ArrayList(Signature),
     has_new_vote_been_rooted: bool,
-    last_vote_refresh_time: *const LastVoteRefreshTime,
+    last_vote_refresh_time: *LastVoteRefreshTime,
     voting_sender: *const stubs.Sender(VoteOp),
     wait_to_vote_slot: ?Slot,
 ) bool {
-    _ = &replay_tower;
-    _ = &progress;
-    _ = &heaviest_slot_on_same_fork;
+    const heaviest_bank_on_same_fork = maybe_heaviest_slot_on_same_fork orelse {
+        // Only refresh if blocks have been built on our last vote
+        return false;
+    };
+
+    // Need to land at least one vote in order to refresh
+    const latest_landed_vote_slot = blk: {
+        const fork_stat = progress.getForkStats(heaviest_bank_on_same_fork) orelse return false;
+        break :blk fork_stat.my_latest_landed_vote orelse return false;
+    };
+
+    const last_voted_slot = replay_tower.lastVotedSlot() orelse {
+        // Need to have voted in order to refresh
+        return false;
+    };
+
+    // If our last landed vote on this fork is greater than the vote recorded in our tower
+    // this means that our tower is old AND on chain adoption has failed. Warn the operator
+    // as they could be submitting slashable votes.
+    if (latest_landed_vote_slot > last_voted_slot and
+        last_vote_refresh_time.last_print_time.elapsed().asSecs() >= 1)
+    {
+        last_vote_refresh_time.last_print_time = sig.time.Instant.now();
+        // TODO log
+    }
+
+    if (latest_landed_vote_slot >= last_voted_slot) {
+        // Our vote or a subsequent vote landed do not refresh
+        return false;
+    }
+
+    const maybe_last_vote_tx_blockhash: ?Hash = switch (replay_tower.last_vote_tx_blockhash) {
+        // Since the checks in vote generation are deterministic, if we were non voting or hot spare
+        // on the original vote, the refresh will also fail. No reason to refresh.
+        // On the fly adjustments via the cli will be picked up for the next vote.
+        .non_voting, .hot_spare => return false,
+        // In this case we have not voted since restart, our setup is unclear.
+        // We have a vote from our previous restart that is eligible for refresh, we must refresh.
+        .uninitialized => null,
+        .blockhash => |blockhash| blockhash,
+    };
+
+    // TODO Need need a FIFO queue of `recent_blockhash` items
+    if (maybe_last_vote_tx_blockhash) |last_vote_tx_blockhash| {
+        // Check the blockhash queue to see if enough blocks have been built on our last voted fork
+        _ = &last_vote_tx_blockhash;
+    }
+
+    if (last_vote_refresh_time.last_refresh_time.elapsed().asMillis() <
+        MAX_VOTE_REFRESH_INTERVAL_MILLIS)
+    {
+        // This avoids duplicate refresh in case there are multiple forks descending from our last voted fork
+        // It also ensures that if the first refresh fails we will continue attempting to refresh at an interval no less
+        // than MAX_VOTE_REFRESH_INTERVAL_MILLIS
+        return false;
+    }
+
+    // All criteria are met, refresh the last vote using the blockhash of `heaviest_bank_on_same_fork`
+    // Update timestamp for refreshed vote
+    replay_tower.refreshLastVoteTimestamp(heaviest_bank_on_same_fork);
+
+    // TODO generate_vote_tx
     _ = &vote_account_pubkey;
     _ = &identity_keypair;
     _ = &authorized_voter_keypairs;
     _ = &vote_signatures;
     _ = &has_new_vote_been_rooted;
-    _ = &last_vote_refresh_time;
-    _ = &voting_sender;
     _ = &wait_to_vote_slot;
-    return true;
+    const vote_tx_result: GenerateVoteTxResult = .{
+        .tx = Transaction.EMPTY,
+    };
+
+    return switch (vote_tx_result) {
+        .tx => |vote_tx| {
+            const recent_blockhash = vote_tx.msg.recent_blockhash;
+            replay_tower.refreshLastVoteTxBlockhash(recent_blockhash);
+            // TODO send vote
+            _ = &voting_sender;
+            last_vote_refresh_time.last_refresh_time = sig.time.Instant.now();
+            return true;
+        },
+        .non_voting => {
+            replay_tower.markLastVoteTxBlockhashNonVoting();
+            return true;
+        },
+        .hot_spare => {
+            replay_tower.markLastVoteTxBlockhashHotSpare();
+            return false;
+        },
+        else => false,
+    };
 }
 
 /// Identifies and returns slots that should be marked as "duplicate confirmed" based on
@@ -557,6 +673,19 @@ pub const AncestorHashesReplayUpdate = union(enum) {
     dead: Slot,
     dead_duplicate_confirmed: Slot,
     popular_pruned_fork: Slot,
+};
+
+pub const GenerateVoteTxResult = union(enum) {
+    // non voting validator, not eligible for refresh
+    // until authorized keypair is overriden
+    non_voting,
+    // hot spare validator, not eligble for refresh
+    // until set identity is invoked
+    hot_spare,
+    // failed generation, eligible for refresh
+    fails,
+    // TODO add Transaction
+    tx: Transaction,
 };
 
 pub const ResultingStateChange = union(enum) {
