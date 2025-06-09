@@ -40,14 +40,13 @@ pub fn checkStatusCache(
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
 pub fn checkAge(
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
+    batch_account_cache: *const BatchAccountCache,
     blockhash_queue: *const BlockhashQueue,
     max_age: u64,
-    last_blockhash: *const Hash,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
 ) TransactionResult(?CachedAccount) {
-    if (blockhash_queue.getHashInfoIfValid(last_blockhash, max_age) != null) {
+    if (blockhash_queue.getHashInfoIfValid(&transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
     }
 
@@ -68,7 +67,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
     transaction: *const RuntimeTransaction,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-    batch_account_cache: *BatchAccountCache,
+    batch_account_cache: *const BatchAccountCache,
 ) ?struct { CachedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
@@ -101,7 +100,7 @@ fn checkLoadAndAdvanceMessageNonceAccount(
 
 fn loadMessageNonceAccount(
     transaction: *const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
+    batch_account_cache: *const BatchAccountCache,
 ) ?struct { CachedAccount, NonceData } {
     const nonce_address = getDurableNonce(transaction) orelse
         return null;
@@ -209,4 +208,50 @@ test checkStatusCache {
             &status_cache,
         ),
     );
+}
+
+test checkAge {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+
+    { // Check that a transaction with a valid recent blockhash is okay
+        const max_age = 5;
+        const recent_blockhash = Hash.initRandom(prng.random());
+
+        const transaction = RuntimeTransaction{
+            .signature_count = 0,
+            .fee_payer = Pubkey.ZEROES,
+            .msg_hash = Hash.ZEROES,
+            .recent_blockhash = recent_blockhash,
+            .instruction_infos = &.{},
+        };
+
+        const blockhash_queue = BlockhashQueue{
+            .last_hash = null,
+            .max_age = max_age,
+            .ages = try .init(
+                allocator,
+                &.{recent_blockhash},
+                &.{.{
+                    .fee_calculator = .{ .lamports_per_signature = 5000 },
+                    .hash_index = 31,
+                    .timestamp = 0,
+                }},
+            ),
+            .last_hash_index = 35,
+        };
+        defer blockhash_queue.deinit(allocator);
+
+        const result = checkAge(
+            &transaction,
+            &BatchAccountCache{},
+            &blockhash_queue,
+            max_age,
+            &Hash.ZEROES,
+            0,
+        );
+
+        try std.testing.expectEqual(result.ok, null);
+    }
 }
