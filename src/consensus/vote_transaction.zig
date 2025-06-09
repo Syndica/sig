@@ -15,142 +15,145 @@ pub const VoteTransaction = union(enum) {
     compact_vote_state_update: VoteStateUpdate,
     tower_sync: TowerSync,
 
-    pub fn default(allocator: std.mem.Allocator) !VoteTransaction {
-        return VoteTransaction{ .tower_sync = try TowerSync.zeroes(allocator) };
-    }
+    pub const DEFAULT: VoteTransaction = .{ .tower_sync = TowerSync.ZEROES };
 
-    pub fn deinit(self: *VoteTransaction, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .vote => |_| {},
-            .vote_state_update => |*args| args.lockouts.deinit(allocator),
-            .compact_vote_state_update => |*args| args.lockouts.deinit(allocator),
-            .tower_sync => |*args| args.lockouts.deinit(allocator),
+    pub fn deinit(self: VoteTransaction, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .vote => |args| args.deinit(allocator),
+            .vote_state_update => |args| args.deinit(allocator),
+            .compact_vote_state_update => |args| args.deinit(allocator),
+            .tower_sync => |args| args.deinit(allocator),
         }
     }
 
     pub fn timestamp(self: *const VoteTransaction) ?UnixTimestamp {
         return switch (self.*) {
-            .vote => |args| args.timestamp,
-            .vote_state_update => |args| args.timestamp,
-            .compact_vote_state_update => |args| args.timestamp,
-            .tower_sync => |args| args.timestamp,
-        };
-    }
-
-    pub fn lastVotedSlot(self: *const VoteTransaction) ?Slot {
-        return switch (self.*) {
-            .vote => |args| if (args.slots.len == 0)
-                null
-            else
-                args.slots[args.slots.len - 1],
-            .vote_state_update => |args| if (args.lockouts.items.len == 0)
-                null
-            else
-                args.lockouts.items[args.lockouts.items.len - 1].slot,
-            .compact_vote_state_update => |args| if (args.lockouts.items.len == 0)
-                null
-            else
-                args.lockouts.items[args.lockouts.items.len - 1].slot,
-            .tower_sync => |args| if (args.lockouts.items.len == 0)
-                null
-            else
-                args.lockouts.items[args.lockouts.items.len - 1].slot,
+            inline //
+            .vote,
+            .vote_state_update,
+            .compact_vote_state_update,
+            .tower_sync,
+            => |args| args.timestamp,
         };
     }
 
     pub fn setTimestamp(self: *VoteTransaction, ts: ?UnixTimestamp) void {
         switch (self.*) {
-            .vote => |*vote| vote.timestamp = ts,
-            .vote_state_update, .compact_vote_state_update => |*vote_state_update| {
-                vote_state_update.timestamp = ts;
-            },
-            .tower_sync => |*tower_sync| tower_sync.timestamp = ts,
+            inline //
+            .vote,
+            .vote_state_update,
+            .compact_vote_state_update,
+            .tower_sync,
+            => |*ptr| ptr.timestamp = ts,
         }
+    }
+
+    pub fn getHash(self: *const VoteTransaction) Hash {
+        return switch (self.*) {
+            inline //
+            .vote,
+            .vote_state_update,
+            .compact_vote_state_update,
+            .tower_sync,
+            => |args| args.hash,
+        };
     }
 
     pub fn isEmpty(self: *const VoteTransaction) bool {
-        return switch (self.*) {
-            .vote => |vote| vote.slots.len == 0,
-            .vote_state_update, .compact_vote_state_update => |vote_state_update| vote_state_update
-                .lockouts.items.len == 0,
-            .tower_sync => |tower_sync| tower_sync.lockouts.items.len == 0,
-        };
+        return self.slotCount() == 0;
     }
 
-    pub fn slot(self: *const VoteTransaction, i: usize) Slot {
-        return switch (self.*) {
-            .vote => |vote| vote.slots[i],
-            .vote_state_update, .compact_vote_state_update => |vote_state_update| vote_state_update
-                .lockouts.items[i].slot,
-            .tower_sync => |tower_sync| tower_sync.lockouts.items[i].slot,
-        };
-    }
-
-    pub fn len(self: *const VoteTransaction) usize {
+    pub fn slotCount(self: *const VoteTransaction) usize {
         return switch (self.*) {
             .vote => |vote| vote.slots.len,
-            .vote_state_update, .compact_vote_state_update => |vote_state_update| vote_state_update
-                .lockouts.items.len,
-            .tower_sync => |tower_sync| tower_sync.lockouts.items.len,
+            inline //
+            .vote_state_update,
+            .compact_vote_state_update,
+            .tower_sync,
+            => |args| args.lockouts.items.len,
         };
     }
 
-    pub fn hash(self: *const VoteTransaction) Hash {
+    /// Asserts `index < self.slotCount()`.
+    pub fn getSlot(self: *const VoteTransaction, index: usize) Slot {
         return switch (self.*) {
-            .vote => |vote| vote.hash,
-            .vote_state_update, .compact_vote_state_update => |vote_state_update| vote_state_update
-                .hash,
-            .tower_sync => |tower_sync| tower_sync.hash,
+            .vote => |vote| vote.slots[index],
+            inline //
+            .vote_state_update,
+            .compact_vote_state_update,
+            .tower_sync,
+            => |args| args.lockouts.items[index].slot,
         };
+    }
+
+    pub fn lastVotedSlot(self: *const VoteTransaction) ?Slot {
+        const slot_count = self.slotCount();
+        if (slot_count == 0) return null;
+        return self.getSlot(slot_count - 1);
+    }
+
+    pub fn isFullTowerVote(self: *const VoteTransaction) bool {
+        return switch (self.*) {
+            .vote_state_update, .tower_sync => true,
+            else => false,
+        };
+    }
+
+    /// Asserts `slots.len == self.slotCount()`.
+    /// Copies all slots from `self` to `slots`.
+    pub fn copyAllSlotsTo(
+        self: *const VoteTransaction,
+        slots: []Slot,
+    ) void {
+        switch (self.*) {
+            .vote => |vote| @memcpy(slots, vote.slots),
+            inline //
+            .vote_state_update,
+            .compact_vote_state_update,
+            .tower_sync,
+            => |args| for (slots, args.lockouts.items) |*slot, lockout| {
+                slot.* = lockout.slot;
+            },
+        }
     }
 
     pub fn eql(self: *const VoteTransaction, other: *const VoteTransaction) bool {
-        if (@intFromEnum(self.*) != @intFromEnum(other.*)) {
-            return false;
-        }
-
-        return switch (self.*) {
+        if (@intFromEnum(self.*) != @intFromEnum(other.*)) return false;
+        switch (self.*) {
             .vote => |self_vote| {
                 const other_vote = other.vote;
-                return std.mem.eql(Slot, self_vote.slots, other_vote.slots) and
+                return self_vote.timestamp == other_vote.timestamp and
                     self_vote.hash.eql(other_vote.hash) and
-                    self_vote.timestamp == other_vote.timestamp;
+                    std.mem.eql(Slot, self_vote.slots, other_vote.slots);
             },
             inline //
             .vote_state_update,
             .compact_vote_state_update,
             .tower_sync,
-            => |self_payload, tag| {
-                const other_payload = @field(other, @tagName(tag));
-                if (self_payload.lockouts.items.len != other_payload.lockouts.items.len or
-                    !self_payload.hash.eql(other_payload.hash) or
-                    self_payload.timestamp != other_payload.timestamp)
-                {
-                    return false;
-                }
-                for (
-                    self_payload.lockouts.items,
-                    other_payload.lockouts.items,
-                ) |self_lockout, other_lockout| {
-                    if (self_lockout.slot != other_lockout.slot or
-                        self_lockout.confirmation_count != other_lockout.confirmation_count)
-                    {
-                        return false;
-                    }
+            => |self_pl, tag| {
+                const other_pl = @field(other, @tagName(tag));
+                if (self_pl.lockouts.items.len != other_pl.lockouts.items.len or
+                    self_pl.timestamp != other_pl.timestamp or
+                    !self_pl.hash.eql(other_pl.hash) //
+                ) return false;
+                for (self_pl.lockouts.items, other_pl.lockouts.items) |self_lo, other_lo| {
+                    if (self_lo.slot != other_lo.slot or
+                        self_lo.confirmation_count != other_lo.confirmation_count //
+                    ) return false;
                 }
                 return true;
             },
-        };
+        }
     }
 };
 
 const Lockout = sig.runtime.program.vote.state.Lockout;
 test "vote_transaction.VoteTransaction - default initialization" {
-    var vote_transaction = try VoteTransaction.default(std.testing.allocator);
+    var vote_transaction = VoteTransaction.DEFAULT;
     defer vote_transaction.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(
-        VoteTransaction{ .tower_sync = try TowerSync.zeroes(std.testing.allocator) },
+        VoteTransaction{ .tower_sync = TowerSync.ZEROES },
         vote_transaction,
     );
 }
@@ -496,9 +499,9 @@ test "vote_transaction.VoteTransaction - slot access" {
         .hash = Hash.ZEROES,
         .timestamp = null,
     } };
-    try std.testing.expectEqual(10, vote.slot(0));
-    try std.testing.expectEqual(20, vote.slot(1));
-    try std.testing.expectEqual(30, vote.slot(2));
+    try std.testing.expectEqual(10, vote.getSlot(0));
+    try std.testing.expectEqual(20, vote.getSlot(1));
+    try std.testing.expectEqual(30, vote.getSlot(2));
 
     var vote_state_update = VoteTransaction{ .vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -514,8 +517,8 @@ test "vote_transaction.VoteTransaction - slot access" {
     vote_state_update.vote_state_update.lockouts.appendAssumeCapacity(
         .{ .slot = 20, .confirmation_count = 2 },
     );
-    try std.testing.expectEqual(10, vote_state_update.slot(0));
-    try std.testing.expectEqual(20, vote_state_update.slot(1));
+    try std.testing.expectEqual(10, vote_state_update.getSlot(0));
+    try std.testing.expectEqual(20, vote_state_update.getSlot(1));
 
     var compact_vote_state_update = VoteTransaction{ .compact_vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -531,8 +534,8 @@ test "vote_transaction.VoteTransaction - slot access" {
     compact_vote_state_update.compact_vote_state_update.lockouts.appendAssumeCapacity(
         .{ .slot = 20, .confirmation_count = 2 },
     );
-    try std.testing.expectEqual(10, compact_vote_state_update.slot(0));
-    try std.testing.expectEqual(20, compact_vote_state_update.slot(1));
+    try std.testing.expectEqual(10, compact_vote_state_update.getSlot(0));
+    try std.testing.expectEqual(20, compact_vote_state_update.getSlot(1));
 
     var tower_sync = VoteTransaction{ .tower_sync = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -549,8 +552,8 @@ test "vote_transaction.VoteTransaction - slot access" {
     tower_sync.tower_sync.lockouts.appendAssumeCapacity(
         .{ .slot = 20, .confirmation_count = 2 },
     );
-    try std.testing.expectEqual(10, tower_sync.slot(0));
-    try std.testing.expectEqual(20, tower_sync.slot(1));
+    try std.testing.expectEqual(10, tower_sync.getSlot(0));
+    try std.testing.expectEqual(20, tower_sync.getSlot(1));
 }
 
 test "vote_transaction.VoteTransaction - length" {
@@ -559,7 +562,7 @@ test "vote_transaction.VoteTransaction - length" {
         .hash = Hash.ZEROES,
         .timestamp = null,
     } };
-    try std.testing.expectEqual(3, vote.len());
+    try std.testing.expectEqual(3, vote.slotCount());
 
     var vote_state_update = VoteTransaction{ .vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -576,7 +579,7 @@ test "vote_transaction.VoteTransaction - length" {
     vote_state_update.vote_state_update.lockouts.appendAssumeCapacity(
         .{ .slot = 2, .confirmation_count = 2 },
     );
-    try std.testing.expectEqual(2, vote_state_update.len());
+    try std.testing.expectEqual(2, vote_state_update.slotCount());
 
     var compact_vote_state_update = VoteTransaction{ .compact_vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -593,7 +596,7 @@ test "vote_transaction.VoteTransaction - length" {
     compact_vote_state_update.compact_vote_state_update.lockouts.appendAssumeCapacity(
         .{ .slot = 2, .confirmation_count = 2 },
     );
-    try std.testing.expectEqual(2, compact_vote_state_update.len());
+    try std.testing.expectEqual(2, compact_vote_state_update.slotCount());
 
     var tower_sync = VoteTransaction{ .tower_sync = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -611,7 +614,7 @@ test "vote_transaction.VoteTransaction - length" {
     tower_sync.tower_sync.lockouts.appendAssumeCapacity(
         .{ .slot = 2, .confirmation_count = 2 },
     );
-    try std.testing.expectEqual(2, tower_sync.len());
+    try std.testing.expectEqual(2, tower_sync.slotCount());
 }
 
 test "vote_transaction.VoteTransaction - hash" {
@@ -621,7 +624,7 @@ test "vote_transaction.VoteTransaction - hash" {
         .hash = test_hash,
         .timestamp = null,
     } };
-    try std.testing.expect(test_hash.eql(vote.hash()));
+    try std.testing.expect(test_hash.eql(vote.getHash()));
 
     var vote_state_update = VoteTransaction{ .vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -631,7 +634,7 @@ test "vote_transaction.VoteTransaction - hash" {
         .root = 100,
     } };
     defer vote_state_update.deinit(std.testing.allocator);
-    try std.testing.expect(test_hash.eql(vote_state_update.hash()));
+    try std.testing.expect(test_hash.eql(vote_state_update.getHash()));
 
     var compact_vote_state_update = VoteTransaction{ .compact_vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -641,7 +644,7 @@ test "vote_transaction.VoteTransaction - hash" {
         .root = 100,
     } };
     defer compact_vote_state_update.deinit(std.testing.allocator);
-    try std.testing.expect(test_hash.eql(compact_vote_state_update.hash()));
+    try std.testing.expect(test_hash.eql(compact_vote_state_update.getHash()));
 
     var tower_sync = VoteTransaction{ .tower_sync = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -652,5 +655,5 @@ test "vote_transaction.VoteTransaction - hash" {
         .block_id = Hash.ZEROES,
     } };
     defer tower_sync.deinit(std.testing.allocator);
-    try std.testing.expect(test_hash.eql(tower_sync.hash()));
+    try std.testing.expect(test_hash.eql(tower_sync.getHash()));
 }

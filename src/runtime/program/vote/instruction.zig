@@ -1,12 +1,14 @@
 const std = @import("std");
 const sig = @import("../../../sig.zig");
 
+const vote_program = sig.runtime.program.vote;
+
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Hash = sig.core.Hash;
-const vote_program = sig.runtime.program.vote;
+const InstructionAccount = sig.core.instruction.InstructionAccount;
 
-pub const IntializeAccount = struct {
+pub const InitializeAccount = struct {
     node_pubkey: Pubkey,
     /// The vote authority keypair signs vote transactions. Can be the same as the identity account.
     authorized_voter: Pubkey,
@@ -33,7 +35,7 @@ pub const Authorize = struct {
     /// Public Key to be made the new authority for the vote account.
     new_authority: Pubkey,
     /// Type of autorization to grant.
-    vote_authorize: vote_program.state.VoteAuthorize,
+    vote_authorize: VoteAuthorize,
 
     pub const AccountIndex = enum(u8) {
         /// `[WRITE]` Vote account to be updated with the Pubkey for authorization
@@ -46,7 +48,7 @@ pub const Authorize = struct {
 };
 
 pub const VoteAuthorizeWithSeedArgs = struct {
-    authorization_type: vote_program.state.VoteAuthorize,
+    authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
     new_authority: Pubkey,
@@ -62,10 +64,17 @@ pub const VoteAuthorizeWithSeedArgs = struct {
         /// `[SIGNER]` Base key of current Voter or Withdrawer authority's derived key
         current_base_authority = 2,
     };
+
+    pub fn deinit(
+        self: VoteAuthorizeWithSeedArgs,
+        allocator: std.mem.Allocator,
+    ) void {
+        allocator.free(self.current_authority_derived_key_seed);
+    }
 };
 
 pub const VoteAuthorizeCheckedWithSeedArgs = struct {
-    authorization_type: vote_program.state.VoteAuthorize,
+    authorization_type: VoteAuthorize,
     current_authority_derived_key_owner: Pubkey,
     current_authority_derived_key_seed: []const u8,
 
@@ -82,6 +91,13 @@ pub const VoteAuthorizeCheckedWithSeedArgs = struct {
         /// `[SIGNER]` New vote or withdraw authority
         new_authority = 3,
     };
+
+    pub fn deinit(
+        self: VoteAuthorizeCheckedWithSeedArgs,
+        allocator: std.mem.Allocator,
+    ) void {
+        allocator.free(self.current_authority_derived_key_seed);
+    }
 };
 
 pub const VoteAuthorize = enum {
@@ -144,6 +160,10 @@ pub const Vote = struct {
         /// `[SIGNER]` Vote authority
         vote_authority = 3,
     };
+
+    pub fn deinit(self: Vote, allocator: std.mem.Allocator) void {
+        self.vote.deinit(allocator);
+    }
 };
 
 pub const VoteSwitch = struct {
@@ -160,6 +180,10 @@ pub const VoteSwitch = struct {
         /// `[SIGNER]` Vote authority
         vote_authority = 3,
     };
+
+    pub fn deinit(self: VoteSwitch, allocator: std.mem.Allocator) void {
+        self.vote.deinit(allocator);
+    }
 };
 
 pub const VoteStateUpdate = struct {
@@ -171,6 +195,10 @@ pub const VoteStateUpdate = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: VoteStateUpdate, allocator: std.mem.Allocator) void {
+        self.vote_state_update.deinit(allocator);
+    }
 };
 
 pub const CompactVoteStateUpdate = struct {
@@ -189,6 +217,10 @@ pub const CompactVoteStateUpdate = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: CompactVoteStateUpdate, allocator: std.mem.Allocator) void {
+        self.vote_state_update.deinit(allocator);
+    }
 };
 
 pub const VoteStateUpdateSwitch = struct {
@@ -201,6 +233,10 @@ pub const VoteStateUpdateSwitch = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: VoteStateUpdateSwitch, allocator: std.mem.Allocator) void {
+        self.vote_state_update.deinit(allocator);
+    }
 };
 
 pub const CompactVoteStateUpdateSwitch = struct {
@@ -220,6 +256,10 @@ pub const CompactVoteStateUpdateSwitch = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: CompactVoteStateUpdateSwitch, allocator: std.mem.Allocator) void {
+        self.vote_state_update.deinit(allocator);
+    }
 };
 
 pub const TowerSync = struct {
@@ -238,6 +278,10 @@ pub const TowerSync = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: TowerSync, allocator: std.mem.Allocator) void {
+        self.tower_sync.deinit(allocator);
+    }
 };
 
 pub const TowerSyncSwitch = struct {
@@ -257,6 +301,10 @@ pub const TowerSyncSwitch = struct {
         /// `[]` Vote authority
         vote_authority = 1,
     };
+
+    pub fn deinit(self: TowerSyncSwitch, allocator: std.mem.Allocator) void {
+        self.tower_sync.deinit(allocator);
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
@@ -268,7 +316,7 @@ pub const Instruction = union(enum(u32)) {
     ///   1. `[]` Rent sysvar
     ///   2. `[]` Clock sysvar
     ///   3. `[SIGNER]` New validator identity (node_pubkey)
-    initialize_account: IntializeAccount,
+    initialize_account: InitializeAccount,
 
     /// Authorize a key to send votes or issue a withdrawal
     ///
@@ -396,7 +444,513 @@ pub const Instruction = union(enum(u32)) {
     ///   0. `[Write]` Vote account to vote with
     ///   1. `[SIGNER]` Vote authority
     tower_sync_switch: TowerSyncSwitch,
+
+    pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .initialize_account,
+            .authorize,
+            .withdraw,
+            .update_validator_identity,
+            .update_commission,
+            .authorize_checked,
+            => {},
+
+            inline //
+            .authorize_with_seed,
+            .authorize_checked_with_seed,
+            .vote,
+            .vote_switch,
+            .update_vote_state,
+            .update_vote_state_switch,
+            .compact_update_vote_state,
+            .compact_update_vote_state_switch,
+            .tower_sync,
+            .tower_sync_switch,
+            => |payload| payload.deinit(allocator),
+        }
+    }
+
+    pub fn serialize(
+        vote_instruction: Instruction,
+        allocator: std.mem.Allocator,
+        account_metas: []const InstructionAccount,
+    ) std.mem.Allocator.Error!sig.core.Instruction {
+        const account_metas_duped = try allocator.dupe(InstructionAccount, account_metas);
+        errdefer allocator.free(account_metas_duped);
+        return try sig.core.Instruction.initUsingBincodeAlloc(
+            allocator,
+            Instruction,
+            vote_program.ID,
+            account_metas_duped,
+            &vote_instruction,
+        );
+    }
 };
+
+/// Helper function for more concisely initializing the account lists when serializing an instruction.
+fn accountMeta(
+    pubkey: Pubkey,
+    flags: enum { none, signer, writable, signer_writable },
+) InstructionAccount {
+    const is_signer, const is_writable = switch (flags) {
+        .none => .{ false, false },
+        .signer => .{ true, false },
+        .writable => .{ false, true },
+        .signer_writable => .{ true, true },
+    };
+    return .{
+        .pubkey = pubkey,
+        .is_signer = is_signer,
+        .is_writable = is_writable,
+    };
+}
+
+pub fn createInitializeAccount(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    init_account: InitializeAccount,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .initialize_account = init_account };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(sig.runtime.sysvar.Rent.ID, .none),
+        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(init_account.node_pubkey, .signer),
+    });
+}
+
+pub fn createAuthorize(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    /// currently authorized
+    authorized_pubkey: Pubkey,
+    authorize: Authorize,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .authorize = authorize };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(authorized_pubkey, .signer),
+    });
+}
+
+pub fn createAuthorizeChecked(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_pubkey: Pubkey, // currently authorized
+    new_authorized_pubkey: Pubkey,
+    vote_authorize: VoteAuthorize,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .authorize_checked = vote_authorize };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(authorized_pubkey, .signer),
+        accountMeta(new_authorized_pubkey, .signer),
+    });
+}
+
+pub fn createAuthorizeWithSeed(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    current_authority_base_key: Pubkey,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+    new_authority: Pubkey,
+    authorization_type: VoteAuthorize,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .authorize_with_seed = .{
+        .authorization_type = authorization_type,
+        .current_authority_derived_key_owner = current_authority_derived_key_owner,
+        .current_authority_derived_key_seed = current_authority_derived_key_seed,
+        .new_authority = new_authority,
+    } };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(current_authority_base_key, .signer),
+    });
+}
+
+pub fn createAuthorizeCheckedWithSeed(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    current_authority_base_key: Pubkey,
+    current_authority_derived_key_owner: Pubkey,
+    current_authority_derived_key_seed: []const u8,
+    new_authority: Pubkey,
+    authorization_type: VoteAuthorize,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .authorize_checked_with_seed = .{
+        .authorization_type = authorization_type,
+        .current_authority_derived_key_owner = current_authority_derived_key_owner,
+        .current_authority_derived_key_seed = current_authority_derived_key_seed,
+    } };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(current_authority_base_key, .signer),
+        accountMeta(new_authority, .signer),
+    });
+}
+
+pub fn createUpdateValidatorIdentity(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_withdrawer_pubkey: Pubkey,
+    node_pubkey: Pubkey,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .update_validator_identity;
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(node_pubkey, .signer),
+        accountMeta(authorized_withdrawer_pubkey, .signer),
+    });
+}
+
+pub fn createUpdateCommission(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_withdrawer_pubkey: Pubkey,
+    commission: u8,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .update_commission = commission };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(authorized_withdrawer_pubkey, .signer),
+    });
+}
+
+pub fn createVote(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    vote: Vote,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .vote = vote };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(sig.runtime.sysvar.SlotHashes.ID, .none),
+        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(authorized_voter_pubkey, .signer),
+    });
+}
+
+pub fn createVoteSwitch(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    vote_switch: VoteSwitch,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .vote_switch = vote_switch };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(sig.runtime.sysvar.SlotHashes.ID, .none),
+        accountMeta(sig.runtime.sysvar.Clock.ID, .none),
+        accountMeta(authorized_voter_pubkey, .signer),
+    });
+}
+
+pub fn createUpdateVoteState(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    vote_state_update: VoteStateUpdate,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .update_vote_state = vote_state_update };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(authorized_voter_pubkey, .signer),
+    });
+}
+
+pub fn createUpdateVoteStateSwitch(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    vote_state_update_switch: VoteStateUpdateSwitch,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .update_vote_state_switch = vote_state_update_switch };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(authorized_voter_pubkey, .signer),
+    });
+}
+
+pub fn createCompactUpdateVoteState(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    vote_state_update: CompactVoteStateUpdate,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .compact_update_vote_state = vote_state_update };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(authorized_voter_pubkey, .signer),
+    });
+}
+
+pub fn createCompactUpdateVoteStateSwitch(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    vote_state_update_switch: CompactVoteStateUpdateSwitch,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .compact_update_vote_state_switch = vote_state_update_switch };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(authorized_voter_pubkey, .signer),
+    });
+}
+
+pub fn createTowerSync(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    tower_sync: TowerSync,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .tower_sync = tower_sync };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(authorized_voter_pubkey, .signer),
+    });
+}
+
+pub fn createTowerSyncSwitch(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_voter_pubkey: Pubkey,
+    tower_sync_switch: TowerSyncSwitch,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .tower_sync_switch = tower_sync_switch };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(authorized_voter_pubkey, .signer),
+    });
+}
+
+pub fn createWithdraw(
+    allocator: std.mem.Allocator,
+    vote_pubkey: Pubkey,
+    authorized_withdrawer_pubkey: Pubkey,
+    lamports: u64,
+    to_pubkey: Pubkey,
+) std.mem.Allocator.Error!sig.core.Instruction {
+    const ix: Instruction = .{ .withdraw = lamports };
+    return try ix.serialize(allocator, &.{
+        accountMeta(vote_pubkey, .writable),
+        accountMeta(to_pubkey, .writable),
+        accountMeta(authorized_withdrawer_pubkey, .signer),
+    });
+}
+
+fn executeRoundTrip(
+    allocator: std.mem.Allocator,
+    instruction: Instruction,
+) !struct { Instruction, Instruction } {
+    const serialized = try sig.bincode.writeAlloc(allocator, instruction, .{});
+    defer allocator.free(serialized);
+
+    const deserialized = try sig.bincode.readFromSlice(
+        allocator,
+        Instruction,
+        serialized,
+        .{},
+    );
+
+    return .{ instruction, deserialized };
+}
+
+test "InitializeAccount: roundtrip" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{
+            .initialize_account = .{
+                .node_pubkey = Pubkey.initRandom(prng.random()),
+                .authorized_voter = Pubkey.initRandom(prng.random()),
+                .authorized_withdrawer = Pubkey.initRandom(prng.random()),
+                .commission = 10,
+            },
+        },
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.initialize_account.node_pubkey.data,
+        &post.initialize_account.node_pubkey.data,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.initialize_account.authorized_voter.data,
+        &post.initialize_account.authorized_voter.data,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.initialize_account.authorized_withdrawer.data,
+        &post.initialize_account.authorized_withdrawer.data,
+    );
+    try std.testing.expectEqual(
+        pre.initialize_account.commission,
+        post.initialize_account.commission,
+    );
+}
+
+test "Authorize: roundtrip" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{
+            .authorize = .{
+                .new_authority = Pubkey.initRandom(prng.random()),
+                .vote_authorize = .voter,
+            },
+        },
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.authorize.new_authority.data,
+        &post.authorize.new_authority.data,
+    );
+    try std.testing.expectEqual(
+        pre.authorize.vote_authorize,
+        post.authorize.vote_authorize,
+    );
+}
+
+test "VoteAuthorizeWithSeedArgs: roundtrip" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{
+            .authorize_with_seed = .{
+                .authorization_type = .voter,
+                .current_authority_derived_key_owner = Pubkey.initRandom(prng.random()),
+                .current_authority_derived_key_seed = try allocator.dupe(u8, "test_seed"),
+                .new_authority = Pubkey.initRandom(prng.random()),
+            },
+        },
+    );
+    defer {
+        pre.deinit(allocator);
+        post.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(
+        pre.authorize_with_seed.authorization_type,
+        post.authorize_with_seed.authorization_type,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.authorize_with_seed.current_authority_derived_key_owner.data,
+        &post.authorize_with_seed.current_authority_derived_key_owner.data,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        pre.authorize_with_seed.current_authority_derived_key_seed,
+        post.authorize_with_seed.current_authority_derived_key_seed,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.authorize_with_seed.new_authority.data,
+        &post.authorize_with_seed.new_authority.data,
+    );
+}
+
+test "VoteAuthorizeCheckedWithSeedArgs: roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{
+            .authorize_checked_with_seed = .{
+                .authorization_type = .voter,
+                .current_authority_derived_key_owner = Pubkey.ZEROES,
+                .current_authority_derived_key_seed = try allocator.dupe(u8, "test_seed"),
+            },
+        },
+    );
+    defer {
+        pre.deinit(allocator);
+        post.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(
+        pre.authorize_checked_with_seed.authorization_type,
+        post.authorize_checked_with_seed.authorization_type,
+    );
+    try std.testing.expect(
+        pre.authorize_checked_with_seed.current_authority_derived_key_owner.equals(
+            &post.authorize_checked_with_seed.current_authority_derived_key_owner,
+        ),
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        pre.authorize_checked_with_seed.current_authority_derived_key_seed,
+        post.authorize_checked_with_seed.current_authority_derived_key_seed,
+    );
+}
+
+test "UpdateCommission: roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{ .update_commission = 20 },
+    );
+
+    try std.testing.expectEqual(pre.update_commission, post.update_commission);
+}
+
+test "Withdraw: roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{ .withdraw = 1000 },
+    );
+
+    try std.testing.expectEqual(pre.withdraw, post.withdraw);
+}
+
+test "Vote: roundtrip" {
+    const allocator = std.testing.allocator;
+
+    const pre, const post = try executeRoundTrip(
+        allocator,
+        .{ .vote = .{ .vote = .{
+            .slots = try allocator.dupe(u64, &[_]Slot{ 1, 2, 3 }),
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        } } },
+    );
+    defer {
+        pre.deinit(allocator);
+        post.deinit(allocator);
+    }
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &pre.vote.vote.hash.data,
+        &post.vote.vote.hash.data,
+    );
+    try std.testing.expectEqualSlices(
+        u64,
+        pre.vote.vote.slots,
+        post.vote.vote.slots,
+    );
+    try std.testing.expectEqual(
+        pre.vote.vote.timestamp,
+        post.vote.vote.timestamp,
+    );
+}
 
 test "CompactVoteStateUpdate.serialize" {
     const allocator = std.testing.allocator;
@@ -526,4 +1080,425 @@ test "TowerSyncSwitch.serialize" {
     defer allocator.free(sig_bytes);
 
     try std.testing.expectEqualSlices(u8, agave_bytes, sig_bytes);
+}
+
+test createInitializeAccount {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createInitializeAccount(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        .{
+            .node_pubkey = Pubkey.initRandom(prng.random()),
+            .authorized_voter = Pubkey.initRandom(prng.random()),
+            .authorized_withdrawer = Pubkey.initRandom(prng.random()),
+            .commission = 10,
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createAuthorize {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createAuthorize(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .new_authority = Pubkey.initRandom(prng.random()),
+            .vote_authorize = .voter,
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createVote {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createVote(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{ .vote = .{
+            .slots = &[_]Slot{ 1, 2, 3 },
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+        } },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createWithdraw {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createWithdraw(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        1000,
+        Pubkey.initRandom(prng.random()),
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createUpdateValidatorIdentity {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createUpdateValidatorIdentity(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createUpdateCommission {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createUpdateCommission(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        20,
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createVoteSwitch {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createVoteSwitch(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .vote = .{
+                .slots = &[_]Slot{ 1, 2, 3 },
+                .hash = Hash.ZEROES,
+                .timestamp = null,
+            },
+            .hash = Hash.initRandom(prng.random()),
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createAuthorizeChecked {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createAuthorizeChecked(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .voter,
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createUpdateVoteState {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createUpdateVoteState(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{ .vote_state_update = .{
+            .lockouts = .{},
+            .root = 42,
+            .hash = Hash.initRandom(prng.random()),
+            .timestamp = null,
+        } },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createUpdateVoteStateSwitch {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createUpdateVoteStateSwitch(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .vote_state_update = .{
+                .lockouts = .{},
+                .root = 42,
+                .hash = Hash.initRandom(prng.random()),
+                .timestamp = null,
+            },
+            .hash = Hash.initRandom(prng.random()),
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createAuthorizeWithSeed {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createAuthorizeWithSeed(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        "test_seed",
+        Pubkey.initRandom(prng.random()),
+        .voter,
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createAuthorizeCheckedWithSeed {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createAuthorizeCheckedWithSeed(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        "test_seed",
+        Pubkey.initRandom(prng.random()),
+        .voter,
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createCompactUpdateVoteState {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createCompactUpdateVoteState(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{ .vote_state_update = .{
+            .lockouts = .{},
+            .root = 42,
+            .hash = Hash.initRandom(prng.random()),
+            .timestamp = null,
+        } },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createCompactUpdateVoteStateSwitch {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createCompactUpdateVoteStateSwitch(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .vote_state_update = .{
+                .lockouts = .{},
+                .root = 42,
+                .hash = Hash.initRandom(prng.random()),
+                .timestamp = null,
+            },
+            .hash = Hash.initRandom(prng.random()),
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createTowerSync {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createTowerSync(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .tower_sync = .{
+                .lockouts = .{},
+                .root = null,
+                .hash = Hash.initRandom(prng.random()),
+                .timestamp = null,
+                .block_id = Hash.initRandom(prng.random()),
+            },
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
+}
+
+test createTowerSyncSwitch {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const instruction = try createTowerSyncSwitch(
+        allocator,
+        Pubkey.initRandom(prng.random()),
+        Pubkey.initRandom(prng.random()),
+        .{
+            .tower_sync = .{
+                .lockouts = .{},
+                .root = null,
+                .hash = Hash.initRandom(prng.random()),
+                .timestamp = null,
+                .block_id = Hash.initRandom(prng.random()),
+            },
+            .hash = Hash.initRandom(prng.random()),
+        },
+    );
+    defer sig.bincode.free(allocator, instruction);
+
+    const message = try sig.core.transaction.Message.initCompile(
+        allocator,
+        &.{instruction},
+        null,
+        Hash.initRandom(prng.random()),
+        null,
+    );
+    defer message.deinit(allocator);
 }

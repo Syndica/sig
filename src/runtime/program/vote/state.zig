@@ -3,8 +3,9 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
 
+const vote_program = sig.runtime.program.vote;
 const InstructionError = sig.core.instruction.InstructionError;
-const VoteError = sig.runtime.program.vote.VoteError;
+const VoteError = vote_program.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
@@ -113,11 +114,23 @@ pub const Vote = struct {
     /// processing timestamp of last slot
     timestamp: ?i64,
 
-    pub const ZEROES = Vote{
-        .slots = &[0]Slot{},
+    pub const ZEROES: Vote = .{
+        .slots = &.{},
         .hash = Hash.ZEROES,
         .timestamp = null,
     };
+
+    pub fn deinit(vote: Vote, allocator: std.mem.Allocator) void {
+        allocator.free(vote.slots);
+    }
+
+    pub fn clone(self: Vote, allocator: std.mem.Allocator) std.mem.Allocator.Error!Vote {
+        return .{
+            .slots = try allocator.dupe(Slot, self.slots),
+            .hash = self.hash,
+            .timestamp = self.timestamp,
+        };
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L178
@@ -131,13 +144,16 @@ pub const VoteStateUpdate = struct {
     /// processing timestamp of last slot
     timestamp: ?i64,
 
-    pub fn zeroes(allocator: std.mem.Allocator) !VoteStateUpdate {
-        return .{
-            .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
-            .root = null,
-            .hash = Hash.ZEROES,
-            .timestamp = null,
-        };
+    pub const ZEROES: VoteStateUpdate = .{
+        .lockouts = .{},
+        .root = null,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    };
+
+    pub fn deinit(self: VoteStateUpdate, allocator: std.mem.Allocator) void {
+        var lockouts = self.lockouts;
+        lockouts.deinit(allocator);
     }
 };
 
@@ -229,14 +245,17 @@ pub const TowerSync = struct {
     /// in order to compute.
     block_id: Hash,
 
-    pub fn zeroes(allocator: std.mem.Allocator) !TowerSync {
-        return .{
-            .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
-            .root = null,
-            .hash = Hash.ZEROES,
-            .timestamp = null,
-            .block_id = Hash.ZEROES,
-        };
+    pub const ZEROES: TowerSync = .{
+        .lockouts = .{},
+        .root = null,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .block_id = Hash.ZEROES,
+    };
+
+    pub fn deinit(self: TowerSync, allocator: std.mem.Allocator) void {
+        var lockouts = self.lockouts;
+        lockouts.deinit(allocator);
     }
 };
 
@@ -1814,10 +1833,8 @@ pub const VoteState = struct {
     }
 };
 
-pub const VoteAuthorize = enum {
-    voter,
-    withdrawer,
-};
+/// Re-export of the `VoteAuthorize` enum.
+pub const VoteAuthorize = vote_program.vote_instruction.VoteAuthorize;
 
 pub fn createTestVoteState(
     allocator: std.mem.Allocator,
