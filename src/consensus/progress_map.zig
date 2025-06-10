@@ -325,7 +325,7 @@ pub const ForkProgress = struct {
         const parent = params.parent;
 
         var new_progress = try ForkProgress.init(allocator, .{
-            .now = sig.time.Instant.now(),
+            .now = params.now,
 
             .last_entry = params.last_entry,
 
@@ -1329,6 +1329,11 @@ test "ForkProgress.init" {
         },
     };
 
+    var expected_child = try expected.clone(allocator);
+    defer expected_child.deinit(allocator);
+    expected_child.propagated_stats.prev_leader_slot = bank.data.slot;
+    expected_child.num_blocks_on_fork += 1;
+
     const actual_init = try ForkProgress.init(allocator, .{
         .now = now,
         .last_entry = bank.data.blockhash_queue.last_hash.?,
@@ -1352,13 +1357,13 @@ test "ForkProgress.init" {
 
     const actual_init_from_parent = try ForkProgress.initFromParent(allocator, .{
         .now = now,
-        .slot = bank.data.slot,
-        .parent_slot = bank.data.parent_slot,
+        .slot = bank.data.slot + 1,
+        .parent_slot = bank.data.slot,
         .parent = &actual_init,
         .validator_vote_pubkey = vsi.validator_vote_pubkey,
         .slot_hash = bank.data.hash,
         .last_entry = bank.data.blockhash_queue.last_hash.?,
-        .i_am_leader = false,
+        .i_am_leader = true,
         .epoch_stakes = &.{
             .stakes = bank.data.stakes,
             .total_stake = bank.totalEpochStake(),
@@ -1368,28 +1373,25 @@ test "ForkProgress.init" {
     });
     defer actual_init_from_parent.deinit(allocator);
 
-    for (0.., [_]ForkProgress{
-        actual_init,
-        actual_init_from_bank,
-        actual_init_from_parent,
-    }) |fp_i, actual| {
-        errdefer std.log.err("Failure on ForkProgress [{d}]", .{fp_i});
-        try sig.testing.expectEqualDeepWithOverrides(expected, actual, struct {
-            pub fn compare(a: anytype, b: @TypeOf(a)) !bool {
-                const T = @TypeOf(a);
-                if (sig.utils.types.arrayListInfo(T)) |info| {
-                    try std.testing.expectEqualSlices(info.Elem, a.items, b.items);
-                    return true;
-                }
-                if (sig.utils.types.hashMapInfo(T)) |info| {
-                    try std.testing.expectEqualSlices(info.Key, a.keys(), b.keys());
-                    try std.testing.expectEqualSlices(info.Value, a.values(), b.values());
-                    return true;
-                }
-                return false;
+    const override = struct {
+        pub fn compare(a: anytype, b: @TypeOf(a)) !bool {
+            const T = @TypeOf(a);
+            if (sig.utils.types.arrayListInfo(T)) |info| {
+                try std.testing.expectEqualSlices(info.Elem, a.items, b.items);
+                return true;
             }
-        });
-    }
+            if (sig.utils.types.hashMapInfo(T)) |info| {
+                try std.testing.expectEqualSlices(info.Key, a.keys(), b.keys());
+                try std.testing.expectEqualSlices(info.Value, a.values(), b.values());
+                return true;
+            }
+            return false;
+        }
+    };
+
+    try sig.testing.expectEqualDeepWithOverrides(expected, actual_init, override);
+    try sig.testing.expectEqualDeepWithOverrides(expected, actual_init_from_bank, override);
+    try sig.testing.expectEqualDeepWithOverrides(expected_child, actual_init_from_parent, override);
 }
 
 test "timings.ExecuteDetailsTimings.eql" {
