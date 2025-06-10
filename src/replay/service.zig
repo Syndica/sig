@@ -146,6 +146,8 @@ const ConsensusDependencies = struct {
     slot_tracker: *SlotTracker,
     fork_choice: *ForkChoice,
     blockstore: *BlockstoreReader,
+    leader_schedule_cache: LeaderScheduleCache,
+    vote_account: Pubkey,
 };
 
 fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stats: []Slot) !void {
@@ -194,7 +196,7 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
     const ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     const descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     const vote_account_pubkey = Pubkey.ZEROES;
-    const identity_pair = Keypair.generate();
+    const identity_keypair = Keypair.generate();
     var authorized_voter_keypairs = [_]Keypair{Keypair.generate()};
     var vote_signatures =
         std.ArrayList(Signature).init(deps.allocator);
@@ -244,7 +246,7 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
             deps.progress_map,
             if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
             &vote_account_pubkey,
-            &identity_pair,
+            &identity_keypair,
             &authorized_voter_keypairs,
             &vote_signatures,
             has_new_vote_been_rooted,
@@ -261,8 +263,42 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
     }
 
     // Vote on the fork
-    if (maybe_voted_slot) |voted_slot| {
-        _ = &voted_slot;
+    if (maybe_voted_slot) |voted| {
+        var leader_schedule_cache = deps.leader_schedule_cache;
+        if (leader_schedule_cache.slotLeader(voted.slot)) |votable_leader| {
+            // TODO implement Self::log_leader_change
+            _ = &votable_leader;
+            try handleVotableBank(
+                deps.allocator,
+                voted.slot,
+                Hash.ZEROES, // TODO get the hash associated with the slot
+                &voted.decision,
+                &.{}, // TODO alternative
+                deps.replay_tower,
+                deps.progress_map,
+                &deps.vote_account,
+                &identity_keypair,
+                &authorized_voter_keypairs,
+                &deps.blockstore.*,
+                &leader_schedule_cache,
+                &.{},
+                &.{},
+                &.{},
+                &.{},
+                deps.fork_choice,
+                &.{},
+                &.{},
+                &.{},
+                &.{},
+                .{},
+                false,
+                &.{},
+                &.{},
+                &.{},
+                &.{},
+                null,
+            );
+        }
     }
 
     // TODO: if reset_bank: Reset onto a fork
@@ -868,22 +904,22 @@ fn handleVotableBank(
     progress: *ProgressMap,
     vote_account_pubkey: *const Pubkey,
     identity_keypair: *const Keypair,
-    authorized_voter_keypairs: []Keypair, // TODO Arc
+    authorized_voter_keypairs: []Keypair,
     blockstore: *const BlockstoreReader,
-    leader_schedule_cache: *const LeaderScheduleCache, // TODO Arc
+    leader_schedule_cache: *const LeaderScheduleCache,
     lockouts_sender: *const stubs.Sender(stubs.CommitmentAggregationData),
     snapshot_controller: ?*const stubs.SnapshotController,
-    rpc_subscriptions: *const stubs.RpcSubscriptions, // TODO Arc
-    block_commitment_cache: *const stubs.BlockCommitmentCache, // TODO Arc/RwLock
+    rpc_subscriptions: *const stubs.RpcSubscriptions,
+    block_commitment_cache: *const stubs.BlockCommitmentCache,
     heaviest_subtree_fork_choice: *ForkChoice,
-    bank_notification_sender: *const ?stubs.BankNotificationSenderConfig,
-    duplicate_slots_tracker: *stubs.DuplicateSlotsTracker,
-    duplicate_confirmed_slots: *stubs.DuplicateConfirmedSlots,
-    unfrozen_gossip_verified_vote_hashes: *stubs.UnfrozenGossipVerifiedVoteHashes,
-    vote_signatures: *std.ArrayList(Signature),
-    has_new_vote_been_rooted: *bool,
-    replay_timing: *stubs.ReplayLoopTiming,
-    voting_sender: *stubs.Sender(VoteOp),
+    bank_notification_sender: *const stubs.BankNotificationSenderConfig,
+    duplicate_slots_tracker: *const stubs.DuplicateSlotsTracker,
+    duplicate_confirmed_slots: *const stubs.DuplicateConfirmedSlots,
+    unfrozen_gossip_verified_vote_hashes: *const stubs.UnfrozenGossipVerifiedVoteHashes,
+    vote_signatures: std.ArrayListUnmanaged(Signature),
+    has_new_vote_been_rooted: bool,
+    replay_timing: *const stubs.ReplayLoopTiming,
+    voting_sender: *const stubs.Sender(VoteOp),
     epoch_slots_frozen_slots: *const stubs.EpochSlotsFrozenSlots,
     drop_bank_sender: *const stubs.Sender(std.ArrayList(stubs.BankWithScheduler)),
     wait_to_vote_slot: ?Slot,
