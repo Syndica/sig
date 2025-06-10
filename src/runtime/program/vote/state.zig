@@ -3,8 +3,9 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 const builtin = @import("builtin");
 
+const vote_program = sig.runtime.program.vote;
 const InstructionError = sig.core.instruction.InstructionError;
-const VoteError = sig.runtime.program.vote.VoteError;
+const VoteError = vote_program.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
@@ -113,11 +114,23 @@ pub const Vote = struct {
     /// processing timestamp of last slot
     timestamp: ?i64,
 
-    pub const ZEROES = Vote{
-        .slots = &[0]Slot{},
+    pub const ZEROES: Vote = .{
+        .slots = &.{},
         .hash = Hash.ZEROES,
         .timestamp = null,
     };
+
+    pub fn deinit(vote: Vote, allocator: std.mem.Allocator) void {
+        allocator.free(vote.slots);
+    }
+
+    pub fn clone(self: Vote, allocator: std.mem.Allocator) std.mem.Allocator.Error!Vote {
+        return .{
+            .slots = try allocator.dupe(Slot, self.slots),
+            .hash = self.hash,
+            .timestamp = self.timestamp,
+        };
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L178
@@ -131,13 +144,16 @@ pub const VoteStateUpdate = struct {
     /// processing timestamp of last slot
     timestamp: ?i64,
 
-    pub fn zeroes(allocator: std.mem.Allocator) !VoteStateUpdate {
-        return .{
-            .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
-            .root = null,
-            .hash = Hash.ZEROES,
-            .timestamp = null,
-        };
+    pub const ZEROES: VoteStateUpdate = .{
+        .lockouts = .{},
+        .root = null,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+    };
+
+    pub fn deinit(self: VoteStateUpdate, allocator: std.mem.Allocator) void {
+        var lockouts = self.lockouts;
+        lockouts.deinit(allocator);
     }
 };
 
@@ -164,9 +180,9 @@ pub fn serializeCompactVoteStateUpdate(
 
     // Serialize in compact format
     try writer.writeInt(Slot, data.root orelse 0, .little);
-    try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
+    try std.leb.writeUleb128(writer, @as(u16, @intCast(lockouts.len)));
     for (lockouts.constSlice()) |lockout| {
-        try sig.bincode.varint.serializeShortU16(writer, @intCast(lockout[0]));
+        try std.leb.writeUleb128(writer, @as(u16, @intCast(lockout[0])));
         try writer.writeInt(u8, @intCast(lockout[1]), .little);
     }
     try writer.writeAll(&data.hash.data);
@@ -187,15 +203,11 @@ pub fn deserializeCompactVoteStateUpdate(
     root = if (root == std.math.maxInt(Slot)) 0 else root;
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
-    const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
+    const lockouts_len = try std.leb.readUleb128(u16, reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(
-            allocator,
-            reader,
-            .{},
-        );
+        const offset = try std.leb.readUleb128(u64, reader);
         const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -233,14 +245,17 @@ pub const TowerSync = struct {
     /// in order to compute.
     block_id: Hash,
 
-    pub fn zeroes(allocator: std.mem.Allocator) !TowerSync {
-        return .{
-            .lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(allocator, 0),
-            .root = null,
-            .hash = Hash.ZEROES,
-            .timestamp = null,
-            .block_id = Hash.ZEROES,
-        };
+    pub const ZEROES: TowerSync = .{
+        .lockouts = .{},
+        .root = null,
+        .hash = Hash.ZEROES,
+        .timestamp = null,
+        .block_id = Hash.ZEROES,
+    };
+
+    pub fn deinit(self: TowerSync, allocator: std.mem.Allocator) void {
+        var lockouts = self.lockouts;
+        lockouts.deinit(allocator);
     }
 };
 
@@ -263,13 +278,9 @@ pub fn serializeTowerSync(writer: anytype, data: anytype, _: sig.bincode.Params)
 
     // Serialize in compact format
     try writer.writeInt(Slot, data.root orelse 0, .little);
-    try sig.bincode.varint.serializeShortU16(writer, @intCast(lockouts.len));
+    try std.leb.writeUleb128(writer, @as(u16, @intCast(lockouts.len)));
     for (lockouts.constSlice()) |lockout| {
-        try sig.bincode.varint.var_int_config_u64.serializer.?(
-            writer,
-            lockout[0],
-            .{},
-        );
+        try std.leb.writeUleb128(writer, lockout[0]);
         try writer.writeInt(u8, lockout[1], .little);
     }
     try writer.writeAll(&data.hash.data);
@@ -290,15 +301,11 @@ pub fn deserializeTowerSync(
     const root = try reader.readInt(Slot, .little);
 
     var slot = if (root == std.math.maxInt(Slot)) 0 else root;
-    const lockouts_len, _ = try sig.bincode.varint.deserializeShortU16(reader);
+    const lockouts_len = try std.leb.readUleb128(u16, reader);
     const lockouts = try allocator.alloc(Lockout, lockouts_len);
     errdefer allocator.free(lockouts);
     for (lockouts) |*lockout| {
-        const offset = try sig.bincode.varint.var_int_config_u64.deserializer.?(
-            allocator,
-            reader,
-            .{},
-        );
+        const offset = try std.leb.readUleb128(u64, reader);
         const confirmation_count = try reader.readInt(u8, .little);
         slot = try std.math.add(Slot, slot, offset);
         lockout.* = .{ .slot = slot, .confirmation_count = confirmation_count };
@@ -1826,10 +1833,8 @@ pub const VoteState = struct {
     }
 };
 
-pub const VoteAuthorize = enum {
-    voter,
-    withdrawer,
-};
+/// Re-export of the `VoteAuthorize` enum.
+pub const VoteAuthorize = vote_program.vote_instruction.VoteAuthorize;
 
 pub fn createTestVoteState(
     allocator: std.mem.Allocator,
