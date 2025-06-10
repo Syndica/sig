@@ -19,6 +19,24 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-batcher");
 
 const assert = std.debug.assert;
 
+/// Processes a batch of transactions by verifying their signatures and
+/// executing them with the SVM.
+pub fn processBatch(
+    transactions: []const ResolvedTransaction,
+    exit: *std.atomic.Value(bool),
+) ?TransactionError {
+    for (transactions) |transaction| {
+        if (exit.load(.monotonic)) {
+            return null;
+        }
+        _ = transaction.transaction.verifyAndHashMessage() catch return .SignatureFailure;
+        // TODO: call svm
+    }
+    // TODO: commit results
+
+    return null;
+}
+
 /// Batches transactions and executes them on a thread pool.
 ///
 /// Internally, transaction results are communicated on a channel instead of
@@ -33,12 +51,10 @@ const assert = std.debug.assert;
 /// This should only be used in a single thread at a time.
 pub const TransactionScheduler = struct {
     allocator: Allocator,
-    batches: ResizeableRingBuffer(ResolvedBatch),
+    batches: std.ArrayListUnmanaged(ResolvedBatch),
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
     results: Channel(?TransactionError),
     locks: AccountLocks,
-    /// The number of batches that have been planned for execution.
-    batches_added: usize,
     /// The number of batches that have been scheduled with thread_pool.trySchedule.
     batches_started: usize,
     /// The number of batches that a result has been received over the channel for.
@@ -53,15 +69,23 @@ pub const TransactionScheduler = struct {
         batch_capacity: usize,
         thread_pool: *ThreadPool,
     ) !TransactionScheduler {
+        var batches = try std.ArrayListUnmanaged(ResolvedBatch)
+            .initCapacity(allocator, batch_capacity);
+        errdefer batches.deinit(allocator);
+
+        const pool = try HomogeneousThreadPool(ProcessBatchTask)
+            .initBorrowed(allocator, thread_pool, null);
+        errdefer pool.deinit(allocator);
+
+        var channel = try Channel(?TransactionError).init(allocator);
+        errdefer channel.deinit();
+
         return .{
             .allocator = allocator,
-            .batches = try ResizeableRingBuffer(ResolvedBatch)
-                .initCapacity(allocator, batch_capacity),
-            .thread_pool = try HomogeneousThreadPool(ProcessBatchTask)
-                .initBorrowed(allocator, thread_pool, null),
-            .results = try Channel(?TransactionError).init(allocator),
+            .batches = batches,
+            .thread_pool = pool,
+            .results = channel,
             .locks = .{},
-            .batches_added = 0,
             .batches_started = 0,
             .batches_finished = 0,
             .exit = std.atomic.Value(bool).init(false),
@@ -70,7 +94,8 @@ pub const TransactionScheduler = struct {
     }
 
     pub fn deinit(self: TransactionScheduler) void {
-        self.batches.deinit(self.allocator);
+        var batches = self.batches;
+        batches.deinit(self.allocator);
         self.thread_pool.deinit(self.allocator);
         var channel = self.results;
         channel.deinit();
@@ -78,13 +103,11 @@ pub const TransactionScheduler = struct {
     }
 
     pub fn addBatch(self: *TransactionScheduler, batch: ResolvedBatch) Allocator.Error!void {
-        self.batches_added += 1;
-        try self.batches.push(batch);
+        try self.batches.append(self.allocator, batch);
     }
 
     pub fn addBatchAssumeCapacity(self: *TransactionScheduler, batch: ResolvedBatch) void {
-        self.batches_added += 1;
-        self.batches.pushAssumeCapacity(batch);
+        self.batches.appendAssumeCapacity(batch);
     }
 
     pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
@@ -101,16 +124,16 @@ pub const TransactionScheduler = struct {
         switch (self.thread_pool.pollFallible()) {
             .done => {
                 assert(self.batches_started == self.batches_finished);
-                if (self.failure == null and self.batches.len() != 0) {
+                if (self.failure) |f| {
+                    return .{ .err = f };
+                } else if (self.batches.items.len != self.batches_started) {
                     if (try self.tryScheduleSome()) |err| {
                         self.exit.store(true, .monotonic);
                         self.failure = .{ .invalid_transaction = err };
                     }
                     return .pending;
-                } else if (self.failure) |f| {
-                    return .{ .err = f };
                 } else {
-                    assert(self.batches_added == self.batches_finished);
+                    assert(self.batches.items.len == self.batches_finished);
                     return .done;
                 }
             },
@@ -120,8 +143,9 @@ pub const TransactionScheduler = struct {
     }
 
     fn tryScheduleSome(self: *TransactionScheduler) !?TransactionError {
-        while (self.batches.peek()) |peeked_batch| {
-            self.locks.lockStrict(self.allocator, peeked_batch.accounts) catch |e| {
+        while (self.batches.items.len > self.batches_started) {
+            const batch = self.batches.items[self.batches_started];
+            self.locks.lockStrict(self.allocator, batch.accounts) catch |e| {
                 switch (e) {
                     error.LockFailed => if (self.batches_started == self.batches_finished) {
                         return .AccountInUse;
@@ -131,7 +155,6 @@ pub const TransactionScheduler = struct {
                     else => return e,
                 }
             };
-            const batch = self.batches.pop().?;
             assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .transactions = batch.transactions,
                 .results = &self.results,
@@ -154,118 +177,6 @@ const ProcessBatchTask = struct {
         try self.results.send(result);
     }
 };
-
-pub fn processBatch(
-    transactions: []const ResolvedTransaction,
-    exit: *std.atomic.Value(bool),
-) ?TransactionError {
-    for (transactions) |transaction| {
-        if (exit.load(.monotonic)) {
-            return null;
-        }
-        const hash = transaction.transaction.verifyAndHashMessage() catch
-            return .SignatureFailure;
-        _ = hash; // autofix
-        // TODO: call svm
-    }
-    // TODO: commit results
-
-    return null;
-}
-
-/// Ring buffer that grows when it's full.
-///
-/// Not thread safe.
-fn ResizeableRingBuffer(T: type) type {
-    return struct {
-        buffer: []T = &.{},
-        head: usize = 0,
-        tail: usize = 0,
-
-        pub fn initCapacity(
-            allocator: Allocator,
-            capacity: usize,
-        ) Allocator.Error!ResizeableRingBuffer(T) {
-            return .{ .buffer = try allocator.alloc(T, capacity) };
-        }
-
-        pub fn deinit(self: ResizeableRingBuffer(T), allocator: Allocator) void {
-            allocator.free(self.buffer);
-        }
-
-        pub fn push(
-            self: *ResizeableRingBuffer(T),
-            allocator: Allocator,
-            item: T,
-        ) Allocator.Error!void {
-            if (self.head == self.tail + self.buffer.len) {
-                try self.ensureTotalCapacity(allocator, @max(8, self.buffer.len * 2));
-            }
-            self.pushAssumeCapacity(item);
-        }
-
-        pub fn pushAssumeCapacity(self: *ResizeableRingBuffer(T), item: T) void {
-            self.assertSane(1);
-            self.buffer[self.head % self.buffer.len] = item;
-            self.head += 1;
-        }
-
-        pub fn pop(self: *ResizeableRingBuffer(T)) ?T {
-            self.assertSane(0);
-            if (self.head == self.tail) {
-                return null;
-            }
-            defer self.tail += 1;
-            return self.buffer[self.tail % self.buffer.len];
-        }
-
-        /// Pointer is invalidated when `put` is called.
-        pub fn peek(self: *ResizeableRingBuffer(T)) ?*const T {
-            self.assertSane(0);
-            if (self.head == self.tail) {
-                return null;
-            }
-            return &self.buffer[self.tail % self.buffer.len];
-        }
-
-        pub fn len(self: *const ResizeableRingBuffer(T)) usize {
-            return self.head - self.tail;
-        }
-
-        pub fn ensureTotalCapacity(
-            self: *ResizeableRingBuffer(T),
-            allocator: Allocator,
-            capacity: usize,
-        ) Allocator.Error!void {
-            self.assertSane(0);
-            const old_len = self.buffer.len;
-            if (capacity < old_len) return;
-
-            const new_len = std.math.ceilPowerOfTwo(
-                usize,
-                @max(capacity, @max(8, old_len * 2)),
-            ) catch return error.OutOfMemory;
-
-            self.buffer = try allocator.realloc(self.buffer, new_len);
-
-            if (old_len != 0) {
-                const old_head_index = self.head % old_len;
-                @memcpy(
-                    self.buffer[old_len..][0..old_head_index],
-                    self.buffer[0..old_head_index],
-                );
-                const num_items = self.head - self.tail;
-                self.tail = self.tail % old_len;
-                self.head = self.tail + num_items;
-            }
-        }
-
-        fn assertSane(self: ResizeableRingBuffer(T), min_free_space: usize) void {
-            assert(self.head - self.tail <= self.buffer.len - min_free_space);
-            assert(self.head >= self.tail);
-        }
-    };
-}
 
 test "TransactionScheduler: happy path" {
     const allocator = std.testing.allocator;
@@ -383,53 +294,14 @@ test "TransactionScheduler: signature verification failure" {
     scheduler.addBatchAssumeCapacity(batch1);
     scheduler.addBatchAssumeCapacity(batch2);
 
-    while (try scheduler.poll() == .pending) std.time.sleep(std.time.ns_per_ms);
+    var i: usize = 0;
+    while (try scheduler.poll() == .pending) {
+        std.time.sleep(std.time.ns_per_ms);
+        i += 1;
+        if (i > 1000) return error.TooSlow;
+    }
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
         try scheduler.poll(),
     );
-}
-
-test ResizeableRingBuffer {
-    const allocator = std.testing.allocator;
-    const expectEqual = std.testing.expectEqual;
-
-    var buffer = try ResizeableRingBuffer(usize).initCapacity(allocator, 0);
-    defer buffer.deinit(allocator);
-
-    try expectEqual(null, buffer.pop());
-    try expectEqual(null, buffer.peek());
-
-    try buffer.push(allocator, 1);
-    try expectEqual(1, buffer.pop());
-    try expectEqual(null, buffer.pop());
-    try expectEqual(null, buffer.peek());
-
-    try buffer.push(allocator, 2);
-    try buffer.push(allocator, 3);
-    try buffer.push(allocator, 4);
-
-    try expectEqual(2, buffer.pop());
-    try expectEqual(3, buffer.peek().?.*);
-    try expectEqual(3, buffer.pop());
-    try expectEqual(4, buffer.pop());
-    try expectEqual(null, buffer.pop());
-    try expectEqual(null, buffer.peek());
-
-    for (5..300) |i| {
-        try buffer.push(allocator, i);
-    }
-    for (5..123) |i| {
-        try expectEqual(i, buffer.peek().?.*);
-        try expectEqual(i, buffer.pop());
-    }
-    for (300..600) |i| {
-        try buffer.push(allocator, i);
-    }
-    for (123..600) |i| {
-        try expectEqual(i, buffer.peek().?.*);
-        try expectEqual(i, buffer.pop());
-    }
-    try expectEqual(null, buffer.pop());
-    try expectEqual(null, buffer.peek());
 }
