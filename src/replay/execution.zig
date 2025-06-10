@@ -86,7 +86,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         // results. this will change once we call the svm and process the
         // results of execution.
         _, const status = slot_status;
-        while (status == .confirm and status.confirm.poll() == .pending) {
+        while (status == .confirm and try status.confirm.poll() == .pending) {
             std.time.sleep(std.time.ns_per_ms); // TODO: consider futex-based wait like ResetEvent
         }
     }

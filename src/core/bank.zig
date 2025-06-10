@@ -79,6 +79,19 @@ pub const SlotConstants = struct {
     /// Whether and how epoch rewards should be distributed in this slot.
     epoch_reward_status: EpochRewardStatus,
 
+    pub fn fromBankFields(bank_fields: *const BankFields) SlotConstants {
+        return .{
+            .slot = bank_fields.slot,
+            .parent_slot = bank_fields.parent_slot,
+            .parent_hash = bank_fields.parent_hash,
+            .block_height = bank_fields.block_height,
+            .collector_id = bank_fields.collector_id,
+            .max_tick_height = bank_fields.max_tick_height,
+            .fee_rate_governor = bank_fields.fee_rate_governor,
+            .epoch_reward_status = .inactive,
+        };
+    }
+
     pub fn genesis(fee_rate_governor: sig.core.genesis_config.FeeRateGovernor) SlotConstants {
         return .{
             .slot = 0,
@@ -147,6 +160,22 @@ pub const SlotState = struct {
         var blockhash_queue = self.blockhash_queue.write();
         defer blockhash_queue.unlock();
         blockhash_queue.get().deinit(allocator);
+    }
+
+    pub fn fromBankFields(
+        allocator: Allocator,
+        bank_fields: *const BankFields,
+    ) Allocator.Error!SlotState {
+        return .{
+            .blockhash_queue = .init(try bank_fields.blockhash_queue.clone(allocator)),
+            .hash = .init(bank_fields.hash),
+            .capitalization = .init(bank_fields.capitalization),
+            .transaction_count = .init(bank_fields.transaction_count),
+            .signature_count = .init(bank_fields.signature_count),
+            .tick_height = .init(bank_fields.tick_height),
+            .collected_rent = .init(bank_fields.collected_rent),
+            .accounts_lt_hash = .init(LtHash{ .data = .{0xBAD1} ** LtHash.NUM_ELEMENTS }),
+        };
     }
 
     pub fn fromFrozenParent(allocator: Allocator, parent: *SlotState) !SlotState {
