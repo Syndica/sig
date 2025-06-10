@@ -900,7 +900,7 @@ fn handleVotableBank(
     vote_hash: Hash, // vote_slot and vote_hash replaces Bank
     switch_fork_decision: *const SwitchForkDecision,
     slot_tracker: *SlotTracker,
-    tower: *ReplayTower,
+    replay_tower: *ReplayTower,
     progress: *ProgressMap,
     vote_account_pubkey: *const Pubkey,
     identity_keypair: *const Keypair,
@@ -924,7 +924,7 @@ fn handleVotableBank(
     drop_bank_sender: *const stubs.Sender(std.ArrayList(stubs.BankWithScheduler)),
     wait_to_vote_slot: ?Slot,
 ) !void {
-    const maybe_new_root = try tower.recordBankVote(
+    const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
         vote_slot,
         vote_hash,
@@ -941,12 +941,17 @@ fn handleVotableBank(
     }
 
     // TODO update_commitment_cache
-    // TODO push_vote
+
+    try push_vote(
+        allocator,
+        replay_tower,
+    );
+
     _ = &vote_slot;
     _ = &vote_hash;
     _ = &switch_fork_decision;
     _ = &slot_tracker;
-    _ = &tower;
+    _ = &replay_tower;
     _ = &progress;
     _ = &vote_account_pubkey;
     _ = &identity_keypair;
@@ -969,6 +974,41 @@ fn handleVotableBank(
     _ = &epoch_slots_frozen_slots;
     _ = &drop_bank_sender;
     _ = &wait_to_vote_slot;
+}
+
+fn push_vote(
+    allocator: std.mem.Allocator,
+    replay_tower: *ReplayTower,
+) !void {
+    // TODO generate_vote_tx
+    const vote_tx_result: GenerateVoteTxResult = .{
+        .tx = Transaction.EMPTY,
+    };
+
+    switch (vote_tx_result) {
+        .tx => |vote_tx| {
+            replay_tower.refreshLastVoteTxBlockhash(vote_tx.msg.recent_blockhash);
+            // TODO save the tower
+            const saved_tower = replay_tower;
+            const lockouts = replay_tower.tower.vote_state.votes.constSlice();
+            var tower_slots: ArrayListUnmanaged(Slot) = try ArrayListUnmanaged(Slot).initCapacity(
+                allocator,
+                lockouts.len,
+            );
+            for (lockouts) |lockout| {
+                tower_slots.appendAssumeCapacity(lockout.slot);
+            }
+            // Use saved_tower and tower_slots in vote_sender
+            _ = &saved_tower;
+            _ = &tower_slots;
+        },
+        .non_voting => {
+            replay_tower.markLastVoteTxBlockhashNonVoting();
+        },
+        else => {
+            // Do nothing
+        },
+    }
 }
 
 fn checkAndHandleNewRoot(
