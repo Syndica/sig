@@ -90,19 +90,6 @@ pub const Vm = struct {
         return .{ self.result, instruction_count };
     }
 
-    /// [agave] https://github.com/anza-xyz/sbpf/blob/795250d9a8f15f04e5967dbcbfc66fa8c4610669/src/interpreter.rs#L589
-    fn dispatchSyscall(self: *Vm, syscall_fn: sig.vm.syscalls.Syscall) !void {
-        self.instruction_count = self.transaction_context.compute_meter - self.instruction_count;
-        self.registers.set(.r0, 0);
-        const result = syscall_fn(
-            self.transaction_context,
-            &self.memory_map,
-            &self.registers,
-        );
-        self.instruction_count = 0;
-        return result;
-    }
-
     fn step(self: *Vm) ExecutionError!bool {
         const config = self.executable.config;
         if (config.enable_instruction_meter and
@@ -600,7 +587,12 @@ pub const Vm = struct {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
-                        self.dispatchSyscall(entry.value) catch return false;
+                        registers.set(.r0, 0);
+                        try entry.value(
+                            self.transaction_context,
+                            &self.memory_map,
+                            &self.registers,
+                        );
                     } else {
                         @panic("TODO: detect invalid syscall in verifier");
                     }
@@ -635,7 +627,12 @@ pub const Vm = struct {
                 if (external) {
                     if (self.loader.functions.lookupKey(inst.imm)) |entry| {
                         resolved = true;
-                        self.dispatchSyscall(entry.value) catch return false;
+                        registers.set(.r0, 0);
+                        try entry.value(
+                            self.transaction_context,
+                            &self.memory_map,
+                            &self.registers,
+                        );
                     }
                 }
 
