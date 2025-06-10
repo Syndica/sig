@@ -293,3 +293,58 @@ pub const BlockError = enum {
 
     DuplicateBlock,
 };
+
+test "confirmSlot: trivial case completes without error" {
+    var thread_pool = ThreadPool.init(.{});
+    var tick_hash_count: u64 = 0;
+
+    const result = try confirmSlot(
+        std.testing.allocator,
+        .FOR_TESTS,
+        undefined,
+        &thread_pool,
+        &.{},
+        .ZEROES,
+        .{
+            .hashes_per_tick = 0,
+            .slot = 0,
+            .max_tick_height = 1,
+            .tick_height = 0,
+            .slot_is_full = false,
+            .tick_hash_count = &tick_hash_count,
+        },
+    );
+    defer result.destroy();
+
+    while (try result.poll() == .pending) std.time.sleep(std.time.ns_per_ms);
+    try std.testing.expectEqual(.done, try result.poll());
+}
+
+test "confirmSlot: no trailing tick at max height -> BlockError.TrailingEntry" {
+    var thread_pool = ThreadPool.init(.{});
+    var tick_hash_count: u64 = 0;
+
+    const result = try confirmSlot(
+        std.testing.allocator,
+        .noop,
+        undefined,
+        &thread_pool,
+        &.{},
+        .ZEROES,
+        .{
+            .hashes_per_tick = 0,
+            .slot = 0,
+            .max_tick_height = 0,
+            .tick_height = 0,
+            .slot_is_full = false,
+            .tick_hash_count = &tick_hash_count,
+        },
+    );
+    defer result.destroy();
+
+    while (try result.poll() == .pending) std.time.sleep(std.time.ns_per_ms);
+    try std.testing.expectEqual(
+        ConfirmSlotStatus{ .err = .{ .invalid_block = .TrailingEntry } },
+        try result.poll(),
+    );
+}

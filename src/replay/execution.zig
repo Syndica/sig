@@ -77,9 +77,8 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
 
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }){};
     for (active_slots) |slot| {
-        // TODO: consider limiting the max number of slots to process
-        // simultaneously to avoid congestion.
-        try slot_statuses.append(state.allocator, .{ slot, try replaySlot(state, slot) });
+        const result = try replaySlot(state, slot);
+        try slot_statuses.append(state.allocator, .{ slot, result });
     }
     for (slot_statuses.items) |slot_status| {
         // NOTE: currently this just awaits the futures and discards the
