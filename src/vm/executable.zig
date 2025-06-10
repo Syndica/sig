@@ -988,17 +988,17 @@ pub const Config = struct {
             features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
         );
 
-        const min_sbpf_version: sbpf.Version = if (!feature_set.contains(
+        const min_sbpf_version: sbpf.Version = if (!feature_set.active.contains(
             features.DISABLE_SBPF_V0_EXECUTION,
-        ) or feature_set.contains(
+        ) or feature_set.active.contains(
             features.REENABLE_SBPF_V0_EXECUTION,
         )) .v0 else .v3;
 
-        const max_sbpf_version: sbpf.Version = if (feature_set.contains(
+        const max_sbpf_version: sbpf.Version = if (feature_set.active.contains(
             features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION,
-        )) .v3 else if (feature_set.contains(
+        )) .v3 else if (feature_set.active.contains(
             features.ENABLE_SBPF_V2_DEPLOYMENT_AND_EXECUTION,
-        )) .v2 else if (feature_set.contains(
+        )) .v2 else if (feature_set.active.contains(
             features.ENABLE_SBPF_V1_DEPLOYMENT_AND_EXECUTION,
         )) .v1 else .v0;
 
