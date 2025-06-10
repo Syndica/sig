@@ -430,11 +430,17 @@ pub fn expectTransactionContextEqual(
     }
 
     if (expected.custom_error != actual.custom_error)
-        return error.MaybeCustomErrorMismatch;
+        return error.CustomErrorMismatch;
 
-    // TODO: implement eqls for LogCollector
-    // if (expected.maybe_log_collector != actual.maybe_log_collector)
-    //     return error.MaybeLogCollectorMismatch;
+    if (expected.log_collector) |elc| {
+        if (actual.log_collector) |alc| {
+            if (!elc.eql(alc)) return error.LogCollectorMismatch;
+        } else {
+            return error.LogCollectorMismatch;
+        }
+    } else {
+        if (actual.log_collector) |_| return error.LogCollectorMismatch;
+    }
 
     // TODO: implement eqls for SysvarCache
     // if (expected.sysvar_cache != actual.sysvar_cache)

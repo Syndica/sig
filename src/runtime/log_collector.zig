@@ -41,6 +41,10 @@ pub const LogCollector = struct {
         self.message_indices.deinit(allocator);
     }
 
+    pub fn eql(self: LogCollector, other: LogCollector) bool {
+        return std.mem.eql(u8, self.message_pool.items, other.message_pool.items);
+    }
+
     pub fn iterator(self: LogCollector) Iterator {
         return .{
             .message_pool = self.message_pool.items,
