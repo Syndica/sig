@@ -195,7 +195,7 @@ fn testParseVoteTransaction(input_hash: ?Hash, random: std.Random) !void {
             null,
         );
         errdefer vote_tx_msg.deinit(allocator);
-        break :blk try Transaction.initOwnedMsgWithSigningKeypairs(
+        break :blk try Transaction.initOwnedMessageWithSigningKeypairs(
             allocator,
             .legacy,
             vote_tx_msg,
@@ -236,7 +236,7 @@ fn testNewVoteTransaction(
         null,
     );
     errdefer vote_tx_msg.deinit(allocator);
-    return try Transaction.initOwnedMsgWithSigningKeypairs(
+    return try Transaction.initOwnedMessageWithSigningKeypairs(
         allocator,
         .legacy,
         vote_tx_msg,

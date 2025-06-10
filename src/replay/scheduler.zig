@@ -37,12 +37,16 @@ pub const TransactionScheduler = struct {
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
     results: Channel(?TransactionError),
     locks: AccountLocks,
+    /// The number of batches that have been planned for execution.
+    batches_added: usize,
     /// The number of batches that have been scheduled with thread_pool.trySchedule.
-    batches_scheduled: usize,
+    batches_started: usize,
     /// The number of batches that a result has been received over the channel for.
     batches_finished: usize,
     /// triggered as soon as a single transaction fails
     exit: std.atomic.Value(bool),
+    /// if non-null, a failure was already recorded and will be returned for every poll
+    failure: ?replay.confirm_slot.ConfirmSlotError,
 
     pub fn initCapacity(
         allocator: Allocator,
@@ -57,9 +61,11 @@ pub const TransactionScheduler = struct {
                 .initBorrowed(allocator, thread_pool, null),
             .results = try Channel(?TransactionError).init(allocator),
             .locks = .{},
-            .batches_scheduled = 0,
+            .batches_added = 0,
+            .batches_started = 0,
             .batches_finished = 0,
             .exit = std.atomic.Value(bool).init(false),
+            .failure = null,
         };
     }
 
@@ -72,47 +78,52 @@ pub const TransactionScheduler = struct {
     }
 
     pub fn addBatch(self: *TransactionScheduler, batch: ResolvedBatch) Allocator.Error!void {
+        self.batches_added += 1;
         try self.batches.push(batch);
     }
 
     pub fn addBatchAssumeCapacity(self: *TransactionScheduler, batch: ResolvedBatch) void {
+        self.batches_added += 1;
         self.batches.pushAssumeCapacity(batch);
     }
 
     pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
-        const batches_len = self.batches.len();
-        assert(self.batches_scheduled <= batches_len);
-        assert(self.batches_finished <= batches_len);
-
-        if (self.batches_finished == batches_len) {
-            return switch (self.thread_pool.pollFallible()) {
-                .done => .done,
-                .pending => .pending,
-                .err => |err| return err,
-            };
-        }
-        if (self.batches_scheduled < batches_len) {
-            if (try self.tryScheduleSome()) |err| {
-                self.exit.store(true, .monotonic);
-                return .{ .err = .{ .invalid_transaction = err } };
-            }
-        }
-        if (self.results.tryReceive()) |maybe_err| {
+        // collect results
+        while (self.results.tryReceive()) |maybe_err| {
             self.batches_finished += 1;
             if (maybe_err) |err| {
                 self.exit.store(true, .monotonic);
-                return .{ .err = .{ .invalid_transaction = err } };
+                self.failure = .{ .invalid_transaction = err };
             }
         }
 
-        return .pending;
+        // process results
+        switch (self.thread_pool.pollFallible()) {
+            .done => {
+                assert(self.batches_started == self.batches_finished);
+                if (self.failure == null and self.batches.len() != 0) {
+                    if (try self.tryScheduleSome()) |err| {
+                        self.exit.store(true, .monotonic);
+                        self.failure = .{ .invalid_transaction = err };
+                    }
+                    return .pending;
+                } else if (self.failure) |f| {
+                    return .{ .err = f };
+                } else {
+                    assert(self.batches_added == self.batches_finished);
+                    return .done;
+                }
+            },
+            .pending => return .pending,
+            .err => |err| return err,
+        }
     }
 
     fn tryScheduleSome(self: *TransactionScheduler) !?TransactionError {
         while (self.batches.peek()) |peeked_batch| {
             self.locks.lockStrict(self.allocator, peeked_batch.accounts) catch |e| {
                 switch (e) {
-                    error.LockFailed => if (self.batches_scheduled - self.batches_finished == 0) {
+                    error.LockFailed => if (self.batches_started == self.batches_finished) {
                         return .AccountInUse;
                     } else {
                         break;
@@ -123,10 +134,10 @@ pub const TransactionScheduler = struct {
             const batch = self.batches.pop().?;
             assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .transactions = batch.transactions,
-                .results = self.results,
+                .results = &self.results,
                 .exit = &self.exit,
             }));
-            self.batches_scheduled += 1;
+            self.batches_started += 1;
         }
         return null;
     }
@@ -134,7 +145,7 @@ pub const TransactionScheduler = struct {
 
 const ProcessBatchTask = struct {
     transactions: []const ResolvedTransaction,
-    results: Channel(?TransactionError),
+    results: *Channel(?TransactionError),
     exit: *std.atomic.Value(bool),
 
     pub fn run(self: *ProcessBatchTask) !void {
@@ -256,6 +267,129 @@ fn ResizeableRingBuffer(T: type) type {
     };
 }
 
+test "TransactionScheduler: happy path" {
+    const allocator = std.testing.allocator;
+    const Transaction = sig.core.Transaction;
+    var rng = std.Random.DefaultPrng.init(123);
+
+    var thread_pool = ThreadPool.init(.{});
+    var scheduler = try TransactionScheduler.initCapacity(allocator, 10, &thread_pool);
+    defer scheduler.deinit();
+
+    const transactions = [_]Transaction{
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+    };
+    defer for (transactions) |tx| {
+        allocator.free(tx.signatures);
+        allocator.free(tx.msg.account_keys);
+    };
+
+    const batch1 = try replay.resolve_lookup
+        .resolveBatch(allocator, undefined, transactions[0..3]);
+    defer batch1.deinit(allocator);
+
+    const batch2 = try replay.resolve_lookup
+        .resolveBatch(allocator, undefined, transactions[3..6]);
+    defer batch2.deinit(allocator);
+
+    scheduler.addBatchAssumeCapacity(batch1);
+    scheduler.addBatchAssumeCapacity(batch2);
+
+    // should be no failures on account collision with the first time this batch was scheduled
+    // scheduler.addBatchAssumeCapacity(batch1);
+
+    var i: usize = 0;
+    while (try scheduler.poll() == .pending) {
+        std.time.sleep(std.time.ns_per_ms);
+        i += 1;
+        if (i > 1000) return error.TooSlow;
+    }
+    try std.testing.expectEqual(.done, try scheduler.poll());
+}
+
+test "TransactionScheduler: failed account locks" {
+    const allocator = std.testing.allocator;
+    const Transaction = sig.core.Transaction;
+    var rng = std.Random.DefaultPrng.init(0);
+
+    var thread_pool = ThreadPool.init(.{});
+    var scheduler = try TransactionScheduler.initCapacity(allocator, 10, &thread_pool);
+    defer scheduler.deinit();
+
+    const tx = try Transaction.initRandom(allocator, rng.random());
+    defer {
+        allocator.free(tx.signatures);
+        allocator.free(tx.msg.account_keys);
+    }
+    const unresolved_batch = .{ tx, tx };
+
+    const batch1 = try replay.resolve_lookup
+        .resolveBatch(allocator, undefined, &unresolved_batch);
+    defer batch1.deinit(allocator);
+
+    scheduler.addBatchAssumeCapacity(batch1);
+
+    var i: usize = 0;
+    while (try scheduler.poll() == .pending) {
+        std.time.sleep(std.time.ns_per_ms);
+        i += 1;
+        if (i > 1000) return error.TooSlow;
+    }
+    try std.testing.expectEqual(
+        ConfirmSlotStatus{ .err = .{ .invalid_transaction = .AccountInUse } },
+        try scheduler.poll(),
+    );
+}
+
+test "TransactionScheduler: signature verification failure" {
+    const allocator = std.testing.allocator;
+    const Transaction = sig.core.Transaction;
+    var rng = std.Random.DefaultPrng.init(0);
+
+    var thread_pool = ThreadPool.init(.{});
+    var scheduler = try TransactionScheduler.initCapacity(allocator, 10, &thread_pool);
+    defer scheduler.deinit();
+
+    var transactions = [_]Transaction{
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+        try Transaction.initRandom(allocator, rng.random()),
+    };
+    defer for (transactions) |tx| {
+        allocator.free(tx.signatures);
+        allocator.free(tx.msg.account_keys);
+    };
+    const replaced_sigs = try allocator.dupe(sig.core.Signature, transactions[5].signatures);
+    replaced_sigs[0].data[0] +%= 1;
+    allocator.free(transactions[5].signatures);
+    transactions[5].signatures = replaced_sigs;
+
+    const batch1 = try replay.resolve_lookup
+        .resolveBatch(allocator, undefined, transactions[0..3]);
+    defer batch1.deinit(allocator);
+
+    const batch2 = try replay.resolve_lookup
+        .resolveBatch(allocator, undefined, transactions[3..6]);
+    defer batch2.deinit(allocator);
+
+    scheduler.addBatchAssumeCapacity(batch1);
+    scheduler.addBatchAssumeCapacity(batch2);
+
+    while (try scheduler.poll() == .pending) std.time.sleep(std.time.ns_per_ms);
+    try std.testing.expectEqual(
+        ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
+        try scheduler.poll(),
+    );
+}
+
 test ResizeableRingBuffer {
     const allocator = std.testing.allocator;
     const expectEqual = std.testing.expectEqual;
@@ -285,7 +419,6 @@ test ResizeableRingBuffer {
     for (5..300) |i| {
         try buffer.push(allocator, i);
     }
-    std.debug.print("{any}", .{buffer.buffer});
     for (5..123) |i| {
         try expectEqual(i, buffer.peek().?.*);
         try expectEqual(i, buffer.pop());

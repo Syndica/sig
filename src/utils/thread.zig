@@ -238,6 +238,8 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
                     return false;
                 }
                 assert(max >= self.num_running_tasks.fetchAdd(1, .monotonic));
+            } else {
+                _ = self.num_running_tasks.fetchAdd(1, .monotonic);
             }
 
             const task = try self.task_pool.create();
