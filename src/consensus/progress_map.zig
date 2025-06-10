@@ -1350,9 +1350,28 @@ test "ForkProgress.init" {
     });
     defer actual_init_from_bank.deinit(allocator);
 
+    const actual_init_from_parent = try ForkProgress.initFromParent(allocator, .{
+        .now = now,
+        .slot = bank.data.slot,
+        .parent_slot = bank.data.parent_slot,
+        .parent = &actual_init,
+        .validator_vote_pubkey = vsi.validator_vote_pubkey,
+        .slot_hash = bank.data.hash,
+        .last_entry = bank.data.blockhash_queue.last_hash.?,
+        .i_am_leader = false,
+        .epoch_stakes = &.{
+            .stakes = bank.data.stakes,
+            .total_stake = bank.totalEpochStake(),
+            .node_id_to_vote_accounts = .empty,
+            .epoch_authorized_voters = .empty,
+        },
+    });
+    defer actual_init_from_parent.deinit(allocator);
+
     for (0.., [_]ForkProgress{
         actual_init,
         actual_init_from_bank,
+        actual_init_from_parent,
     }) |fp_i, actual| {
         errdefer std.log.err("Failure on ForkProgress [{d}]", .{fp_i});
         try sig.testing.expectEqualDeepWithOverrides(expected, actual, struct {
