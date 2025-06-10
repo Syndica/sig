@@ -911,7 +911,7 @@ fn handleVotableBank(
     snapshot_controller: ?*const stubs.SnapshotController,
     rpc_subscriptions: *const stubs.RpcSubscriptions,
     block_commitment_cache: *const stubs.BlockCommitmentCache,
-    heaviest_subtree_fork_choice: *ForkChoice,
+    fork_choice: *ForkChoice,
     bank_notification_sender: *const stubs.BankNotificationSenderConfig,
     duplicate_slots_tracker: *const stubs.DuplicateSlotsTracker,
     duplicate_confirmed_slots: *const stubs.DuplicateConfirmedSlots,
@@ -935,6 +935,7 @@ fn handleVotableBank(
             allocator,
             slot_tracker,
             progress,
+            fork_choice,
             new_root,
         );
     }
@@ -956,7 +957,7 @@ fn handleVotableBank(
     _ = &snapshot_controller;
     _ = &rpc_subscriptions;
     _ = &block_commitment_cache;
-    _ = &heaviest_subtree_fork_choice;
+    _ = &fork_choice;
     _ = &bank_notification_sender;
     _ = &duplicate_slots_tracker;
     _ = &duplicate_confirmed_slots;
@@ -974,12 +975,15 @@ fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
+    fork_choice: *ForkChoice,
     new_root: Slot,
 ) !void {
     // get the root bank before squash.
-    const root_slot = slot_tracker.slots.get(new_root) orelse return error.MissingSlot;
+    var root_tracker = slot_tracker.slots.get(new_root) orelse return error.MissingSlot;
+    const root_hash, var hash_lg = root_tracker.state.hash.readWithLock();
+    defer hash_lg.unlock();
     // TODO need to get parents
-    _ = &root_slot;
+    _ = &root_tracker;
 
     // Update the progress map.
     // TODO Move to its own function?
@@ -1001,6 +1005,12 @@ fn checkAndHandleNewRoot(
             _ = progress.map.swapRemove(key);
         }
     }
+
+    // Update forkchoice
+    try fork_choice.setTreeRoot(&.{
+        .slot = new_root,
+        .hash = root_hash.* orelse return error.MissingHash,
+    });
 }
 
 fn resetFork(
