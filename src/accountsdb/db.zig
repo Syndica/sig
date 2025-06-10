@@ -1765,6 +1765,7 @@ pub const AccountsDB = struct {
 
         const reference_buf, const ref_global_index = try self.account_index
             .reference_manager.allocOrExpand(n_accounts);
+
         var references = std.ArrayListUnmanaged(AccountRef).initBuffer(reference_buf);
 
         try indexAndValidateAccountFile(

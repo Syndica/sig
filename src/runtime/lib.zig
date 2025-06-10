@@ -9,6 +9,7 @@ pub const instruction_info = @import("instruction_info.zig");
 pub const log_collector = @import("log_collector.zig");
 pub const nonce = @import("nonce.zig");
 pub const program = @import("program/lib.zig");
+pub const program_cache = @import("program_cache.zig");
 pub const pubkey_utils = @import("pubkey_utils.zig");
 pub const stable_log = @import("stable_log.zig");
 pub const sysvar = @import("sysvar/lib.zig");
