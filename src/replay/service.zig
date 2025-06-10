@@ -221,24 +221,20 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         &in_vote_only_mode,
     );
 
-    const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
-        deps.allocator,
-        heaviest_slot,
-        if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
-        heaviest_epoch,
-        &ancestors,
-        &descendants,
-        deps.progress_map,
-        &latest_validator_votes_for_frozen_banks,
-        deps.fork_choice,
-        .{},
-        &slot_history,
-    );
-    const maybe_voted_slot = vote_and_reset_forks.vote_slot;
-    const reset_slot = vote_and_reset_forks.reset_slot;
-    const heaviest_fork_failures = vote_and_reset_forks.heaviest_fork_failures;
-    _ = &heaviest_fork_failures;
-    _ = &reset_slot;
+    const maybe_voted_slot, const reset_slot, const heaviest_fork_failures =
+        try deps.replay_tower.selectVoteAndResetForks(
+            deps.allocator,
+            heaviest_slot,
+            if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
+            heaviest_epoch,
+            &ancestors,
+            &descendants,
+            deps.progress_map,
+            &latest_validator_votes_for_frozen_banks,
+            deps.fork_choice,
+            .{},
+            &slot_history,
+        );
 
     if (maybe_voted_slot == null) {
         _ = maybeRefreshLastVote(
