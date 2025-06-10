@@ -106,7 +106,6 @@ pub const ExecutedTransaction = struct {
 
     pub fn deinit(self: ExecutedTransaction, allocator: std.mem.Allocator) void {
         if (self.log_collector) |lc| lc.deinit(allocator);
-        if (self.return_data) |data| allocator.free(data);
     }
 };
 
@@ -126,7 +125,6 @@ pub const ProcessedTransaction = union(enum(u8)) {
     pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
         switch (self) {
             .executed => |executed| {
-                executed.loaded_accounts.deinit(allocator);
                 executed.executed_transaction.deinit(allocator);
             },
             else => {},
@@ -369,7 +367,7 @@ pub fn checkFeePayer(
     @panic("not implemented");
 }
 
-test "transaction_execution" {
+test "loadAndExecuteTransactions: no transactions" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
@@ -422,4 +420,89 @@ test "transaction_execution" {
     );
 
     _ = result;
+}
+
+test "loadAndExecuteTransactions: invalid compute budget instruction" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const max_age = 5;
+    const recent_blockhash = Hash.initRandom(prng.random());
+
+    const transaction = RuntimeTransaction{
+        .signature_count = 0,
+        .fee_payer = Pubkey.ZEROES,
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = recent_blockhash,
+        .instruction_infos = &.{.{
+            .program_meta = .{
+                .pubkey = sig.runtime.program.compute_budget.ID,
+                .index_in_transaction = 0,
+            },
+            .account_metas = .{},
+            .instruction_data = &.{},
+        }},
+    };
+
+    var blockhash_queue = BlockhashQueue{
+        .last_hash = null,
+        .max_age = 10,
+        .ages = try .init(
+            allocator,
+            &.{recent_blockhash},
+            &.{.{
+                .fee_calculator = .{ .lamports_per_signature = 5000 },
+                .hash_index = 0,
+                .timestamp = 0,
+            }},
+        ),
+        .last_hash_index = 0,
+    };
+    defer blockhash_queue.deinit(allocator);
+
+    var account_cache = BatchAccountCache{};
+    defer account_cache.deinit(allocator);
+
+    const epoch_stakes = try EpochStakes.initEmpty(allocator);
+    defer epoch_stakes.deinit(allocator);
+
+    const results = try loadAndExecuteTransactions(
+        allocator,
+        &.{transaction},
+        &account_cache,
+        &.{
+            .ancestors = &Ancestors{},
+            .feature_set = &FeatureSet.EMPTY,
+            .status_cache = &StatusCache.default(),
+            .sysvar_cache = &SysvarCache{},
+            .rent_collector = &sig.core.rent_collector.defaultCollector(10),
+            .blockhash_queue = &blockhash_queue,
+            .epoch_stakes = &epoch_stakes,
+            .max_age = max_age,
+            .last_blockhash = recent_blockhash,
+            .next_durable_nonce = Hash.ZEROES,
+            .next_lamports_per_signature = 0,
+            .last_lamports_per_signature = 0,
+            .lamports_per_signature = 0,
+        },
+        &.{
+            .log = false,
+            .log_messages_byte_limit = null,
+        },
+    );
+    defer {
+        for (results) |result| {
+            switch (result) {
+                .ok => |ok| ok.deinit(allocator),
+                .err => |err| err.deinit(allocator),
+            }
+        }
+        allocator.free(results);
+    }
+
+    try std.testing.expectEqual(
+        TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },
+        results[0].err,
+    );
 }
