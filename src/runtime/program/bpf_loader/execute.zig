@@ -68,8 +68,6 @@ pub fn execute(
         }
     }
 
-    std.debug.print("bpf_program_execute\n", .{});
-
     // NOTE: We reborrow the program account within bpf_program.execute, this adds an additional
     // borrow wrt Agave's implementation. It should not cause an issue but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
