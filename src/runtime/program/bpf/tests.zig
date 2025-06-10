@@ -459,7 +459,7 @@ test "basic direct mapping" {
         },
         .{
             .accounts = accounts,
-            .compute_meter = 106,
+            .compute_meter = 109,
             .feature_set = &.{
                 .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
                 .{ .pubkey = features.BPF_ACCOUNT_DATA_DIRECT_MAPPING },
