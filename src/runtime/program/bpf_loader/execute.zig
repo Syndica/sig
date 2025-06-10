@@ -37,6 +37,8 @@ pub fn execute(
         break :blk program_account.account.owner;
     };
 
+    //std.debug.print("bpf_exec: {s} key: {s}\n", .{program_owner, ic.ixn_info.program_meta.pubkey});
+
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
     if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
         if (bpf_loader_program.v1.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
@@ -65,6 +67,8 @@ pub fn execute(
             return InstructionError.IncorrectProgramId;
         }
     }
+
+    std.debug.print("bpf_program_execute\n", .{});
 
     // NOTE: We reborrow the program account within bpf_program.execute, this adds an additional
     // borrow wrt Agave's implementation. It should not cause an issue but is worth noting.
@@ -1558,7 +1562,6 @@ pub fn deployProgram(
             .minimum_version = vm.sbpf.Version.v0,
         },
     ) catch |err| {
-        if (@errorReturnTrace()) |t| std.debug.dumpStackTrace(t.*);
         try tc.log("{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };

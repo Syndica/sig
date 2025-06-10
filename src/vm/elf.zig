@@ -766,7 +766,6 @@ pub const Elf = struct {
         }
 
         if (sbpf_version.enableStricterElfHeaders()) {
-            std.debug.print("parseStrict\n", .{});
             return try parseStrict(
                 allocator,
                 bytes,
@@ -776,7 +775,6 @@ pub const Elf = struct {
                 config,
             );
         } else {
-            std.debug.print("parseLenient\n", .{});
             if (sbpf_version.enableElfVaddr() and
                 config.optimize_rodata != true)
             {

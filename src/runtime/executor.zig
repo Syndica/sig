@@ -26,9 +26,6 @@ pub fn executeInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L475
     processNextInstruction(allocator, tc) catch |err| {
-        std.debug.print("process: {any}\n", .{err});
-        if (@errorReturnTrace()) |t| std.debug.dumpStackTrace(t.*);
-
         popInstruction(tc) catch {};
         return err;
     };

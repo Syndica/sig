@@ -90,6 +90,7 @@ pub const Vm = struct {
         return .{ self.result, instruction_count };
     }
 
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/795250d9a8f15f04e5967dbcbfc66fa8c4610669/src/interpreter.rs#L589
     fn dispatchSyscall(self: *Vm, syscall_fn: sig.vm.syscalls.Syscall) !void {
         self.instruction_count = self.transaction_context.compute_meter - self.instruction_count;
         self.registers.set(.r0, 0);
