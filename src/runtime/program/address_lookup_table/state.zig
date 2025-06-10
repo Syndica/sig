@@ -105,7 +105,7 @@ pub const AddressLookupTable = struct {
     pub fn deserialize(
         data: []const u8,
     ) (error{OutOfMemory} || InstructionError)!AddressLookupTable {
-        const noalloc = sig.utils.allocators.NoAlloc.allocator;
+        const noalloc = sig.utils.allocators.failing.allocator(.{});
         const state = sig.bincode.readFromSlice(noalloc, ProgramState, data, .{}) catch
             return error.InvalidAccountData;
 

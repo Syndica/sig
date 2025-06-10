@@ -9,37 +9,6 @@ const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
 const bytesAsValue = std.mem.bytesAsValue;
 
-/// An allocator that can only allocate 0 bytes.
-pub const NoAlloc = struct {
-    pub const allocator = Allocator{
-        .ptr = undefined,
-        .vtable = &.{
-            .alloc = alloc,
-            .resize = resize,
-            .free = free,
-            .remap = remap,
-        },
-    };
-
-    fn alloc(_: *anyopaque, n: usize, _: Alignment, _: usize) ?[*]u8 {
-        return if (n == 0) @constCast(@ptrCast(&.{})) else null;
-    }
-
-    fn free(_: *anyopaque, buf: []u8, _: Alignment, _: usize) void {
-        std.debug.assert(buf.len == 0);
-    }
-
-    fn resize(_: *anyopaque, buf: []u8, _: Alignment, new_size: usize, _: usize) bool {
-        std.debug.assert(buf.len == 0);
-        return new_size == 0;
-    }
-
-    fn remap(_: *anyopaque, memory: []u8, _: Alignment, new_len: usize, _: usize) ?[*]u8 {
-        std.debug.assert(memory.len == 0);
-        return if (new_len == 0) memory.ptr else null;
-    }
-};
-
 /// very similar to RecycleFBA but with a few differences:
 /// - this uses an explicit T type and only returns slices of that type (instead of a generic u8)
 /// - additional memory blocks are supported (instead of using a fixed-buffer-allocator approach)
