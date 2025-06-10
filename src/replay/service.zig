@@ -33,7 +33,6 @@ const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
-const SwitchForkDecision = sig.consensus.replay_tower.SwitchForkDecision;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -270,31 +269,10 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
                 deps.allocator,
                 voted.slot,
                 Hash.ZEROES, // TODO get the hash associated with the slot
-                &voted.decision,
                 deps.slot_tracker,
                 deps.replay_tower,
                 deps.progress_map,
-                &deps.vote_account,
-                &identity_keypair,
-                &authorized_voter_keypairs,
-                &deps.blockstore.*,
-                &leader_schedule_cache,
-                &.{},
-                &.{},
-                &.{},
-                &.{},
                 deps.fork_choice,
-                &.{},
-                &.{},
-                &.{},
-                &.{},
-                .{},
-                false,
-                &.{},
-                &.{},
-                &.{},
-                &.{},
-                null,
             );
         }
     }
@@ -900,31 +878,10 @@ fn handleVotableBank(
     allocator: std.mem.Allocator,
     vote_slot: Slot,
     vote_hash: Hash, // vote_slot and vote_hash replaces Bank
-    switch_fork_decision: *const SwitchForkDecision,
     slot_tracker: *SlotTracker,
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
-    vote_account_pubkey: *const Pubkey,
-    identity_keypair: *const Keypair,
-    authorized_voter_keypairs: []Keypair,
-    blockstore: *const BlockstoreReader,
-    leader_schedule_cache: *const LeaderScheduleCache,
-    lockouts_sender: *const stubs.Sender(stubs.CommitmentAggregationData),
-    snapshot_controller: ?*const stubs.SnapshotController,
-    rpc_subscriptions: *const stubs.RpcSubscriptions,
-    block_commitment_cache: *const stubs.BlockCommitmentCache,
     fork_choice: *ForkChoice,
-    bank_notification_sender: *const stubs.BankNotificationSenderConfig,
-    duplicate_slots_tracker: *const stubs.DuplicateSlotsTracker,
-    duplicate_confirmed_slots: *const stubs.DuplicateConfirmedSlots,
-    unfrozen_gossip_verified_vote_hashes: *const stubs.UnfrozenGossipVerifiedVoteHashes,
-    vote_signatures: std.ArrayListUnmanaged(Signature),
-    has_new_vote_been_rooted: bool,
-    replay_timing: *const stubs.ReplayLoopTiming,
-    voting_sender: *const stubs.Sender(VoteOp),
-    epoch_slots_frozen_slots: *const stubs.EpochSlotsFrozenSlots,
-    drop_bank_sender: *const stubs.Sender(std.ArrayList(stubs.BankWithScheduler)),
-    wait_to_vote_slot: ?Slot,
 ) !void {
     const maybe_new_root = try replay_tower.recordBankVote(
         allocator,
@@ -948,34 +905,6 @@ fn handleVotableBank(
         allocator,
         replay_tower,
     );
-
-    _ = &vote_slot;
-    _ = &vote_hash;
-    _ = &switch_fork_decision;
-    _ = &slot_tracker;
-    _ = &replay_tower;
-    _ = &progress;
-    _ = &vote_account_pubkey;
-    _ = &identity_keypair;
-    _ = &authorized_voter_keypairs;
-    _ = &blockstore;
-    _ = &leader_schedule_cache;
-    _ = &lockouts_sender;
-    _ = &snapshot_controller;
-    _ = &rpc_subscriptions;
-    _ = &block_commitment_cache;
-    _ = &fork_choice;
-    _ = &bank_notification_sender;
-    _ = &duplicate_slots_tracker;
-    _ = &duplicate_confirmed_slots;
-    _ = &unfrozen_gossip_verified_vote_hashes;
-    _ = &vote_signatures;
-    _ = &has_new_vote_been_rooted;
-    _ = &replay_timing;
-    _ = &voting_sender;
-    _ = &epoch_slots_frozen_slots;
-    _ = &drop_bank_sender;
-    _ = &wait_to_vote_slot;
 }
 
 fn push_vote(
