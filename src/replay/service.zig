@@ -235,10 +235,8 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
         &slot_history,
     );
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
-    const reset_slot = vote_and_reset_forks.reset_slot;
+    const maybe_reset_slot = vote_and_reset_forks.reset_slot;
     const heaviest_fork_failures = vote_and_reset_forks.heaviest_fork_failures;
-    _ = &heaviest_fork_failures;
-    _ = &reset_slot;
 
     if (maybe_voted_slot == null) {
         _ = maybeRefreshLastVote(
@@ -257,7 +255,7 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
     }
 
     if (deps.replay_tower.tower.isRecent(heaviest_slot) and
-        vote_and_reset_forks.heaviest_fork_failures.items.len != 0)
+        heaviest_fork_failures.items.len != 0)
     {
         // Implemented the log
     }
@@ -302,6 +300,10 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
     }
 
     // Reset onto a fork
+    if (maybe_reset_slot) |reset_slot| {
+        // TODO implement
+        _ = &reset_slot;
+    }
 }
 
 const LastVoteRefreshTime = struct {
