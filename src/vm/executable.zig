@@ -974,6 +974,9 @@ pub const Config = struct {
         return config.stack_frame_size * config.max_call_depth;
     }
 
+    /// TODO: create config in a Instruction/TransactionContext to be accessed by:
+    /// - src/runtime/program/bpf-loader/execute.zig:deployProgram
+    /// - src/runtime/program/bpf/execute.zig:execute
     /// [agave] https://github.com/anza-xyz/agave/blob/7be24c24cdd882f85276ff3594815783f72ff5e7/programs/bpf_loader/src/syscalls/mod.rs#L324
     pub fn createEnvironmentV1(
         compute_budget: *const ComputeBudget,
@@ -1020,6 +1023,7 @@ pub const Config = struct {
         };
     }
 
+    /// [agave] https://github.com/anza-xyz/agave/blob/7be24c24cdd882f85276ff3594815783f72ff5e7/programs/bpf_loader/src/syscalls/mod.rs#L558
     pub fn createEnvironmentV2(
         compute_budget: *const ComputeBudget,
         debugging_features: bool,

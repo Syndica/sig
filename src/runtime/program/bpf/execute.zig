@@ -83,7 +83,7 @@ pub fn execute(
                 .aligned_memory_mapping = !direct_mapping,
                 .minimum_version = min_sbpf_version,
                 .maximum_version = max_sbpf_version,
-                .optimize_rodata = false, 
+                .optimize_rodata = false,
             },
         ) catch |err| {
             try ic.tc.log("{s}", .{@errorName(err)});
