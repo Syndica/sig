@@ -75,17 +75,24 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         return false;
     }
 
-    var slot_statuses = std.ArrayListUnmanaged(ReplaySlotStatus){};
+    var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }){};
     for (active_slots) |slot| {
         // TODO: consider limiting the max number of slots to process
         // simultaneously to avoid congestion.
-        try slot_statuses.append(state.allocator, try replaySlot(state, slot));
+        try slot_statuses.append(state.allocator, .{ slot, try replaySlot(state, slot) });
+    }
+    for (slot_statuses.items) |slot_status| {
+        // NOTE: currently this just awaits the futures and discards the
+        // results. this will change once we call the svm and process the
+        // results of execution.
+        _, const status = slot_status;
+        while (status == .confirm and status.confirm.poll() == .pending) {
+            std.time.sleep(std.time.ns_per_ms); // TODO: consider futex-based wait like ResetEvent
+        }
     }
 
-    // TODO: join futures
     // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
-
-    return false; // TODO
+    return false;
 }
 
 const ReplaySlotStatus = union(enum) {
