@@ -72,11 +72,11 @@ pub const TransactionScheduler = struct {
     }
 
     pub fn addBatch(self: *TransactionScheduler, batch: ResolvedBatch) Allocator.Error!void {
-        try self.batches.put(batch);
+        try self.batches.push(batch);
     }
 
     pub fn addBatchAssumeCapacity(self: *TransactionScheduler, batch: ResolvedBatch) void {
-        self.batches.putAssumeCapacity(batch);
+        self.batches.pushAssumeCapacity(batch);
     }
 
     pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
@@ -182,26 +182,25 @@ fn ResizeableRingBuffer(T: type) type {
             allocator.free(self.buffer);
         }
 
-        pub fn put(
+        pub fn push(
             self: *ResizeableRingBuffer(T),
             allocator: Allocator,
             item: T,
         ) Allocator.Error!void {
             if (self.head == self.tail + self.buffer.len) {
-                self.ensureTotalCapacity(allocator);
+                try self.ensureTotalCapacity(allocator, @max(8, self.buffer.len * 2));
             }
-            self.putAssumeCapacity(item);
+            self.pushAssumeCapacity(item);
         }
 
-        pub fn putAssumeCapacity(self: *ResizeableRingBuffer(T), item: T) void {
-            assert(self.head < self.tail + self.buffer.len);
-            assert(self.head >= self.tail);
-            self.buffer[self.head] = item;
+        pub fn pushAssumeCapacity(self: *ResizeableRingBuffer(T), item: T) void {
+            self.assertSane(1);
+            self.buffer[self.head % self.buffer.len] = item;
             self.head += 1;
         }
 
         pub fn pop(self: *ResizeableRingBuffer(T)) ?T {
-            self.assertSane();
+            self.assertSane(0);
             if (self.head == self.tail) {
                 return null;
             }
@@ -211,7 +210,7 @@ fn ResizeableRingBuffer(T: type) type {
 
         /// Pointer is invalidated when `put` is called.
         pub fn peek(self: *ResizeableRingBuffer(T)) ?*const T {
-            self.assertSane();
+            self.assertSane(0);
             if (self.head == self.tail) {
                 return null;
             }
@@ -227,17 +226,77 @@ fn ResizeableRingBuffer(T: type) type {
             allocator: Allocator,
             capacity: usize,
         ) Allocator.Error!void {
+            self.assertSane(0);
             const old_len = self.buffer.len;
             if (capacity < old_len) return;
-            const new_len = @max(std.math.ceilPowerOfTwo(usize, capacity), @max(8, old_len * 2));
-            try allocator.realloc(T, new_len);
-            self.head = self.head % old_len;
-            self.tail = self.tail % old_len;
+
+            const new_len = std.math.ceilPowerOfTwo(
+                usize,
+                @max(capacity, @max(8, old_len * 2)),
+            ) catch return error.OutOfMemory;
+
+            self.buffer = try allocator.realloc(self.buffer, new_len);
+
+            if (old_len != 0) {
+                const old_head_index = self.head % old_len;
+                @memcpy(
+                    self.buffer[old_len..][0..old_head_index],
+                    self.buffer[0..old_head_index],
+                );
+                const num_items = self.head - self.tail;
+                self.tail = self.tail % old_len;
+                self.head = self.tail + num_items;
+            }
         }
 
-        fn assertSane(self: ResizeableRingBuffer(T)) void {
-            assert(self.head < self.tail + self.buffer.len + 1);
+        fn assertSane(self: ResizeableRingBuffer(T), min_free_space: usize) void {
+            assert(self.head - self.tail <= self.buffer.len - min_free_space);
             assert(self.head >= self.tail);
         }
     };
+}
+
+test ResizeableRingBuffer {
+    const allocator = std.testing.allocator;
+    const expectEqual = std.testing.expectEqual;
+
+    var buffer = try ResizeableRingBuffer(usize).initCapacity(allocator, 0);
+    defer buffer.deinit(allocator);
+
+    try expectEqual(null, buffer.pop());
+    try expectEqual(null, buffer.peek());
+
+    try buffer.push(allocator, 1);
+    try expectEqual(1, buffer.pop());
+    try expectEqual(null, buffer.pop());
+    try expectEqual(null, buffer.peek());
+
+    try buffer.push(allocator, 2);
+    try buffer.push(allocator, 3);
+    try buffer.push(allocator, 4);
+
+    try expectEqual(2, buffer.pop());
+    try expectEqual(3, buffer.peek().?.*);
+    try expectEqual(3, buffer.pop());
+    try expectEqual(4, buffer.pop());
+    try expectEqual(null, buffer.pop());
+    try expectEqual(null, buffer.peek());
+
+    for (5..300) |i| {
+        try buffer.push(allocator, i);
+    }
+    std.debug.print("{any}", .{buffer.buffer});
+    for (5..123) |i| {
+        try expectEqual(i, buffer.peek().?.*);
+        try expectEqual(i, buffer.pop());
+    }
+    for (300..600) |i| {
+        try buffer.push(allocator, i);
+    }
+    for (123..600) |i| {
+        try expectEqual(i, buffer.peek().?.*);
+        try expectEqual(i, buffer.pop());
+    }
+    try expectEqual(null, buffer.pop());
+    try expectEqual(null, buffer.peek());
 }
