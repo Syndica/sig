@@ -273,7 +273,7 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
                 voted.slot,
                 Hash.ZEROES, // TODO get the hash associated with the slot
                 &voted.decision,
-                &.{}, // TODO alternative
+                deps.slot_tracker,
                 deps.replay_tower,
                 deps.progress_map,
                 &deps.vote_account,
@@ -899,7 +899,7 @@ fn handleVotableBank(
     vote_slot: Slot,
     vote_hash: Hash, // vote_slot and vote_hash replaces Bank
     switch_fork_decision: *const SwitchForkDecision,
-    bank_forks: *const stubs.BankForks, // TODO replace with alternative, have ref counted
+    slot_tracker: *SlotTracker,
     tower: *ReplayTower,
     progress: *ProgressMap,
     vote_account_pubkey: *const Pubkey,
@@ -931,8 +931,12 @@ fn handleVotableBank(
     );
 
     if (maybe_new_root) |new_root| {
-        _ = &new_root;
-        // TODO check_and_handle_new_root
+        try checkAndHandleNewRoot(
+            allocator,
+            slot_tracker,
+            progress,
+            new_root,
+        );
     }
 
     // TODO update_commitment_cache
@@ -940,7 +944,7 @@ fn handleVotableBank(
     _ = &vote_slot;
     _ = &vote_hash;
     _ = &switch_fork_decision;
-    _ = &bank_forks;
+    _ = &slot_tracker;
     _ = &tower;
     _ = &progress;
     _ = &vote_account_pubkey;
@@ -964,6 +968,39 @@ fn handleVotableBank(
     _ = &epoch_slots_frozen_slots;
     _ = &drop_bank_sender;
     _ = &wait_to_vote_slot;
+}
+
+fn checkAndHandleNewRoot(
+    allocator: std.mem.Allocator,
+    slot_tracker: *SlotTracker,
+    progress: *ProgressMap,
+    new_root: Slot,
+) !void {
+    // get the root bank before squash.
+    const root_slot = slot_tracker.slots.get(new_root) orelse return error.MissingSlot;
+    // TODO need to get parents
+    _ = &root_slot;
+
+    // Update the progress map.
+    // TODO Move to its own function?
+    {
+        var to_remove = std.ArrayList(Slot).init(
+            allocator,
+        );
+        defer to_remove.deinit();
+
+        var it = progress.map.iterator();
+        while (it.next()) |entry| {
+            // TODO should frozen state be taking into consideration.
+            if (slot_tracker.slots.get(entry.key_ptr.*) == null) {
+                try to_remove.append(entry.key_ptr.*);
+            }
+        }
+
+        for (to_remove.items) |key| {
+            _ = progress.map.swapRemove(key);
+        }
+    }
 }
 
 fn resetFork(
