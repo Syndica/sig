@@ -263,6 +263,12 @@ pub fn RwMux(comptime T: type) type {
             };
         }
 
+        pub fn set(self: *Self, item: T) void {
+            self.private.r.lock();
+            defer self.private.r.unlock();
+            self.private.v = item;
+        }
+
         /// `read` returns a `RLockGuard` after acquiring a `read` lock
         pub fn read(self: *Self) RLockGuard {
             self.private.r.lockShared();

@@ -7,8 +7,11 @@ const Allocator = std.mem.Allocator;
 const ThreadPool = sig.sync.ThreadPool;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
+const BlockstoreDB = sig.ledger.BlockstoreDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
+const ProgressMap = sig.consensus.ProgressMap;
 const Slot = sig.core.Slot;
+const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
 
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
@@ -31,18 +34,21 @@ pub const ReplayDependencies = struct {
     blockstore_reader: *BlockstoreReader,
     /// Used to get the entries to validate them and execute the transactions
     accounts_db: *AccountsDB,
-    slot_leaders: sig.core.leader_schedule.SlotLeaders,
+    slot_leaders: SlotLeaders,
     /// The slot to start replaying from.
     root_slot: Slot,
+    root_slot_constants: sig.core.SlotConstants,
+    root_slot_state: sig.core.SlotState,
 };
 
 const ReplayState = struct {
     allocator: Allocator,
     logger: sig.trace.ScopedLogger("replay"),
     thread_pool: *ThreadPool,
-    slot_leaders: sig.core.leader_schedule.SlotLeaders,
+    slot_leaders: SlotLeaders,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
+    blockstore_db: BlockstoreDB,
     execution: ReplayExecutionState,
 
     fn init(deps: ReplayDependencies) Allocator.Error!ReplayState {
@@ -53,6 +59,12 @@ const ReplayState = struct {
         const slot_tracker = try deps.allocator.create(SlotTracker);
         errdefer deps.allocator.destroy(slot_tracker);
         slot_tracker.* = .init(deps.root_slot);
+        try slot_tracker.put(
+            deps.allocator,
+            deps.root_slot,
+            deps.root_slot_constants,
+            deps.root_slot_state,
+        );
 
         const epoch_tracker = try deps.allocator.create(EpochTracker);
         errdefer deps.allocator.destroy(epoch_tracker);
@@ -65,6 +77,7 @@ const ReplayState = struct {
             .slot_leaders = deps.slot_leaders,
             .slot_tracker = slot_tracker,
             .epochs = epoch_tracker,
+            .blockstore_db = deps.blockstore_reader.db,
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
                 deps.logger,
@@ -100,7 +113,14 @@ pub fn run(deps: ReplayDependencies) !void {
 /// - replay all active slots that have not been replayed yet
 /// - running concensus on the latest updates
 fn advanceReplay(state: *ReplayState) !void {
-    try trackNewSlots(state);
+    try trackNewSlots(
+        state.allocator,
+        &state.blockstore_db,
+        state.slot_tracker,
+        state.epochs,
+        state.slot_leaders,
+        &state.execution.progress_map,
+    );
 
     _ = try replay.execution.replayActiveSlots(&state.execution);
 
@@ -118,16 +138,18 @@ fn advanceReplay(state: *ReplayState) !void {
 ///
 /// Analogous to
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
-fn trackNewSlots(state: *ReplayState) !void {
-    const allocator = state.allocator;
-    const blockstore_reader = state.execution.blockstore_reader;
-    const slot_tracker = state.slot_tracker;
-    const epoch_tracker = state.epochs;
-    const slot_leaders = state.slot_leaders;
-    _ = &state.execution.progress_map; // needed for update_fork_propagated_threshold_from_votes
-
+fn trackNewSlots(
+    allocator: Allocator,
+    blockstore_db: *sig.ledger.BlockstoreDB,
+    slot_tracker: *SlotTracker,
+    epoch_tracker: *EpochTracker,
+    slot_leaders: SlotLeaders,
+    /// needed for update_fork_propagated_threshold_from_votes
+    _: *ProgressMap,
+) !void {
     const root = slot_tracker.root.load(.monotonic);
-    const frozen_slots = try slot_tracker.frozenSlots(allocator);
+    var frozen_slots = try slot_tracker.frozenSlots(allocator);
+    defer frozen_slots.deinit(allocator);
 
     var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
         .initCapacity(allocator, frozen_slots.count());
@@ -136,8 +158,12 @@ fn trackNewSlots(state: *ReplayState) !void {
         try frozen_slots_since_root.append(allocator, slot);
     };
 
-    const next_slots = try blockstore_reader
-        .getSlotsSince(allocator, frozen_slots_since_root.items);
+    var next_slots = try BlockstoreReader
+        .getSlotsSince(blockstore_db, allocator, frozen_slots_since_root.items);
+    defer {
+        for (next_slots.values()) |*list| list.deinit();
+        next_slots.deinit(allocator);
+    }
 
     for (next_slots.keys(), next_slots.values()) |parent_slot, children| {
         const parent_info = frozen_slots.get(parent_slot) orelse return error.MissingParent;
@@ -209,4 +235,154 @@ fn processConsensus() void {
     // TODO: handle_votable_bank
 
     // TODO: if reset_bank: Reset onto a fork
+}
+
+test trackNewSlots {
+    const Pubkey = sig.core.Pubkey;
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0);
+
+    var blockstore_db = try sig.ledger.tests.TestDB.init(@src());
+    defer blockstore_db.deinit();
+    //     0
+    //     1
+    //    / \
+    //   2   4
+    //  [3]  6
+    //   5
+    // no shreds received from 0 or 3
+    inline for (.{
+        .{ 0, 0, &.{1} },
+        .{ 1, 0, &.{ 2, 4 } },
+        .{ 2, 1, &.{} },
+        .{ 3, null, &.{5} },
+        .{ 5, 3, &.{} },
+        .{ 4, 1, &.{6} },
+        .{ 6, 4, &.{} },
+    }) |item| {
+        const slot, const parent, const children = item;
+        var meta = sig.ledger.meta.SlotMeta.init(allocator, slot, parent);
+        defer meta.deinit();
+        try meta.child_slots.appendSlice(children);
+        try blockstore_db.put(sig.ledger.schema.schema.slot_meta, slot, meta);
+    }
+
+    var slot_tracker = SlotTracker.init(0);
+    defer slot_tracker.deinit(allocator);
+    try slot_tracker.put(allocator, 0, .genesis(.DEFAULT), .GENESIS);
+    slot_tracker.get(0).?.state.hash.set(.ZEROES);
+
+    var epoch_tracker = EpochTracker{ .schedule = .DEFAULT };
+    defer epoch_tracker.deinit(allocator);
+    try epoch_tracker.epochs.put(allocator, 0, .{
+        .hashes_per_tick = 1,
+        .ticks_per_slot = 1,
+        .ns_per_slot = 1,
+        .genesis_creation_time = 1,
+        .slots_per_year = 1,
+        .stakes = try .initEmpty(allocator),
+    });
+
+    const leader_schedule = sig.core.leader_schedule.LeaderSchedule{
+        .allocator = undefined,
+        .slot_leaders = &.{
+            Pubkey.initRandom(rng.random()),
+            Pubkey.initRandom(rng.random()),
+            Pubkey.initRandom(rng.random()),
+            Pubkey.initRandom(rng.random()),
+            Pubkey.initRandom(rng.random()),
+            Pubkey.initRandom(rng.random()),
+            Pubkey.initRandom(rng.random()),
+        },
+    };
+
+    // slot tracker should start with only 0
+    try expectSlotTracker(&slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
+
+    // only the root (0) is considered frozen, so only 0 and 1 should be added at first.
+    try trackNewSlots(
+        allocator,
+        &blockstore_db,
+        &slot_tracker,
+        &epoch_tracker,
+        leader_schedule.slotLeaders(0),
+        undefined,
+    );
+    try expectSlotTracker(
+        &slot_tracker,
+        leader_schedule,
+        &.{ .{ 0, 0 }, .{ 1, 0 } },
+        &.{ 2, 3, 4, 5, 6 },
+    );
+
+    // doing nothing should result in the same tracker state
+    try trackNewSlots(
+        allocator,
+        &blockstore_db,
+        &slot_tracker,
+        &epoch_tracker,
+        leader_schedule.slotLeaders(0),
+        undefined,
+    );
+    try expectSlotTracker(
+        &slot_tracker,
+        leader_schedule,
+        &.{ .{ 0, 0 }, .{ 1, 0 } },
+        &.{ 2, 3, 4, 5, 6 },
+    );
+
+    // freezing 1 should result in 2 and 4 being added
+    slot_tracker.get(1).?.state.hash.set(.ZEROES);
+    try trackNewSlots(
+        allocator,
+        &blockstore_db,
+        &slot_tracker,
+        &epoch_tracker,
+        leader_schedule.slotLeaders(0),
+        undefined,
+    );
+    try expectSlotTracker(
+        &slot_tracker,
+        leader_schedule,
+        &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 } },
+        &.{ 3, 5, 6 },
+    );
+
+    // freezing 2 and 4 should only result in 6 being added since 3's parent is unknown
+    slot_tracker.get(2).?.state.hash.set(.ZEROES);
+    slot_tracker.get(4).?.state.hash.set(.ZEROES);
+    try trackNewSlots(
+        allocator,
+        &blockstore_db,
+        &slot_tracker,
+        &epoch_tracker,
+        leader_schedule.slotLeaders(0),
+        undefined,
+    );
+    try expectSlotTracker(
+        &slot_tracker,
+        leader_schedule,
+        &.{ .{ 0, 0 }, .{ 1, 0 }, .{ 2, 1 }, .{ 4, 1 }, .{ 6, 4 } },
+        &.{ 3, 5 },
+    );
+}
+
+fn expectSlotTracker(
+    slot_tracker: *SlotTracker,
+    leader_schedule: sig.core.leader_schedule.LeaderSchedule,
+    included_slots: []const [2]Slot,
+    excluded_slots: []const Slot,
+) !void {
+    for (included_slots) |item| {
+        const slot, const parent = item;
+        const slot_info = slot_tracker.get(slot) orelse return error.Fail;
+        try std.testing.expectEqual(parent, slot_info.constants.parent_slot);
+        if (slot != 0) try std.testing.expectEqual(
+            leader_schedule.slot_leaders[slot],
+            slot_info.constants.collector_id,
+        );
+    }
+    for (excluded_slots) |slot| {
+        try std.testing.expectEqual(null, slot_tracker.get(slot));
+    }
 }

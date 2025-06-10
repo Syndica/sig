@@ -18,6 +18,10 @@ pub const String = std.ArrayList(u8);
 pub const RustDuration = struct {
     secs: u64,
     nanos: u32,
+
+    pub fn asNanos(self: RustDuration) u128 {
+        return @as(u128, self.secs) * 1_000_000_000 + @as(u128, self.nanos);
+    }
 };
 
 /// Analogous to [PohConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/poh_config.rs#L10)
@@ -56,6 +60,15 @@ pub const FeeRateGovernor = struct {
     burn_percent: u8,
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .skip = true };
+
+    pub const DEFAULT = FeeRateGovernor{
+        .lamports_per_signature = 0,
+        .target_lamports_per_signature = 10_000,
+        .target_signatures_per_slot = 50 * 400,
+        .min_lamports_per_signature = 0,
+        .max_lamports_per_signature = 0,
+        .burn_percent = 50,
+    };
 
     pub fn initDerived(
         base: *const FeeRateGovernor,
@@ -210,7 +223,25 @@ pub const GenesisConfig = struct {
     pub fn deinit(self: GenesisConfig, allocator: std.mem.Allocator) void {
         bincode.free(allocator, self);
     }
+
+    pub fn nsPerSlot(self: *const GenesisConfig) u128 {
+        return self.poh_config.target_tick_duration.asNanos() *| @as(u128, self.ticks_per_slot);
+    }
+
+    pub fn slotsPerYear(self: *const GenesisConfig) f64 {
+        return yearsAsSlots(1.0, self.poh_config.target_tick_duration, self.ticks_per_slot);
+    }
 };
+
+fn yearsAsSlots(years: f64, tick_duration: RustDuration, ticks_per_slot: u64) f64 {
+    const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
+
+    const SLOTS_PER_YEAR = SECONDS_PER_YEAR *
+        (1_000_000_000.0 / @as(f64, tick_duration.asNanos())) /
+        @as(f64, ticks_per_slot);
+
+    return years * SLOTS_PER_YEAR;
+}
 
 test "genesis_config deserialize development config" {
     const allocator = std.testing.allocator;

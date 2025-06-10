@@ -119,6 +119,17 @@ pub const LeaderSchedule = struct {
         self.allocator.free(self.slot_leaders);
     }
 
+    pub fn slotLeaders(self: *const LeaderSchedule, comptime first_slot: Slot) SlotLeaders {
+        return SlotLeaders.init(@as(*LeaderSchedule, @constCast(self)), struct {
+            fn getSlotLeader(this: *const LeaderSchedule, slot: Slot) ?Pubkey {
+                return if (slot < first_slot or slot - first_slot >= this.slot_leaders.len)
+                    null
+                else
+                    this.slot_leaders[slot - first_slot];
+            }
+        }.getSlotLeader);
+    }
+
     pub fn fromMap(
         allocator: Allocator,
         leader_to_slots: std.AutoArrayHashMapUnmanaged(Pubkey, []const u64),

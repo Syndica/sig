@@ -1210,21 +1210,18 @@ pub const BlockstoreReader = struct {
     ///
     /// Analogous to [get_slots_since](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3821)
     pub fn getSlotsSince(
-        self: *Self,
+        db: *BlockstoreDB,
         allocator: Allocator,
         slots: []const Slot,
     ) !std.AutoArrayHashMapUnmanaged(Slot, ArrayList(Slot)) {
         // TODO perf: support multi_get in db
         var map = std.AutoArrayHashMapUnmanaged(Slot, ArrayList(Slot)).empty;
         errdefer {
-            var iter = map.iterator();
-            while (iter.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
+            for (map.values()) |*list| list.deinit();
             map.deinit(allocator);
         }
         for (slots) |slot| {
-            if (try self.db.get(allocator, schema.slot_meta, slot)) |meta| {
+            if (try db.get(allocator, schema.slot_meta, slot)) |meta| {
                 errdefer meta.child_slots.deinit();
                 var cdi = meta.completed_data_indexes;
                 cdi.deinit();

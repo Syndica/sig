@@ -79,6 +79,19 @@ pub const SlotConstants = struct {
     /// Whether and how epoch rewards should be distributed in this slot.
     epoch_reward_status: EpochRewardStatus,
 
+    pub fn genesis(fee_rate_governor: sig.core.genesis_config.FeeRateGovernor) SlotConstants {
+        return .{
+            .slot = 0,
+            .parent_slot = 0,
+            .parent_hash = sig.core.Hash.ZEROES,
+            .block_height = 0,
+            .collector_id = Pubkey.ZEROES,
+            .max_tick_height = 0,
+            .fee_rate_governor = fee_rate_governor,
+            .epoch_reward_status = .inactive,
+        };
+    }
+
     pub fn deinit(self: SlotConstants, allocator: Allocator) void {
         self.epoch_reward_status.deinit(allocator);
     }
@@ -119,6 +132,17 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(LtHash),
 
+    pub const GENESIS = SlotState{
+        .blockhash_queue = .init(.DEFAULT),
+        .hash = .init(null),
+        .capitalization = .init(0),
+        .transaction_count = .init(0),
+        .signature_count = .init(0),
+        .tick_height = .init(0),
+        .collected_rent = .init(0),
+        .accounts_lt_hash = .init(.ZEROES),
+    };
+
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
         var blockhash_queue = self.blockhash_queue.write();
         defer blockhash_queue.unlock();
@@ -140,7 +164,7 @@ pub const SlotState = struct {
     }
 
     pub fn isFrozen(self: *SlotState) bool {
-        return self.hash.read().get().* != null;
+        return self.hash.readCopy() != null;
     }
 
     pub fn tickHeight(self: *const SlotState) u64 {
@@ -174,6 +198,20 @@ pub const EpochConstants = struct {
 
     /// The pre-determined stakes assigned to this epoch.
     stakes: EpochStakes,
+
+    pub fn genesis(
+        allocator: Allocator,
+        genesis_config: core.genesis_config.GenesisConfig,
+    ) EpochConstants {
+        return .{
+            .hashes_per_tick = genesis_config.poh_config.hashes_per_tick,
+            .ticks_per_slot = genesis_config.ticks_per_slot,
+            .ns_per_slot = genesis_config.nsPerSlot(),
+            .genesis_creation_time = genesis_config.creation_time,
+            .slots_per_year = genesis_config.slotsPerYear(),
+            .stakes = .initEmpty(allocator),
+        };
+    }
 
     pub fn deinit(self: EpochConstants, allocator: Allocator) void {
         self.stakes.deinit(allocator);
@@ -447,6 +485,17 @@ pub const BlockhashQueue = struct {
 
     /// hashes older than `max_age` will be dropped from the queue
     max_age: usize,
+
+    pub const DEFAULT = BlockhashQueue.init(300);
+
+    pub fn init(max_age: usize) BlockhashQueue {
+        return .{
+            .ages = .{},
+            .last_hash_index = 0,
+            .last_hash = null,
+            .max_age = max_age,
+        };
+    }
 
     pub fn deinit(self: BlockhashQueue, allocator: std.mem.Allocator) void {
         var ages = self.ages;

@@ -41,6 +41,12 @@ pub const SlotTracker = struct {
         };
     }
 
+    pub fn deinit(self: SlotTracker, allocator: Allocator) void {
+        var slots = self.slots;
+        for (slots.values()) |v| allocator.destroy(v);
+        slots.deinit(allocator);
+    }
+
     pub fn put(
         self: *SlotTracker,
         allocator: Allocator,
@@ -103,6 +109,7 @@ pub const EpochTracker = struct {
 
     pub fn deinit(self: EpochTracker, allocator: Allocator) void {
         var epochs = self.epochs;
+        for (epochs.values()) |ec| ec.deinit(allocator);
         epochs.deinit(allocator);
     }
 
