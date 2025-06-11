@@ -167,7 +167,6 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         .last_refresh_time = sig.time.Instant.now(),
         .last_print_time = sig.time.Instant.now(),
     };
-    const voting_sender: stubs.Sender(VoteOp) = .{};
     const latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenBanks{
         .max_gossip_frozen_votes = .{},
     };
@@ -205,7 +204,6 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
             deps.progress_map,
             if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
             &last_vote_refresh_time,
-            &voting_sender,
         );
     }
 
@@ -218,13 +216,20 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     // Vote on the fork
     if (maybe_voted_slot) |voted| {
         var leader_schedule_cache = deps.leader_schedule_cache;
+        const slot_tracker = deps.slot_tracker;
         if (leader_schedule_cache.slotLeader(voted.slot)) |votable_leader| {
             // TODO implement Self::log_leader_change
             _ = &votable_leader;
+            var found_slot = slot_tracker.slots.get(voted.slot) orelse
+                return error.MissingSlot;
+
+            const voted_hash = found_slot.state.hash.read().get().* orelse
+                return error.MissingSlotInTracker;
+
             try handleVotableBank(
                 deps.allocator,
                 voted.slot,
-                Hash.ZEROES, // TODO get the hash associated with the slot
+                voted_hash,
                 deps.slot_tracker,
                 deps.replay_tower,
                 deps.progress_map,
@@ -283,7 +288,6 @@ fn maybeRefreshLastVote(
     progress: *const ProgressMap,
     maybe_heaviest_slot_on_same_fork: ?Slot,
     last_vote_refresh_time: *LastVoteRefreshTime,
-    voting_sender: *const stubs.Sender(VoteOp),
 ) bool {
     const heaviest_bank_on_same_fork = maybe_heaviest_slot_on_same_fork orelse {
         // Only refresh if blocks have been built on our last vote
@@ -347,16 +351,13 @@ fn maybeRefreshLastVote(
     // AUDIT: Rest of code replaces Self::refresh_last_vote in Agave
     replay_tower.refreshLastVoteTimestamp(heaviest_bank_on_same_fork);
 
-    // TODO currently hardcoding to non voting transaction
+    // TODO Transaction generation to be implemented.
+    // Currently hardcoding to non voting transaction.
     const vote_tx_result: GenerateVoteTxResult = .non_voting;
 
     return switch (vote_tx_result) {
-        .tx => |vote_tx| {
-            const recent_blockhash = vote_tx.msg.recent_blockhash;
-            replay_tower.refreshLastVoteTxBlockhash(recent_blockhash);
-            // TODO send vote
-            _ = &voting_sender;
-            last_vote_refresh_time.last_refresh_time = sig.time.Instant.now();
+        .tx => |_| {
+            // TODO to be implemented
             return true;
         },
         .non_voting => {
