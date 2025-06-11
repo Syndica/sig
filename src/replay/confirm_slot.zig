@@ -67,11 +67,11 @@ fn startPohVerify(
     const entries_per_task = entries.len / num_tasks;
     var batch_initial_hash = initial_hash;
     for (0..num_tasks) |i| {
-        const end = if (i == num_tasks + 1) entries.len else i * entries_per_task;
+        const end = if (i == num_tasks - 1) entries.len else (i + 1) * entries_per_task;
         assert(try pool.trySchedule(allocator, .{
             .allocator = allocator,
             .initial_hash = batch_initial_hash,
-            .entries = entries[i..end],
+            .entries = entries[i * entries_per_task .. end],
         }));
         batch_initial_hash = entries[end - 1].hash;
     }
@@ -156,7 +156,8 @@ pub const ConfirmSlotFuture = struct {
                 for (try self.pollEach()) |status| switch (status) {
                     .pending => pending = true,
                     .err => |err| if (self.status_when_done == .done) {
-                        // TODO: notify threads to exit
+                        // TODO: notify poh threads to exit
+                        self.scheduler.exit.store(true, .monotonic);
                         self.status_when_done = .{ .err = err };
                     },
                     .done => {},
@@ -174,7 +175,7 @@ pub const ConfirmSlotFuture = struct {
             switch (self.poh_verifier.pollFallible()) {
                 .done => .done,
                 .pending => .pending,
-                .err => .{ .err = .{ .invalid_transaction = .SignatureFailure } },
+                .err => .{ .err = .{ .invalid_block = .InvalidEntryHash } },
             },
             try self.scheduler.poll(),
         };
@@ -186,8 +187,10 @@ const PohTask = struct {
     initial_hash: Hash,
     entries: []const Entry,
 
-    pub fn run(self: *PohTask) Allocator.Error!bool {
-        return try core.entry.verifyPoh(self.entries, self.allocator, null, self.initial_hash);
+    pub fn run(self: *PohTask) !void {
+        if (!try core.entry.verifyPoh(self.entries, self.allocator, null, self.initial_hash)) {
+            return error.PohVerifyFailed;
+        }
     }
 };
 
@@ -294,11 +297,11 @@ pub const BlockError = enum {
     DuplicateBlock,
 };
 
-test "confirmSlot: trivial case completes without error" {
+test "confirmSlot happy path: trivial case" {
     var thread_pool = ThreadPool.init(.{});
     var tick_hash_count: u64 = 0;
 
-    const result = try confirmSlot(
+    const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
         undefined,
@@ -314,83 +317,239 @@ test "confirmSlot: trivial case completes without error" {
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer result.destroy();
+    defer future.destroy();
 
-    while (try result.poll() == .pending) std.time.sleep(std.time.ns_per_ms);
-    try std.testing.expectEqual(.done, try result.poll());
+    const result = try testAwait(future);
+    errdefer std.debug.print("failed with: {any}\n", .{result});
+    try std.testing.expectEqual(.done, result);
 }
 
-test "confirmSlot: no trailing tick at max height -> BlockError.TrailingEntry" {
+test "confirmSlot happy path: partial slot" {
+    const allocator = std.testing.allocator;
+
     var thread_pool = ThreadPool.init(.{});
     var tick_hash_count: u64 = 0;
 
-    const result = try confirmSlot(
+    const poh, const entry_array = try sig.core.poh.testPoh(true);
+    const entries: []const sig.core.Entry = entry_array.slice();
+    defer for (entries) |entry| entry.deinit(allocator);
+
+    const future = try confirmSlot(
         std.testing.allocator,
-        .noop,
+        .FOR_TESTS,
         undefined,
         &thread_pool,
-        &.{},
+        entries[0 .. entries.len - 1],
         .ZEROES,
         .{
-            .hashes_per_tick = 0,
+            .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
-            .max_tick_height = 0,
+            .max_tick_height = poh.tick_count,
             .tick_height = 0,
             .slot_is_full = false,
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer result.destroy();
+    defer future.destroy();
 
-    while (try result.poll() == .pending) std.time.sleep(std.time.ns_per_ms);
+    const result = try testAwait(future);
+    errdefer std.debug.print("failed with: {any}\n", .{result});
+    try std.testing.expectEqual(.done, result);
+}
+
+test "confirmSlot happy path: full slot" {
+    const allocator = std.testing.allocator;
+
+    var thread_pool = ThreadPool.init(.{});
+    var tick_hash_count: u64 = 0;
+
+    const poh, const entry_array = try sig.core.poh.testPoh(true);
+    const entries: []const sig.core.Entry = entry_array.slice();
+    defer for (entries) |entry| entry.deinit(allocator);
+
+    const future = try confirmSlot(
+        std.testing.allocator,
+        .FOR_TESTS,
+        undefined,
+        &thread_pool,
+        entries,
+        .ZEROES,
+        .{
+            .hashes_per_tick = poh.hashes_per_tick,
+            .slot = 0,
+            .max_tick_height = poh.tick_count,
+            .tick_height = 0,
+            .slot_is_full = true,
+            .tick_hash_count = &tick_hash_count,
+        },
+    );
+    defer future.destroy();
+
+    const result = try testAwait(future);
+    errdefer std.debug.print("failed with: {any}\n", .{result});
+    try std.testing.expectEqual(.done, result);
+}
+
+test "confirmSlot fail: full slot not marked full -> .InvalidLastTick" {
+    const allocator = std.testing.allocator;
+
+    var thread_pool = ThreadPool.init(.{});
+    var tick_hash_count: u64 = 0;
+
+    const poh, const entry_array = try sig.core.poh.testPoh(true);
+    const entries: []const sig.core.Entry = entry_array.slice();
+    defer for (entries) |entry| entry.deinit(allocator);
+
+    const future = try confirmSlot(
+        std.testing.allocator,
+        .noop,
+        undefined,
+        &thread_pool,
+        entries,
+        .ZEROES,
+        .{
+            .hashes_per_tick = poh.hashes_per_tick,
+            .slot = 0,
+            .max_tick_height = poh.tick_count,
+            .tick_height = 0,
+            .slot_is_full = false,
+            .tick_hash_count = &tick_hash_count,
+        },
+    );
+    defer future.destroy();
+
+    const result = try testAwait(future);
+    errdefer std.debug.print("failed with: {any}\n", .{result});
     try std.testing.expectEqual(
-        ConfirmSlotStatus{ .err = .{ .invalid_block = .TrailingEntry } },
-        try result.poll(),
+        ConfirmSlotStatus{ .err = .{ .invalid_block = .InvalidLastTick } },
+        result,
     );
 }
 
-// TODO: finish test
-// test "confirmSlot: happy path" {
-//     const allocator = std.testing.allocator;
-//     const Transaction = sig.core.Transaction;
-//     var rng = std.Random.DefaultPrng.init(0);
+test "confirmSlot fail: no trailing tick at max height -> .TrailingEntry" {
+    const allocator = std.testing.allocator;
 
-//     var thread_pool = ThreadPool.init(.{});
-//     var tick_hash_count: u64 = 0;
+    var thread_pool = ThreadPool.init(.{});
+    var tick_hash_count: u64 = 0;
 
-//     const transactions = [_]Transaction{
-//         try Transaction.initRandom(allocator, rng.random()),
-//         try Transaction.initRandom(allocator, rng.random()),
-//         try Transaction.initRandom(allocator, rng.random()),
-//         try Transaction.initRandom(allocator, rng.random()),
-//         try Transaction.initRandom(allocator, rng.random()),
-//         try Transaction.initRandom(allocator, rng.random()),
-//     };
-//     defer for (transactions) |tx| {
-//         allocator.free(tx.signatures);
-//         allocator.free(tx.msg.account_keys);
-//     };
+    const poh, const entry_array = try sig.core.poh.testPoh(true);
+    const entries: []const sig.core.Entry = entry_array.slice();
+    defer for (entries) |entry| entry.deinit(allocator);
 
-//     const entry1 = Entry{};
+    const future = try confirmSlot(
+        std.testing.allocator,
+        .noop,
+        undefined,
+        &thread_pool,
+        entries[0 .. entries.len - 1],
+        .ZEROES,
+        .{
+            .hashes_per_tick = poh.hashes_per_tick,
+            .slot = 0,
+            .max_tick_height = poh.tick_count - 1,
+            .tick_height = 0,
+            .slot_is_full = false,
+            .tick_hash_count = &tick_hash_count,
+        },
+    );
+    defer future.destroy();
 
-//     const result = try confirmSlot(
-//         std.testing.allocator,
-//         .FOR_TESTS,
-//         undefined,
-//         &thread_pool,
-//         &.{},
-//         .ZEROES,
-//         .{
-//             .hashes_per_tick = 0,
-//             .slot = 0,
-//             .max_tick_height = 1,
-//             .tick_height = 0,
-//             .slot_is_full = false,
-//             .tick_hash_count = &tick_hash_count,
-//         },
-//     );
-//     defer result.destroy();
+    const result = try testAwait(future);
+    errdefer std.debug.print("failed with: {any}\n", .{result});
+    try std.testing.expectEqual(
+        ConfirmSlotStatus{ .err = .{ .invalid_block = .TrailingEntry } },
+        result,
+    );
+}
 
-//     while (try result.poll() == .pending) std.time.sleep(std.time.ns_per_ms);
-//     try std.testing.expectEqual(.done, try result.poll());
-// }
+// TODO: finish tests
+
+test "confirmSlot fail: invalid poh chain" {
+    const allocator = std.testing.allocator;
+
+    var thread_pool = ThreadPool.init(.{});
+    var tick_hash_count: u64 = 0;
+
+    const poh, var entry_array = try sig.core.poh.testPoh(true);
+    const entries: []sig.core.Entry = entry_array.slice();
+    defer for (entries) |entry| entry.deinit(allocator);
+
+    // break the hash chain
+    entries[0].hash.data[0] +%= 1;
+
+    const future = try confirmSlot(
+        std.testing.allocator,
+        .FOR_TESTS,
+        undefined,
+        &thread_pool,
+        entries,
+        .ZEROES,
+        .{
+            .hashes_per_tick = poh.hashes_per_tick,
+            .slot = 0,
+            .max_tick_height = poh.tick_count,
+            .tick_height = 0,
+            .slot_is_full = true,
+            .tick_hash_count = &tick_hash_count,
+        },
+    );
+    defer future.destroy();
+
+    const result = try testAwait(future);
+    errdefer std.debug.print("failed with: {any}\n", .{result});
+    try std.testing.expectEqual(
+        ConfirmSlotStatus{ .err = .{ .invalid_block = .InvalidEntryHash } },
+        result,
+    );
+}
+
+test "confirmSlot fail: sigverify" {
+    const allocator = std.testing.allocator;
+
+    var thread_pool = ThreadPool.init(.{});
+    var tick_hash_count: u64 = 0;
+
+    const poh, var entry_array = try sig.core.poh.testPoh(false);
+    const entries: []sig.core.Entry = entry_array.slice();
+    defer for (entries) |entry| entry.deinit(allocator);
+
+    const future = try confirmSlot(
+        std.testing.allocator,
+        .FOR_TESTS,
+        undefined,
+        &thread_pool,
+        entries,
+        .ZEROES,
+        .{
+            .hashes_per_tick = poh.hashes_per_tick,
+            .slot = 0,
+            .max_tick_height = poh.tick_count,
+            .tick_height = 0,
+            .slot_is_full = true,
+            .tick_hash_count = &tick_hash_count,
+        },
+    );
+    defer future.destroy();
+
+    const result = try testAwait(future);
+    errdefer std.debug.print("failed with: {any}\n", .{result});
+    try std.testing.expectEqual(
+        ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
+        result,
+    );
+}
+
+pub fn testAwait(
+    future: anytype,
+) !ret: {
+    const poll = @typeInfo(@TypeOf(future)).pointer.child.poll;
+    break :ret @typeInfo(@typeInfo(@TypeOf(poll)).@"fn".return_type.?).error_union.payload;
+} {
+    var i: usize = 0;
+    while (try future.poll() == .pending) {
+        std.time.sleep(std.time.ns_per_ms);
+        i += 1;
+        if (i > 100) return error.TooSlow;
+    }
+    return try future.poll();
+}

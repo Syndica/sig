@@ -75,8 +75,10 @@ pub const Transaction = struct {
         };
     }
 
-    /// Basic transaction with randomized pubkeys in a constant structure. Not
-    /// very random, but good enough for tests that need random accounts.
+    /// Basic transaction with randomized addresses and data.
+    ///
+    /// The number of instructions, pubkeys, and program/writable/signer/readonly
+    /// indexes are hardcoded, not randomized.
     pub fn initRandom(allocator: std.mem.Allocator, random: std.Random) !Transaction {
         const KeyPair = std.crypto.sign.Ed25519.KeyPair;
         const keypair = try KeyPair.generateDeterministic(.{random.int(u8)} ** 32);
@@ -89,17 +91,27 @@ pub const Transaction = struct {
         });
         errdefer allocator.free(account_keys);
 
+        const data = try allocator.alloc(u8, random.intRangeAtMost(usize, 0, 256));
+        errdefer allocator.free(data);
+        random.bytes(data);
+
+        const account_indexes = try allocator.dupe(u8, &.{ 0, 1 });
+        errdefer allocator.free(account_indexes);
+
+        const instructions = try allocator.dupe(Instruction, &.{.{
+            .program_index = 2,
+            .account_indexes = account_indexes,
+            .data = data,
+        }});
+        errdefer allocator.free(instructions);
+
         const message = Message{
             .signature_count = 1,
             .readonly_signed_count = 0,
             .readonly_unsigned_count = 1,
             .account_keys = account_keys,
             .recent_blockhash = Hash.initRandom(random),
-            .instructions = &.{.{
-                .program_index = 2,
-                .account_indexes = &.{ 0, 1 },
-                .data = &.{ 2, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0 },
-            }},
+            .instructions = instructions,
             .address_lookups = &.{},
         };
 

@@ -95,10 +95,13 @@ pub const TransactionScheduler = struct {
 
     pub fn deinit(self: TransactionScheduler) void {
         var batches = self.batches;
+        for (batches.items) |batch| batch.deinit(self.allocator);
         batches.deinit(self.allocator);
-        self.thread_pool.deinit(self.allocator);
+
         var channel = self.results;
         channel.deinit();
+
+        self.thread_pool.deinit(self.allocator);
         self.locks.deinit(self.allocator);
     }
 
@@ -195,35 +198,28 @@ test "TransactionScheduler: happy path" {
         try Transaction.initRandom(allocator, rng.random()),
         try Transaction.initRandom(allocator, rng.random()),
     };
-    defer for (transactions) |tx| {
-        allocator.free(tx.signatures);
-        allocator.free(tx.msg.account_keys);
-    };
+    defer for (transactions) |tx| tx.deinit(allocator);
 
-    const batch1 = try replay.resolve_lookup
-        .resolveBatch(allocator, undefined, transactions[0..3]);
-    defer batch1.deinit(allocator);
+    {
+        const batch1 = try replay.resolve_lookup
+            .resolveBatch(allocator, undefined, transactions[0..3]);
+        errdefer batch1.deinit(allocator);
 
-    const batch2 = try replay.resolve_lookup
-        .resolveBatch(allocator, undefined, transactions[3..6]);
-    defer batch2.deinit(allocator);
+        const batch2 = try replay.resolve_lookup
+            .resolveBatch(allocator, undefined, transactions[3..6]);
+        errdefer batch2.deinit(allocator);
 
-    scheduler.addBatchAssumeCapacity(batch1);
-    scheduler.addBatchAssumeCapacity(batch2);
+        scheduler.addBatchAssumeCapacity(batch1);
+        scheduler.addBatchAssumeCapacity(batch2);
 
-    // should be no failures on account collision with the first time this batch was scheduled
-    // scheduler should just know to run it separately
-    // scheduler.addBatchAssumeCapacity(batch1);
-    // scheduler.addBatchAssumeCapacity(batch1);
-    // TODO: add this
-
-    var i: usize = 0;
-    while (try scheduler.poll() == .pending) {
-        std.time.sleep(std.time.ns_per_ms);
-        i += 1;
-        if (i > 1000) return error.TooSlow;
+        // should be no failures on account collision with the first time this batch was scheduled
+        // scheduler should just know to run it separately
+        // scheduler.addBatchAssumeCapacity(batch1);
+        // scheduler.addBatchAssumeCapacity(batch1);
+        // TODO: add this
     }
-    try std.testing.expectEqual(.done, try scheduler.poll());
+
+    try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
 }
 
 test "TransactionScheduler: failed account locks" {
@@ -236,27 +232,21 @@ test "TransactionScheduler: failed account locks" {
     defer scheduler.deinit();
 
     const tx = try Transaction.initRandom(allocator, rng.random());
-    defer {
-        allocator.free(tx.signatures);
-        allocator.free(tx.msg.account_keys);
-    }
+    defer tx.deinit(allocator);
+
     const unresolved_batch = .{ tx, tx };
 
-    const batch1 = try replay.resolve_lookup
-        .resolveBatch(allocator, undefined, &unresolved_batch);
-    defer batch1.deinit(allocator);
+    {
+        const batch1 = try replay.resolve_lookup
+            .resolveBatch(allocator, undefined, &unresolved_batch);
+        errdefer batch1.deinit(allocator);
 
-    scheduler.addBatchAssumeCapacity(batch1);
-
-    var i: usize = 0;
-    while (try scheduler.poll() == .pending) {
-        std.time.sleep(std.time.ns_per_ms);
-        i += 1;
-        if (i > 1000) return error.TooSlow;
+        scheduler.addBatchAssumeCapacity(batch1);
     }
+
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_transaction = .AccountInUse } },
-        try scheduler.poll(),
+        try replay.confirm_slot.testAwait(&scheduler),
     );
 }
 
@@ -277,34 +267,28 @@ test "TransactionScheduler: signature verification failure" {
         try Transaction.initRandom(allocator, rng.random()),
         try Transaction.initRandom(allocator, rng.random()),
     };
-    defer for (transactions) |tx| {
-        allocator.free(tx.signatures);
-        allocator.free(tx.msg.account_keys);
-    };
+    defer for (transactions) |tx| tx.deinit(allocator);
+
     const replaced_sigs = try allocator.dupe(sig.core.Signature, transactions[5].signatures);
     replaced_sigs[0].data[0] +%= 1;
     allocator.free(transactions[5].signatures);
     transactions[5].signatures = replaced_sigs;
 
-    const batch1 = try replay.resolve_lookup
-        .resolveBatch(allocator, undefined, transactions[0..3]);
-    defer batch1.deinit(allocator);
+    {
+        const batch1 = try replay.resolve_lookup
+            .resolveBatch(allocator, undefined, transactions[0..3]);
+        errdefer batch1.deinit(allocator);
 
-    const batch2 = try replay.resolve_lookup
-        .resolveBatch(allocator, undefined, transactions[3..6]);
-    defer batch2.deinit(allocator);
+        const batch2 = try replay.resolve_lookup
+            .resolveBatch(allocator, undefined, transactions[3..6]);
+        errdefer batch2.deinit(allocator);
 
-    scheduler.addBatchAssumeCapacity(batch1);
-    scheduler.addBatchAssumeCapacity(batch2);
-
-    var i: usize = 0;
-    while (try scheduler.poll() == .pending) {
-        std.time.sleep(std.time.ns_per_ms);
-        i += 1;
-        if (i > 1000) return error.TooSlow;
+        scheduler.addBatchAssumeCapacity(batch1);
+        scheduler.addBatchAssumeCapacity(batch2);
     }
+
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
-        try scheduler.poll(),
+        try replay.confirm_slot.testAwait(&scheduler),
     );
 }

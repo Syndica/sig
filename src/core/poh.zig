@@ -1,8 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Allocator = std.mem.Allocator;
-
 const Hash = sig.core.Hash;
 
 const assert = std.debug.assert;
@@ -118,40 +116,44 @@ pub const PohEntry = struct {
     hash: Hash,
 };
 
-test Poh {
+/// returns a valid PoH chain of entries with transactions that have valid signatures.
+pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.Entry, 7) } {
     const allocator = std.testing.allocator;
     const expect = std.testing.expect;
     const expectEqual = std.testing.expectEqual;
     const Transaction = sig.core.Transaction;
     const hashTransactions = sig.core.entry.hashTransactions;
-    const verifyPoh = sig.core.entry.verifyPoh;
 
     var rng = std.Random.DefaultPrng.init(0);
+
+    var a_transaction = try Transaction.initRandom(allocator, rng.random());
+    if (!valid_signatures) {
+        const sigs = try allocator.dupe(sig.core.Signature, a_transaction.signatures);
+        allocator.free(a_transaction.signatures);
+        a_transaction.signatures = sigs;
+        sigs[0].data[0] +%= 1;
+    }
 
     const transactions = [_]Transaction{
         try Transaction.initRandom(allocator, rng.random()),
         try Transaction.initRandom(allocator, rng.random()),
+        a_transaction,
         try Transaction.initRandom(allocator, rng.random()),
         try Transaction.initRandom(allocator, rng.random()),
         try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-    };
-    defer for (transactions) |tx| {
-        allocator.free(tx.signatures);
-        allocator.free(tx.msg.account_keys);
     };
 
-    const batch1 = transactions[0..2];
-    const batch2 = transactions[2..3];
-    const batch3 = transactions[3..6];
+    const batch1 = try allocator.dupe(Transaction, transactions[0..2]);
+    const batch2 = try allocator.dupe(Transaction, transactions[2..3]);
+    const batch3 = try allocator.dupe(Transaction, transactions[3..6]);
 
     const mixin1 = try hashTransactions(allocator, null, batch1);
     const mixin2 = try hashTransactions(allocator, null, batch2);
     const mixin3 = try hashTransactions(allocator, null, batch3);
 
-    var poh = Poh.init(Hash.ZEROES, 20, 0);
+    var poh = Poh.init(.ZEROES, 20, 0);
 
-    var entries = try std.BoundedArray(sig.core.Entry, 6).init(0);
+    var entries = try std.BoundedArray(sig.core.Entry, 7).init(0);
 
     try expect(!poh.hash(18));
     try expect(poh.hash(100));
@@ -181,9 +183,23 @@ test Poh {
     const result3 = poh.tryRecord(mixin3).?;
     try entries.append(.init(result3, batch3));
 
-    // verify...
-    const entry_slice = entries.slice();
-    try expectEqual(6, entry_slice.len);
+    // end with a tick
+    try expect(poh.hash(20));
+    try entries.append(.init(poh.tick().?, &.{}));
 
-    try expect(try verifyPoh(entries.slice(), allocator, null, Hash.ZEROES));
+    return .{ poh, entries };
+}
+
+test Poh {
+    const allocator = std.testing.allocator;
+
+    _, var entry_array = try testPoh(true);
+    const entries: []sig.core.Entry = entry_array.slice();
+    defer for (entries) |entry| entry.deinit(allocator);
+
+    try std.testing.expectEqual(7, entries.len);
+    try std.testing.expect(try sig.core.entry.verifyPoh(entries, allocator, null, .ZEROES));
+
+    entries[1].hash = .ZEROES;
+    try std.testing.expect(!try sig.core.entry.verifyPoh(entries, allocator, null, .ZEROES));
 }
