@@ -3328,6 +3328,7 @@ test "load other sysvars" {
 }
 
 test "generate snapshot & update gossip snapshot hashes" {
+    const GossipDataTag = sig.gossip.data.GossipDataTag;
     const SnapshotHashes = sig.gossip.data.SnapshotHashes;
 
     const allocator = std.testing.allocator;
@@ -3409,7 +3410,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 
         try std.testing.expectEqual(1, queue.queue.items.len);
         const queue_item_0 = queue.queue.items[0]; // should be from the full generation
-        try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_0));
+        try std.testing.expectEqual(.SnapshotHashes, @as(GossipDataTag, queue_item_0));
 
         try std.testing.expectEqualDeep(
             SnapshotHashes{
@@ -3459,7 +3460,7 @@ test "generate snapshot & update gossip snapshot hashes" {
 
             try std.testing.expectEqual(2, queue.queue.items.len);
             const queue_item_1 = queue.queue.items[1]; // should be from the incremental generation
-            try std.testing.expectEqual(.SnapshotHashes, std.meta.activeTag(queue_item_1));
+            try std.testing.expectEqual(.SnapshotHashes, @as(GossipDataTag, queue_item_1));
 
             try std.testing.expectEqualDeep(
                 SnapshotHashes{

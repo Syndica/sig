@@ -52,7 +52,7 @@ fn exitWithUsage() noreturn {
         \\
     ) catch @panic("failed to print usage");
 
-    inline for (std.meta.fields(Benchmark)) |field| {
+    inline for (@typeInfo(Benchmark).@"enum".fields) |field| {
         stdout.print(
             " {s}\n",
             .{field.name},

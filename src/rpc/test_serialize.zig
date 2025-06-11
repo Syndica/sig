@@ -25,8 +25,7 @@ const Response = rpc.response.Response;
 fn testRequest(
     comptime method: methods.MethodAndParams.Tag,
     /// passed into the client
-    // TODO: use this instead of `std.meta.FieldType` to avoid eval branch quota until `@FieldType`'s here.
-    params: @typeInfo(methods.MethodAndParams).@"union".fields[@intFromEnum(method)].type,
+    params: @FieldType(methods.MethodAndParams, @tagName(method)),
     /// test will assert the request serializes to this json
     expected_request_json: []const u8,
 ) !void {

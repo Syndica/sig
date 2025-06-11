@@ -55,7 +55,7 @@ pub fn run(
             last_purge_slot,
             DEFAULT_CLEANUP_SLOT_INTERVAL,
         );
-        std.time.sleep(LOOP_LIMITER.asNanos());
+        std.Thread.sleep(LOOP_LIMITER.asNanos());
     }
 }
 
