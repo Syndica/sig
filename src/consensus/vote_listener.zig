@@ -136,7 +136,7 @@ pub const VoteListener = struct {
     recv: std.Thread,
     process_votes: std.Thread,
 
-    pub fn new(
+    pub fn init(
         allocator: std.mem.Allocator,
         exit: sig.sync.ExitCondition,
         logger: sig.trace.Logger,
@@ -280,7 +280,7 @@ test VoteListener {
 
     var exit = std.atomic.Value(bool).init(false);
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
-    const vote_listener = try VoteListener.new(allocator, exit_cond, .noop, &vote_tracker, .{
+    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, .{
         .bank_forks_rw = &bank_forks_rw,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_db = {},
