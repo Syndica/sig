@@ -306,9 +306,9 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
     );
 
     // Hashes for slots 1,3,5
-    const h1 = Hash.generateSha256("1");
-    const h3 = Hash.generateSha256("3");
-    const h5 = Hash.generateSha256("5");
+    const h1 = Hash.init("1");
+    const h3 = Hash.init("3");
+    const h5 = Hash.init("5");
 
     var verifier = OptimisticConfirmationVerifier.init(
         sig.time.Instant.now(),
@@ -369,7 +369,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
             &ledger_reader,
-            .{ .slot = 4, .hash = Hash.generateSha256("4"), .ancestors = &anc4 },
+            .{ .slot = 4, .hash = Hash.init("4"), .ancestors = &anc4 },
         );
         defer allocator.free(unrooted);
         try std.testing.expectEqual(1, unrooted.len);
@@ -395,7 +395,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
             &ledger_reader,
-            .{ .slot = 7, .hash = Hash.generateSha256("7"), .ancestors = &anc7 },
+            .{ .slot = 7, .hash = Hash.init("7"), .ancestors = &anc7 },
         );
         defer allocator.free(unrooted);
         // Expect two entries (1 and 3), order by slot ascending due to set ordering
@@ -423,7 +423,7 @@ test "OptimisticConfirmationVerifier.verifyForUnrootedOptimisticSlots: unrooted 
         const unrooted = try verifier.verifyForUnrootedOptimisticSlots(
             allocator,
             &ledger_reader,
-            .{ .slot = 7, .hash = Hash.generateSha256("7"), .ancestors = &anc7 },
+            .{ .slot = 7, .hash = Hash.init("7"), .ancestors = &anc7 },
         );
         defer allocator.free(unrooted);
         try std.testing.expectEqual(0, unrooted.len);

@@ -36,54 +36,33 @@ pub const Hash = extern struct {
 
     pub const SIZE = 32;
 
-    pub const ZEROES: Hash = .{ .data = .{0} ** SIZE };
+    pub const ZEROES: Hash = .{ .data = @splat(0) };
 
-    /// Hashes the input byte slice(s) using SHA 256.
-    ///
-    /// If the passed-in type contains multiple byte slices, it will
-    /// iterate/recurse over them in order, updating the hasher for all of them
-    /// before finalizing at the end.
-    pub fn generateSha256(
-        /// May be a slice or array of bytes, or a slice, array, or tuple
-        /// containing slices or arrays of bytes nested with arbitrary depth.
-        ///
-        /// for example:
-        /// - []const u8
-        /// - []const []const u8
-        /// - [2]u8
-        /// - *[13]u8
-        /// - struct { [128]u8, []const []const u8, struct { []const u8 }, ... }
-        data: anytype,
-    ) Hash {
-        var hasher = Sha256.init(.{});
-        update(&hasher, data);
-        return .{ .data = hasher.finalResult() };
+    /// Creates a `Hash` by applying SHA256 to the input `data` and using
+    /// the result of that as the output.
+    pub fn init(data: []const u8) Hash {
+        var out: [32]u8 = undefined;
+        Sha256.hash(data, &out, .{});
+        return .{ .data = out };
+    }
+
+    /// Does the same thing as `init`, but updates the hash with each
+    /// input slice from the `data` list.
+    pub fn initMany(data: []const []const u8) Hash {
+        var new = Sha256.init(.{});
+        for (data) |d| new.update(d);
+        return .{ .data = new.finalResult() };
     }
 
     /// re-hashes the current hash with the mixed-in byte slice(s).
-    pub fn extendAndHash(self: Hash, data: anytype) Hash {
-        return generateSha256(.{ self.data, data });
-    }
-
-    fn update(hasher: *Sha256, data: anytype) void {
-        const T = @TypeOf(data);
-
-        if (T == Hash or T == *const Hash or T == *Hash) {
-            hasher.update(&data.data);
-        } else if (@typeInfo(T) == .@"struct") {
-            inline for (data) |val| update(hasher, val);
-        } else if (std.meta.Elem(T) == u8) switch (@typeInfo(T)) {
-            .array => hasher.update(&data),
-            else => hasher.update(data),
-        } else {
-            for (data) |val| update(hasher, val);
-        }
+    pub fn extend(self: Hash, data: []const u8) Hash {
+        return .initMany(&.{ &self.data, data });
     }
 
     pub fn eql(self: Hash, other: Hash) bool {
-        const xx: @Vector(SIZE, u8) = self.data;
-        const yy: @Vector(SIZE, u8) = other.data;
-        return @reduce(.And, xx == yy);
+        const x: @Vector(SIZE, u8) = self.data;
+        const y: @Vector(SIZE, u8) = other.data;
+        return @reduce(.And, x == y);
     }
 
     pub fn order(self: *const Hash, other: *const Hash) std.math.Order {
