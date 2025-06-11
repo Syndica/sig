@@ -247,18 +247,19 @@ pub const GossipPullFilter = struct {
         std.debug.assert(index <= std.math.pow(u64, 2, mask_bits));
         // eg, with index = 2 and mask_bits = 3
         // shift_bits = 61 (ie, only look at first 2 bits)
-        const shift_bits: u6 = @intCast(64 - mask_bits);
+        const shift_bits: u6 = @intCast(@as(u7, 64) - mask_bits);
         // 2 << 61 = 100...000
         const shifted_index = index << shift_bits;
         // OR with all the other zeros
         //  10                 111111..11111
         //   ^                         ^
         // index (mask_bits length) | rest
-        return shifted_index | (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
+        return shifted_index | (~@as(u64, 0) >> mask_bits);
     }
 
-    pub fn computeMaskBits(num_items: f64, max: f64) u32 {
-        return @intFromFloat(@max(0, (std.math.ceil(std.math.log2(num_items / max)))));
+    pub fn computeMaskBits(num_items: f64, max: f64) u6 {
+        const bottom = std.math.ceil(std.math.log2(num_items / max));
+        return @intFromFloat(@max(0, bottom));
     }
 
     pub fn computeMaxItems(max_bits: f64, false_rate: f64, num_keys: f64) f64 {

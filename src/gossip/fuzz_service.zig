@@ -452,7 +452,11 @@ pub fn randomPullRequestWithContactInfo(
         }
     } else {
         // add some valid hashes
-        var filter_set = try GossipPullFilterSet.initTest(allocator, random, filter.mask_bits);
+        var filter_set = try GossipPullFilterSet.initTest(
+            allocator,
+            random,
+            @intCast(filter.mask_bits),
+        );
 
         for (0..5) |_| {
             const rand_value = try randomSignedGossipData(allocator, random, true);

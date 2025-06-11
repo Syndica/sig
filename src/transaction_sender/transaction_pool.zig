@@ -28,7 +28,7 @@ pub const TransactionPool = struct {
 
     pub fn init(allocator: Allocator, max_transactions: usize) TransactionPool {
         return .{
-            .pending_transactions_rw = RwMux(PendingTransactions).init(PendingTransactions.init(allocator)),
+            .pending_transactions_rw = RwMux(PendingTransactions).init(.init(allocator)),
             .retry_signatures = std.ArrayList(Signature).init(allocator),
             .drop_signatures = std.ArrayList(Signature).init(allocator),
             .max_transactions = max_transactions,
@@ -58,19 +58,37 @@ pub const TransactionPool = struct {
         return pending_transactions.contains(signature);
     }
 
-    pub fn readSignaturesAndTransactionsWithLock(self: *TransactionPool) struct { []const Signature, []const TransactionInfo, RwMux(PendingTransactions).RLockGuard } {
-        const pending_transactions: *const PendingTransactions, const pending_transactions_lg = self.pending_transactions_rw.readWithLock();
-        return .{ pending_transactions.keys(), pending_transactions.values(), pending_transactions_lg };
+    pub fn readSignaturesAndTransactionsWithLock(self: *TransactionPool) struct {
+        []const Signature,
+        []const TransactionInfo,
+        RwMux(PendingTransactions).RLockGuard,
+    } {
+        const pending_transactions, //
+        const pending_transactions_lg = self.pending_transactions_rw.readWithLock();
+        return .{
+            pending_transactions.keys(),
+            pending_transactions.values(),
+            pending_transactions_lg,
+        };
     }
 
-    pub fn readRetryTransactionsWithLock(self: *TransactionPool, allocator: Allocator) !struct { []TransactionInfo, RwMux(PendingTransactions).RLockGuard } {
-        const pending_transactions: *const PendingTransactions, const pending_transactions_lg = self.pending_transactions_rw.readWithLock();
-        var retry_transactions = try allocator.alloc(TransactionInfo, self.retry_signatures.items.len);
+    pub fn readRetryTransactionsWithLock(self: *TransactionPool, allocator: Allocator) !struct {
+        []TransactionInfo,
+        RwMux(PendingTransactions).RLockGuard,
+    } {
+        const pending_transactions, const pending_transactions_lg = //
+            self.pending_transactions_rw.readWithLock();
+
+        var retry_transactions = try allocator.alloc(
+            TransactionInfo,
+            self.retry_signatures.items.len,
+        );
         for (self.retry_signatures.items, 0..) |signature, i| {
             retry_transactions[i] = pending_transactions.get(signature) orelse {
                 @panic("Retry transaction not found in pool");
             };
         }
+
         return .{ retry_transactions, pending_transactions_lg };
     }
 
@@ -91,8 +109,10 @@ pub const TransactionPool = struct {
     }
 
     pub fn purge(self: *TransactionPool) void {
-        const pending_transactions: *PendingTransactions, var pending_transactions_lg = self.pending_transactions_rw.writeWithLock();
+        const pending_transactions, var pending_transactions_lg = //
+            self.pending_transactions_rw.writeWithLock();
         defer pending_transactions_lg.unlock();
+
         for (self.drop_signatures.items) |signature| {
             _ = pending_transactions.swapRemove(signature);
         }

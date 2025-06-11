@@ -23,12 +23,19 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
             reader: anytype,
             params: Params,
         ) anyerror!List {
-            const len = (try readIntAsLength(usize, reader, params)) orelse return error.ArrayListTooBig;
+            const len = try readIntAsLength(
+                usize,
+                reader,
+                params,
+            ) orelse return error.ArrayListTooBig;
 
             var data: List = try List.initCapacity(allocator, len);
             errdefer free(allocator, data);
 
-            for (0..len) |_| data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
+            for (0..len) |_| {
+                const item = try bincode.read(allocator, list_info.Elem, reader, params);
+                data.appendAssumeCapacity(item);
+            }
             return data;
         }
 
@@ -51,9 +58,15 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
 
 /// Defaults the field of type `List` to an empty state on EOF.
 pub fn defaultOnEofConfig(comptime List: type) bincode.FieldConfig(List) {
-    const al_info = arrayListInfo(List) orelse @compileError("Expected std.ArrayList[Unmanaged]Aligned(T), got " ++ @typeName(List));
+    const al_info = arrayListInfo(List) orelse
+        @compileError("Expected std.ArrayList[Unmanaged]Aligned(T), got " ++ @typeName(List));
+
     const S = struct {
-        fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!List {
+        fn deserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) anyerror!List {
             const len = if (bincode.readIntAsLength(usize, reader, params)) |maybe_len|
                 (maybe_len orelse return error.ArrayListTooBig)
             else |err| switch (err) {

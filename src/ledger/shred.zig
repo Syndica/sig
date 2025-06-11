@@ -29,10 +29,10 @@ pub const Shred = union(ShredType) {
     code: CodeShred,
     data: DataShred,
 
-    pub fn deinit(self: Shred) void {
-        return switch (self) {
-            inline .code, .data => |s| s.deinit(),
-        };
+    pub fn deinit(self: Shred, allocator: std.mem.Allocator) void {
+        switch (self) {
+            inline .code, .data => |s| allocator.free(s.payload),
+        }
     }
 
     pub fn fromPayload(allocator: Allocator, data: []const u8) !Shred {
@@ -51,10 +51,13 @@ pub const Shred = union(ShredType) {
         };
     }
 
-    pub fn clone(self: Shred) Allocator.Error!Shred {
+    pub fn clone(
+        self: Shred,
+        allocator: std.mem.Allocator,
+    ) Allocator.Error!Shred {
         return switch (self) {
-            .code => |shred| .{ .code = try shred.clone() },
-            .data => |shred| .{ .data = try shred.clone() },
+            .code => |shred| .{ .code = try shred.clone(allocator) },
+            .data => |shred| .{ .data = try shred.clone(allocator) },
         };
     }
 
@@ -156,7 +159,6 @@ pub const Shred = union(ShredType) {
 pub const CodeShred = struct {
     common: CommonHeader,
     custom: CodeHeader,
-    allocator: Allocator,
     payload: []u8,
 
     const Generic = GenericShred(.code);
@@ -167,14 +169,14 @@ pub const CodeShred = struct {
         .headers_size = 89,
     };
 
-    pub fn deinit(self: CodeShred) void {
-        self.allocator.free(self.payload);
+    pub fn deinit(self: CodeShred, allocator: std.mem.Allocator) void {
+        allocator.free(self.payload);
     }
 
-    pub fn clone(self: CodeShred) Allocator.Error!CodeShred {
-        var new = self;
-        new.payload = try new.allocator.dupe(u8, new.payload);
-        return new;
+    pub fn clone(self: CodeShred, allocator: std.mem.Allocator) Allocator.Error!CodeShred {
+        var copy = self;
+        copy.payload = try allocator.dupe(u8, copy.payload);
+        return copy;
     }
 
     /// agave: ShredCode::from_recovered_shard
@@ -212,7 +214,6 @@ pub const CodeShred = struct {
             try setRetransmitterSignatureFor(payload, common_header.variant, sign);
 
         const shred: CodeShred = .{
-            .allocator = allocator,
             .common = common_header,
             .custom = code_header,
             .payload = payload,
@@ -291,7 +292,6 @@ pub const CodeShred = struct {
 pub const DataShred = struct {
     common: CommonHeader,
     custom: DataHeader,
-    allocator: Allocator,
     payload: []u8,
 
     pub const constants: ShredConstants = .{
@@ -300,17 +300,16 @@ pub const DataShred = struct {
         .headers_size = 88,
     };
 
-    const Self = @This();
     const Generic = GenericShred(.data);
 
-    pub fn deinit(self: Self) void {
-        self.allocator.free(self.payload);
+    pub fn deinit(self: DataShred, allocator: std.mem.Allocator) void {
+        allocator.free(self.payload);
     }
 
-    pub fn clone(self: Self) Allocator.Error!Self {
-        var new = self;
-        new.payload = try new.allocator.dupe(u8, new.payload);
-        return new;
+    pub fn clone(self: DataShred, allocator: std.mem.Allocator) Allocator.Error!DataShred {
+        var copy = self;
+        copy.payload = try allocator.dupe(u8, copy.payload);
+        return copy;
     }
 
     /// agave: ShredData::from_recovered_shard
@@ -320,7 +319,7 @@ pub const DataShred = struct {
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
         shard: []const u8,
-    ) !Self {
+    ) !DataShred {
         if (shard.len + Signature.SIZE > constants.payload_size) {
             return error.InvalidShardSize;
         }
@@ -347,22 +346,22 @@ pub const DataShred = struct {
         return shred;
     }
 
-    pub fn zeroedForTest(allocator: std.mem.Allocator) !Self {
+    pub fn zeroedForTest(allocator: std.mem.Allocator) !DataShred {
         return Generic.zeroedForTest(allocator);
     }
 
-    pub fn sanitize(self: *const Self) !void {
+    pub fn sanitize(self: *const DataShred) !void {
         try Generic.sanitize(self);
         // see ShredFlags comptime block for omitted check that is guaranteed at comptime.
         _ = try self.data();
         _ = try self.parent();
     }
 
-    pub fn writePayload(self: *Self, new_payload: []const u8) !void {
+    pub fn writePayload(self: *DataShred, new_payload: []const u8) !void {
         return Generic.writePayload(self, new_payload);
     }
 
-    pub fn data(self: *const Self) ![]const u8 {
+    pub fn data(self: *const DataShred) ![]const u8 {
         const data_buffer_size = try capacity(constants, self.common.variant);
         const size = self.custom.size;
         if (size > self.payload.len or
@@ -375,7 +374,7 @@ pub const DataShred = struct {
         return self.payload[constants.headers_size..size];
     }
 
-    pub fn parent(self: *const Self) error{InvalidParentSlotOffset}!Slot {
+    pub fn parent(self: *const DataShred) error{InvalidParentSlotOffset}!Slot {
         const slot = self.common.slot;
         if (self.custom.parent_slot_offset == 0 and slot != 0) {
             return error.InvalidParentSlotOffset;
@@ -387,7 +386,7 @@ pub const DataShred = struct {
         ) catch error.InvalidParentSlotOffset;
     }
 
-    pub fn erasureShardIndex(self: *const Self) !usize {
+    pub fn erasureShardIndex(self: *const DataShred) !usize {
         return try std.math.sub(
             u32,
             self.common.index,
@@ -395,32 +394,32 @@ pub const DataShred = struct {
         );
     }
 
-    pub fn dataComplete(self: Self) bool {
+    pub fn dataComplete(self: DataShred) bool {
         return self.custom.flags.isSet(.data_complete_shred);
     }
 
-    pub fn isLastInSlot(self: Self) bool {
+    pub fn isLastInSlot(self: DataShred) bool {
         return self.custom.flags.isSet(.last_shred_in_slot);
     }
 
-    pub fn referenceTick(self: Self) u8 {
+    pub fn referenceTick(self: DataShred) u8 {
         return self.custom.flags
             .intersection(.shred_tick_reference_mask).state;
     }
 
-    pub fn id(self: Self) ShredId {
+    pub fn id(self: DataShred) ShredId {
         return Generic.id(&self);
     }
 
-    pub fn merkleRoot(self: Self) !Hash {
+    pub fn merkleRoot(self: DataShred) !Hash {
         return Generic.merkleRoot(self);
     }
 
-    pub fn chainedMerkleRoot(self: Self) !Hash {
+    pub fn chainedMerkleRoot(self: DataShred) !Hash {
         return Generic.chainedMerkleRoot(self);
     }
 
-    pub fn retransmitterSignature(self: Self) !Signature {
+    pub fn retransmitterSignature(self: DataShred) !Signature {
         return Generic.retransmitterSignature(self);
     }
 };
@@ -460,8 +459,7 @@ fn GenericShred(shred_type: ShredType) type {
         /// - payload.len >= constants.payload_size
         fn fromPayloadOwned(allocator: Allocator, payload: []u8) !Self {
             var buf = std.io.fixedBufferStream(payload[0..constants.payload_size]);
-            const self = Self{
-                .allocator = allocator,
+            const self: Self = .{
                 .common = try bincode.read(allocator, CommonHeader, buf.reader(), .{}),
                 .custom = try bincode.read(allocator, CustomHeader, buf.reader(), .{}),
                 .payload = payload,
@@ -476,7 +474,6 @@ fn GenericShred(shred_type: ShredType) type {
             return .{
                 .common = CommonHeader.ZEROED_FOR_TEST,
                 .custom = CustomHeader.ZEROED_FOR_TEST,
-                .allocator = allocator,
                 .payload = payload,
             };
         }
@@ -515,11 +512,8 @@ fn GenericShred(shred_type: ShredType) type {
             if (self.payload.len != constants.payload_size) {
                 return error.InvalidPayloadSize;
             }
-            const end = constants.headers_size +
-                try capacity(constants, self.common.variant);
-            if (self.payload.len < end) {
-                return error.InsufficientPayloadSize;
-            }
+            const end = constants.headers_size + try capacity(constants, self.common.variant);
+            if (self.payload.len < end) return error.InsufficientPayloadSize;
             const start = switch (self.common.variant.shred_type) {
                 .data => Signature.SIZE,
                 .code => constants.headers_size,
@@ -834,19 +828,17 @@ pub const MerkleProofEntryList = struct {
     bytes: []const u8,
     len: usize,
 
-    const Self = @This();
-
-    pub fn deinit(self: Self, allocator: Allocator) void {
+    pub fn deinit(self: MerkleProofEntryList, allocator: Allocator) void {
         allocator.free(self.bytes);
     }
 
-    pub fn sanitize(self: Self) !void {
+    pub fn sanitize(self: MerkleProofEntryList) !void {
         if (self.len * merkle_proof_entry_size != self.bytes.len) {
             return error.InvalidMerkleProof;
         }
     }
 
-    pub fn get(self: *const Self, index: usize) ?MerkleProofEntry {
+    pub fn get(self: *const MerkleProofEntryList, index: usize) ?MerkleProofEntry {
         if (index > self.len) return null;
         const start = index * merkle_proof_entry_size;
         const end = start + merkle_proof_entry_size;
@@ -855,13 +847,16 @@ pub const MerkleProofEntryList = struct {
         return entry;
     }
 
-    pub fn iterator(self: Self) MerkleProofIterator {
+    pub fn iterator(self: MerkleProofEntryList) MerkleProofIterator {
         return .{ .slice = self.bytes };
     }
 
-    pub fn eql(self: Self, other: Self) bool {
-        return self.len == other.len and
-            std.mem.eql(u8, self.bytes[0..self.len], other.bytes[0..other.len]);
+    pub fn eql(self: MerkleProofEntryList, other: MerkleProofEntryList) bool {
+        return self.len == other.len and std.mem.eql(
+            u8,
+            self.bytes[0..self.len],
+            other.bytes[0..other.len],
+        );
     }
 };
 
@@ -928,9 +923,7 @@ pub const CodeHeader = struct {
     /// shreds in the set. This index is the code shred's position within that sequence.
     erasure_code_index: u16,
 
-    const Self = @This();
-
-    const ZEROED_FOR_TEST = Self{
+    const ZEROED_FOR_TEST: CodeHeader = .{
         .num_data_shreds = 0,
         .num_code_shreds = 0,
         .erasure_code_index = 0,
@@ -943,9 +936,7 @@ pub const ShredVariant = struct {
     chained: bool,
     resigned: bool,
 
-    const Self = @This();
-
-    pub fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!Self {
+    pub fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!ShredVariant {
         return switch (byte & 0xF0) {
             0x40 => .{
                 .shred_type = .code,
@@ -989,7 +980,7 @@ pub const ShredVariant = struct {
         };
     }
 
-    pub fn toByte(self: Self) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
+    pub fn toByte(self: ShredVariant) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
         if (self.proof_size & 0xF0 != 0) return error.IllegalProof;
         const big_end: u8 =
             if (self.shred_type == .code and
@@ -1021,7 +1012,7 @@ pub const ShredVariant = struct {
         return big_end | self.proof_size;
     }
 
-    pub fn constants(self: Self) ShredConstants {
+    pub fn constants(self: ShredVariant) ShredConstants {
         return switch (self.shred_type) {
             .data => DataShred.constants,
             .code => CodeShred.constants,
@@ -1281,8 +1272,12 @@ test "layout.merkleRoot" {
 }
 
 test "fromPayload" {
-    const shred = try Shred.fromPayload(std.testing.allocator, &test_data_shred);
-    defer shred.deinit();
+    const allocator = std.testing.allocator;
+    const shred = try Shred.fromPayload(
+        allocator,
+        &test_data_shred,
+    );
+    defer shred.deinit(allocator);
 }
 
 pub const test_data_shred = [_]u8{
@@ -1302,13 +1297,14 @@ pub const test_data_shred = [_]u8{
 };
 
 test "mainnet shreds look like agave" {
+    const allocator = std.testing.allocator;
     const test_data = @import("test_shreds.zig");
     const test_shreds = test_data.mainnet_shreds;
 
     for (0..test_shreds.len) |i| {
         const payload = test_shreds[i];
-        const shred = try Shred.fromPayload(std.testing.allocator, payload);
-        defer shred.deinit();
+        const shred = try Shred.fromPayload(allocator, payload);
+        defer shred.deinit(allocator);
         const actual_fields = test_data.ParsedFields{
             .slot = shred.commonHeader().slot,
             .index = shred.commonHeader().index,

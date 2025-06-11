@@ -82,7 +82,10 @@ pub const LeaderScheduleCache = struct {
         const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
         const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
         defer leader_schedules_lg.unlock();
-        return if (leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
+        return if (leader_schedules.get(epoch)) |schedule|
+            schedule.slot_leaders[slot_index]
+        else
+            null;
     }
 
     pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) ![]const Pubkey {
@@ -272,10 +275,12 @@ pub const LeaderSchedule = struct {
 };
 
 test "leaderSchedule calculation matches agave" {
+    const allocator = std.testing.allocator;
+
     var rng = ChaChaRng(20).fromSeed(.{0} ** 32);
     const random = rng.random();
     var pubkey_bytes: [32]u8 = undefined;
-    var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(std.testing.allocator);
+    var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
     defer staked_nodes.deinit();
     for (0..100) |_| {
         random.bytes(&pubkey_bytes);
@@ -283,8 +288,13 @@ test "leaderSchedule calculation matches agave" {
         const stake = random.int(u64) / 1000;
         try staked_nodes.put(key, stake);
     }
-    const slot_leaders = try LeaderSchedule.fromStakedNodes(std.testing.allocator, 123, 321, &staked_nodes.unmanaged);
-    defer std.testing.allocator.free(slot_leaders);
+    const slot_leaders = try LeaderSchedule.fromStakedNodes(
+        allocator,
+        123,
+        321,
+        &staked_nodes.unmanaged,
+    );
+    defer allocator.free(slot_leaders);
     for (slot_leaders, 0..) |slot_leader, i| {
         try std.testing.expectEqual(
             slot_leader,

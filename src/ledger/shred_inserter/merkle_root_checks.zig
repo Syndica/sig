@@ -5,8 +5,6 @@ const shred_inserter = @import("lib.zig");
 
 const shred_mod = sig.ledger.shred;
 
-const Allocator = std.mem.Allocator;
-
 const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Hash = sig.core.Hash;
 const ScopedLogger = sig.trace.ScopedLogger;
@@ -26,17 +24,13 @@ const ShredWorkingStore = shred_inserter.working_state.ShredWorkingStore;
 const newlinesToSpaces = sig.utils.fmt.newlinesToSpaces;
 
 pub const MerkleRootValidator = struct {
-    allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: ScopedLogger(@typeName(MerkleRootValidator)),
     shreds: ShredWorkingStore,
     duplicate_shreds: DuplicateShredsWorkingStore,
 
-    const Self = @This();
-
-    pub fn init(pending_state: *PendingInsertShredsState) Self {
+    pub fn init(pending_state: *PendingInsertShredsState) MerkleRootValidator {
         return .{
-            .allocator = pending_state.allocator,
-            .logger = pending_state.logger.withScope(@typeName(Self)),
+            .logger = pending_state.logger.withScope(@typeName(MerkleRootValidator)),
             .shreds = pending_state.shreds(),
             .duplicate_shreds = pending_state.duplicateShreds(),
         };
@@ -44,7 +38,8 @@ pub const MerkleRootValidator = struct {
 
     /// agave: check_merkle_root_consistency
     pub fn checkConsistency(
-        self: Self,
+        self: MerkleRootValidator,
+        allocator: std.mem.Allocator,
         slot: Slot,
         merkle_root_meta: *const ledger.meta.MerkleRootMeta,
         shred: *const Shred,
@@ -81,13 +76,20 @@ pub const MerkleRootValidator = struct {
             };
             if (try self.shreds.get(shred_id)) |conflicting_shred| {
                 defer conflicting_shred.deinit();
-                const original = try shred.clone();
-                errdefer original.deinit();
-                const conflict = try conflicting_shred.clone(self.allocator);
+
+                const original = try shred.clone(allocator);
+                errdefer original.deinit(allocator);
+
+                const conflict = try conflicting_shred.clone(allocator);
                 errdefer conflict.deinit();
-                try self.duplicate_shreds.append(.{
-                    .MerkleRootConflict = .{ .original = original, .conflict = conflict },
-                });
+
+                try self.duplicate_shreds.append(
+                    allocator,
+                    .{ .merkle_root_conflict = .{
+                        .original = original,
+                        .conflict = conflict,
+                    } },
+                );
             } else {
                 self.logger.err().logf(&newlinesToSpaces(
                     \\Shred {any} indiciated by merkle root meta {any} is
@@ -113,7 +115,8 @@ pub const MerkleRootValidator = struct {
     ///
     /// agave: check_forward_chained_merkle_root_consistency
     pub fn checkForwardChaining(
-        self: Self,
+        self: MerkleRootValidator,
+        allocator: std.mem.Allocator,
         shred: CodeShred,
         erasure_meta: ErasureMeta,
         merkle_root_metas: MerkleRootMetaWorkingStore,
@@ -129,20 +132,32 @@ pub const MerkleRootValidator = struct {
             );
             return false;
         };
-        const next_erasure_set =
-            ErasureSetId{ .slot = slot, .erasure_set_index = next_erasure_set_index };
-        const next_merkle_root_meta = try merkle_root_metas.get(next_erasure_set) orelse {
+
+        const next_erasure_set: ErasureSetId = .{
+            .slot = slot,
+            .erasure_set_index = next_erasure_set_index,
+        };
+
+        const next_merkle_root_meta = try merkle_root_metas.get(
+            allocator,
+            next_erasure_set,
+        ) orelse {
             // No shred from the next fec set has been received
             return true;
         };
 
-        const next_shred_id = ShredId{
+        const next_shred_id: ShredId = .{
             .slot = slot,
             .index = next_merkle_root_meta.first_received_shred_index,
             .shred_type = next_merkle_root_meta.first_received_shred_type,
         };
 
-        return self.checkAndReportChaining(.forward, .{ .code = shred }, next_shred_id);
+        return self.checkAndReportChaining(
+            allocator,
+            .forward,
+            .{ .code = shred },
+            next_shred_id,
+        );
     }
 
     /// Returns true if there is no chaining conflict between
@@ -157,7 +172,8 @@ pub const MerkleRootValidator = struct {
     ///
     /// agave: check_backwards_chained_merkle_root_consistency
     pub fn checkBackwardChaining(
-        self: Self,
+        self: MerkleRootValidator,
+        allocator: std.mem.Allocator,
         shred: Shred,
         erasure_metas: ErasureMetaWorkingStore,
     ) !bool {
@@ -176,27 +192,26 @@ pub const MerkleRootValidator = struct {
         // If a shred from the previous fec set has already been inserted, check the chaining.
         // Since we cannot compute the previous fec set index, we check the in memory map, otherwise
         // check the previous key from blockstore to see if it is consecutive with our current set.
-        _, const prev_erasure_meta = if (try erasure_metas.previousSet(erasure_set_id)) |pes|
-            pes
-        else
+        const maybe_pes = try erasure_metas.previousSet(allocator, erasure_set_id);
+        _, const prev_erasure_meta = if (maybe_pes) |pes| pes else
             // No shreds from the previous erasure batch have been received,
             // so nothing to check. Once the previous erasure batch is received,
             // we will verify this chain through the forward check above.
             return true;
 
-        const prev_shred_id = ShredId{
+        const prev_shred_id: ShredId = .{
             .slot = slot,
             .index = @intCast(prev_erasure_meta.first_received_code_index),
             .shred_type = .code,
         };
-
-        return self.checkAndReportChaining(.backward, shred, prev_shred_id);
+        return self.checkAndReportChaining(allocator, .backward, shred, prev_shred_id);
     }
 
     /// The input shreds must be from adjacent erasure sets in the same slot,
     /// or this function will not work correctly.
     fn checkAndReportChaining(
-        self: Self,
+        self: MerkleRootValidator,
+        allocator: std.mem.Allocator,
         direction: enum { forward, backward },
         shred: Shred,
         other_shred_id: ShredId,
@@ -252,13 +267,19 @@ pub const MerkleRootValidator = struct {
         );
 
         if (!try self.duplicate_shreds.contains(slot)) {
-            const original = try shred.clone();
-            errdefer original.deinit();
-            const conflict = try other_shred.clone(self.allocator);
+            const original = try shred.clone(allocator);
+            errdefer original.deinit(allocator);
+
+            const conflict = try other_shred.clone(allocator);
             errdefer conflict.deinit();
-            try self.duplicate_shreds.append(.{
-                .ChainedMerkleRootConflict = .{ .original = original, .conflict = conflict },
-            });
+
+            try self.duplicate_shreds.append(
+                allocator,
+                .{ .chained_merkle_root_conflict = .{
+                    .original = original,
+                    .conflict = conflict,
+                } },
+            );
         }
 
         return false;

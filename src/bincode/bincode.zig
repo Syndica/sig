@@ -383,7 +383,12 @@ pub fn readFieldWithConfig(
 }
 
 pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
-    return writeWithConfig(writer, data, params, getConfig(@TypeOf(data)) orelse .{});
+    return writeWithConfig(
+        writer,
+        data,
+        params,
+        getConfig(@TypeOf(data)) orelse .{},
+    );
 }
 
 pub fn writeWithConfig(

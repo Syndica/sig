@@ -202,7 +202,11 @@ pub const ThreadPool = struct {
             batch: Batch = .{},
             allocator: std.mem.Allocator,
 
-            pub fn init(allocator: std.mem.Allocator, thread_pool: *ThreadPool, count: usize) !Runner {
+            pub fn init(
+                allocator: std.mem.Allocator,
+                thread_pool: *ThreadPool,
+                count: usize,
+            ) !Runner {
                 return Runner{
                     .allocator = allocator,
                     .thread_pool = thread_pool,
@@ -257,7 +261,17 @@ pub const ThreadPool = struct {
         comptime Run: anytype,
         values: anytype,
     ) !void {
-        return try Do(this, allocator, wg, @TypeOf(ctx), ctx, Run, @TypeOf(values), values, false);
+        return try Do(
+            this,
+            allocator,
+            wg,
+            @TypeOf(ctx),
+            ctx,
+            Run,
+            @TypeOf(values),
+            values,
+            false,
+        );
     }
 
     pub fn doPtr(
@@ -268,7 +282,17 @@ pub const ThreadPool = struct {
         comptime Run: anytype,
         values: anytype,
     ) !void {
-        return try Do(this, allocator, wg, @TypeOf(ctx), ctx, Run, @TypeOf(values), values, true);
+        return try Do(
+            this,
+            allocator,
+            wg,
+            @TypeOf(ctx),
+            ctx,
+            Run,
+            @TypeOf(values),
+            values,
+            true,
+        );
     }
 
     pub fn Do(
@@ -458,7 +482,11 @@ pub const ThreadPool = struct {
 
                 // We signaled to spawn a new thread
                 if (can_wake and sync.spawned < self.max_threads) {
-                    const thread = std.Thread.spawn(.{}, Thread.run, .{self}) catch return self.unregister(null);
+                    const thread = std.Thread.spawn(
+                        .{},
+                        Thread.run,
+                        .{self},
+                    ) catch return self.unregister(null);
                     // if (self.name.len > 0) thread.setName(self.name) catch {};
                     return thread.detach();
                 }

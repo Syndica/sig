@@ -120,7 +120,10 @@ pub const Service = struct {
         errdefer self.exit.store(true, .monotonic);
 
         var last_batch_sent = Instant.now();
-        var transaction_batch = std.AutoArrayHashMap(Signature, TransactionInfo).init(self.allocator);
+        var transaction_batch = std.AutoArrayHashMap(
+            Signature,
+            TransactionInfo,
+        ).init(self.allocator);
         defer transaction_batch.deinit();
 
         while (true) {
@@ -228,7 +231,10 @@ pub const Service = struct {
                 if (signature_status.err) |err| {
                     try self.transaction_pool.drop_signatures.append(signature);
                     self.metrics.failed_count.inc();
-                    self.logger.info().logf("transaction failed: error={} signature={}\n", .{ err, signature });
+                    self.logger.info().logf(
+                        "transaction failed: error={} signature={}\n",
+                        .{ err, signature },
+                    );
                     continue;
                 }
             }
@@ -243,7 +249,10 @@ pub const Service = struct {
             if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                 try self.transaction_pool.drop_signatures.append(signature);
                 self.metrics.exceeded_max_retries_count.inc();
-                self.logger.info().logf("transaction exceeded max retries: signature={}\n", .{signature});
+                self.logger.info().logf(
+                    "transaction exceeded max retries: signature={}\n",
+                    .{signature},
+                );
                 continue;
             }
 
@@ -309,7 +318,10 @@ pub const Service = struct {
 
         for (leader_addresses) |leader_address| {
             for (transactions) |tx| {
-                self.logger.info().logf("sending transaction to leader: address={} signature={}", .{ leader_address, tx.signature });
+                self.logger.info().logf(
+                    "sending transaction to leader: address={} signature={}",
+                    .{ leader_address, tx.signature },
+                );
                 try self.send_channel.send(Packet.init(
                     leader_address.toEndpoint(),
                     tx.wire_transaction,
@@ -377,13 +389,16 @@ pub const Metrics = struct {
     }
 
     pub fn log(self: *const Metrics, logger: Logger) void {
-        logger.info().logf("{} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
-            self.received_count.get(),
-            self.pending_count.get(),
-            self.rooted_count.get(),
-            self.failed_count.get(),
-            self.expired_count.get(),
-            self.exceeded_max_retries_count.get(),
-        });
+        logger.info().logf(
+            "{} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries",
+            .{
+                self.received_count.get(),
+                self.pending_count.get(),
+                self.rooted_count.get(),
+                self.failed_count.get(),
+                self.expired_count.get(),
+                self.exceeded_max_retries_count.get(),
+            },
+        );
     }
 };

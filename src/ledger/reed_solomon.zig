@@ -15,15 +15,9 @@ pub const ReedSolomon = struct {
     // TODO lru cache of matrices
 
     pub fn init(allocator: Allocator, data_shards: usize, parity_shards: usize) !ReedSolomon {
-        if (data_shards == 0) {
-            return error.TooFewDataShards;
-        }
-        if (parity_shards == 0) {
-            return error.TooFewParityShards;
-        }
-        if (data_shards + parity_shards > field.order) {
-            return error.TooManyShards;
-        }
+        if (data_shards == 0) return error.TooFewDataShards;
+        if (parity_shards == 0) return error.TooFewParityShards;
+        if (data_shards + parity_shards > field.order) return error.TooManyShards;
         const total_shards = data_shards + parity_shards;
 
         const vandermonde = try Matrix.initVandermonde(allocator, total_shards, data_shards);
@@ -66,9 +60,10 @@ pub const ReedSolomon = struct {
     ) !void {
         if (shards.len > self.total_shard_count) return error.TooManyShards;
         if (shards.len < self.total_shard_count) return error.TooFewShards;
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const arena_allocator = arena.allocator();
+
+        var arena_state = std.heap.ArenaAllocator.init(allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
 
         var number_present: usize = 0;
         var maybe_shard_len: ?usize = null;
@@ -76,21 +71,17 @@ pub const ReedSolomon = struct {
         const data_shard_count = self.data_shard_count;
 
         for (shards) |maybe_shard| if (maybe_shard) |shard| {
-            if (shard.len == 0) {
-                return error.EmptyShard;
-            }
+            if (shard.len == 0) return error.EmptyShard;
             number_present += 1;
             if (maybe_shard_len) |old_len| {
                 if (shard.len != old_len) {
                     return error.IncorrectShardSize;
                 }
-            } else {
-                maybe_shard_len = shard.len;
-            }
+            } else maybe_shard_len = shard.len;
         };
 
         if (number_present == self.total_shard_count) {
-            // Cool.  All of the shards are there.  We don't
+            // Cool. All of the shards are there. We don't
             // need to do anything.
             return;
         }
@@ -103,7 +94,7 @@ pub const ReedSolomon = struct {
         const shard_len = maybe_shard_len.?; // must be non-null since at least one shard is present
 
         // Pull out an array holding just the shards that
-        // correspond to the rows of the submatrix.  These shards
+        // correspond to the rows of the submatrix. These shards
         // will be the input to the decoding process that re-creates
         // the missing data shards.
         //
@@ -118,11 +109,27 @@ pub const ReedSolomon = struct {
         // as the data decode matrix is a N x N matrix, thus only needs
         // N valid indices for determining the N rows to pick from
         // `self.matrix`.
-        var sub_shards = try ArrayList([]const u8).initCapacity(arena_allocator, data_shard_count);
-        var missing_data_slices = try ArrayList([]u8).initCapacity(arena_allocator, self.parity_shard_count);
-        var missing_parity_slices = try ArrayList([]u8).initCapacity(arena_allocator, self.parity_shard_count);
-        var valid_indices = try ArrayList(usize).initCapacity(arena_allocator, data_shard_count);
-        var invalid_indices = try ArrayList(usize).initCapacity(arena_allocator, data_shard_count);
+
+        var sub_shards: std.ArrayListUnmanaged([]const u8) = try .initCapacity(
+            arena,
+            data_shard_count,
+        );
+        var missing_data_slices: std.ArrayListUnmanaged([]u8) = try .initCapacity(
+            arena,
+            self.parity_shard_count,
+        );
+        var missing_parity_slices: std.ArrayListUnmanaged([]u8) = try .initCapacity(
+            arena,
+            self.parity_shard_count,
+        );
+        var valid_indices: std.ArrayListUnmanaged(usize) = try .initCapacity(
+            arena,
+            data_shard_count,
+        );
+        var invalid_indices: std.ArrayListUnmanaged(usize) = try .initCapacity(
+            arena,
+            data_shard_count,
+        );
 
         // Separate the shards into groups
         for (shards, 0..) |maybe_shard, matrix_row| {
@@ -140,7 +147,7 @@ pub const ReedSolomon = struct {
                 }
             } else if (matrix_row >= data_shard_count and data_only) {
                 // this is a parity shard and we're not going to recover it
-                try invalid_indices.append(matrix_row); // TODO should be able to assume capacity but this failed
+                try invalid_indices.append(arena, matrix_row); // TODO should be able to assume capacity but this failed
             } else {
                 // missing shard that we need to recover
                 const new_shard = try allocator.alloc(u8, shard_len);
@@ -151,20 +158,24 @@ pub const ReedSolomon = struct {
                 } else {
                     missing_parity_slices.appendAssumeCapacity(new_shard);
                 }
-                try invalid_indices.append(matrix_row); // TODO should be able to assume capacity but this failed
+                try invalid_indices.append(arena, matrix_row); // TODO should be able to assume capacity but this failed
             }
         }
 
-        const data_decode_matrix = try self
-            .getDataDecodeMatrix(arena_allocator, valid_indices.items);
+        const data_decode_matrix = try self.getDataDecodeMatrix(
+            arena,
+            valid_indices.items,
+        );
 
         // Re-create any data shards that were missing.
         //
         // The input to the coding is all of the shards we actually
         // have, and the output is the missing data shards. The computation
         // is done using the special decode matrix we just built.
-        var matrix_rows = try ArrayList([]const u8)
-            .initCapacity(arena_allocator, self.parity_shard_count);
+        var matrix_rows: std.ArrayListUnmanaged([]const u8) = try .initCapacity(
+            arena,
+            self.parity_shard_count,
+        );
 
         for (invalid_indices.items) |i_slice| {
             if (i_slice >= data_shard_count) break;
@@ -173,9 +184,7 @@ pub const ReedSolomon = struct {
 
         self.codeSlices(matrix_rows.items, sub_shards.items, missing_data_slices.items);
 
-        if (data_only) {
-            return;
-        }
+        if (data_only) return;
 
         // Now that we have all of the data shards intact, we can
         // compute any of the parity that is missing.
@@ -183,48 +192,31 @@ pub const ReedSolomon = struct {
         // The input to the coding is ALL of the data shards, including
         // any that we just calculated.  The output is whichever of the
         // parity shards were missing.
-        matrix_rows = try ArrayList([]const u8)
-            .initCapacity(arena_allocator, self.parity_shard_count);
-        const parity_rows = try self.getParityRows(arena_allocator);
+
+        matrix_rows = try .initCapacity(arena, self.parity_shard_count);
+        const parity_rows = try self.getParityRows(arena);
 
         var found = false;
         for (invalid_indices.items) |i_slice| {
             if (!found and i_slice < data_shard_count) continue;
             found = true;
-            matrix_rows.appendAssumeCapacity(parity_rows.items[i_slice - data_shard_count]);
+            matrix_rows.appendAssumeCapacity(parity_rows[i_slice - data_shard_count]);
         }
 
         {
             // Gather up all the data shards.
             // old data shards are in `sub_shards`,
             // new ones are in `missing_data_slices`.
+            var all_data_slices: std.ArrayListUnmanaged([]const u8) = try .initCapacity(
+                arena,
+                data_shard_count,
+            );
+
+            var pusher: Pusher = .{
+                .data_slices = &all_data_slices,
+                .sub_shards = sub_shards.items,
+            };
             var i_new_data_slice: usize = 0;
-
-            var all_data_slices = try ArrayList([]const u8)
-                .initCapacity(arena_allocator, data_shard_count);
-
-            var pusher = struct {
-                i_old_data_slice: usize = 0,
-                next_maybe_good: usize = 0,
-                data_slices: *ArrayList([]const u8),
-                sub_shards: *ArrayList([]const u8),
-
-                fn pushGoodUpTo(
-                    this: *@This(),
-                    up_to: usize,
-                ) void {
-                    // if next_maybe_good == up_to, this loop is a no-op.
-                    for (this.next_maybe_good..up_to) |_| {
-                        // push all good indices we just skipped.
-                        this.data_slices.appendAssumeCapacity(
-                            this.sub_shards.items[this.i_old_data_slice],
-                        );
-                        this.i_old_data_slice += 1;
-                    }
-                    this.next_maybe_good = up_to + 1;
-                }
-            }{ .data_slices = &all_data_slices, .sub_shards = &sub_shards };
-
             for (invalid_indices.items) |i_slice| {
                 if (i_slice >= data_shard_count) break;
                 pusher.pushGoodUpTo(i_slice);
@@ -233,11 +225,33 @@ pub const ReedSolomon = struct {
             }
             pusher.pushGoodUpTo(data_shard_count);
 
-            // Now do the actual computation for the missing
-            // parity shards
-            self.codeSlices(matrix_rows.items, all_data_slices.items, missing_parity_slices.items);
+            // Now do the actual computation for the missing parity shards
+            self.codeSlices(
+                matrix_rows.items,
+                all_data_slices.items,
+                missing_parity_slices.items,
+            );
         }
     }
+
+    const Pusher = struct {
+        i_old_data_slice: usize = 0,
+        next_maybe_good: usize = 0,
+        data_slices: *std.ArrayListUnmanaged([]const u8),
+        sub_shards: []const []const u8,
+
+        /// Asserts `up_to` is larger than or equal to `maybe_good`.
+        fn pushGoodUpTo(self: *Pusher, up_to: usize) void {
+            // if next_maybe_good == up_to, this loop is a no-op.
+            for (self.next_maybe_good..up_to) |_| {
+                // push all good indices we just skipped.
+                const good_index = self.sub_shards[self.i_old_data_slice];
+                self.data_slices.appendAssumeCapacity(good_index);
+                self.i_old_data_slice += 1;
+            }
+            self.next_maybe_good = up_to + 1;
+        }
+    };
 
     fn getDataDecodeMatrix(
         self: ReedSolomon,
@@ -249,8 +263,12 @@ pub const ReedSolomon = struct {
         // Pull out the rows of the matrix that correspond to the shards that
         // we have and build a square matrix. This matrix could be used to
         // generate the shards that we have from the original data.
-        var sub_matrix = try Matrix
-            .initZeros(allocator, self.data_shard_count, self.data_shard_count); // TODO is zero needed?
+        // TODO is zero needed?
+        var sub_matrix = try Matrix.initZeros(
+            allocator,
+            self.data_shard_count,
+            self.data_shard_count,
+        );
         for (valid_indices, 0..) |valid_index, sub_matrix_row| {
             for (0..self.data_shard_count) |c| {
                 sub_matrix.set(sub_matrix_row, c, self.matrix.get(valid_index, c));
@@ -269,13 +287,16 @@ pub const ReedSolomon = struct {
         return data_decode_matrix;
     }
 
-    fn getParityRows(self: ReedSolomon, allocator: Allocator) Allocator.Error!ArrayList([]const u8) {
+    fn getParityRows(self: *const ReedSolomon, allocator: std.mem.Allocator) ![]const []const u8 {
         const matrix = &self.matrix;
-        var parity_rows = try ArrayList([]const u8).initCapacity(allocator, self.parity_shard_count);
+        var parity_rows: std.ArrayListUnmanaged([]const u8) = try .initCapacity(
+            allocator,
+            self.parity_shard_count,
+        );
         for (self.data_shard_count..self.total_shard_count) |i| {
             parity_rows.appendAssumeCapacity(matrix.getRow(i));
         }
-        return parity_rows;
+        return try parity_rows.toOwnedSlice(allocator);
     }
 
     fn codeSlices(
@@ -311,19 +332,17 @@ pub const Matrix = struct {
     col_count: usize,
     data: []u8,
 
-    const Self = Matrix;
-
-    pub fn deinit(self: Self, allocator: Allocator) void {
+    pub fn deinit(self: Matrix, allocator: Allocator) void {
         allocator.free(self.data);
     }
 
-    pub fn initZeros(allocator: Allocator, rows: usize, cols: usize) Allocator.Error!Self {
+    pub fn initZeros(allocator: Allocator, rows: usize, cols: usize) Allocator.Error!Matrix {
         const self = try initUndefined(allocator, rows, cols);
         @memset(self.data, 0);
         return self;
     }
 
-    pub fn initIdentity(allocator: Allocator, size: usize) Allocator.Error!Self {
+    pub fn initIdentity(allocator: Allocator, size: usize) Allocator.Error!Matrix {
         const self = try initZeros(allocator, size, size);
         for (0..size) |i| {
             self.set(i, i, 1);
@@ -331,11 +350,14 @@ pub const Matrix = struct {
         return self;
     }
 
-    pub fn initVandermonde(allocator: Allocator, rows: usize, cols: usize) Allocator.Error!Self {
+    pub fn initVandermonde(
+        allocator: Allocator,
+        rows: usize,
+        cols: usize,
+    ) Allocator.Error!Matrix {
         var self = try initUndefined(allocator, rows, cols);
         for (0..rows) |r| {
-            // doesn't matter what `r_a` is as long as it's unique.
-            // then the vandermonde matrix is invertible.
+            // The vandermonde matrix is invertable as long as `r_a` is unique.
             const r_a: u8 = @intCast(r);
             for (0..cols) |c| {
                 self.data[self.index(r, c)] = field.exp(r_a, c);
@@ -345,7 +367,7 @@ pub const Matrix = struct {
         return self;
     }
 
-    fn initUndefined(allocator: Allocator, rows: usize, cols: usize) Allocator.Error!Self {
+    fn initUndefined(allocator: Allocator, rows: usize, cols: usize) Allocator.Error!Matrix {
         return .{
             .row_count = rows,
             .col_count = cols,
@@ -354,13 +376,13 @@ pub const Matrix = struct {
     }
 
     pub fn subMatrix(
-        self: Self,
+        self: Matrix,
         allocator: Allocator,
         rmin: usize,
         cmin: usize,
         rmax: usize,
         cmax: usize,
-    ) Allocator.Error!Self {
+    ) Allocator.Error!Matrix {
         const result = try initUndefined(allocator, rmax - rmin, cmax - cmin);
         for (rmin..rmax) |r| {
             for (cmin..cmax) |c| {
@@ -371,7 +393,7 @@ pub const Matrix = struct {
         return result;
     }
 
-    pub fn multiply(self: Self, allocator: Allocator, rhs: Self) Allocator.Error!Self {
+    pub fn multiply(self: Matrix, allocator: Allocator, rhs: Matrix) Allocator.Error!Matrix {
         if (self.col_count != rhs.row_count) {
             @panic("Column count on left is different from row count on right");
         }
@@ -389,7 +411,7 @@ pub const Matrix = struct {
         return result;
     }
 
-    pub fn invert(self: Self, allocator: Allocator) !Self {
+    pub fn invert(self: Matrix, allocator: Allocator) !Matrix {
         if (!self.isSquare()) {
             @panic("Trying to invert a non-square matrix");
         }
@@ -406,11 +428,11 @@ pub const Matrix = struct {
         return try work.subMatrix(allocator, 0, row_count, col_count, col_count * 2);
     }
 
-    pub fn isSquare(self: Self) bool {
+    pub fn isSquare(self: Matrix) bool {
         return self.row_count == self.col_count;
     }
 
-    pub fn augment(self: Self, allocator: Allocator, rhs: Self) Allocator.Error!Self {
+    pub fn augment(self: Matrix, allocator: Allocator, rhs: Matrix) Allocator.Error!Matrix {
         if (self.row_count != rhs.row_count) {
             @panic("Matrices do not have the same row count, lhs: {}, rhs: {}");
         }
@@ -427,7 +449,7 @@ pub const Matrix = struct {
         return result;
     }
 
-    pub fn gaussianElimination(self: *Self) error{SingularMatrix}!void {
+    pub fn gaussianElimination(self: *Matrix) error{SingularMatrix}!void {
         for (0..self.row_count) |r| {
             if (self.get(r, r) == 0) {
                 for (r + 1..self.row_count) |r_below| {
@@ -480,30 +502,28 @@ pub const Matrix = struct {
         }
     }
 
-    pub inline fn get(self: Self, row: usize, col: usize) u8 {
+    pub inline fn get(self: Matrix, row: usize, col: usize) u8 {
         return self.data[self.index(row, col)];
     }
 
-    pub inline fn set(self: Self, row: usize, col: usize, val: u8) void {
+    pub inline fn set(self: Matrix, row: usize, col: usize, val: u8) void {
         self.data[self.index(row, col)] = val;
     }
 
-    inline fn index(self: Self, row: usize, col: usize) usize {
+    inline fn index(self: Matrix, row: usize, col: usize) usize {
         return row * self.col_count + col;
     }
 
-    pub fn getRow(self: *const Self, row: usize) []const u8 {
+    pub fn getRow(self: *const Matrix, row: usize) []const u8 {
         const start, const end = self.rowStartEnd(row);
         return self.data[start..end];
     }
 
-    pub fn swapRows(self: *Self, r1: usize, r2: usize) void {
+    pub fn swapRows(self: *Matrix, r1: usize, r2: usize) void {
         const r1_s = r1 * self.col_count;
         const r2_s = r2 * self.col_count;
 
-        if (r1 == r2) {
-            return;
-        } else {
+        if (r1 != r2) {
             for (0..self.col_count) |i| {
                 const tmp1 = self.data[r1_s + i];
                 self.data[r1_s + i] = self.data[r2_s + i];
@@ -512,7 +532,7 @@ pub const Matrix = struct {
         }
     }
 
-    fn rowStartEnd(self: Self, row: usize) struct { usize, usize } {
+    fn rowStartEnd(self: Matrix, row: usize) struct { usize, usize } {
         const start = row * self.col_count;
         return .{ start, start + self.col_count };
     }
@@ -619,48 +639,55 @@ test "ReedSolomon.reconstruct lorem ipsum with any missing combination" {
         "at cupidatat non proident, sunt in culpa qui officia deserunt mollit an",
         "im id est laborum.                                                     ",
         &.{
-            84,  123, 122, 105, 123, 40,  103, 107, 107, 127, 57,  51,  61,  96,  100, 113, 48,  126,
-            95,  46,  99,  108, 114, 99,  39,  127, 109, 97,  38,  47,  104, 36,  39,  45,  125, 47,
-            41,  121, 51,  32,  115, 53,  109, 109, 126, 61,  56,  105, 122, 105, 31,  113, 31,  59,
-            124, 58,  47,  56,  40,  123, 101, 111, 112, 35,  117, 40,  119, 56,  40,  61,  57,
+            84,  123, 122, 105, 123, 40,  103, 107, 107, 127, 57,  51,  61, 96,  100, 113, 48,
+            126, 95,  46,  99,  108, 114, 99,  39,  127, 109, 97,  38,  47, 104, 36,  39,  45,
+            125, 47,  41,  121, 51,  32,  115, 53,  109, 109, 126, 61,  56, 105, 122, 105, 31,
+            113, 31,  59,  124, 58,  47,  56,  40,  123, 101, 111, 112, 35, 117, 40,  119, 56,
+            40,  61,  57,
         },
         &.{
-            149, 45,  221, 144, 32,  40, 199, 26,  68,  194, 233, 120, 144, 174, 219, 255, 236, 166,
-            182, 157, 133, 209, 123, 22, 0,   29,  191, 96,  162, 224, 191, 228, 239, 228, 137, 129,
-            254, 117, 225, 90,  74,  15, 26,  219, 46,  50,  52,  104, 119, 196, 93,  80,  97,  166,
-            134, 65,  29,  196, 75,  85, 67,  194, 4,   11,  36,  47,  33,  94,  73,  230, 182,
+            149, 45,  221, 144, 32,  40,  199, 26, 68, 194, 233, 120, 144, 174, 219, 255, 236,
+            166, 182, 157, 133, 209, 123, 22,  0,  29, 191, 96,  162, 224, 191, 228, 239, 228,
+            137, 129, 254, 117, 225, 90,  74,  15, 26, 219, 46,  50,  52,  104, 119, 196, 93,
+            80,  97,  166, 134, 65,  29,  196, 75, 85, 67,  194, 4,   11,  36,  47,  33,  94,
+            73,  230, 182,
         },
         &.{
-            130, 124, 84,  98,  124, 141, 137, 165, 147, 206, 77,  115, 20,  177, 34,  215, 253, 33,
-            9,   139, 163, 243, 122, 84,  94,  48,  20,  63,  189, 199, 91,  217, 131, 179, 62,  65,
-            145, 36,  234, 108, 20,  49,  104, 178, 197, 24,  58,  251, 108, 210, 243, 17,  32,  87,
-            61,  89,  28,  241, 243, 150, 80,  224, 35,  15,  0,   175, 87,  132, 252, 189, 44,
+            130, 124, 84,  98,  124, 141, 137, 165, 147, 206, 77,  115, 20,  177, 34,  215, 253,
+            33,  9,   139, 163, 243, 122, 84,  94,  48,  20,  63,  189, 199, 91,  217, 131, 179,
+            62,  65,  145, 36,  234, 108, 20,  49,  104, 178, 197, 24,  58,  251, 108, 210, 243,
+            17,  32,  87,  61,  89,  28,  241, 243, 150, 80,  224, 35,  15,  0,   175, 87,  132,
+            252, 189, 44,
         },
         &.{
-            88,  26,  179, 228, 193, 169, 135, 130, 213, 89, 169, 255, 160, 211, 34,  11, 63,  155,
-            39,  182, 103, 141, 250, 18,  140, 224, 172, 48, 201, 76,  37,  219, 207, 35, 4,   27,
-            213, 240, 157, 93,  176, 1,   205, 109, 6,   34, 106, 119, 149, 103, 136, 99, 19,  9,
-            97,  79,  215, 149, 196, 33,  248, 89,  107, 91, 56,  135, 220, 65,  33,  41, 210,
+            88,  26, 179, 228, 193, 169, 135, 130, 213, 89,  169, 255, 160, 211, 34,  11,  63,
+            155, 39, 182, 103, 141, 250, 18,  140, 224, 172, 48,  201, 76,  37,  219, 207, 35,
+            4,   27, 213, 240, 157, 93,  176, 1,   205, 109, 6,   34,  106, 119, 149, 103, 136,
+            99,  19, 9,   97,  79,  215, 149, 196, 33,  248, 89,  107, 91,  56,  135, 220, 65,
+            33,  41, 210,
         },
     };
-    for (0..num_shards) |i| for (0..num_shards) |j| for (0..num_shards) |k| for (0..num_shards) |l| {
-        var data = ArrayList(?[]const u8).init(allocator);
-        defer data.deinit();
-        defer for (data.items) |md| if (md) |d| allocator.free(d);
-        for (0..num_shards) |s| {
-            if (s == i or s == j or s == k or s == l) {
-                try data.append(null);
-            } else {
-                const to_include = try allocator.alloc(u8, master_copy[s].len);
-                @memcpy(to_include, master_copy[s]);
-                try data.append(to_include);
-            }
-        }
-        try rs.reconstruct(allocator, data.items, false);
-        for (0..num_shards) |s| {
-            try std.testing.expectEqualSlices(u8, master_copy[s], data.items[s].?);
-        }
-    };
+    for (0..num_shards) |i|
+        for (0..num_shards) |j|
+            for (0..num_shards) |k|
+                for (0..num_shards) |l| {
+                    var data = ArrayList(?[]const u8).init(allocator);
+                    defer data.deinit();
+                    defer for (data.items) |md| if (md) |d| allocator.free(d);
+                    for (0..num_shards) |s| {
+                        if (s == i or s == j or s == k or s == l) {
+                            try data.append(null);
+                        } else {
+                            const to_include = try allocator.alloc(u8, master_copy[s].len);
+                            @memcpy(to_include, master_copy[s]);
+                            try data.append(to_include);
+                        }
+                    }
+                    try rs.reconstruct(allocator, data.items, false);
+                    for (0..num_shards) |s| {
+                        try std.testing.expectEqualSlices(u8, master_copy[s], data.items[s].?);
+                    }
+                };
 }
 
 test "ReedSolomon.reconstruct shards constructed from mainnet shreds" {

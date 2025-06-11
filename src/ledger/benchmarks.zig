@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 const ledger_tests = @import("./tests.zig");
 const ledger = @import("lib.zig");
 
+const shred_inserter = ledger.shred_inserter.shred_inserter;
 const Reward = ledger.transaction_status.Reward;
 const Rewards = ledger.transaction_status.Rewards;
 const RewardType = ledger.transaction_status.RewardType;
@@ -46,7 +47,7 @@ pub const BenchmarkLedger = struct {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var inserter = try state.shredInserter();
+        var inserter = try state.shredInserter(allocator);
 
         const shreds_path = "agave.blockstore.bench_write_small.shreds.bin";
         const shreds = try testShreds(std.heap.c_allocator, shreds_path);
@@ -59,8 +60,10 @@ pub const BenchmarkLedger = struct {
         }
 
         var timer = try sig.time.Timer.start();
+
         const result = try inserter.insertShreds(shreds, is_repairs, .{});
-        defer result.deinit();
+        defer result.deinit(allocator);
+
         return timer.read();
     }
 
@@ -105,8 +108,8 @@ pub const BenchmarkLedger = struct {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var inserter = try state.shredInserter();
-        var reader = try state.reader();
+        var inserter = try state.shredInserter(allocator);
+        var reader = try state.reader(allocator);
 
         const shreds_path = "agave.blockstore.bench_read.shreds.bin";
         const shreds = try testShreds(std.heap.c_allocator, shreds_path);
@@ -114,9 +117,11 @@ pub const BenchmarkLedger = struct {
 
         const total_shreds = shreds.len;
 
-        const result = try ledger.shred_inserter.shred_inserter
-            .insertShredsForTest(&inserter, shreds);
-        result.deinit();
+        const result = try shred_inserter.insertShredsForTest(
+            &inserter,
+            shreds,
+        );
+        result.deinit(allocator);
 
         const slot: u32 = 0;
         const num_reads = total_shreds / 15;
@@ -137,17 +142,16 @@ pub const BenchmarkLedger = struct {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var inserter = try state.shredInserter();
-        var reader = try state.reader();
+        var inserter = try state.shredInserter(allocator);
+        var reader = try state.reader(allocator);
 
         const shreds_path = "agave.blockstore.bench_read.shreds.bin";
         const shreds = try testShreds(std.heap.c_allocator, shreds_path);
         defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
-        const result = try ledger.shred_inserter.shred_inserter
-            .insertShredsForTest(&inserter, shreds);
-        result.deinit();
+        const result = try shred_inserter.insertShredsForTest(&inserter, shreds);
+        result.deinit(allocator);
         const num_reads = total_shreds / 15;
 
         const slot: u32 = 0;
@@ -168,10 +172,11 @@ pub const BenchmarkLedger = struct {
     }
 
     pub fn @"BlockstoreReader.getCompleteBlock"() !sig.time.Duration {
-        const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var reader = try state.reader();
-        const result = try ledger_tests.insertDataForBlockTest(state);
+        var reader = try state.reader(allocator);
+        const result = try ledger_tests.insertDataForBlockTest(allocator, &state);
         result.deinit();
 
         var timer = try sig.time.Timer.start();
@@ -180,10 +185,11 @@ pub const BenchmarkLedger = struct {
     }
 
     pub fn @"BlockstoreReader.getDataShredsForSlot"() !sig.time.Duration {
-        const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var reader = try state.reader();
-        const result = try ledger_tests.insertDataForBlockTest(state);
+        var reader = try state.reader(allocator);
+        const result = try ledger_tests.insertDataForBlockTest(allocator, &state);
         result.deinit();
 
         var timer = try sig.time.Timer.start();
@@ -194,10 +200,11 @@ pub const BenchmarkLedger = struct {
     }
 
     pub fn @"BlockstoreReader.getSlotEntriesWithShredInfo"() !sig.time.Duration {
-        const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var reader = try state.reader();
-        const result = try ledger_tests.insertDataForBlockTest(state);
+        var reader = try state.reader(allocator);
+        const result = try ledger_tests.insertDataForBlockTest(allocator, &state);
         result.deinit();
 
         var timer = try sig.time.Timer.start();
@@ -211,17 +218,16 @@ pub const BenchmarkLedger = struct {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var inserter = try state.shredInserter();
-        var reader = try state.reader();
+        var inserter = try state.shredInserter(allocator);
+        var reader = try state.reader(allocator);
 
         const shreds_path = "agave.blockstore.bench_read.code_shreds.bin";
         const shreds = try testShreds(std.heap.c_allocator, shreds_path);
         defer deinitShreds(allocator, shreds);
 
         const total_shreds = shreds.len;
-        const result = try ledger.shred_inserter.shred_inserter
-            .insertShredsForTest(&inserter, shreds);
-        result.deinit();
+        const result = try shred_inserter.insertShredsForTest(&inserter, shreds);
+        result.deinit(allocator);
 
         const slot: u32 = 1;
 
@@ -244,16 +250,15 @@ pub const BenchmarkLedger = struct {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var inserter = try state.shredInserter();
-        var reader = try state.reader();
+        var inserter = try state.shredInserter(allocator);
+        var reader = try state.reader(allocator);
 
         const shreds_path = "agave.blockstore.bench_read.code_shreds.bin";
         const shreds = try testShreds(std.heap.c_allocator, shreds_path);
         defer deinitShreds(allocator, shreds);
 
-        const result = try ledger.shred_inserter.shred_inserter
-            .insertShredsForTest(&inserter, shreds);
-        result.deinit();
+        const result = try shred_inserter.insertShredsForTest(&inserter, shreds);
+        result.deinit(allocator);
 
         const slot = 1;
         const start_index = 0;
@@ -272,22 +277,23 @@ pub const BenchmarkLedger = struct {
         const Signature = sig.core.Signature;
         const TransactionStatusMeta = ledger.transaction_status.TransactionStatusMeta;
 
-        const state = try TestState.init(std.heap.c_allocator, @src(), .noop);
+        const allocator = std.heap.c_allocator;
+        var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
         var writer = try state.writer();
         var rng = std.Random.DefaultPrng.init(100);
 
         var signatures: std.ArrayList(Signature) =
-            try std.ArrayList(Signature).initCapacity(state.allocator, 64);
+            try std.ArrayList(Signature).initCapacity(allocator, 64);
         defer signatures.deinit();
         var writable_keys =
-            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
+            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(allocator, 64);
         defer {
             for (writable_keys.items) |l| l.deinit();
             writable_keys.deinit();
         }
         var readonly_keys =
-            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(state.allocator, 64);
+            try std.ArrayList(std.ArrayList(Pubkey)).initCapacity(allocator, 64);
         defer {
             for (readonly_keys.items) |l| l.deinit();
             readonly_keys.deinit();
@@ -295,13 +301,13 @@ pub const BenchmarkLedger = struct {
 
         for (0..64) |_| {
             // Two writable keys
-            var w_keys = try std.ArrayList(Pubkey).initCapacity(state.allocator, 2);
+            var w_keys = try std.ArrayList(Pubkey).initCapacity(allocator, 2);
             try w_keys.append(Pubkey.initRandom(rng.random()));
             try w_keys.append(Pubkey.initRandom(rng.random()));
             writable_keys.appendAssumeCapacity(w_keys);
 
             // Two readonly keys
-            var r_keys = try std.ArrayList(Pubkey).initCapacity(state.allocator, 2);
+            var r_keys = try std.ArrayList(Pubkey).initCapacity(allocator, 2);
             try r_keys.append(Pubkey.initRandom(rng.random()));
             try r_keys.append(Pubkey.initRandom(rng.random()));
             readonly_keys.appendAssumeCapacity(r_keys);
@@ -338,7 +344,7 @@ pub const BenchmarkLedgerSlow = struct {
         const allocator = std.heap.c_allocator;
         var state = try TestState.init(allocator, @src(), .noop);
         defer state.deinit();
-        var reader = try state.reader();
+        var reader = try state.reader(allocator);
         var db = state.db;
 
         var write_batch = try db.initWriteBatch();
@@ -349,14 +355,14 @@ pub const BenchmarkLedgerSlow = struct {
         const slot_per_epoch = 432_000;
         var parent_slot: ?Slot = null;
         for (1..(slot_per_epoch + 1)) |slot| {
-            var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
-            defer slot_meta.deinit();
+            var slot_meta = SlotMeta.init(slot, parent_slot);
+            defer slot_meta.deinit(allocator);
             // ensure isFull() is true
             slot_meta.last_index = 1;
             slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
             // update next slots
             if (slot < (slot_per_epoch + 1)) {
-                try slot_meta.child_slots.append(slot + 1);
+                try slot_meta.child_slots.append(allocator, slot + 1);
             }
             try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
             // connect the chain

@@ -36,6 +36,8 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
         const Self = @This();
 
+        const Error = error{} || Allocator.Error;
+
         pub fn open(
             allocator: Allocator,
             logger: Logger,
@@ -89,7 +91,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self.fast_allocator.destroy(self.disk_allocator_state);
         }
 
-        pub fn count(self: *Self, comptime cf: ColumnFamily) anyerror!u64 {
+        pub fn count(self: *Self, comptime cf: ColumnFamily) Error!u64 {
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
 
@@ -157,7 +159,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!bool {
+        pub fn contains(self: *Self, comptime cf: ColumnFamily, key: cf.Key) Error!bool {
             const key_bytes = try key_serializer.serializeAlloc(self.fast_allocator, key);
             defer self.fast_allocator.free(key_bytes);
             const map = &self.maps[cf.find(column_families)];
@@ -410,12 +412,12 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                     };
                 }
 
-                pub fn nextKey(self: *@This()) anyerror!?cf.Key {
+                pub fn nextKey(self: *@This()) Error!?cf.Key {
                     const index = self.nextIndex() orelse return null;
                     return try key_serializer.deserialize(cf.Key, self.allocator, self.keys[index]);
                 }
 
-                pub fn nextValue(self: *@This()) anyerror!?cf.Value {
+                pub fn nextValue(self: *@This()) Error!?cf.Value {
                     const index = self.nextIndex() orelse return null;
                     return try value_serializer.deserialize(
                         cf.Value,
@@ -447,7 +449,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn flush(_: *Self, comptime _: ColumnFamily) anyerror!void {}
+        pub fn flush(_: *Self, comptime _: ColumnFamily) Error!void {}
     };
 }
 
@@ -460,42 +462,41 @@ fn serializeValue(allocator: Allocator, value: anytype) !RcSlice(u8) {
     return rc_slice;
 }
 
+// TODO(sinon): can we unmanaged this?
 const SharedHashMap = struct {
     /// must be the same as SharedHashmapDB.storage_allocator
     allocator: Allocator,
     map: SortedMap([]const u8, RcSlice(u8)),
     lock: RwLock,
 
-    const Self = @This();
-
-    fn init(allocator: Allocator) Allocator.Error!Self {
+    fn init(allocator: Allocator) Allocator.Error!SharedHashMap {
         return .{
             .allocator = allocator,
-            .map = SortedMap([]const u8, RcSlice(u8)).init(allocator),
+            .map = .EMPTY,
             .lock = .{},
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *SharedHashMap) void {
         const keys, const values = self.map.items();
         for (keys, values) |key, value| {
             self.allocator.free(key);
             value.deinit(self.allocator);
         }
-        self.map.deinit();
+        self.map.deinit(self.allocator);
     }
 
-    pub fn count(self: *Self) usize {
+    pub fn count(self: *SharedHashMap) usize {
         self.lock.lockShared();
         defer self.lock.unlockShared();
         return self.map.count();
     }
 
     /// value *must* be allocated with SharedHashMap.allocator
-    pub fn put(self: *Self, key: []const u8, value: RcSlice(u8)) Allocator.Error!void {
+    pub fn put(self: *SharedHashMap, key: []const u8, value: RcSlice(u8)) Allocator.Error!void {
         self.lock.lock();
         defer self.lock.unlock();
-        const entry = try self.map.getOrPut(key);
+        const entry = try self.map.getOrPut(self.allocator, key);
         if (entry.found_existing) {
             self.allocator.free(key);
             entry.value_ptr.deinit(self.allocator);
@@ -504,11 +505,11 @@ const SharedHashMap = struct {
     }
 
     /// Only call this while holding the lock
-    pub fn getPreLocked(self: *Self, key: []const u8) ?RcSlice(u8) {
+    pub fn getPreLocked(self: *SharedHashMap, key: []const u8) ?RcSlice(u8) {
         return self.map.get(key) orelse return null;
     }
 
-    pub fn delete(self: *Self, key_: []const u8) void {
+    pub fn delete(self: *SharedHashMap, key_: []const u8) void {
         const key, const value = lock: {
             self.lock.lock();
             defer self.lock.unlock();

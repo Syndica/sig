@@ -181,7 +181,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             );
         }
 
-        pub fn initWriteBatch(self: *Self) Error!WriteBatch {
+        pub fn initWriteBatch(self: *Self) anyerror!WriteBatch {
             return .{
                 .allocator = self.allocator,
                 .inner = rocks.WriteBatch.init(),
@@ -189,7 +189,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn commit(self: *Self, batch: *WriteBatch) Error!void {
+        pub fn commit(self: *Self, batch: *WriteBatch) anyerror!void {
             return callRocks(self.logger, rocks.DB.write, .{ &self.db, batch.inner });
         }
 
@@ -204,6 +204,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         /// - rocksdb uses the name "write batch" for this concept
         /// - this name avoids confusion with solana transactions
         pub const WriteBatch = struct {
+            // TODO(sinon): no managed
             allocator: Allocator,
             inner: rocks.WriteBatch,
             cf_handles: []const rocks.ColumnFamilyHandle,
@@ -264,7 +265,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
-        ) anyerror!Iterator(cf, direction) {
+        ) !Iterator(cf, direction) {
             const start_bytes = if (start) |s| try key_serializer.serializeToRef(self.allocator, s) else null;
             defer if (start_bytes) |sb| sb.deinit();
             return .{
@@ -292,7 +293,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                     self.inner.deinit();
                 }
 
-                pub fn next(self: *@This()) anyerror!?cf.Entry() {
+                pub fn next(self: *@This()) !?cf.Entry() {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
                     return if (entry) |kv| {
                         return .{
@@ -302,7 +303,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                     } else null;
                 }
 
-                pub fn nextKey(self: *@This()) anyerror!?cf.Key {
+                pub fn nextKey(self: *@This()) !?cf.Key {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
                     return if (entry) |kv|
                         try key_serializer.deserialize(cf.Key, self.allocator, kv[0].data)
@@ -310,7 +311,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                         null;
                 }
 
-                pub fn nextValue(self: *@This()) anyerror!?cf.Value {
+                pub fn nextValue(self: *@This()) !?cf.Value {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
                     return if (entry) |kv|
                         try key_serializer.deserialize(cf.Value, self.allocator, kv[1].data)
@@ -346,6 +347,9 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             RocksDBIterator,
             RocksDBWrite,
             RocksDBFlush,
+            NoSpaceLeft,
+            BadBoolean,
+            BadOptionalBoolean,
         } || Allocator.Error;
     };
 }

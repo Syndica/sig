@@ -6,7 +6,6 @@ const shred_inserter = @import("lib.zig");
 const schema = ledger.schema.schema;
 
 const Allocator = std.mem.Allocator;
-const AutoHashMap = std.AutoHashMap;
 
 const Slot = sig.core.Slot;
 
@@ -23,7 +22,7 @@ pub fn handleChaining(
     allocator: Allocator,
     db: *BlockstoreDB,
     write_batch: *WriteBatch,
-    working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
+    working_set: *std.AutoHashMapUnmanaged(u64, SlotMetaWorkingSetEntry),
 ) !void {
     const count = working_set.count();
     if (count == 0) return; // TODO is this correct?
@@ -47,13 +46,13 @@ pub fn handleChaining(
     for (keys[delete_i..count]) |k| {
         if (working_set.fetchRemove(k)) |entry| {
             var slot_meta_working_set_entry = entry.value;
-            slot_meta_working_set_entry.deinit();
+            slot_meta_working_set_entry.deinit(allocator);
         }
     }
 
     // handle chaining
-    var new_chained_slots = AutoHashMap(u64, SlotMeta).init(allocator);
-    defer deinitMapRecursive(&new_chained_slots);
+    var new_chained_slots: std.AutoHashMapUnmanaged(u64, SlotMeta) = .empty;
+    defer deinitMapRecursive(&new_chained_slots, allocator);
     for (keys[0..keep_i]) |slot| {
         try handleChainingForSlot(
             allocator,
@@ -68,7 +67,11 @@ pub fn handleChaining(
     // Write all the newly changed slots in new_chained_slots to the write_batch
     var new_iter = new_chained_slots.iterator();
     while (new_iter.next()) |entry| {
-        try write_batch.put(schema.slot_meta, entry.key_ptr.*, entry.value_ptr.*);
+        try write_batch.put(
+            schema.slot_meta,
+            entry.key_ptr.*,
+            entry.value_ptr.*,
+        );
     }
 }
 
@@ -77,8 +80,8 @@ fn handleChainingForSlot(
     allocator: Allocator,
     db: *BlockstoreDB,
     write_batch: *WriteBatch,
-    working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
-    new_chained_slots: *AutoHashMap(u64, SlotMeta),
+    working_set: *std.AutoHashMapUnmanaged(u64, SlotMetaWorkingSetEntry),
+    new_chained_slots: *std.AutoHashMapUnmanaged(u64, SlotMeta),
     slot: Slot,
 ) !void {
     const slot_meta_entry = working_set.getPtr(slot) orelse return error.Unwrap;
@@ -107,7 +110,7 @@ fn handleChainingForSlot(
 
             // This is a newly inserted slot/orphan so run the chaining logic to link it to a
             // newly discovered parent
-            try chainNewSlotToPrevSlot(prev_slot_meta, slot, slot_meta);
+            try chainNewSlotToPrevSlot(allocator, prev_slot_meta, slot, slot_meta);
 
             // If the parent of `slot` is a newly inserted orphan, insert it into the orphans
             // column family
@@ -152,21 +155,21 @@ fn handleChainingForSlot(
 fn findSlotMetaElseCreate(
     allocator: Allocator,
     db: *BlockstoreDB,
-    working_set: *const AutoHashMap(u64, SlotMetaWorkingSetEntry),
-    chained_slots: *AutoHashMap(u64, SlotMeta),
+    working_set: *const std.AutoHashMapUnmanaged(u64, SlotMetaWorkingSetEntry),
+    chained_slots: *std.AutoHashMapUnmanaged(u64, SlotMeta),
     slot: Slot,
 ) !*SlotMeta {
     if (working_set.getPtr(slot)) |m| {
         return &m.new_slot_meta;
     }
-    const entry = try chained_slots.getOrPut(slot);
+    const entry = try chained_slots.getOrPut(allocator, slot);
     if (entry.found_existing) {
         return entry.value_ptr;
     }
     entry.value_ptr.* = if (try db.get(allocator, schema.slot_meta, slot)) |m|
         m
     else
-        SlotMeta.init(allocator, slot, null);
+        SlotMeta.init(slot, null);
     return entry.value_ptr;
 }
 
@@ -189,8 +192,8 @@ fn traverseChildrenMut(
     allocator: Allocator,
     db: *BlockstoreDB,
     slots: []const u64,
-    working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
-    passed_visited_slots: *AutoHashMap(u64, SlotMeta),
+    working_set: *std.AutoHashMapUnmanaged(u64, SlotMetaWorkingSetEntry),
+    passed_visited_slots: *std.AutoHashMapUnmanaged(u64, SlotMeta),
 ) !void {
     var slot_lists = std.ArrayList([]const u64).init(allocator);
     defer slot_lists.deinit();
@@ -216,11 +219,12 @@ fn traverseChildrenMut(
 
 /// agave: chain_new_slot_to_prev_slot
 fn chainNewSlotToPrevSlot(
+    allocator: std.mem.Allocator,
     prev_slot_meta: *SlotMeta,
     current_slot: Slot,
     current_slot_meta: *SlotMeta,
 ) !void {
-    try prev_slot_meta.child_slots.append(current_slot);
+    try prev_slot_meta.child_slots.append(allocator, current_slot);
     if (prev_slot_meta.isConnected()) {
         _ = current_slot_meta.setParentConnected();
     }

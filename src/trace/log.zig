@@ -121,8 +121,6 @@ pub const ChannelPrintLogger = struct {
     handle: ?std.Thread,
     write_stderr: bool,
 
-    const Self = @This();
-
     pub const Config = struct {
         max_level: Level = Level.debug,
         allocator: std.mem.Allocator,
@@ -131,7 +129,7 @@ pub const ChannelPrintLogger = struct {
         write_stderr: bool = true,
     };
 
-    pub fn init(config: Config, maybe_writer: anytype) !*Self {
+    pub fn init(config: Config, maybe_writer: anytype) !*ChannelPrintLogger {
         const max_buffer = config.max_buffer;
         const recycle_fba = try config.allocator.create(RecycleFBA(.{}));
         errdefer config.allocator.destroy(recycle_fba);
@@ -141,7 +139,7 @@ pub const ChannelPrintLogger = struct {
         }, max_buffer);
         errdefer recycle_fba.deinit();
 
-        const self = try config.allocator.create(Self);
+        const self = try config.allocator.create(ChannelPrintLogger);
         errdefer config.allocator.destroy(self);
         self.* = .{
             .allocator = config.allocator,
@@ -161,7 +159,7 @@ pub const ChannelPrintLogger = struct {
         return self;
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *ChannelPrintLogger) void {
         if (self.handle) |handle| {
             std.time.sleep(std.time.ns_per_ms * 5);
             self.exit.store(true, .seq_cst);
@@ -174,15 +172,18 @@ pub const ChannelPrintLogger = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn logger(self: *Self) Logger {
+    pub fn logger(self: *ChannelPrintLogger) Logger {
         return .{ .channel_print = self };
     }
 
-    pub fn scopedLogger(self: *Self, comptime new_scope: anytype) ScopedLogger(new_scope) {
+    pub fn scopedLogger(
+        self: *ChannelPrintLogger,
+        comptime new_scope: anytype,
+    ) ScopedLogger(new_scope) {
         return .{ .channel_print = self };
     }
 
-    pub fn run(self: *Self, maybe_writer: anytype) void {
+    pub fn run(self: *ChannelPrintLogger, maybe_writer: anytype) void {
         const stderr_writer = std.io.getStdErr().writer();
         while (true) {
             self.channel.waitToReceive(.{ .unordered = &self.exit }) catch break;
@@ -202,7 +203,7 @@ pub const ChannelPrintLogger = struct {
     }
 
     pub fn log(
-        self: *Self,
+        self: *ChannelPrintLogger,
         comptime scope: ?[]const u8,
         level: Level,
         fields: anytype,
@@ -211,38 +212,25 @@ pub const ChannelPrintLogger = struct {
     ) void {
         if (@intFromEnum(self.max_level) < @intFromEnum(level)) return;
         const size = logfmt.countLog(scope, level, fields, fmt, args);
-        const msg_buf = self.allocBuf(size) catch |err| {
-            std.debug.print("allocBuff failed with err: {any}", .{err});
+        const allocator = self.log_allocator_state.allocator();
+        const message_buffer = allocator.alloc(u8, size) catch {
+            std.debug.print("failed to log: OOM", .{});
             return;
         };
 
-        var stream = std.io.fixedBufferStream(msg_buf);
+        var stream = std.io.fixedBufferStream(message_buffer);
         logfmt.writeLog(stream.writer(), scope, level, fields, fmt, args) catch |err| {
             std.debug.print("writeLog failed with err: {any}", .{err});
-            self.log_allocator.free(msg_buf);
+            self.log_allocator.free(message_buffer);
             return;
         };
         std.debug.assert(size == stream.pos);
 
-        self.channel.send(msg_buf) catch |err| {
+        self.channel.send(message_buffer) catch |err| {
             std.debug.print("Send msg through channel failed with err: {any}", .{err});
-            self.log_allocator.free(msg_buf);
+            self.log_allocator.free(message_buffer);
             return;
         };
-    }
-
-    // Utility function for allocating memory from RecycleFBA for part of the log message.
-    fn allocBuf(self: *const Self, size: u64) ![]u8 {
-        for (0..100) |_| {
-            return self.log_allocator.alloc(u8, size) catch {
-                std.time.sleep(std.time.ns_per_ms);
-                if (self.exit.load(.monotonic)) {
-                    return error.MemoryBlockedWithExitSignaled;
-                }
-                continue;
-            };
-        }
-        return error.OutOfMemory;
     }
 };
 

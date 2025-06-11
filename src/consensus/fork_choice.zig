@@ -73,8 +73,8 @@ pub const ForkInfo = struct {
     /// and all competing forks for the same slot are invalid.
     is_duplicate_confirmed: bool,
 
-    fn deinit(self: *ForkInfo) void {
-        self.children.deinit();
+    fn deinit(self: *ForkInfo, allocator: std.mem.Allocator) void {
+        self.children.deinit(allocator);
     }
 
     /// Returns true if the fork rooted at this node is included in fork choice
@@ -174,7 +174,7 @@ pub const ForkChoice = struct {
     pub fn deinit(self: *ForkChoice) void {
         var it = self.fork_infos.iterator();
         while (it.next()) |fork_info| {
-            fork_info.value_ptr.deinit();
+            fork_info.value_ptr.deinit(self.allocator);
         }
         self.fork_infos.deinit();
         self.latest_votes.deinit();
@@ -254,7 +254,7 @@ pub const ForkChoice = struct {
                 // The `heaviest_slot` and `deepest_slot` of a leaf is itself
                 .heaviest_subtree_slot = slot_hash_key,
                 .deepest_slot = slot_hash_key,
-                .children = SortedMap(SlotAndHash, void).init(self.allocator),
+                .children = .EMPTY,
                 .parent = maybe_parent,
                 .latest_duplicate_ancestor = parent_latest_duplicate_ancestor,
                 // If the parent is none, then this is the root, which implies this must
@@ -269,7 +269,7 @@ pub const ForkChoice = struct {
         const parent = if (maybe_parent) |parent| parent else return;
 
         if (self.fork_infos.getPtr(parent)) |parent_fork_info| {
-            try parent_fork_info.children.put(slot_hash_key, {});
+            try parent_fork_info.children.put(self.allocator, slot_hash_key, {});
         } else {
             // If parent is given then parent's info must
             // already exist by time child is being added.
@@ -388,7 +388,7 @@ pub const ForkChoice = struct {
     pub fn setTreeRoot(self: *ForkChoice, new_root: *const SlotAndHash) !void {
         // Remove everything reachable from old root but not new root
         var remove_set = try self.subtreeDiff(&self.tree_root, new_root);
-        defer remove_set.deinit();
+        defer remove_set.deinit(self.allocator);
 
         for (remove_set.keys()) |node_key| {
             if (!self.fork_infos.contains(node_key)) {
@@ -406,7 +406,7 @@ pub const ForkChoice = struct {
         for (remove_set.keys()) |node_key| {
             // SAFETY: Previous contains check ensures this won't panic.
             const fork_info = self.fork_infos.getPtr(node_key).?;
-            fork_info.children.deinit();
+            fork_info.children.deinit(self.allocator);
             _ = self.fork_infos.remove(node_key);
         }
 
@@ -440,18 +440,19 @@ pub const ForkChoice = struct {
             try newly_duplicate_confirmed_ancestors.append(ancestor_slot_hash_key);
         }
 
-        var update_operations = UpdateOperations.init(self.allocator);
-        defer update_operations.deinit();
+        var update_operations: UpdateOperations = .EMPTY;
+        defer update_operations.deinit(self.allocator);
 
         // Notify all children that a parent was marked as valid.
         var children_hash_keys = try self.subtreeDiff(
             valid_slot_hash_key,
             &.{ .slot = 0, .hash = Hash.ZEROES },
         );
-        defer children_hash_keys.deinit();
+        defer children_hash_keys.deinit(self.allocator);
 
         for (children_hash_keys.keys()) |child_hash_key| {
             _ = try doInsertAggregateOperation(
+                self.allocator,
                 &update_operations,
                 UpdateOperation{ .MarkValid = valid_slot_hash_key.slot },
                 child_hash_key,
@@ -477,18 +478,19 @@ pub const ForkChoice = struct {
                 return error.DuplicateConfirmedCannotBeMarkedInvalid;
             }
 
-            var update_operations = UpdateOperations.init(self.allocator);
-            defer update_operations.deinit();
+            var update_operations: UpdateOperations = .EMPTY;
+            defer update_operations.deinit(self.allocator);
 
             // Notify all children that a parent was marked as invalid
             var children_hash_keys = try self.subtreeDiff(
                 invalid_slot_hash_key,
                 &.{ .slot = 0, .hash = Hash.ZEROES },
             );
-            defer children_hash_keys.deinit();
+            defer children_hash_keys.deinit(self.allocator);
 
             for (children_hash_keys.keys()) |child_hash_key| {
                 _ = try doInsertAggregateOperation(
+                    self.allocator,
                     &update_operations,
                     UpdateOperation{ .MarkInvalid = invalid_slot_hash_key.slot },
                     child_hash_key,
@@ -811,15 +813,13 @@ pub const ForkChoice = struct {
         root1: *const SlotAndHash,
         root2: *const SlotAndHash,
     ) !SortedMap(SlotAndHash, void) {
-        if (!self.containsBlock(root1)) {
-            return SortedMap(SlotAndHash, void).init(self.allocator);
-        }
+        if (!self.containsBlock(root1)) return .EMPTY;
         var pending_keys = std.ArrayList(SlotAndHash).init(self.allocator);
         defer pending_keys.deinit();
 
         try pending_keys.append(root1.*);
 
-        var reachable_set = SortedMap(SlotAndHash, void).init(self.allocator);
+        var reachable_set: SortedMap(SlotAndHash, void) = .EMPTY;
 
         while (pending_keys.pop()) |current_key| {
             if (current_key.equals(root2.*)) {
@@ -830,7 +830,7 @@ pub const ForkChoice = struct {
             for (children.keys()) |child| {
                 try pending_keys.append(child);
             }
-            try reachable_set.put(current_key, {});
+            try reachable_set.put(self.allocator, current_key, {});
         }
 
         return reachable_set;
@@ -886,6 +886,7 @@ pub const ForkChoice = struct {
         var parent_iter = self.ancestorIterator(slot_hash_key);
         while (parent_iter.next()) |parent_slot_hash_key| {
             if (!try doInsertAggregateOperation(
+                self.allocator,
                 update_operations,
                 modify_fork_validity,
                 parent_slot_hash_key,
@@ -1201,6 +1202,7 @@ const AncestorIterator = struct {
 
 /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L814
 fn doInsertAggregateOperation(
+    allocator: std.mem.Allocator,
     update_operations: *UpdateOperations,
     modify_fork_validity: ?UpdateOperation,
     slot_hash_key: SlotAndHash,
@@ -1218,27 +1220,29 @@ fn doInsertAggregateOperation(
         switch (mark_fork_validity) {
             .MarkValid => |slot| {
                 try update_operations.put(
-                    SlotAndHashLabel{
+                    allocator,
+                    .{
                         .slot_hash_key = slot_hash_key,
                         .label = .MarkValid,
                     },
-                    UpdateOperation{ .MarkValid = slot },
+                    .{ .MarkValid = slot },
                 );
             },
             .MarkInvalid => |slot| {
                 try update_operations.put(
-                    SlotAndHashLabel{
+                    allocator,
+                    .{
                         .slot_hash_key = slot_hash_key,
                         .label = .MarkInvalid,
                     },
-                    UpdateOperation{ .MarkInvalid = slot },
+                    .{ .MarkInvalid = slot },
                 );
             },
             else => {},
         }
     }
 
-    try update_operations.put(aggregate_label, .Aggregate);
+    try update_operations.put(allocator, aggregate_label, .Aggregate);
     return true;
 }
 const test_allocator = std.testing.allocator;
@@ -1256,7 +1260,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 0, .hash = Hash.ZEROES },
             &.{ .slot = 0, .hash = Hash.ZEROES },
         );
-        defer diff.deinit();
+        defer diff.deinit(test_allocator);
         try std.testing.expectEqual(0, diff.count());
     }
 
@@ -1265,7 +1269,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 5, .hash = Hash.ZEROES },
             &.{ .slot = 5, .hash = Hash.ZEROES },
         );
-        defer diff.deinit();
+        defer diff.deinit(test_allocator);
         try std.testing.expectEqual(0, diff.count());
     }
     {
@@ -1273,7 +1277,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 6, .hash = Hash.ZEROES },
             &.{ .slot = 6, .hash = Hash.ZEROES },
         );
-        defer diff.deinit();
+        defer diff.deinit(test_allocator);
         try std.testing.expectEqual(0, diff.count());
     }
 
@@ -1284,7 +1288,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 3, .hash = Hash.ZEROES },
             &.{ .slot = 1, .hash = Hash.ZEROES },
         );
-        defer diff.deinit();
+        defer diff.deinit(test_allocator);
 
         const items = diff.items();
         const slot_and_hashes = items[0];
@@ -1312,7 +1316,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 1, .hash = Hash.ZEROES },
             &.{ .slot = 3, .hash = Hash.ZEROES },
         );
-        defer diff.deinit();
+        defer diff.deinit(test_allocator);
 
         const items = diff.items();
         const slot_and_hashes = items[0]; // Access the keys slice
@@ -1340,7 +1344,7 @@ test "HeaviestSubtreeForkChoice.subtreeDiff" {
             &.{ .slot = 0, .hash = Hash.ZEROES },
             &.{ .slot = 6, .hash = Hash.ZEROES },
         );
-        defer diff.deinit();
+        defer diff.deinit(test_allocator);
 
         const items = diff.items();
         const slot_and_hashes = items[0]; // Access the keys slice
@@ -2456,8 +2460,8 @@ pub fn splitOff(
     var split_tree_root = node_to_split_at.*;
     const parent = node_to_split_at.parent orelse return error.SplitNodeIsRoot;
 
-    var update_operations = UpdateOperations.init(allocator);
-    defer update_operations.deinit();
+    var update_operations: UpdateOperations = .EMPTY;
+    defer update_operations.deinit(allocator);
 
     try fork_choice.insertAggregateOperations(&update_operations, slot_hash_key);
 
@@ -2470,7 +2474,7 @@ pub fn splitOff(
     defer {
         var it = split_tree_fork_infos.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(allocator);
         }
         split_tree_fork_infos.deinit();
     }

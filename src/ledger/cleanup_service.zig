@@ -464,12 +464,12 @@ test "findSlotsToClean" {
     );
 
     // set highest and lowest slot by inserting slot_meta
-    var lowest_slot_meta = ledger.meta.SlotMeta.init(allocator, 10, null);
-    defer lowest_slot_meta.deinit();
+    var lowest_slot_meta = ledger.meta.SlotMeta.init(10, null);
+    defer lowest_slot_meta.deinit(allocator);
     lowest_slot_meta.received = 10;
 
-    var highest_slot_meta = ledger.meta.SlotMeta.init(allocator, 20, null);
-    defer highest_slot_meta.deinit();
+    var highest_slot_meta = ledger.meta.SlotMeta.init(20, null);
+    defer highest_slot_meta.deinit(allocator);
     highest_slot_meta.received = 20;
 
     {
@@ -493,7 +493,7 @@ test "findSlotsToClean" {
     try std.testing.expectEqual(0, r.total_shreds);
     try std.testing.expectEqual(0, r.highest_slot_to_purge);
     var data_shred = try ledger.shred.DataShred.zeroedForTest(allocator);
-    defer data_shred.deinit();
+    defer data_shred.deinit(allocator);
     {
         var write_batch = try db.initWriteBatch();
         defer write_batch.deinit();
@@ -526,8 +526,7 @@ test "purgeSlots" {
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,

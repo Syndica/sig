@@ -111,7 +111,8 @@ pub const Request = struct {
             const method_and_params = switch (method) {
                 inline else => |tag| @unionInit(MethodAndParams, @tagName(tag), blk: {
                     // NOTE: using `std.meta.FieldType` here hits eval branch quota, hack until `@FieldType`
-                    const Params = @typeInfo(MethodAndParams).@"union".fields[@intFromEnum(tag)].type;
+                    const i: usize = @intFromEnum(tag);
+                    const Params = @typeInfo(MethodAndParams).@"union".fields[i].type;
                     if (Params == noreturn) {
                         std.debug.panic("TODO: implement {s}", .{@tagName(method)});
                     }

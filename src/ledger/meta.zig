@@ -33,22 +33,17 @@ pub const SlotMeta = struct {
     parent_slot: ?Slot,
     /// The list of slots, each of which contains a block that derives
     /// from this one.
-    child_slots: std.ArrayList(Slot),
+    child_slots: std.ArrayListUnmanaged(Slot),
     /// Connected status flags of this slot
     connected_flags: ConnectedFlags,
     /// Shreds indices which are marked data complete.  That is, those that have the
     /// [`ShredFlags::DATA_COMPLETE_SHRED`][`crate::shred::ShredFlags::DATA_COMPLETE_SHRED`] set.
     completed_data_indexes: SortedSet(u32),
 
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator, slot: Slot, parent_slot: ?Slot) Self {
-        const connected_flags = if (slot == 0)
-            // Slot 0 is the start, mark it as having its' parent connected
-            // such that slot 0 becoming full will be updated as connected
-            ConnectedFlags.from(.parent_connected)
-        else
-            ConnectedFlags{};
+    pub fn init(slot: Slot, parent_slot: ?Slot) SlotMeta {
+        // Slot 0 is the start, mark it as having its' parent connected
+        // such that slot 0 becoming full will be updated as connected
+        const connected_flags: ConnectedFlags = if (slot == 0) .from(.parent_connected) else .{};
         return .{
             .slot = slot,
             .parent_slot = parent_slot,
@@ -57,18 +52,18 @@ pub const SlotMeta = struct {
             .received = 0,
             .first_shred_timestamp_milli = 0,
             .last_index = null,
-            .child_slots = std.ArrayList(Slot).init(allocator),
-            .completed_data_indexes = SortedSet(u32).init(allocator),
+            .child_slots = .empty,
+            .completed_data_indexes = .EMPTY,
         };
     }
 
-    pub fn deinit(self: Self) void {
-        self.child_slots.deinit();
-        self.completed_data_indexes.deinit();
+    pub fn deinit(self: *SlotMeta, allocator: std.mem.Allocator) void {
+        self.child_slots.deinit(allocator);
+        self.completed_data_indexes.deinit(allocator);
     }
 
-    pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
-        var child_slots = try std.ArrayList(Slot).initCapacity(
+    pub fn clone(self: SlotMeta, allocator: Allocator) Allocator.Error!SlotMeta {
+        var child_slots: std.ArrayListUnmanaged(Slot) = try .initCapacity(
             allocator,
             self.child_slots.items.len,
         );
@@ -82,11 +77,11 @@ pub const SlotMeta = struct {
             .first_shred_timestamp_milli = self.first_shred_timestamp_milli,
             .last_index = self.last_index,
             .child_slots = child_slots,
-            .completed_data_indexes = try self.completed_data_indexes.clone(),
+            .completed_data_indexes = try self.completed_data_indexes.clone(allocator),
         };
     }
 
-    pub fn eql(self: *Self, other: *Self) bool {
+    pub fn eql(self: *SlotMeta, other: *SlotMeta) bool {
         return self.slot == other.slot and
             self.consecutive_received_from_0 == other.consecutive_received_from_0 and
             self.received == other.received and
@@ -98,7 +93,7 @@ pub const SlotMeta = struct {
             self.completed_data_indexes.eql(&other.completed_data_indexes);
     }
 
-    pub fn isFull(self: Self) bool {
+    pub fn isFull(self: SlotMeta) bool {
         if (self.last_index) |last_index| {
             std.debug.assert(self.consecutive_received_from_0 <= last_index + 1);
             return self.consecutive_received_from_0 == last_index + 1;
@@ -107,27 +102,27 @@ pub const SlotMeta = struct {
         }
     }
 
-    pub fn isOrphan(self: Self) bool {
+    pub fn isOrphan(self: SlotMeta) bool {
         return self.parent_slot == null;
     }
 
-    pub fn isConnected(self: Self) bool {
+    pub fn isConnected(self: SlotMeta) bool {
         return self.connected_flags.isSet(.connected);
     }
 
-    pub fn setConnected(self: *Self) void {
+    pub fn setConnected(self: *SlotMeta) void {
         std.debug.assert(self.isParentConnected());
         self.connected_flags.set(.connected);
     }
 
-    pub fn isParentConnected(self: Self) bool {
+    pub fn isParentConnected(self: SlotMeta) bool {
         return self.connected_flags.isSet(.parent_connected);
     }
 
     /// Mark the meta's parent as connected.
     /// If the meta is also full, the meta is now connected as well. Return a
     /// boolean indicating whether the meta becamed connected from this call.
-    pub fn setParentConnected(self: *Self) bool {
+    pub fn setParentConnected(self: *SlotMeta) bool {
         // Already connected so nothing to do, bail early
         if (self.isConnected()) {
             return false;
@@ -188,9 +183,7 @@ pub const ErasureMeta = struct {
     /// Erasure configuration for this erasure set
     config: ErasureConfig,
 
-    const Self = @This();
-
-    pub fn fromCodeShred(shred: CodeShred) ?Self {
+    pub fn fromCodeShred(shred: CodeShred) ?ErasureMeta {
         return .{
             .erasure_set_index = shred.common.erasure_set_index,
             .config = ErasureConfig{
@@ -204,14 +197,14 @@ pub const ErasureMeta = struct {
 
     /// Returns true if the erasure fields on the shred
     /// are consistent with the erasure-meta.
-    pub fn checkCodeShred(self: Self, shred: CodeShred) bool {
+    pub fn checkCodeShred(self: ErasureMeta, shred: CodeShred) bool {
         var other = fromCodeShred(shred) orelse return false;
         other.first_received_code_index = self.first_received_code_index;
         return sig.utils.types.eql(self, other);
     }
 
     /// Analogous to [status](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L442)
-    pub fn status(self: Self, index: *Index) union(enum) {
+    pub fn status(self: ErasureMeta, index: *Index) union(enum) {
         can_recover,
         data_full,
         still_need: usize,
@@ -233,19 +226,19 @@ pub const ErasureMeta = struct {
     }
 
     /// Analogous to [data_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L422)
-    pub fn dataShredsIndices(self: Self) [2]u64 {
+    pub fn dataShredsIndices(self: ErasureMeta) [2]u64 {
         const num_data = self.config.num_data;
         return .{ self.erasure_set_index, self.erasure_set_index + num_data };
     }
 
     /// Analogous to [code_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L428)
-    pub fn codeShredsIndices(self: Self) [2]u64 {
+    pub fn codeShredsIndices(self: ErasureMeta) [2]u64 {
         const num_code = self.config.num_code;
         return .{ self.first_code_index, self.first_code_index + num_code };
     }
 
     /// Analogous to [next_erasure_set_index](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L437)
-    pub fn nextErasureSetIndex(self: Self) ?u32 {
+    pub fn nextErasureSetIndex(self: ErasureMeta) ?u32 {
         const num_data: u32 = @intCast(self.config.num_data);
         return std.math.add(
             u32,
@@ -267,17 +260,9 @@ pub const Index = struct {
     data_index: ShredIndex,
     code_index: ShredIndex,
 
-    pub fn init(allocator: std.mem.Allocator, slot: Slot) Index {
-        return .{
-            .slot = slot,
-            .data_index = ShredIndex.init(allocator),
-            .code_index = ShredIndex.init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Index) void {
-        self.data_index.deinit();
-        self.code_index.deinit();
+    pub fn deinit(self: *Index, allocator: std.mem.Allocator) void {
+        self.data_index.deinit(allocator);
+        self.code_index.deinit(allocator);
     }
 };
 
@@ -315,13 +300,13 @@ pub const ProgramCost = struct {
 pub const FrozenHashVersioned = union(enum) {
     current: FrozenHashStatus,
 
-    pub fn isDuplicateConfirmed(self: @This()) bool {
+    pub fn isDuplicateConfirmed(self: FrozenHashVersioned) bool {
         return switch (self) {
             .current => |c| c.is_duplicate_confirmed,
         };
     }
 
-    pub fn frozenHash(self: @This()) sig.core.Hash {
+    pub fn frozenHash(self: FrozenHashVersioned) sig.core.Hash {
         return switch (self) {
             .current => |c| c.frozen_hash,
         };

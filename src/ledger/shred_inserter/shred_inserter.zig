@@ -7,8 +7,6 @@ const meta = ledger.meta;
 const schema = ledger.schema.schema;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
-const AutoHashMap = std.AutoHashMap;
 const Atomic = std.atomic.Value;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Mutex = std.Thread.Mutex;
@@ -51,23 +49,21 @@ const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
 pub const ShredInserter = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger(@typeName(Self)),
+    logger: sig.trace.ScopedLogger(@typeName(ShredInserter)),
     db: BlockstoreDB,
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
     metrics: BlockstoreInsertionMetrics,
-
-    const Self = @This();
 
     pub fn init(
         allocator: Allocator,
         logger: sig.trace.Logger,
         registry: *sig.prometheus.Registry(.{}),
         db: BlockstoreDB,
-    ) GetMetricError!Self {
+    ) GetMetricError!ShredInserter {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(ShredInserter)),
             .db = db,
             .lock = .{},
             .max_root = Atomic(u64).init(0), // TODO read this from the database
@@ -75,7 +71,7 @@ pub const ShredInserter = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *ShredInserter) void {
         self.logger.deinit();
     }
 
@@ -115,13 +111,13 @@ pub const ShredInserter = struct {
     };
 
     pub const Result = struct {
-        completed_data_set_infos: ArrayList(CompletedDataSetInfo),
-        duplicate_shreds: ArrayList(PossibleDuplicateShred),
+        completed_data_set_infos: []const CompletedDataSetInfo,
+        duplicate_shreds: []const PossibleDuplicateShred,
 
-        pub fn deinit(self: Result) void {
-            for (self.duplicate_shreds.items) |ds| ds.deinit();
-            self.completed_data_set_infos.deinit();
-            self.duplicate_shreds.deinit();
+        pub fn deinit(self: Result, allocator: std.mem.Allocator) void {
+            for (self.duplicate_shreds) |ds| ds.deinit(allocator);
+            allocator.free(self.completed_data_set_infos);
+            allocator.free(self.duplicate_shreds);
         }
     };
 
@@ -192,7 +188,7 @@ pub const ShredInserter = struct {
     ///
     /// agave: do_insert_shreds
     pub fn insertShreds(
-        self: *Self,
+        self: *ShredInserter,
         shreds: []const Shred,
         is_repaired: []const bool,
         options: Options,
@@ -202,8 +198,8 @@ pub const ShredInserter = struct {
         // check inputs for validity and edge cases
         //
         if (shreds.len == 0) return .{
-            .completed_data_set_infos = ArrayList(CompletedDataSetInfo).init(self.allocator),
-            .duplicate_shreds = ArrayList(PossibleDuplicateShred).init(self.allocator),
+            .completed_data_set_infos = &.{},
+            .duplicate_shreds = &.{},
         };
         std.debug.assert(shreds.len == is_repaired.len);
         self.metrics.num_shreds.add(shreds.len);
@@ -214,12 +210,11 @@ pub const ShredInserter = struct {
         const allocator = self.allocator;
         var total_timer = try Timer.start();
         var state = try PendingInsertShredsState.init(
-            self.allocator,
             self.logger.unscoped(),
             &self.db,
             self.metrics,
         );
-        defer state.deinit();
+        defer state.deinit(allocator);
         const write_batch = &state.write_batch;
         const merkle_root_validator = MerkleRootValidator.init(&state);
 
@@ -231,9 +226,11 @@ pub const ShredInserter = struct {
         ///////////////////////////
         // insert received shreds
         //
+
+        var newly_completed_data_sets: std.ArrayListUnmanaged(CompletedDataSetInfo) = .empty;
+        errdefer newly_completed_data_sets.deinit(allocator);
+
         var shred_insertion_timer = try Timer.start();
-        var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
-        errdefer newly_completed_data_sets.deinit();
         for (shreds, is_repaired) |shred, is_repair| {
             const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
             switch (shred) {
@@ -241,14 +238,15 @@ pub const ShredInserter = struct {
                     if (options.shred_tracker) |tracker| {
                         tracker.registerDataShred(&shred.data, timestamp) catch |err| {
                             switch (err) {
-                                error.SlotUnderflow, error.SlotOverflow => {
-                                    self.metrics.register_shred_error.observe(@errorCast(err));
-                                },
+                                error.SlotUnderflow,
+                                error.SlotOverflow,
+                                => |e| self.metrics.register_shred_error.observe(e),
                                 else => return err,
                             }
                         };
                     }
-                    if (self.checkInsertDataShred(
+
+                    switch (try self.checkInsertDataShred(
                         data_shred,
                         &state,
                         merkle_root_validator,
@@ -256,25 +254,20 @@ pub const ShredInserter = struct {
                         options.is_trusted,
                         options.slot_leaders,
                         shred_source,
-                    )) |completed_data_sets| {
-                        if (is_repair) {
-                            self.metrics.num_repair.inc();
-                        }
-                        defer completed_data_sets.deinit();
-                        try newly_completed_data_sets.appendSlice(completed_data_sets.items);
-                        self.metrics.num_inserted.inc();
-                    } else |e| switch (e) {
-                        error.Exists => if (is_repair) {
+                    )) {
+                        .ok => |completed_data_sets| {
+                            defer allocator.free(completed_data_sets);
+
+                            if (is_repair) self.metrics.num_repair.inc();
+                            try newly_completed_data_sets.appendSlice(allocator, completed_data_sets);
+                            self.metrics.num_inserted.inc();
+                        },
+                        .exists => if (is_repair) {
                             self.metrics.num_repaired_data_shreds_exists.inc();
                         } else {
                             self.metrics.num_turbine_data_shreds_exists.inc();
                         },
-                        error.InvalidShred => self.metrics.num_data_shreds_invalid.inc(),
-                        // error.BlockstoreError => {
-                        //     self.metrics.num_data_shreds_blockstore_error.inc();
-                        //     // TODO improve this (maybe should be an error set)
-                        // },
-                        else => return e, // TODO explicit
+                        .invalid_shred => self.metrics.num_data_shreds_invalid.inc(),
                     }
                 },
                 .code => |code_shred| {
@@ -294,10 +287,10 @@ pub const ShredInserter = struct {
 
         /////////////////////////////////////
         // recover shreds and insert them
-        //
+        var valid_recovered_shreds: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer valid_recovered_shreds.deinit(allocator);
+
         var shred_recovery_timer = try Timer.start();
-        var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
-        defer valid_recovered_shreds.deinit();
         if (options.slot_leaders) |leaders| {
             var reed_solomon_cache = try ReedSolomonCache.init(allocator);
             defer reed_solomon_cache.deinit();
@@ -308,13 +301,11 @@ pub const ShredInserter = struct {
                 &reed_solomon_cache,
             );
             defer {
-                for (recovered_shreds.items) |shred| {
-                    shred.deinit();
-                }
-                recovered_shreds.deinit();
+                for (recovered_shreds) |shred| shred.deinit(allocator);
+                allocator.free(recovered_shreds);
             }
 
-            for (recovered_shreds.items) |shred| {
+            for (recovered_shreds) |shred| {
                 if (shred == .data) {
                     self.metrics.num_recovered.inc();
                 }
@@ -330,7 +321,7 @@ pub const ShredInserter = struct {
                 // erasure batch, no need to store code shreds in
                 // blockstore.
                 if (shred == .code) {
-                    try valid_recovered_shreds.append(shred.payload());
+                    try valid_recovered_shreds.append(allocator, shred.payload());
                     continue;
                 }
                 if (options.shred_tracker) |tracker| {
@@ -343,7 +334,8 @@ pub const ShredInserter = struct {
                         }
                     };
                 }
-                if (self.checkInsertDataShred(
+
+                switch (try self.checkInsertDataShred(
                     shred.data,
                     &state,
                     merkle_root_validator,
@@ -351,19 +343,16 @@ pub const ShredInserter = struct {
                     options.is_trusted,
                     options.slot_leaders,
                     .recovered,
-                )) |completed_data_sets| {
-                    defer completed_data_sets.deinit();
-                    try newly_completed_data_sets.appendSlice(completed_data_sets.items);
-                    self.metrics.num_recovered_inserted.inc();
-                    try valid_recovered_shreds.append(shred.payload());
-                } else |e| switch (e) {
-                    error.Exists => self.metrics.num_recovered_exists.inc(),
-                    error.InvalidShred => self.metrics.num_recovered_failed_invalid.inc(),
-                    // error.BlockstoreError => {
-                    //     self.metrics.num_recovered_blockstore_error.inc();
-                    //     // TODO improve this (maybe should be an error set)
-                    // },
-                    else => return e, // TODO explicit
+                )) {
+                    .ok => |completed_data_sets| {
+                        defer allocator.free(completed_data_sets);
+
+                        try newly_completed_data_sets.appendSlice(allocator, completed_data_sets);
+                        self.metrics.num_recovered_inserted.inc();
+                        try valid_recovered_shreds.append(allocator, shred.payload());
+                    },
+                    .exists => self.metrics.num_recovered_exists.inc(),
+                    .invalid_shred => self.metrics.num_recovered_failed_invalid.inc(),
                 }
             }
             if (valid_recovered_shreds.items.len > 0) if (options.retransmit_sender) |_| {
@@ -410,6 +399,7 @@ pub const ShredInserter = struct {
             const shred = state.just_inserted_shreds.get(shred_id).?;
             // TODO: agave discards the result here. should we also?
             _ = try merkle_root_validator.checkForwardChaining(
+                self.allocator,
                 shred.code,
                 erasure_meta,
                 state.merkleRootMetas(),
@@ -438,7 +428,11 @@ pub const ShredInserter = struct {
             // unreachable: Merkle root meta was just created, initial shred must exist
             const shred = state.just_inserted_shreds.get(shred_id).?;
             // TODO: agave discards the result here. should we also?
-            _ = try merkle_root_validator.checkBackwardChaining(shred, state.erasureMetas());
+            _ = try merkle_root_validator.checkBackwardChaining(
+                self.allocator,
+                shred,
+                state.erasureMetas(),
+            );
         }
 
         self.metrics.merkle_chaining_elapsed_us.add(merkle_chaining_timer.read().asMicros());
@@ -446,21 +440,21 @@ pub const ShredInserter = struct {
         ///////////////////////////
         // commit and return
         //
-        try state.commit();
+        try state.commit(self.allocator);
 
         // TODO send signals
 
         self.metrics.total_elapsed_us.add(total_timer.read().asMicros());
 
         return .{
-            .completed_data_set_infos = newly_completed_data_sets,
-            .duplicate_shreds = state.duplicate_shreds,
+            .completed_data_set_infos = try newly_completed_data_sets.toOwnedSlice(allocator),
+            .duplicate_shreds = try state.duplicate_shreds.toOwnedSlice(allocator),
         };
     }
 
     /// agave: check_insert_coding_shred
     fn checkInsertCodeShred(
-        self: *Self,
+        self: *ShredInserter,
         shred: CodeShred,
         state: *PendingInsertShredsState,
         merkle_root_validator: MerkleRootValidator,
@@ -470,11 +464,11 @@ pub const ShredInserter = struct {
     ) !bool {
         const slot = shred.common.slot;
 
-        const index_meta_working_set_entry = try state.getIndexMetaEntry(slot);
+        const index_meta_working_set_entry = try state.getIndexMetaEntry(self.allocator, slot);
         const index_meta = &index_meta_working_set_entry.index;
 
         const erasure_set_id = shred.common.erasureSetId();
-        try state.merkleRootMetas().load(erasure_set_id);
+        try state.merkleRootMetas().load(self.allocator, erasure_set_id);
 
         if (!try self.shouldInsertCodeShred(
             state,
@@ -491,19 +485,26 @@ pub const ShredInserter = struct {
         //     .record_shred(shred.slot(), shred.erasure_set_index(), shred_source, None);
         _ = shred_source;
 
-        const was_inserted = !std.meta.isError(insertCodeShred(index_meta, shred, write_batch));
+        const was_inserted = !std.meta.isError(self.insertCodeShred(index_meta, shred, write_batch));
 
         if (was_inserted) {
             index_meta_working_set_entry.did_insert_occur = true;
             self.metrics.num_inserted.inc();
-            try state.merkleRootMetas().initIfMissing(erasure_set_id, shred);
+            try state.merkleRootMetas().initIfMissing(
+                self.allocator,
+                erasure_set_id,
+                shred,
+            );
         }
 
         // NOTE: it's not accurate to say the shred was "just inserted" if was_inserted is false,
         // but it is added to just_inserted_shreds regardless because it would be nice to have
         // access to these shreds later on, for example when recovery is attempted. also, this is
         // the same approach used in agave.
-        const shred_entry = try state.just_inserted_shreds.getOrPut(shred.id());
+        const shred_entry = try state.just_inserted_shreds.getOrPut(
+            self.allocator,
+            shred.id(),
+        );
         if (!shred_entry.found_existing) {
             self.metrics.num_code_shreds_inserted.inc();
             shred_entry.value_ptr.* = .{ .code = shred }; // TODO lifetime
@@ -513,7 +514,7 @@ pub const ShredInserter = struct {
     }
 
     fn shouldInsertCodeShred(
-        self: *Self,
+        self: *ShredInserter,
         state: *PendingInsertShredsState,
         merkle_root_validator: MerkleRootValidator,
         shred: CodeShred,
@@ -528,9 +529,14 @@ pub const ShredInserter = struct {
             // dupes
             if (index_meta.code_index.contains(shred.common.index)) {
                 self.metrics.num_code_shreds_exists.inc();
-                const dupe = try shred.clone();
-                errdefer dupe.deinit();
-                try state.duplicate_shreds.append(.{ .Exists = .{ .code = dupe } });
+
+                const dupe = try shred.clone(self.allocator);
+                errdefer dupe.deinit(self.allocator);
+
+                try state.duplicate_shreds.append(
+                    self.allocator,
+                    .{ .exists = .{ .code = dupe } },
+                );
                 return false;
             }
 
@@ -549,12 +555,11 @@ pub const ShredInserter = struct {
                 // Compare our current shred against the previous shred for potential
                 // conflicts
                 if (!try merkle_root_validator.checkConsistency(
+                    self.allocator,
                     shred.common.slot,
                     merkle_root_meta.asRef(),
                     &.{ .code = shred },
-                )) {
-                    return false;
-                }
+                )) return false;
             }
         }
 
@@ -563,7 +568,11 @@ pub const ShredInserter = struct {
         // NOTE perf: maybe this can be skipped for trusted shreds.
         // agave runs this regardless of trust, but we can check if it has
         // a meaningful performance impact to skip this for trusted shreds.
-        const erasure_meta = try state.erasureMetas().getOrPut(erasure_set_id, shred);
+        const erasure_meta = try state.erasureMetas().getOrPut(
+            self.allocator,
+            erasure_set_id,
+            shred,
+        );
         if (!erasure_meta.checkCodeShred(shred)) {
             self.metrics.num_code_shreds_invalid_erasure_config.inc();
             try self.recordShredConflict(state, shred, erasure_meta);
@@ -577,7 +586,7 @@ pub const ShredInserter = struct {
     /// will store a record of it in the database in `schema.duplicate_slots` and log
     /// some error and warn messages.
     fn recordShredConflict(
-        self: *Self,
+        self: *ShredInserter,
         state: *PendingInsertShredsState,
         shred: CodeShred,
         erasure_meta: *const ErasureMeta,
@@ -597,7 +606,7 @@ pub const ShredInserter = struct {
                 // found the duplicate
                 self.db.put(schema.duplicate_slots, slot, .{
                     .shred1 = conflicting_shred.data,
-                    .shred2 = try shred.allocator.dupe(u8, shred.payload),
+                    .shred2 = try self.allocator.dupe(u8, shred.payload),
                 }) catch |e| {
                     // TODO: only log a database error?
                     self.logger.err().logf(
@@ -605,13 +614,20 @@ pub const ShredInserter = struct {
                         .{ slot, erasure_set_id, e },
                     );
                 };
-                const original = try shred.clone();
-                errdefer original.deinit();
+
+                const original = try shred.clone(self.allocator);
+                errdefer original.deinit(self.allocator);
+
                 const conflict = try conflicting_shred.clone(self.allocator);
                 errdefer conflict.deinit();
-                try state.duplicate_shreds.append(.{
-                    .ErasureConflict = .{ .original = .{ .code = original }, .conflict = conflict },
-                });
+
+                try state.duplicate_shreds.append(
+                    self.allocator,
+                    .{ .erasure_conflict = .{
+                        .original = .{ .code = original },
+                        .conflict = conflict,
+                    } },
+                );
             } else {
                 self.logger.err().logf(&newlinesToSpaces(
                     \\Unable to find the conflicting code shred that set {any}.
@@ -655,9 +671,15 @@ pub const ShredInserter = struct {
         return null;
     }
 
+    const CheckResult = union(enum) {
+        exists,
+        invalid_shred,
+        ok: []const CompletedDataSetInfo,
+    };
+
     /// agave: check_insert_data_shred
     fn checkInsertDataShred(
-        self: *Self,
+        self: *ShredInserter,
         shred: DataShred,
         state: *PendingInsertShredsState,
         merkle_root_validator: MerkleRootValidator,
@@ -665,27 +687,35 @@ pub const ShredInserter = struct {
         is_trusted: bool,
         leader_schedule: ?SlotLeaders,
         shred_source: ShredSource,
-    ) !ArrayList(CompletedDataSetInfo) {
+    ) !CheckResult {
         const slot = shred.common.slot;
-        const shred_index: u64 = @intCast(shred.common.index);
-        const shred_union = Shred{ .data = shred };
+        const shred_index: u64 = shred.common.index;
+        const shred_union: Shred = .{ .data = shred };
 
-        const index_meta_working_set_entry = try state.getIndexMetaEntry(slot);
+        const index_meta_working_set_entry = try state.getIndexMetaEntry(self.allocator, slot);
         const index_meta = &index_meta_working_set_entry.index;
-        const slot_meta_entry = try state.getSlotMetaEntry(slot, try shred.parent());
+        const slot_meta_entry = try state.getSlotMetaEntry(
+            self.allocator,
+            slot,
+            try shred.parent(),
+        );
         const slot_meta = &slot_meta_entry.new_slot_meta;
 
         const erasure_set_id = shred.common.erasureSetId();
-        try state.merkleRootMetas().load(erasure_set_id);
+        try state.merkleRootMetas().load(self.allocator, erasure_set_id);
 
         if (!is_trusted) {
             if (isDataShredPresent(shred, slot_meta, &index_meta.data_index)) {
                 {
-                    const dupe = try shred_union.clone();
-                    errdefer dupe.deinit();
-                    try state.duplicate_shreds.append(.{ .Exists = dupe });
+                    const dupe = try shred_union.clone(self.allocator);
+                    errdefer dupe.deinit(self.allocator);
+
+                    try state.duplicate_shreds.append(
+                        self.allocator,
+                        .{ .exists = dupe },
+                    );
                 }
-                return error.Exists;
+                return .exists;
             }
             if (shred.isLastInSlot() and
                 shred_index < slot_meta.received and
@@ -709,6 +739,7 @@ pub const ShredInserter = struct {
             }
 
             if (!try self.shouldInsertDataShred(
+                self.allocator,
                 shred,
                 slot_meta,
                 state.shreds(),
@@ -717,17 +748,20 @@ pub const ShredInserter = struct {
                 shred_source,
                 &state.duplicate_shreds,
             )) {
-                return error.InvalidShred;
+                return .invalid_shred;
             }
 
             if (state.merkle_root_metas.get(erasure_set_id)) |merkle_root_meta| {
                 // A previous shred has been inserted in this batch or in blockstore
                 // Compare our current shred against the previous shred for potential
                 // conflicts
-                if (!try merkle_root_validator
-                    .checkConsistency(slot, merkle_root_meta.asRef(), &shred_union))
-                {
-                    return error.InvalidShred;
+                if (!try merkle_root_validator.checkConsistency(
+                    self.allocator,
+                    slot,
+                    merkle_root_meta.asRef(),
+                    &shred_union,
+                )) {
+                    return .invalid_shred;
                 }
             }
         }
@@ -739,18 +773,24 @@ pub const ShredInserter = struct {
             write_batch,
             shred_source,
         );
-        try state.merkleRootMetas().initIfMissing(erasure_set_id, shred);
-        try state.just_inserted_shreds.put(shred.id(), shred_union); // TODO check first?
+        try state.merkleRootMetas().initIfMissing(self.allocator, erasure_set_id, shred);
+        // TODO check first?
+        try state.just_inserted_shreds.put(
+            self.allocator,
+            shred.id(),
+            shred_union,
+        );
         index_meta_working_set_entry.did_insert_occur = true;
         slot_meta_entry.did_insert_occur = true;
 
-        try state.erasureMetas().load(erasure_set_id);
+        try state.erasureMetas().load(self.allocator, erasure_set_id);
 
-        return newly_completed_data_sets;
+        return .{ .ok = newly_completed_data_sets };
     }
 
     /// agave: insert_coding_shred
     fn insertCodeShred(
+        self: *ShredInserter,
         index_meta: *meta.Index,
         shred: CodeShred,
         write_batch: *WriteBatch,
@@ -761,7 +801,7 @@ pub const ShredInserter = struct {
         assertOk(shred.sanitize());
 
         try write_batch.put(schema.code_shred, .{ slot, shred_index }, shred.payload);
-        try index_meta.code_index.put(shred_index);
+        try index_meta.code_index.put(self.allocator, shred_index);
     }
 
     /// Check if the shred already exists in blockstore
@@ -778,14 +818,15 @@ pub const ShredInserter = struct {
 
     /// agave: should_insert_data_shred
     fn shouldInsertDataShred(
-        self: *Self,
+        self: *ShredInserter,
+        allocator: std.mem.Allocator,
         shred: DataShred,
         slot_meta: *const SlotMeta,
         shred_store: ShredWorkingStore,
         max_root: Slot,
         leader_schedule: ?SlotLeaders,
         shred_source: ShredSource,
-        duplicate_shreds: *ArrayList(PossibleDuplicateShred),
+        duplicate_shreds: *std.ArrayListUnmanaged(PossibleDuplicateShred),
     ) !bool {
         const slot = shred.common.slot;
         const shred_index_u32 = shred.common.index;
@@ -806,6 +847,7 @@ pub const ShredInserter = struct {
                     .shred_type = .data,
                 };
                 const maybe_shred = try shred_store.get(shred_id);
+
                 const ending_shred = if (maybe_shred) |s| s else {
                     self.logger.err().logf(&newlinesToSpaces(
                         \\Last received data shred {any} indicated by slot meta \
@@ -816,7 +858,8 @@ pub const ShredInserter = struct {
                     return false; // TODO: this is redundant
                 };
                 defer ending_shred.deinit();
-                const dupe = meta.DuplicateSlotProof{
+
+                const dupe: meta.DuplicateSlotProof = .{
                     .shred1 = ending_shred.data,
                     .shred2 = shred.payload,
                 };
@@ -824,14 +867,20 @@ pub const ShredInserter = struct {
                     // TODO: only log a database error?
                     self.logger.err().logf("failed to store duplicate slot: {}", .{e});
                 };
-                const original = try shred.clone();
-                errdefer original.deinit();
+
+                const original = try shred.clone(allocator);
+                errdefer original.deinit(allocator);
+
                 const conflict = try ending_shred.clone(self.allocator);
                 errdefer conflict.deinit();
-                try duplicate_shreds.append(.{ .LastIndexConflict = .{
-                    .original = .{ .data = original },
-                    .conflict = conflict,
-                } });
+
+                try duplicate_shreds.append(
+                    allocator,
+                    .{ .last_index_conflict = .{
+                        .original = .{ .data = original },
+                        .conflict = conflict,
+                    } },
+                );
             }
 
             const leader_pubkey = slotLeader(leader_schedule, slot);
@@ -851,19 +900,19 @@ pub const ShredInserter = struct {
     }
 
     /// agave: has_duplicate_shreds_in_slot
-    fn hasDuplicateShredsInSlot(self: *Self, slot: Slot) !bool {
+    fn hasDuplicateShredsInSlot(self: *ShredInserter, slot: Slot) !bool {
         return try self.db.contains(schema.duplicate_slots, slot);
     }
 
     /// agave: insert_data_shred
     fn insertDataShred(
-        self: *const Self,
+        self: *const ShredInserter,
         slot_meta: *SlotMeta,
         data_index: *meta.ShredIndex,
         shred: *const DataShred,
         write_batch: *WriteBatch,
         _: ShredSource,
-    ) !ArrayList(CompletedDataSetInfo) {
+    ) ![]const CompletedDataSetInfo {
         const slot = shred.common.slot;
         const index_u32 = shred.common.index;
         const index: u64 = @intCast(index_u32);
@@ -877,9 +926,8 @@ pub const ShredInserter = struct {
         } else slot_meta.consecutive_received_from_0;
 
         try write_batch.put(schema.data_shred, .{ slot, index }, shred.payload);
-        try data_index.put(index);
+        try data_index.put(self.allocator, index);
 
-        var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(self.allocator);
         const shred_indices = try updateSlotMeta(
             self.allocator,
             shred.isLastInSlot(),
@@ -890,10 +938,12 @@ pub const ShredInserter = struct {
             shred.referenceTick(),
             data_index,
         );
-        defer shred_indices.deinit();
-        for (shred_indices.items) |indices| {
+        defer self.allocator.free(shred_indices);
+
+        var newly_completed_data_sets: std.ArrayListUnmanaged(CompletedDataSetInfo) = .empty;
+        for (shred_indices) |indices| {
             const start, const end = indices;
-            try newly_completed_data_sets.append(.{
+            try newly_completed_data_sets.append(self.allocator, .{
                 .slot = slot,
                 .start_index = start,
                 .end_index = end,
@@ -901,16 +951,14 @@ pub const ShredInserter = struct {
         }
 
         // TODO self.metrics: record_shred
-        if (slot_meta.isFull()) {
-            self.sendSlotFullTiming(slot);
-        }
+        if (slot_meta.isFull()) self.sendSlotFullTiming(slot);
 
-        return newly_completed_data_sets;
+        return newly_completed_data_sets.toOwnedSlice(self.allocator);
     }
 
     /// send slot full timing point to poh_timing_report service
     /// agave: send_slot_full_timing
-    fn sendSlotFullTiming(self: *const Self, slot: Slot) void {
+    fn sendSlotFullTiming(self: *const ShredInserter, slot: Slot) void {
         _ = self;
         _ = slot;
         // TODO
@@ -918,12 +966,12 @@ pub const ShredInserter = struct {
 
     // agave: try_shred_recovery
     fn tryShredRecovery(
-        self: *Self,
+        self: *ShredInserter,
         erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
-        index_working_set: *AutoHashMap(u64, IndexMetaWorkingSetEntry),
+        index_working_set: *std.AutoHashMapUnmanaged(u64, IndexMetaWorkingSetEntry),
         shred_store: ShredWorkingStore,
         reed_solomon_cache: *ReedSolomonCache,
-    ) !ArrayList(Shred) {
+    ) ![]const Shred {
         // Recovery rules:
         // 1. Only try recovery around indexes for which new data or code shreds are received
         // 2. For new data shreds, check if an erasure set exists. If not, don't try recovery
@@ -938,6 +986,7 @@ pub const ShredInserter = struct {
             };
             switch (erasure_meta.status(&index_meta_entry.index)) {
                 .can_recover => return try self.recoverShreds(
+                    self.allocator,
                     &index_meta_entry.index,
                     erasure_meta,
                     shred_store,
@@ -952,21 +1001,22 @@ pub const ShredInserter = struct {
                 },
             }
         }
-        return std.ArrayList(Shred).init(self.allocator);
+        return &.{};
     }
 
     /// agave: recover_shreds
     fn recoverShreds(
-        self: *Self,
+        self: *ShredInserter,
+        allocator: std.mem.Allocator,
         index: *const Index,
         erasure_meta: *const ErasureMeta,
         shred_store: ShredWorkingStore,
         reed_solomon_cache: *ReedSolomonCache,
-    ) !std.ArrayList(Shred) {
-        var available_shreds = ArrayList(Shred).init(self.allocator);
+    ) ![]const Shred {
+        var available_shreds: std.ArrayListUnmanaged(Shred) = .empty;
         defer {
-            for (available_shreds.items) |shred| shred.deinit();
-            available_shreds.deinit();
+            for (available_shreds.items) |shred| shred.deinit(allocator);
+            available_shreds.deinit(allocator);
         }
 
         try getRecoveryShreds(
@@ -993,12 +1043,12 @@ pub const ShredInserter = struct {
             available_shreds.items,
             reed_solomon_cache,
         )) |shreds| {
-            self.submitRecoveryMetrics(index.slot, erasure_meta, true, "complete", shreds.items.len);
+            self.submitRecoveryMetrics(index.slot, erasure_meta, true, "complete", shreds.len);
             return shreds;
         } else |e| {
             self.logger.err().logf("shred recovery error: {}", .{e});
             self.submitRecoveryMetrics(index.slot, erasure_meta, true, "incomplete", 0);
-            return std.ArrayList(Shred).init(self.allocator);
+            return &.{};
         }
     }
 
@@ -1010,17 +1060,17 @@ pub const ShredInserter = struct {
         slot: Slot,
         shred_indices: [2]u64,
         shred_store: ShredWorkingStore,
-        available_shreds: *ArrayList(Shred),
+        available_shreds: *std.ArrayListUnmanaged(Shred),
     ) !void {
         for (shred_indices[0]..shred_indices[1]) |i| {
             if (try shred_store.getWithIndex(allocator, index, shred_type, slot, i)) |shred| {
-                try available_shreds.append(shred);
+                try available_shreds.append(allocator, shred);
             }
         }
     }
 
     fn submitRecoveryMetrics(
-        self: *const Self,
+        self: *const ShredInserter,
         slot: Slot,
         erasure_meta: *const ErasureMeta,
         attempted: bool,
@@ -1070,12 +1120,11 @@ fn updateSlotMeta(
     new_consecutive_received_from_0: u64,
     reference_tick: u8,
     received_data_shreds: *meta.ShredIndex,
-) Allocator.Error!ArrayList([2]u32) {
-    const first_insert = slot_meta.received == 0;
+) Allocator.Error![]const [2]u32 {
     // Index is zero-indexed, while the "received" height starts from 1,
     // so received = index + 1 for the same shred.
-    slot_meta.received = @max(@as(u64, @intCast(index)) + 1, slot_meta.received);
-    if (first_insert) {
+    slot_meta.received = @max(index + 1, slot_meta.received);
+    if (slot_meta.received == 0) {
         // predict the timestamp of what would have been the first shred in this slot
         const slot_time_elapsed = @as(u64, @intCast(reference_tick)) * 1000 / DEFAULT_TICKS_PER_SECOND;
         slot_meta.first_shred_timestamp_milli = @as(u64, @intCast(std.time.milliTimestamp())) -| slot_time_elapsed;
@@ -1106,37 +1155,36 @@ fn updateCompletedDataIndexes(
     received_data_shreds: *meta.ShredIndex,
     /// Shreds indices which are marked data complete.
     completed_data_indexes: *SortedSet(u32),
-) Allocator.Error!ArrayList([2]u32) {
-    var shred_indices = ArrayList(u32).init(allocator);
-    defer shred_indices.deinit();
+) Allocator.Error![]const [2]u32 {
+    var shred_indices: std.ArrayListUnmanaged(u32) = .empty;
+    defer shred_indices.deinit(allocator);
+
     const subslice = completed_data_indexes.range(null, new_shred_index);
     const start_shred_index = if (subslice.len == 0) 0 else subslice[subslice.len - 1];
-    // Consecutive entries i, k, j in this vector represent potential ranges [i, k),
-    // [k, j) that could be completed data ranges
-    try shred_indices.append(start_shred_index);
+    // Consecutive entries i, k, j in this vector represent potential ranges
+    // [i, k), [k, j) that could be completed data ranges
+    try shred_indices.append(allocator, start_shred_index);
     // `new_shred_index` is data complete, so need to insert here into the
     // `completed_data_indexes`
     if (is_last_in_data) {
-        try completed_data_indexes.put(new_shred_index);
-        try shred_indices.append(new_shred_index + 1);
+        try completed_data_indexes.put(allocator, new_shred_index);
+        try shred_indices.append(allocator, new_shred_index + 1);
     }
     const new_subslice = completed_data_indexes.range(new_shred_index + 1, null);
     if (new_subslice.len != 0) {
-        try shred_indices.append(new_subslice[0]);
+        try shred_indices.append(allocator, new_subslice[0]);
     }
 
-    var ret = ArrayList([2]u32).init(allocator);
-    var i: usize = 0;
-    while (i + 1 < shred_indices.items.len) {
+    var result: std.ArrayListUnmanaged([2]u32) = .empty;
+    for (0..shred_indices.items.len -| 1) |i| {
         const begin = shred_indices.items[i];
         const end = shred_indices.items[i + 1];
-        const num_shreds: usize = @intCast(end - begin);
+        const num_shreds: u64 = end - begin;
         if (received_data_shreds.range(begin, end).len == num_shreds) {
-            try ret.append(.{ begin, end - 1 });
+            try result.append(allocator, .{ begin, end - 1 });
         }
-        i += 1;
     }
-    return ret;
+    return try result.toOwnedSlice(allocator);
 }
 
 const ShredSource = enum {
@@ -1204,27 +1252,27 @@ fn assertOk(result: anytype) void {
 }
 
 const ShredInserterTestState = struct {
-    state: *TestState,
+    state: TestState,
     db: BlockstoreDB,
     inserter: ShredInserter,
 
     pub fn init(
-        allocator_: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
     ) !ShredInserterTestState {
         var test_logger = DirectPrintLogger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
         const logger = test_logger.logger();
-        return initWithLogger(allocator_, test_src, logger);
+        return initWithLogger(allocator, test_src, logger);
     }
 
     fn initWithLogger(
-        allocator_: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         comptime test_src: std.builtin.SourceLocation,
         logger: sig.trace.Logger,
     ) !ShredInserterTestState {
-        const state = try TestState.init(allocator_, test_src, logger);
+        var state = try TestState.init(allocator, test_src, logger);
         const inserter = try ShredInserter.init(
-            state.allocator,
+            allocator,
             logger,
             &state.registry,
             state.db,
@@ -1232,28 +1280,26 @@ const ShredInserterTestState = struct {
         return .{ .state = state, .db = state.db, .inserter = inserter };
     }
 
-    pub fn allocator(self: ShredInserterTestState) Allocator {
-        return self.state.allocator;
-    }
-
     /// Test helper to convert raw bytes into shreds and pass them to insertShreds
     fn insertShredBytes(
         self: *ShredInserterTestState,
+        allocator: std.mem.Allocator,
         shred_payloads: []const []const u8,
     ) !ShredInserter.Result {
-        const shreds = try self.allocator().alloc(Shred, shred_payloads.len);
+        const shreds = try allocator.alloc(Shred, shred_payloads.len);
         defer {
-            for (shreds) |shred| shred.deinit();
-            self.allocator().free(shreds);
+            for (shreds) |shred| shred.deinit(allocator);
+            allocator.free(shreds);
         }
-        for (shred_payloads, 0..) |payload, i| {
-            shreds[i] = try Shred.fromPayload(self.allocator(), payload);
+
+        for (shred_payloads, shreds) |payload, *shred| {
+            shred.* = try Shred.fromPayload(allocator, payload);
         }
-        const is_repairs = try self.allocator().alloc(bool, shreds.len);
-        defer self.allocator().free(is_repairs);
-        for (0..shreds.len) |i| {
-            is_repairs[i] = false;
-        }
+
+        const is_repairs = try allocator.alloc(bool, shreds.len);
+        defer allocator.free(is_repairs);
+        @memset(is_repairs, false);
+
         return self.inserter.insertShreds(shreds, is_repairs, .{});
     }
 
@@ -1289,38 +1335,44 @@ pub fn insertShredsForTest(inserter: *ShredInserter, shreds: []const Shred) !Shr
 }
 
 test "insertShreds single shred" {
-    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
-    defer state.deinit();
     const allocator = std.testing.allocator;
+    var state = try ShredInserterTestState.init(allocator, @src());
+    defer state.deinit();
+
     const shred = try Shred.fromPayload(allocator, &ledger.shred.test_data_shred);
-    defer shred.deinit();
+    defer shred.deinit(allocator);
+
     const result = try state.inserter.insertShreds(&.{shred}, &.{false}, .{});
-    result.deinit();
+    result.deinit(allocator);
+
     const stored_shred = try state.db.getBytes(
         schema.data_shred,
         .{ shred.commonHeader().slot, shred.commonHeader().index },
     );
     defer if (stored_shred) |s| s.deinit();
+
     if (stored_shred == null) return error.Fail;
+
     try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
 }
 
 test "insertShreds 100 shreds from mainnet" {
-    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
+    const allocator = std.testing.allocator;
+    var state = try ShredInserterTestState.init(allocator, @src());
     defer state.deinit();
 
     const shred_bytes = test_shreds.mainnet_shreds;
-    var shreds = std.ArrayList(Shred).init(std.testing.allocator);
+    var shreds = std.ArrayList(Shred).init(allocator);
     defer shreds.deinit();
-    defer for (shreds.items) |s| s.deinit();
+    defer for (shreds.items) |s| s.deinit(allocator);
 
     for (shred_bytes) |payload| {
-        const shred = try Shred.fromPayload(std.testing.allocator, payload);
+        const shred = try Shred.fromPayload(allocator, payload);
         try shreds.append(shred);
     }
     const result = try state.inserter
         .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), .{});
-    result.deinit();
+    result.deinit(allocator);
     for (shreds.items) |shred| {
         const bytes = try state.db.getBytes(
             schema.data_shred,
@@ -1333,7 +1385,9 @@ test "insertShreds 100 shreds from mainnet" {
 
 // agave: test_handle_chaining_basic
 test "chaining basic" {
-    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
+    const allocator = std.testing.allocator;
+
+    var state = try ShredInserterTestState.init(allocator, @src());
     defer state.deinit();
 
     const shreds = test_shreds.handle_chaining_basic_shreds;
@@ -1347,11 +1401,12 @@ test "chaining basic" {
     };
 
     // insert slot 1
-    var result = try state.insertShredBytes(slots[1]);
-    result.deinit();
+    var result = try state.insertShredBytes(allocator, slots[1]);
+    result.deinit(allocator);
     {
-        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
-        defer slot_meta.deinit();
+        var slot_meta: SlotMeta = (try state.db.get(allocator, schema.slot_meta, 1)).?;
+        defer slot_meta.deinit(allocator);
+
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
@@ -1359,19 +1414,21 @@ test "chaining basic" {
     }
 
     // insert slot 2
-    result = try state.insertShredBytes(slots[2]);
-    result.deinit();
+    result = try state.insertShredBytes(allocator, slots[2]);
+    result.deinit(allocator);
     {
-        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
-        defer slot_meta.deinit();
+        var slot_meta: SlotMeta = (try state.db.get(allocator, schema.slot_meta, 1)).?;
+        defer slot_meta.deinit(allocator);
+
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 2)).?;
-        defer slot_meta.deinit();
+        var slot_meta: SlotMeta = (try state.db.get(allocator, schema.slot_meta, 2)).?;
+        defer slot_meta.deinit(allocator);
+
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
         try std.testing.expectEqual(1, slot_meta.parent_slot);
@@ -1379,27 +1436,27 @@ test "chaining basic" {
     }
 
     // insert slot 0
-    result = try state.insertShredBytes(slots[0]);
-    result.deinit();
+    result = try state.insertShredBytes(allocator, slots[0]);
+    result.deinit(allocator);
     {
-        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 0)).?;
-        defer slot_meta.deinit();
+        var slot_meta: SlotMeta = (try state.db.get(allocator, schema.slot_meta, 0)).?;
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 1)).?;
-        defer slot_meta.deinit();
+        var slot_meta: SlotMeta = (try state.db.get(allocator, schema.slot_meta, 1)).?;
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(0, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
     {
-        var slot_meta: SlotMeta = (try state.db.get(state.allocator(), schema.slot_meta, 2)).?;
-        defer slot_meta.deinit();
+        var slot_meta: SlotMeta = (try state.db.get(allocator, schema.slot_meta, 2)).?;
+        defer slot_meta.deinit(allocator);
         try std.testing.expectEqualSlices(u64, &.{}, slot_meta.child_slots.items);
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(1, slot_meta.parent_slot);
@@ -1409,11 +1466,13 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
-    var state = try ShredInserterTestState.initWithLogger(std.testing.allocator, @src(), .noop);
+    const allocator = std.testing.allocator;
+    var state = try ShredInserterTestState.initWithLogger(allocator, @src(), .noop);
     defer state.deinit();
-    const allocator = state.allocator();
+
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
+
     const metrics = try registry.initStruct(BlockstoreInsertionMetrics);
 
     const slot = 1;
@@ -1430,16 +1489,18 @@ test "merkle root metas coding" {
         defer write_batch.deinit();
         const this_shred = shreds[0];
         var insert_state = try PendingInsertShredsState.init(
-            state.allocator(),
             .noop,
             &state.db,
             metrics,
         );
-        defer insert_state.deinit();
+        defer insert_state.deinit(allocator);
         const merkle_root_metas = &insert_state.merkle_root_metas;
 
-        const succeeded = try state
-            .checkInsertCodeShred(this_shred, &insert_state, &write_batch);
+        const succeeded = try state.checkInsertCodeShred(
+            this_shred,
+            &insert_state,
+            &write_batch,
+        );
         try std.testing.expect(succeeded);
 
         const erasure_set_id = this_shred.commonHeader().erasureSetId();
@@ -1466,17 +1527,16 @@ test "merkle root metas coding" {
     }
 
     var insert_state = try PendingInsertShredsState.init(
-        state.allocator(),
         .noop,
         &state.db,
         metrics,
     );
     defer {
-        insert_state.deinit();
+        insert_state.deinit(allocator);
         for (insert_state.duplicate_shreds.items) |shred| {
-            shred.deinit();
+            shred.deinit(allocator);
         }
-        insert_state.duplicate_shreds.deinit();
+        insert_state.duplicate_shreds.deinit(allocator);
     }
 
     { // second shred (same index as first, should conflict with merkle root)
@@ -1492,7 +1552,7 @@ test "merkle root metas coding" {
         try std.testing.expectEqual(1, insert_state.duplicate_shreds.items.len);
         try std.testing.expectEqual(
             slot,
-            insert_state.duplicate_shreds.items[0].MerkleRootConflict.original.commonHeader().slot,
+            insert_state.duplicate_shreds.items[0].merkle_root_conflict.original.commonHeader().slot,
         );
 
         // Verify that we still have the merkle root meta from the original shred
@@ -1500,7 +1560,7 @@ test "merkle root metas coding" {
         const original_erasure_set_id = shreds[0].commonHeader().erasureSetId();
         const original_meta_from_map = merkle_root_metas.get(original_erasure_set_id).?.asRef();
         const original_meta_from_db = (try state.db.get(
-            state.allocator(),
+            allocator,
             schema.merkle_root_meta,
             original_erasure_set_id,
         )).?;
@@ -1516,7 +1576,7 @@ test "merkle root metas coding" {
         try state.db.commit(&write_batch);
     }
 
-    for (insert_state.duplicate_shreds.items) |duplicate| duplicate.deinit();
+    for (insert_state.duplicate_shreds.items) |duplicate| duplicate.deinit(allocator);
     insert_state.duplicate_shreds.clearRetainingCapacity();
 
     { // third shred (different index, should succeed)
@@ -1537,7 +1597,7 @@ test "merkle root metas coding" {
         const original_erasure_set_id = shreds[0].commonHeader().erasureSetId();
         const original_meta_from_map = merkle_root_metas.get(original_erasure_set_id).?.asRef();
         const original_meta_from_db = (try state.db.get(
-            state.allocator(),
+            allocator,
             schema.merkle_root_meta,
             original_erasure_set_id,
         )).?;
@@ -1562,9 +1622,9 @@ test "merkle root metas coding" {
 
 // agave: test_recovery
 test "recovery" {
-    var state = try ShredInserterTestState.init(std.testing.allocator, @src());
+    const allocator = std.testing.allocator;
+    var state = try ShredInserterTestState.init(allocator, @src());
     defer state.deinit();
-    const allocator = state.allocator();
 
     const shreds = try loadShredsFromFile(
         allocator,
@@ -1587,7 +1647,7 @@ test "recovery" {
         is_repairs,
         .{ .slot_leaders = leader_schedule.provider() },
     );
-    result.deinit();
+    result.deinit(allocator);
 
     for (data_shreds) |data_shred| {
         const key = .{ data_shred.data.common.slot, data_shred.data.common.index };

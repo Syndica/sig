@@ -460,6 +460,7 @@ fn stateFromAccount(
 }
 
 pub fn populateAncestorVotedStakes(
+    allocator: std.mem.Allocator,
     voted_stakes: *SortedSet(Slot),
     vote_slots: []const Slot,
     ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
@@ -469,9 +470,9 @@ pub fn populateAncestorVotedStakes(
     // this slot
     for (vote_slots) |vote_slot| {
         if (ancestors.getPtr(vote_slot)) |maybe_slot_ancestors| {
-            try voted_stakes.put(vote_slot);
+            try voted_stakes.put(allocator, vote_slot);
             for (maybe_slot_ancestors.items()) |slot| {
-                _ = try voted_stakes.put(slot);
+                _ = try voted_stakes.put(allocator, slot);
             }
         }
     }

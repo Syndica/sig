@@ -37,7 +37,11 @@ pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
             try writer.writeAll(data);
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: bincode.Params) ![]u8 {
+        pub fn deserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            _: bincode.Params,
+        ) ![]u8 {
             const len = try bincode.read(allocator, u64, reader, .{});
 
             const data = try allocator.alloc(u8, len);
@@ -108,7 +112,11 @@ pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
             try writer.writeAll(&data);
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![size]u8 {
+        pub fn deserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) ![size]u8 {
             if (params.include_fixed_array_length) {
                 _ = try bincode.read(allocator, u64, reader, .{});
             }
@@ -131,7 +139,11 @@ pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
 
 pub fn U8ArraySentinelConfig(comptime size: u64) bincode.FieldConfig([size:0]u8) {
     const S = struct {
-        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![size:0]u8 {
+        pub fn deserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) ![size:0]u8 {
             if (params.include_fixed_array_length) {
                 _ = try bincode.read(allocator, u64, reader, .{});
             }

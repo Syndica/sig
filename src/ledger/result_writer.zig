@@ -3,7 +3,6 @@ pub const sig = @import("../sig.zig");
 pub const ledger = @import("lib.zig");
 
 // std
-const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 // sig common
@@ -30,7 +29,6 @@ const schema = ledger.schema.schema;
 /// Persist the results of executing a transaction, executing a block,
 /// or reaching consensus on a block.
 pub const LedgerResultWriter = struct {
-    allocator: Allocator,
     logger: ScopedLogger(@typeName(Self)),
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
@@ -41,7 +39,6 @@ pub const LedgerResultWriter = struct {
     const Self = @This();
 
     pub fn init(
-        allocator: Allocator,
         logger: Logger,
         db: BlockstoreDB,
         registry: *sig.prometheus.Registry(.{}),
@@ -49,7 +46,6 @@ pub const LedgerResultWriter = struct {
         max_root: *std.atomic.Value(Slot),
     ) !LedgerResultWriter {
         return .{
-            .allocator = allocator,
             .logger = logger.withScope(@typeName(Self)),
             .db = db,
             .lowest_cleanup_slot = lowest_cleanup_slot,
@@ -88,11 +84,12 @@ pub const LedgerResultWriter = struct {
     /// agave: insert_bank_hash
     pub fn insertBankHash(
         self: *Self,
+        allocator: std.mem.Allocator,
         slot: Slot,
         frozen_hash: Hash,
         is_duplicate_confirmed: bool,
     ) !void {
-        if (try self.db.get(self.allocator, schema.bank_hash, slot)) |prev_value| {
+        if (try self.db.get(allocator, schema.bank_hash, slot)) |prev_value| {
             if (frozen_hash.eql(prev_value.frozenHash()) and prev_value.isDuplicateConfirmed()) {
                 // Don't overwrite is_duplicate_confirmed == true with is_duplicate_confirmed == false,
                 // which may happen on startup when procesing from blockstore processor because the
@@ -141,19 +138,26 @@ pub const LedgerResultWriter = struct {
     /// agave: mark_slots_as_if_rooted_normally_at_startup
     pub fn markSlotsAsIfRootedNormallyAtStartup(
         self: *Self,
+        allocator: std.mem.Allocator,
         slot_maybe_hashes: []struct { Slot, ?Hash },
         with_hash: bool,
     ) !void {
-        var slots = try ArrayList(Slot).initCapacity(self.allocator, slot_maybe_hashes.len);
-        defer slots.deinit();
+        var slots: std.ArrayListUnmanaged(Slot) = try .initCapacity(
+            allocator,
+            slot_maybe_hashes.len,
+        );
+        defer slots.deinit(allocator);
         for (slot_maybe_hashes) |slot_hash| {
             slots.appendAssumeCapacity(slot_hash[0]);
         }
         try self.setRoots(slots.items);
         if (with_hash) {
-            var slot_hashes = try ArrayList(struct { Slot, Hash })
-                .initCapacity(self.allocator, slot_maybe_hashes.len);
-            defer slot_hashes.deinit();
+            var slot_hashes: std.ArrayListUnmanaged(struct { Slot, Hash }) = try .initCapacity(
+                allocator,
+                slot_maybe_hashes.len,
+            );
+            defer slot_hashes.deinit(allocator);
+
             for (slot_maybe_hashes) |slot_hash| {
                 const slot, const maybe_hash = slot_hash;
                 slot_hashes.appendAssumeCapacity(.{
@@ -182,6 +186,7 @@ pub const LedgerResultWriter = struct {
     /// agave: scan_and_fix_roots
     pub fn scanAndFixRoots(
         self: *Self,
+        allocator: std.mem.Allocator,
         maybe_start_root: ?Slot,
         maybe_end_slot: ?Slot,
         exit: std.atomic.Value(bool),
@@ -196,24 +201,27 @@ pub const LedgerResultWriter = struct {
         defer lowest_cleanup_slot.unlock();
 
         const start_root = if (maybe_start_root) |slot| blk: {
-            if (!try self.isRoot(slot)) {
+            if (!try self.isRoot(allocator, slot)) {
                 return error.SlotNotRooted;
             }
             break :blk slot;
         } else self.max_root.load(.monotonic);
         const end_slot = maybe_end_slot orelse lowest_cleanup_slot.get().*;
 
-        var ancestor_iterator = try AncestorIterator
-            .initExclusive(self.allocator, &self.db, start_root);
+        var ancestor_iterator = try AncestorIterator.initExclusive(
+            allocator,
+            &self.db,
+            start_root,
+        );
 
         var find_missing_roots_timer = try Timer.start();
-        var roots_to_fix = ArrayList(Slot).init(self.allocator);
-        defer roots_to_fix.deinit();
 
-        while (try ancestor_iterator.next()) |slot| {
+        var roots_to_fix: std.ArrayListUnmanaged(Slot) = .empty;
+        defer roots_to_fix.deinit(allocator);
+        while (try ancestor_iterator.next(allocator)) |slot| {
             if (slot < end_slot) break;
-            if (!try self.isRoot(slot)) {
-                try roots_to_fix.append(slot);
+            if (!try self.isRoot(allocator, slot)) {
+                try roots_to_fix.append(allocator, slot);
             }
             if (exit.load(.acquire)) {
                 return 0;
@@ -236,7 +244,10 @@ pub const LedgerResultWriter = struct {
                 try self.setRoots(chunk);
             }
         } else {
-            self.logger.debug().logf("No missing roots found in range {} to {}", .{ start_root, end_slot });
+            self.logger.debug().logf(
+                "No missing roots found in range {} to {}",
+                .{ start_root, end_slot },
+            );
         }
         const fix_roots_us = fix_roots_timer.read().asMicros();
         const num_roots_fixed = roots_to_fix.items.len;
@@ -258,10 +269,14 @@ pub const LedgerResultWriter = struct {
     /// root as connected such that the node that joined midway through can
     /// have their slots considered connected.
     /// agave: set_and_chain_connected_on_root_and_next_slots
-    pub fn setAndChainConnectedOnRootAndNextSlots(self: *Self, root: Slot) !void {
-        var root_slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, root) orelse
-            SlotMeta.init(self.allocator, root, null);
-        defer root_slot_meta.deinit();
+    pub fn setAndChainConnectedOnRootAndNextSlots(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        root: Slot,
+    ) !void {
+        var root_slot_meta: SlotMeta =
+            try self.db.get(allocator, schema.slot_meta, root) orelse .init(root, null);
+        defer root_slot_meta.deinit(allocator);
 
         // If the slot was already connected, there is nothing to do as this slot's
         // children are also assumed to be appropriately connected
@@ -278,22 +293,34 @@ pub const LedgerResultWriter = struct {
         root_slot_meta.setConnected();
         try write_batch.put(schema.slot_meta, root_slot_meta.slot, root_slot_meta);
 
-        var child_slots = try ArrayList(Slot)
-            .initCapacity(self.allocator, root_slot_meta.child_slots.items.len);
-        defer child_slots.deinit();
+        var child_slots: std.ArrayListUnmanaged(Slot) = try .initCapacity(
+            allocator,
+            root_slot_meta.child_slots.items.len,
+        );
+        defer child_slots.deinit(allocator);
 
         child_slots.appendSliceAssumeCapacity(root_slot_meta.child_slots.items);
         var i: usize = 0;
         while (i < child_slots.items.len) : (i += 1) {
             const slot = child_slots.items[i];
-            var slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, slot) orelse {
-                self.logger.err().logf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
+            var slot_meta: SlotMeta = try self.db.get(
+                allocator,
+                schema.slot_meta,
+                slot,
+            ) orelse {
+                self.logger.err().logf(
+                    "Slot {} is a child but has no SlotMeta in blockstore",
+                    .{slot},
+                );
                 return error.CorruptedBlockstore;
             };
-            defer slot_meta.deinit();
+            defer slot_meta.deinit(allocator);
 
             if (slot_meta.setParentConnected()) {
-                try child_slots.appendSlice(slot_meta.child_slots.items);
+                try child_slots.appendSlice(
+                    allocator,
+                    slot_meta.child_slots.items,
+                );
             }
             try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
         }
@@ -301,8 +328,8 @@ pub const LedgerResultWriter = struct {
         try self.db.commit(&write_batch);
     }
 
-    fn isRoot(self: *Self, slot: Slot) !bool {
-        return try self.db.get(self.allocator, schema.rooted_slots, slot) orelse false;
+    fn isRoot(self: *Self, allocator: std.mem.Allocator, slot: Slot) !bool {
+        return try self.db.get(allocator, schema.rooted_slots, slot) orelse false;
     }
 };
 
@@ -328,8 +355,7 @@ test "setRoots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
@@ -341,7 +367,7 @@ test "setRoots" {
     try writer.setRoots(&roots);
 
     for (roots) |slot| {
-        const is_root = try writer.isRoot(slot);
+        const is_root = try writer.isRoot(allocator, slot);
         try std.testing.expect(is_root);
     }
 }
@@ -357,8 +383,7 @@ test "scanAndFixRoots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
@@ -370,9 +395,9 @@ test "scanAndFixRoots" {
     const roots: [2]Slot = .{ 1, 3 };
     try writer.setRoots(&roots);
 
-    const slot_meta_1 = SlotMeta.init(allocator, 1, null);
-    const slot_meta_2 = SlotMeta.init(allocator, 2, 1);
-    const slot_meta_3 = SlotMeta.init(allocator, 3, 2);
+    const slot_meta_1 = SlotMeta.init(1, null);
+    const slot_meta_2 = SlotMeta.init(2, 1);
+    const slot_meta_3 = SlotMeta.init(3, 2);
 
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
@@ -383,9 +408,9 @@ test "scanAndFixRoots" {
 
     const exit = std.atomic.Value(bool).init(false);
 
-    try std.testing.expectEqual(false, try writer.isRoot(2));
+    try std.testing.expectEqual(false, try writer.isRoot(allocator, 2));
 
-    const num_fixed = try writer.scanAndFixRoots(3, 1, exit);
+    const num_fixed = try writer.scanAndFixRoots(allocator, 3, 1, exit);
     try std.testing.expectEqual(1, num_fixed);
 }
 
@@ -400,8 +425,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
@@ -412,7 +436,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     // 1 is a root
     const roots: [1]Slot = .{1};
     try writer.setRoots(&roots);
-    const slot_meta_1 = SlotMeta.init(allocator, 1, null);
+    const slot_meta_1 = SlotMeta.init(1, null);
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
@@ -420,7 +444,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
     try std.testing.expectEqual(false, slot_meta_1.isConnected());
 
-    try writer.setAndChainConnectedOnRootAndNextSlots(1);
+    try writer.setAndChainConnectedOnRootAndNextSlots(allocator, 1);
 
     // should be connected
     const db_slot_meta_1 = (try db.get(allocator, schema.slot_meta, 1)) orelse
@@ -435,15 +459,15 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     try writer.setRoots(&other_roots);
 
     for (other_roots, 0..) |slot, i| {
-        var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
-        defer slot_meta.deinit();
+        var slot_meta = SlotMeta.init(slot, parent_slot);
+        defer slot_meta.deinit(allocator);
 
         // ensure isFull() is true
         slot_meta.last_index = 1;
         slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < other_roots.len) {
-            try slot_meta.child_slots.append(other_roots[i + 1]);
+            try slot_meta.child_slots.append(allocator, other_roots[i + 1]);
         }
 
         try write_batch2.put(schema.slot_meta, slot_meta.slot, slot_meta);
@@ -452,12 +476,12 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     }
     try db.commit(&write_batch2);
 
-    try writer.setAndChainConnectedOnRootAndNextSlots(other_roots[0]);
+    try writer.setAndChainConnectedOnRootAndNextSlots(allocator, other_roots[0]);
 
     for (other_roots) |slot| {
         var db_slot_meta = (try db.get(allocator, schema.slot_meta, slot)) orelse
             return error.MissingSlotMeta;
-        defer db_slot_meta.deinit();
+        defer db_slot_meta.deinit(allocator);
         try std.testing.expectEqual(true, db_slot_meta.isConnected());
     }
 }
@@ -473,8 +497,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var writer = LedgerResultWriter{
-        .allocator = allocator,
+    var writer: LedgerResultWriter = .{
         .db = db,
         .logger = logger,
         .lowest_cleanup_slot = &lowest_cleanup_slot,
@@ -488,47 +511,58 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const roots: [3]Slot = .{ 1, 2, 3 };
     try writer.setRoots(&roots);
 
-    var slot_meta_1 = SlotMeta.init(allocator, 1, null);
-    defer slot_meta_1.deinit();
+    var slot_meta_1 = SlotMeta.init(1, null);
+    defer slot_meta_1.deinit(allocator);
+
     slot_meta_1.last_index = 1;
     slot_meta_1.consecutive_received_from_0 = 1 + 1;
-    try slot_meta_1.child_slots.append(2);
+    try slot_meta_1.child_slots.append(allocator, 2);
+
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
 
     // 2 is not full
-    var slot_meta_2 = SlotMeta.init(allocator, 2, 1);
-    defer slot_meta_2.deinit();
+    var slot_meta_2 = SlotMeta.init(2, 1);
+    defer slot_meta_2.deinit(allocator);
     slot_meta_2.last_index = 1;
     slot_meta_2.consecutive_received_from_0 = 0; // ! NOT FULL
-    try slot_meta_2.child_slots.append(3);
+    try slot_meta_2.child_slots.append(allocator, 3);
     try write_batch.put(schema.slot_meta, slot_meta_2.slot, slot_meta_2);
 
     // 3 is full
-    var slot_meta_3 = SlotMeta.init(allocator, 3, 2);
-    defer slot_meta_3.deinit();
+    var slot_meta_3 = SlotMeta.init(3, 2);
+    defer slot_meta_3.deinit(allocator);
     slot_meta_3.last_index = 1;
     slot_meta_3.consecutive_received_from_0 = 1 + 1;
     try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
 
     try db.commit(&write_batch);
 
-    try writer.setAndChainConnectedOnRootAndNextSlots(1);
+    try writer.setAndChainConnectedOnRootAndNextSlots(allocator, 1);
 
     // should be connected
-    var db_slot_meta_1 = (try db.get(allocator, schema.slot_meta, 1)) orelse
-        return error.MissingSlotMeta;
-    defer db_slot_meta_1.deinit();
+    var db_slot_meta_1 = try db.get(
+        allocator,
+        schema.slot_meta,
+        1,
+    ) orelse return error.MissingSlotMeta;
+    defer db_slot_meta_1.deinit(allocator);
     try std.testing.expectEqual(true, db_slot_meta_1.isConnected());
 
-    var db_slot_meta_2: SlotMeta = (try db.get(allocator, schema.slot_meta, 2)) orelse
-        return error.MissingSlotMeta;
-    defer db_slot_meta_2.deinit();
+    var db_slot_meta_2: SlotMeta = try db.get(
+        allocator,
+        schema.slot_meta,
+        2,
+    ) orelse return error.MissingSlotMeta;
+    defer db_slot_meta_2.deinit(allocator);
     try std.testing.expectEqual(true, db_slot_meta_2.isParentConnected());
     try std.testing.expectEqual(false, db_slot_meta_2.isConnected());
 
-    var db_slot_meta_3: SlotMeta = (try db.get(allocator, schema.slot_meta, 3)) orelse
-        return error.MissingSlotMeta;
-    defer db_slot_meta_3.deinit();
+    var db_slot_meta_3: SlotMeta = try db.get(
+        allocator,
+        schema.slot_meta,
+        3,
+    ) orelse return error.MissingSlotMeta;
+    defer db_slot_meta_3.deinit(allocator);
     try std.testing.expectEqual(false, db_slot_meta_3.isParentConnected());
     try std.testing.expectEqual(false, db_slot_meta_3.isConnected());
 }
