@@ -59,10 +59,8 @@ pub fn pushInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
     // [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_executor.c#L1001-L1011
-    if (program_id.equals(&ids.NATIVE_LOADER_ID)) {
-        std.debug.print("Cannot push native loader program onto instruction stack\n", .{});
+    if (program_id.equals(&ids.NATIVE_LOADER_ID))
         return InstructionError.UnsupportedProgramId;
-    }
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
@@ -136,13 +134,8 @@ fn processNextInstruction(
     // Lookup the program id
     // [agave] https://github.com/anza-xyz/agave/blob/a1ed2b1052bde05e79c31388b399dba9da10f7de/program-runtime/src/invoke_context.rs#L518-L529
     const program_id = blk: {
-        const program_account = ic.borrowProgramAccount() catch |e| {
-            std.debug.print(
-                "Failed to borrow program account for {s}: {any}\n",
-                .{ ic.ixn_info.program_meta.pubkey, e },
-            );
+        const program_account = ic.borrowProgramAccount() catch
             return InstructionError.UnsupportedProgramId;
-        };
         defer program_account.release();
 
         break :blk if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
@@ -169,10 +162,8 @@ fn processNextInstruction(
         break :blk native_program_fn;
     };
 
-    const native_program_fn = maybe_native_program_fn orelse {
-        std.debug.print("Failed to lookup native program fn: {s}\n", .{program_id});
+    const native_program_fn = maybe_native_program_fn orelse
         return InstructionError.UnsupportedProgramId;
-    };
 
     // Invoke the program and log the result
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L551-L571
