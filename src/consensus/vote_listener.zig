@@ -1411,7 +1411,7 @@ test VoteListener {
         }
     }
 
-    std.time.sleep(10 * std.time.ns_per_ms);
+    std.time.sleep(100 * std.time.ns_per_ms);
 
     {
         vote_tracker.map_rwlock.lockShared();
