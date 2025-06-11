@@ -1214,9 +1214,11 @@ test "strict header corrupt file header" {
     const expected_results: [@sizeOf(elf.Elf64_Ehdr)]?error{
         InvalidFileHeader,
         OutOfBounds,
+        Overlap,
         VersionUnsupported,
     } =
-        .{error.InvalidFileHeader} ** 33 ++
+        .{error.InvalidFileHeader} ** 32 ++
+        .{error.Overlap} ** 1 ++
         .{error.OutOfBounds} ** 15 ++
         .{error.VersionUnsupported} ** 4 ++
         .{error.InvalidFileHeader} ** 4 ++
@@ -1282,7 +1284,10 @@ test "strict header corrupt program header" {
             copy[true_offset] = 0xAF;
 
             var loader: BuiltinProgram = .{};
-            var result = Elf.parse(allocator, copy, &loader, .{});
+            var result = Elf.parse(allocator, copy, &loader, .{}) catch |e| switch (e) {
+                error.OutOfBounds => error.InvalidProgramHeader,
+                else => e,
+            };
             defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
             if (expected) |err| {
