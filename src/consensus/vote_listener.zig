@@ -1221,13 +1221,15 @@ test VoteListener {
         allocator.free(vote_slots);
     };
 
-    const gossip_verified_vote_hash_channel = try sig.sync.Channel(GossipVerifiedVoteHash).create(allocator);
+    const gossip_verified_vote_hash_channel =
+        try sig.sync.Channel(GossipVerifiedVoteHash).create(allocator);
     defer gossip_verified_vote_hash_channel.destroy();
 
     const bank_notification_channel = try sig.sync.Channel(BankNotification).create(allocator);
     defer bank_notification_channel.destroy();
 
-    const duplicate_confirmed_slot_channel = try sig.sync.Channel(ThresholdConfirmedSlot).create(allocator);
+    const duplicate_confirmed_slot_channel =
+        try sig.sync.Channel(ThresholdConfirmedSlot).create(allocator);
     defer duplicate_confirmed_slot_channel.destroy();
 
     var exit = std.atomic.Value(bool).init(false);
