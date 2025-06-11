@@ -1280,6 +1280,116 @@ test VoteListener {
     defer vote_listener.joinAndDeinit();
     defer exit_cond.setExit();
 
+    const Tracker = struct {
+        voted: []const struct { Pubkey, bool },
+        optimistic_votes_tracker: []const struct { Hash, Vst },
+        voted_slot_updates: ?[]const Pubkey,
+        gossip_only_stake: u64,
+
+        const Vst = struct {
+            voted: []const Pubkey,
+            stake: u64,
+
+            fn deinit(self: @This(), ally: std.mem.Allocator) void {
+                ally.free(self.voted);
+            }
+        };
+
+        fn deinit(self: @This(), ally: std.mem.Allocator) void {
+            ally.free(self.voted);
+            for (self.optimistic_votes_tracker) |slot_ovt| slot_ovt[1].deinit(allocator);
+            ally.free(self.optimistic_votes_tracker);
+            if (self.voted_slot_updates) |vsu| ally.free(vsu);
+        }
+
+        fn from(svt: *const sig.consensus.vote_tracker.SlotVoteTracker) !@This() {
+            const actual_voted = voted: {
+                var actual_voted: std.ArrayListUnmanaged(struct { Pubkey, bool }) = .{};
+                defer actual_voted.deinit(allocator);
+                try actual_voted.ensureTotalCapacityPrecise(allocator, svt.voted.count());
+                for (svt.voted.keys(), svt.voted.values()) |key, val| {
+                    actual_voted.appendAssumeCapacity(.{ key, val });
+                }
+                break :voted try actual_voted.toOwnedSlice(allocator);
+            };
+            errdefer allocator.free(actual_voted);
+
+            const actual_ovt = ovt: {
+                var actual_ovt: std.ArrayListUnmanaged(struct { Hash, Vst }) = .{};
+                defer actual_ovt.deinit(allocator);
+                defer for (actual_ovt.items) |slot_vst| slot_vst[1].deinit(allocator);
+
+                try actual_ovt.ensureTotalCapacityPrecise(
+                    allocator,
+                    svt.optimistic_votes_tracker.count(),
+                );
+                for (
+                    svt.optimistic_votes_tracker.keys(),
+                    svt.optimistic_votes_tracker.values(),
+                ) |key, val| {
+                    const vst: Vst = .{
+                        .stake = val.stake,
+                        .voted = try allocator.dupe(Pubkey, val.voted.keys()),
+                    };
+                    actual_ovt.appendAssumeCapacity(.{ key, vst });
+                }
+                break :ovt try actual_ovt.toOwnedSlice(allocator);
+            };
+            errdefer allocator.free(actual_ovt);
+            errdefer for (actual_ovt) |vst| vst[1].deinit(allocator);
+
+            const voted_slot_updates = if (svt.voted_slot_updates) |vsu|
+                try allocator.dupe(Pubkey, vsu.items)
+            else
+                null;
+            errdefer allocator.free(voted_slot_updates orelse &.{});
+
+            const gossip_only_stake = svt.gossip_only_stake;
+
+            return .{
+                .voted = actual_voted,
+                .optimistic_votes_tracker = actual_ovt,
+                .voted_slot_updates = voted_slot_updates,
+                .gossip_only_stake = gossip_only_stake,
+            };
+        }
+    };
+
+    const expected_trackers = [_]struct { Slot, Tracker }{
+        .{
+            2, .{
+                .voted = &.{.{ vote_key1, true }},
+                .optimistic_votes_tracker = &.{.{
+                    comptime Hash.parseBase58String(
+                        "9FZEBiJqTk1R3zWcJUP7oD3VFnTSaXKHB9Df6Q62VHBs",
+                    ) catch unreachable,
+                    .{
+                        .stake = 0,
+                        .voted = &.{vote_key1},
+                    },
+                }},
+                .voted_slot_updates = &.{vote_key1},
+                .gossip_only_stake = 0,
+            },
+        },
+        .{
+            3, .{
+                .voted = &.{.{ vote_key2, true }},
+                .optimistic_votes_tracker = &.{.{
+                    comptime Hash.parseBase58String(
+                        "5NeJAWrXPN6RDoBMXFrsd99dUH9x8ozd3Cs63QR7afQM",
+                    ) catch unreachable,
+                    .{
+                        .stake = 0,
+                        .voted = &.{vote_key2},
+                    },
+                }},
+                .voted_slot_updates = &.{vote_key2},
+                .gossip_only_stake = 0,
+            },
+        },
+    };
+
     {
         const gossip_table, var gossip_table_lg = gossip_table_rw.writeWithLock();
         defer gossip_table_lg.unlock();
@@ -1329,34 +1439,11 @@ test VoteListener {
         }
     }
 
-    std.time.sleep(500 * std.time.ns_per_ms);
+    std.time.sleep(10 * std.time.ns_per_ms);
 
     {
         vote_tracker.map_rwlock.lockShared();
         defer vote_tracker.map_rwlock.unlockShared();
-
-        const Tracker = struct {
-            voted: []const struct { Pubkey, bool },
-            optimistic_votes_tracker: []const struct { Hash, Vst },
-            voted_slot_updates: ?[]const Pubkey,
-            gossip_only_stake: u64,
-
-            const Vst = struct {
-                voted: []const Pubkey,
-                stake: u64,
-
-                fn deinit(self: @This(), ally: std.mem.Allocator) void {
-                    ally.free(self.voted);
-                }
-            };
-
-            fn deinit(self: @This(), ally: std.mem.Allocator) void {
-                ally.free(self.voted);
-                for (self.optimistic_votes_tracker) |slot_ovt| slot_ovt[1].deinit(allocator);
-                ally.free(self.optimistic_votes_tracker);
-                if (self.voted_slot_updates) |vsu| ally.free(vsu);
-            }
-        };
 
         var actual_trackers: std.ArrayListUnmanaged(struct { Slot, Tracker }) = .{};
         defer actual_trackers.deinit(allocator);
@@ -1366,93 +1453,11 @@ test VoteListener {
         for (vote_tracker.map.keys(), vote_tracker.map.values()) |vt_key, vt_val| {
             const svt, var svt_lg = vt_val.tracker.readWithLock();
             defer svt_lg.unlock();
-
-            const actual_voted = voted: {
-                var actual_voted: std.ArrayListUnmanaged(struct { Pubkey, bool }) = .{};
-                defer actual_voted.deinit(allocator);
-                try actual_voted.ensureTotalCapacityPrecise(allocator, svt.voted.count());
-                for (svt.voted.keys(), svt.voted.values()) |key, val| {
-                    actual_voted.appendAssumeCapacity(.{ key, val });
-                }
-                break :voted try actual_voted.toOwnedSlice(allocator);
-            };
-            errdefer allocator.free(actual_voted);
-
-            const actual_ovt = ovt: {
-                var actual_ovt: std.ArrayListUnmanaged(struct { Hash, Tracker.Vst }) = .{};
-                defer actual_ovt.deinit(allocator);
-                defer for (actual_ovt.items) |slot_vst| slot_vst[1].deinit(allocator);
-
-                try actual_ovt.ensureTotalCapacityPrecise(
-                    allocator,
-                    svt.optimistic_votes_tracker.count(),
-                );
-                for (
-                    svt.optimistic_votes_tracker.keys(),
-                    svt.optimistic_votes_tracker.values(),
-                ) |key, val| {
-                    const vst: Tracker.Vst = .{
-                        .stake = val.stake,
-                        .voted = try allocator.dupe(Pubkey, val.voted.keys()),
-                    };
-                    actual_ovt.appendAssumeCapacity(.{ key, vst });
-                }
-                break :ovt try actual_ovt.toOwnedSlice(allocator);
-            };
-            errdefer allocator.free(actual_ovt);
-            errdefer for (actual_ovt) |vst| vst[1].deinit(allocator);
-
-            const voted_slot_updates = if (svt.voted_slot_updates) |vsu|
-                try allocator.dupe(Pubkey, vsu.items)
-            else
-                null;
-            errdefer allocator.free(voted_slot_updates orelse &.{});
-
-            const gossip_only_stake = svt.gossip_only_stake;
-
-            actual_trackers.appendAssumeCapacity(.{ vt_key, .{
-                .voted = actual_voted,
-                .optimistic_votes_tracker = actual_ovt,
-                .voted_slot_updates = voted_slot_updates,
-                .gossip_only_stake = gossip_only_stake,
-            } });
+            actual_trackers.appendAssumeCapacity(.{ vt_key, try .from(svt) });
         }
 
         try std.testing.expectEqualDeep(
-            &[_]struct { Slot, Tracker }{
-                .{
-                    2, .{
-                        .voted = &.{.{ vote_key1, true }},
-                        .optimistic_votes_tracker = &.{.{
-                            comptime Hash.parseBase58String(
-                                "9FZEBiJqTk1R3zWcJUP7oD3VFnTSaXKHB9Df6Q62VHBs",
-                            ) catch unreachable,
-                            .{
-                                .stake = 0,
-                                .voted = &.{vote_key1},
-                            },
-                        }},
-                        .voted_slot_updates = &.{vote_key1},
-                        .gossip_only_stake = 0,
-                    },
-                },
-                .{
-                    3, .{
-                        .voted = &.{.{ vote_key2, true }},
-                        .optimistic_votes_tracker = &.{.{
-                            comptime Hash.parseBase58String(
-                                "5NeJAWrXPN6RDoBMXFrsd99dUH9x8ozd3Cs63QR7afQM",
-                            ) catch unreachable,
-                            .{
-                                .stake = 0,
-                                .voted = &.{vote_key2},
-                            },
-                        }},
-                        .voted_slot_updates = &.{vote_key2},
-                        .gossip_only_stake = 0,
-                    },
-                },
-            },
+            &expected_trackers,
             actual_trackers.items,
         );
     }
