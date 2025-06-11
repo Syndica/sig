@@ -624,7 +624,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
 
-    const feature_set = FeatureSet.EMPTY;
+    const feature_set = try FeatureSet.allEnabled(allocator);
     defer feature_set.deinit(allocator);
 
     var status_cache = StatusCache.default();
@@ -686,18 +686,15 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const sender_account = account_cache.account_cache.get(sender_key).?;
     const receiver_account = account_cache.account_cache.get(receiver_key).?;
 
-    try std.testing.expectEqual(
-        100_000 - 10_000 - transaction_fee - prioritization_fee - rent_collected,
-        sender_account.lamports,
-    );
-    try std.testing.expectEqual(
-        100_000 + 10_000 - rent_collected,
-        receiver_account.lamports,
-    );
+    try std.testing.expectEqual(35_000, transaction_fee);
+    try std.testing.expectEqual(0, prioritization_fee);
+    try std.testing.expectEqual(0, rent_collected);
+    try std.testing.expectEqual(55_000, sender_account.lamports);
+    try std.testing.expectEqual(110_000, receiver_account.lamports);
     try std.testing.expectEqual(null, executed_transaction.err);
     try std.testing.expectEqual(null, executed_transaction.log_collector);
     try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
     try std.testing.expectEqual(null, executed_transaction.return_data);
-    try std.testing.expectEqual(199_850, executed_transaction.compute_meter);
+    try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
     try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
 }
