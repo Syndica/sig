@@ -437,12 +437,6 @@ fn towerDuplicateConfirmedForks(
     return try duplicate_confirmed_forks.toOwnedSlice(allocator);
 }
 
-// TODO complete
-const VoteOp = union(enum) {
-    push_vote,
-    refresh_vote,
-};
-
 // TODO Revisit
 const stubs = struct {
     pub const DuplicateSlotsTracker = struct {};
