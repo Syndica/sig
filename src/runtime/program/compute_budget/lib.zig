@@ -37,6 +37,33 @@ pub fn entrypoint(
     try ic.tc.consumeCompute(COMPUTE_UNITS);
 }
 
+test "compute_budget Instruction" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = COMPUTE_UNITS,
+        },
+    );
+    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+
+    try sig.runtime.executor.executeInstruction(allocator, &tc, .{
+        .account_metas = .{},
+        .instruction_data = &.{},
+        .program_meta = .{ .index_in_transaction = 0, .pubkey = ID },
+    });
+
+    try std.testing.expectEqual(tc.compute_meter, 0);
+}
+
 // [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L28
 pub const ComputeBudgetLimits = struct {
     heap_size: u32,
