@@ -1,10 +1,13 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
+
+const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
+
+const RwMux = sig.sync.RwMux;
 
 const ThreadPool = sig.sync.ThreadPool;
 
@@ -141,8 +144,8 @@ const ConsensusDependencies = struct {
     progress_map: *ProgressMap,
     slot_tracker: *SlotTracker,
     fork_choice: *ForkChoice,
-    blockstore: *BlockstoreReader,
-    leader_schedule_cache: LeaderScheduleCache,
+    blockstore_reader: *BlockstoreReader,
+    leader_schedule_cache: *LeaderScheduleCache,
     vote_account: Pubkey,
 };
 
@@ -228,6 +231,8 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 
             try handleVotableBank(
                 deps.allocator,
+                deps.blockstore_reader,
+                deps.leader_schedule_cache,
                 voted.slot,
                 voted_hash,
                 deps.slot_tracker,
@@ -514,11 +519,12 @@ fn checkForVoteOnlyMode(
     _ = &in_vote_only_mode;
 }
 
-// TODO The parameter list is humongous. Try to simplify
 fn handleVotableBank(
     allocator: std.mem.Allocator,
+    blockstore_reader: *BlockstoreReader,
+    leader_schedule_cache: *LeaderScheduleCache,
     vote_slot: Slot,
-    vote_hash: Hash, // vote_slot and vote_hash replaces Bank
+    vote_hash: Hash,
     slot_tracker: *SlotTracker,
     replay_tower: *ReplayTower,
     progress: *ProgressMap,
@@ -533,6 +539,8 @@ fn handleVotableBank(
     if (maybe_new_root) |new_root| {
         try checkAndHandleNewRoot(
             allocator,
+            blockstore_reader,
+            leader_schedule_cache,
             slot_tracker,
             progress,
             fork_choice,
@@ -585,6 +593,8 @@ fn push_vote(
 
 fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
+    blockstore_reader: *BlockstoreReader,
+    leader_schedule_cache: *LeaderScheduleCache,
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -597,6 +607,36 @@ fn checkAndHandleNewRoot(
     // TODO need to get parents
     _ = &root_tracker;
 
+    // TODO revisit this
+    const rooted_slots = try slot_tracker.activeSlots(allocator);
+
+    if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
+    // TODO implement leader_schedule_cache.set_root.
+    _ = &leader_schedule_cache;
+
+    // TODO have this a seperate function?
+    {
+        // TODO revisit these values.
+        var lowest_cleanup_slot = RwMux(Slot).init(0);
+        var max_root = std.atomic.Value(Slot).init(0);
+        var registry = sig.prometheus.Registry(.{}).init(allocator);
+        defer registry.deinit();
+
+        var writer = LedgerResultWriter{
+            .allocator = allocator,
+            .db = blockstore_reader.db,
+            .logger = .noop,
+            .lowest_cleanup_slot = &lowest_cleanup_slot,
+            .max_root = &max_root,
+            .scan_and_fix_roots_metrics = try registry.initStruct(
+                sig.ledger.result_writer.ScanAndFixRootsMetrics,
+            ),
+        };
+
+        try writer.setRoots(rooted_slots);
+    }
+
+    // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     // Update the progress map.
     // TODO Move to its own function?
     {
