@@ -7,7 +7,6 @@ const bincode = sig.bincode;
 
 const EndPoint = @import("zig-network").EndPoint;
 const GossipService = sig.gossip.service.GossipService;
-const ChunkType = sig.gossip.service.ChunkType;
 const ContactInfo = sig.gossip.data.ContactInfo;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipMessage = sig.gossip.message.GossipMessage;
@@ -189,11 +188,11 @@ pub fn fuzz(
                     keypair,
                     to_endpoint,
                 );
-                defer packets.deinit();
+                defer allocator.free(packets);
                 try sendPackets(
                     &msg_count,
                     outgoing_channel,
-                    packets.items,
+                    packets,
                     random,
                 );
             },
@@ -206,11 +205,11 @@ pub fn fuzz(
                     keypair,
                     to_endpoint,
                 );
-                defer packets.deinit();
+                defer allocator.free(packets);
                 try sendPackets(
                     &msg_count,
                     outgoing_channel,
-                    packets.items,
+                    packets,
                     random,
                 );
             },
@@ -244,7 +243,7 @@ pub fn fuzz(
 pub fn sendPackets(
     msg_count: *u64,
     outgoing_channel: *Channel(Packet),
-    packets: []Packet,
+    packets: []const Packet,
     random: std.Random,
 ) !void {
     for (packets) |packet| {
@@ -349,7 +348,7 @@ pub fn randomPushMessage(
     random: std.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
-) !std.ArrayList(Packet) {
+) ![]const Packet {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
     const should_pass_sig_verification = random.boolean();
@@ -367,7 +366,7 @@ pub fn randomPushMessage(
         &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
-        ChunkType.PushMessage,
+        .PushMessage,
     );
 }
 
@@ -376,7 +375,7 @@ pub fn randomPullResponse(
     random: std.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
-) !std.ArrayList(Packet) {
+) ![]const Packet {
     const size: comptime_int = 5;
     var values: [size]SignedGossipData = undefined;
     const should_pass_sig_verification = random.boolean();
@@ -394,7 +393,7 @@ pub fn randomPullResponse(
         &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
-        ChunkType.PullResponse,
+        .PullResponse,
     );
 }
 

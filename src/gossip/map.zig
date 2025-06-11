@@ -35,9 +35,7 @@ const assert = std.debug.assert;
 pub const GossipMap = struct {
     key_to_index: std.AutoArrayHashMapUnmanaged(GossipKey, SplitUnionList(GossipData).Index) = .{},
     gossip_data: SplitUnionList(GossipData) = SplitUnionList(GossipData).init(),
-    metadata: std.ArrayListUnmanaged(Metadata) = .{},
-
-    pub const Metadata = GossipMetadata; // TODO eliminate redundant alias
+    metadata: std.ArrayListUnmanaged(GossipMetadata) = .{},
 
     pub fn deinit(self: *GossipMap, allocator: Allocator) void {
         self.key_to_index.deinit(allocator);
@@ -181,7 +179,7 @@ pub const GossipMap = struct {
         keys: []GossipKey,
         indices: []SplitUnionList(GossipData).Index,
         gossip_data: *const SplitUnionList(GossipData),
-        metadata: []Metadata,
+        metadata: []GossipMetadata,
         cursor: usize = 0,
 
         pub fn next(self: *Iterator) ?Entry {
@@ -198,7 +196,7 @@ pub const GossipMap = struct {
 
 pub const Entry = struct {
     key_ptr: *GossipKey,
-    metadata_ptr: *GossipMap.Metadata,
+    metadata_ptr: *gossip.data.GossipMetadata,
     gossip_data_entry: SplitUnionList(GossipData).Entry,
     index: usize,
 

@@ -32,6 +32,7 @@ pub const Signature = struct {
         e.NonCanonicalError ||
         e.EncodingError ||
         e.IdentityElementError;
+
     pub fn verifier(
         self: Signature,
         pubkey: Pubkey,

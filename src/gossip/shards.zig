@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const AutoArrayHashMap = std.AutoArrayHashMap;
 const Hash = sig.core.Hash;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipVersionedData = sig.gossip.data.GossipVersionedData;
@@ -17,87 +16,94 @@ pub const GossipTableShards = struct {
     // shards[k] includes gossip values which the first shard_bits of their hash
     // value is equal to k. Each shard is a mapping from gossip values indices to
     // their hash value.
-    shard_bits: u32 = GOSSIP_SHARDS_BITS,
-    shards: [GOSSIP_SHARDS_LEN]AutoArrayHashMap(usize, u64),
+    shard_bits: u32,
+    shards: [GOSSIP_SHARDS_LEN]std.AutoArrayHashMapUnmanaged(usize, u64),
 
-    const Self = @This();
+    pub const EMPTY: GossipTableShards = .{
+        .shard_bits = GOSSIP_SHARDS_BITS,
+        .shards = @splat(.{}),
+    };
 
-    pub fn init(allocator: std.mem.Allocator) !Self {
-        var shards: [GOSSIP_SHARDS_LEN]AutoArrayHashMap(usize, u64) = undefined;
-        @memset(&shards, AutoArrayHashMap(usize, u64).init(allocator));
-
-        return Self{
-            .shards = shards,
-        };
+    pub fn deinit(self: *GossipTableShards, allocator: std.mem.Allocator) void {
+        for (&self.shards) |*shard| shard.deinit(allocator);
     }
 
-    pub fn deinit(self: *Self) void {
-        for (0..self.shards.len) |i| {
-            self.shards[i].deinit();
-        }
-    }
-
-    pub fn insert(self: *Self, gossip_index: usize, hash: *const Hash) !void {
+    pub fn insert(
+        self: *GossipTableShards,
+        allocator: std.mem.Allocator,
+        gossip_index: usize,
+        hash: *const Hash,
+    ) !void {
         const uhash = hashToU64(hash);
         const shard_index = GossipTableShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
-        try shard.put(gossip_index, uhash);
+        try shard.put(allocator, gossip_index, uhash);
     }
 
-    pub fn remove(self: *Self, gossip_index: usize, hash: *const Hash) void {
+    pub fn remove(self: *GossipTableShards, gossip_index: usize, hash: *const Hash) void {
         const uhash = hashToU64(hash);
         const shard_index = GossipTableShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         _ = shard.swapRemove(gossip_index);
     }
 
+    /// Asserts `shard_bits` isn't 0.
     pub fn computeShardIndex(shard_bits: u32, hash: u64) usize {
         const shift_bits: u6 = @intCast(64 - shard_bits);
         return @intCast(hash >> shift_bits);
     }
 
-    /// see filterGossipVersionedDatas for more readable (but inefficient) version  of what this fcn is doing
-    pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) error{OutOfMemory}!std.ArrayList(usize) {
-        const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
+    /// see filterGossipVersionedDatas for more readable (but inefficient)
+    /// version of what this function is doing
+    pub fn find(
+        self: *const GossipTableShards,
+        allocator: std.mem.Allocator,
+        mask: u64,
+        mask_bits: u32,
+    ) error{OutOfMemory}![]const usize {
+        const ones = (~@as(u64, 0) >> @intCast(mask_bits));
         const match_mask = mask | ones;
 
         if (self.shard_bits < mask_bits) {
             // shard_bits is smaller, all matches with mask will be in the same shard index
             var shard = self.shards[GossipTableShards.computeShardIndex(self.shard_bits, mask)];
 
-            var shard_iter = shard.iterator();
-            var result = std.ArrayList(usize).init(alloc);
-            while (shard_iter.next()) |entry| {
+            var result: std.ArrayListUnmanaged(usize) = .empty;
+            defer result.deinit(allocator);
+
+            var iterator = shard.iterator();
+            while (iterator.next()) |entry| {
                 const hash = entry.value_ptr.*;
 
                 // see checkMask
                 if (hash | ones == match_mask) {
                     const index = entry.key_ptr.*;
-                    try result.append(index);
+                    try result.append(allocator, index);
                 }
             }
-            return result;
+
+            return result.toOwnedSlice(allocator);
         } else if (self.shard_bits == mask_bits) {
             // when bits are equal we know the lookup will be exact
             var shard = self.shards[GossipTableShards.computeShardIndex(self.shard_bits, mask)];
 
-            var result = try std.ArrayList(usize).initCapacity(alloc, shard.count());
-            try result.insertSlice(0, shard.keys());
+            const result = try allocator.dupe(usize, shard.keys());
             return result;
         } else {
             // shardbits > maskbits
             const shift_bits: u6 = @intCast(self.shard_bits - mask_bits);
-            const count: usize = @intCast(@as(u64, 1) << shift_bits);
+            const count = @as(u64, 1) << shift_bits;
             const end = GossipTableShards.computeShardIndex(self.shard_bits, match_mask) + 1;
 
-            var result = std.ArrayList(usize).init(alloc);
-            var insert_index: usize = 0;
-            for ((end - count)..end) |shard_index| {
+            var result: std.ArrayListUnmanaged(usize) = .empty;
+            defer result.deinit(allocator);
+            for (0..count) |i| {
+                const shard_index = (end - count) + i;
                 const shard = self.shards[shard_index];
-                try result.insertSlice(insert_index, shard.keys());
-                insert_index += shard.count();
+                try result.appendSlice(allocator, shard.keys());
             }
-            return result;
+
+            return try result.toOwnedSlice(allocator);
         }
     }
 };
@@ -105,21 +111,23 @@ pub const GossipTableShards = struct {
 const GossipTable = sig.gossip.table.GossipTable;
 
 test "GossipTableShards" {
-    var shards = try GossipTableShards.init(std.testing.allocator);
-    defer shards.deinit();
+    const allocator = std.testing.allocator;
+
+    var shards: GossipTableShards = .EMPTY;
+    defer shards.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
     const v = Hash.initRandom(random);
-    try shards.insert(10, &v);
+    try shards.insert(allocator, 10, &v);
     shards.remove(10, &v);
 
-    const result = try shards.find(std.testing.allocator, 20, 10);
-    defer result.deinit();
+    const result = try shards.find(allocator, 20, 10);
+    defer allocator.free(result);
 }
 
-// test helper fcns
+// test helper functions
 fn newTestGossipVersionedData(random: std.Random, gossip_table: *GossipTable) !GossipVersionedData {
     const keypair = KeyPair.generate();
     const value = SignedGossipData.initRandom(random, &keypair);
@@ -134,52 +142,61 @@ fn checkMask(value: *const GossipVersionedData, mask: u64, mask_bits: u32) bool 
     return (uhash | ones) == (mask | ones);
 }
 
-// does the same thing as find() but a lot more inefficient
+// does the same thing as find() but a lot less efficient
 fn filterGossipVersionedDatas(
-    alloc: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     values: []GossipVersionedData,
     mask: u64,
     mask_bits: u32,
-) !std.AutoHashMap(usize, void) {
-    var result = std.AutoHashMap(usize, void).init(alloc);
+) !std.AutoHashMapUnmanaged(usize, void) {
+    var result: std.AutoHashMapUnmanaged(usize, void) = .empty;
+    errdefer result.deinit(allocator);
+
     for (values, 0..) |value, i| {
         if (checkMask(&value, mask, mask_bits)) {
-            try result.put(i, {});
+            try result.put(allocator, i, {});
         }
     }
+
     return result;
 }
 
 test "gossip.gossip_shards: test shard find" {
-    var gossip_table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
-    defer gossip_table.deinit();
+    const allocator = std.testing.allocator;
 
-    // gen ranndom values
-    var values = try std.ArrayList(GossipVersionedData).initCapacity(std.testing.allocator, 1000);
-    defer values.deinit();
+    var gossip_table = try GossipTable.init(allocator, allocator);
+    defer gossip_table.deinit();
 
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
-    while (values.items.len < 50) {
-        const value = try newTestGossipVersionedData(random, &gossip_table);
-        try values.append(value);
+    const values = try allocator.alloc(GossipVersionedData, 50);
+    defer allocator.free(values);
+    for (values) |*value| {
+        value.* = try newTestGossipVersionedData(random, &gossip_table);
     }
 
-    var gossip_shards = gossip_table.shards;
     // test find with different mask bit sizes  (< > == shard bits)
     for (0..10) |_| {
         const mask = random.int(u64);
         for (0..12) |mask_bits| {
-            var set = try filterGossipVersionedDatas(std.testing.allocator, values.items, mask, @intCast(mask_bits));
-            defer set.deinit();
+            var set = try filterGossipVersionedDatas(
+                allocator,
+                values,
+                mask,
+                @intCast(mask_bits),
+            );
+            defer set.deinit(allocator);
 
-            var indices = try gossip_shards.find(std.testing.allocator, mask, @intCast(mask_bits));
-            defer indices.deinit();
+            const indices = try gossip_table.shards.find(
+                allocator,
+                mask,
+                @intCast(mask_bits),
+            );
+            defer allocator.free(indices);
 
-            try std.testing.expectEqual(set.count(), @as(u32, @intCast(indices.items.len)));
-
-            for (indices.items) |index| {
+            try std.testing.expectEqual(set.count(), indices.len);
+            for (indices) |index| {
                 _ = set.remove(index);
             }
             try std.testing.expectEqual(set.count(), 0);

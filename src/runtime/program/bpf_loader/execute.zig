@@ -191,7 +191,7 @@ pub fn executeV3Write(
                     return InstructionError.IncorrectAuthority;
                 }
 
-                if (!try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority))) {
+                if (!try ic.ixn_info.isindicesigner(@intFromEnum(AccountIndex.authority))) {
                     try ic.tc.log("Buffer authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -305,7 +305,7 @@ pub fn executeV3DeployWithMaxDataLen(
                 }
 
                 // Safety: at least 8 accounts are present
-                if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+                if (!(try ic.ixn_info.isindicesigner(@intFromEnum(AccountIndex.authority)))) {
                     try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -555,7 +555,7 @@ pub fn executeV3Upgrade(
                     try ic.tc.log("Buffer and upgrade authority don't match", .{});
                     return InstructionError.IncorrectAuthority;
                 }
-                if (!(try ic.ixn_info.isIndexSigner(6))) {
+                if (!(try ic.ixn_info.isindicesigner(6))) {
                     try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -616,7 +616,7 @@ pub fn executeV3Upgrade(
                     try ic.tc.log("Incorrect upgrade authority provided", .{});
                     return InstructionError.IncorrectAuthority;
                 }
-                if (!(try ic.ixn_info.isIndexSigner(6))) {
+                if (!(try ic.ixn_info.isindicesigner(6))) {
                     try ic.tc.log("Upgrade authority did not sign", .{});
                     return InstructionError.MissingRequiredSignature;
                 }
@@ -746,7 +746,7 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.ixn_info.isIndexSigner(1))) {
+            if (!(try ic.ixn_info.isindicesigner(1))) {
                 try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
@@ -765,7 +765,7 @@ pub fn executeV3SetAuthority(
                 try ic.tc.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isindicesigner(
                 @intFromEnum(AccountIndex.present_authority),
             ))) {
                 try ic.tc.log("Upgrade authority did not sign", .{});
@@ -821,13 +821,13 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("Incorrect buffer authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isindicesigner(
                 @intFromEnum(AccountIndex.present_authority),
             ))) {
                 try ic.tc.log("Buffer authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!(try ic.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isindicesigner(
                 @intFromEnum(AccountIndex.new_authority),
             ))) {
                 try ic.tc.log("New authority did not sign", .{});
@@ -848,13 +848,13 @@ pub fn executeV3SetAuthorityChecked(
                 try ic.tc.log("Incorrect upgrade authority provided", .{});
                 return InstructionError.IncorrectAuthority;
             }
-            if (!(try ic.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isindicesigner(
                 @intFromEnum(AccountIndex.present_authority),
             ))) {
                 try ic.tc.log("Upgrade authority did not sign", .{});
                 return InstructionError.MissingRequiredSignature;
             }
-            if (!(try ic.ixn_info.isIndexSigner(
+            if (!(try ic.ixn_info.isindicesigner(
                 @intFromEnum(AccountIndex.new_authority),
             ))) {
                 try ic.tc.log("New authority did not sign", .{});
@@ -1012,7 +1012,7 @@ fn commonCloseAccount(
         try ic.tc.log("Incorrect authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
-    if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+    if (!(try ic.ixn_info.isindicesigner(@intFromEnum(AccountIndex.authority)))) {
         try ic.tc.log("Authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }
@@ -1268,7 +1268,7 @@ pub fn executeV3Migrate(
         try ic.tc.log("Incorrect migration authority provided", .{});
         return InstructionError.IncorrectAuthority;
     }
-    if (!(try ic.ixn_info.isIndexSigner(@intFromEnum(AccountIndex.authority)))) {
+    if (!(try ic.ixn_info.isindicesigner(@intFromEnum(AccountIndex.authority)))) {
         try ic.tc.log("Migration authority did not sign", .{});
         return InstructionError.MissingRequiredSignature;
     }

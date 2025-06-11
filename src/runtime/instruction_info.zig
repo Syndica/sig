@@ -72,7 +72,7 @@ pub const InstructionInfo = struct {
     }
 
     /// Return if the account at a given index is a signer with bounds checking
-    pub fn isIndexSigner(
+    pub fn isindicesigner(
         self: *const InstructionInfo,
         index: u16,
     ) InstructionError!bool {

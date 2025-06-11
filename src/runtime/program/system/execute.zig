@@ -208,7 +208,7 @@ fn executeTransferWithSeed(
     const from_base_pubkey = ic.ixn_info.account_metas.buffer[from_base_index].pubkey;
     const from_pubkey = ic.ixn_info.account_metas.buffer[from_index].pubkey;
 
-    if (!try ic.ixn_info.isIndexSigner(from_base_index)) {
+    if (!try ic.ixn_info.isindicesigner(from_base_index)) {
         try ic.tc.log("Transfer: `from` account {} must sign", .{from_base_pubkey});
         return InstructionError.MissingRequiredSignature;
     }
@@ -460,7 +460,7 @@ fn transfer(
     to_index: u16,
     lamports: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    if (!try ic.ixn_info.isIndexSigner(from_index)) {
+    if (!try ic.ixn_info.isindicesigner(from_index)) {
         try ic.tc.log(
             "Transfer: `from` account {} must sign",
             .{ic.ixn_info.account_metas.buffer[from_index].pubkey},

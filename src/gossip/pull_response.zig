@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
-const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.mux.RwMux;
@@ -24,28 +23,26 @@ pub fn filterSignedGossipDatas(
     filter: *const GossipPullFilter,
     caller_wallclock: u64,
     max_number_values: usize,
-) error{OutOfMemory}!ArrayList(SignedGossipData) {
-    if (max_number_values == 0) {
-        return ArrayList(SignedGossipData).init(allocator);
-    }
+) error{OutOfMemory}![]SignedGossipData {
+    if (max_number_values == 0) return &.{};
 
     const jitter = random.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
-    var bloom = filter.bloom;
-
-    var match_indexs = try gossip_table.getBitmaskMatches(
+    const match_indices = try gossip_table.getBitmaskMatches(
         allocator,
         filter.mask,
         filter.mask_bits,
     );
-    defer match_indexs.deinit();
+    defer allocator.free(match_indices);
 
-    const output_size = @min(max_number_values, match_indexs.items.len);
-    var output = try ArrayList(SignedGossipData).initCapacity(allocator, output_size);
-    errdefer output.deinit();
+    var output: std.ArrayListUnmanaged(SignedGossipData) = try .initCapacity(
+        allocator,
+        max_number_values,
+    );
+    errdefer output.deinit(allocator);
 
-    for (match_indexs.items) |entry_index| {
+    for (match_indices) |entry_index| {
         var entry = gossip_table.store.getByIndex(entry_index);
 
         // entry is too new
@@ -53,7 +50,7 @@ pub fn filterSignedGossipDatas(
             continue;
         }
         // entry is already contained in the bloom
-        if (bloom.contains(&entry.metadata.value_hash.data)) {
+        if (filter.bloom.contains(&entry.metadata.value_hash.data)) {
             continue;
         }
         // exclude contact info (? not sure why - labs does it)
@@ -62,13 +59,11 @@ pub fn filterSignedGossipDatas(
         }
 
         // good
-        try output.append(entry.signedData());
-        if (output.items.len == max_number_values) {
-            break;
-        }
+        output.appendAssumeCapacity(entry.signedData());
+        if (output.items.len == max_number_values) break;
     }
 
-    return output;
+    return try output.toOwnedSlice(allocator);
 }
 
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;

@@ -88,15 +88,15 @@ pub const ActiveSet = struct {
         allocator: std.mem.Allocator,
         origin: Pubkey,
         table: *const GossipTable,
-    ) error{OutOfMemory}!std.ArrayList(EndPoint) {
-        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(
+    ) error{OutOfMemory}![]const EndPoint {
+        var active_set_endpoints: std.ArrayListUnmanaged(EndPoint) = try .initCapacity(
             allocator,
             GOSSIP_PUSH_FANOUT,
         );
-        errdefer active_set_endpoints.deinit();
+        errdefer active_set_endpoints.deinit(allocator);
 
-        var iter = self.peers.iterator();
-        while (iter.next()) |entry| {
+        var iterator = self.peers.iterator();
+        while (iterator.next()) |entry| {
             // lookup peer contact info
             const peer_info = table.getThreadSafeContactInfo(entry.key_ptr.*) orelse continue;
             const peer_gossip_addr = peer_info.gossip_addr orelse continue;
@@ -105,9 +105,7 @@ pub const ActiveSet = struct {
 
             // check if peer has been pruned
             const origin_bytes = origin.data;
-            if (entry.value_ptr.contains(&origin_bytes)) {
-                continue;
-            }
+            if (entry.value_ptr.contains(&origin_bytes)) continue;
 
             active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toEndpoint());
             if (active_set_endpoints.items.len == GOSSIP_PUSH_FANOUT) {
@@ -115,7 +113,7 @@ pub const ActiveSet = struct {
             }
         }
 
-        return active_set_endpoints;
+        return try active_set_endpoints.toOwnedSlice(allocator);
     }
 };
 
@@ -153,18 +151,19 @@ test "init/denit" {
 
     const origin = Pubkey.initRandom(prng.random());
 
-    var fanout = try active_set.getFanoutPeers(allocator, origin, &table);
-    defer fanout.deinit();
-    const no_prune_fanout_len = fanout.items.len;
+    const fanout = try active_set.getFanoutPeers(allocator, origin, &table);
+    defer allocator.free(fanout);
+
+    const no_prune_fanout_len = fanout.len;
     try std.testing.expect(no_prune_fanout_len > 0);
 
     var iter = active_set.peers.keyIterator();
     const peer_pubkey = iter.next().?.*;
     active_set.prune(peer_pubkey, origin);
 
-    var fanout_with_prune = try active_set.getFanoutPeers(allocator, origin, &table);
-    defer fanout_with_prune.deinit();
-    try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
+    const fanout_with_prune = try active_set.getFanoutPeers(allocator, origin, &table);
+    defer allocator.free(fanout_with_prune);
+    try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.len + 1);
 }
 
 test "gracefully rotates with duplicate contact ids" {
