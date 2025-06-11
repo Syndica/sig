@@ -14,8 +14,6 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
 const Transaction = sig.core.transaction.Transaction;
-const Signature = sig.core.Signature;
-const Keypair = sig.identity.KeyPair;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
@@ -164,12 +162,7 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const heaviest_epoch: Epoch = 0;
     const ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     const descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
-    const vote_account_pubkey = Pubkey.ZEROES;
-    const identity_keypair = Keypair.generate();
-    var authorized_voter_keypairs = [_]Keypair{Keypair.generate()};
-    var vote_signatures =
-        std.ArrayList(Signature).init(deps.allocator);
-    const has_new_vote_been_rooted = true;
+
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = sig.time.Instant.now(),
         .last_print_time = sig.time.Instant.now(),
@@ -181,7 +174,6 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const bits = try sig.bloom.bit_set.DynamicArrayBitSet(u64).initEmpty(deps.allocator, 10);
     defer bits.deinit(deps.allocator);
     const slot_history = SlotHistory{ .bits = bits, .next_slot = 0 };
-    const wait_till_vote_slot = null;
 
     // Looks like this is mostly used for logging? So maybe it can be skipped?
     checkForVoteOnlyMode(
@@ -212,14 +204,8 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
             deps.replay_tower,
             deps.progress_map,
             if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
-            &vote_account_pubkey,
-            &identity_keypair,
-            &authorized_voter_keypairs,
-            &vote_signatures,
-            has_new_vote_been_rooted,
             &last_vote_refresh_time,
             &voting_sender,
-            wait_till_vote_slot,
         );
     }
 
@@ -296,14 +282,8 @@ fn maybeRefreshLastVote(
     replay_tower: *ReplayTower,
     progress: *const ProgressMap,
     maybe_heaviest_slot_on_same_fork: ?Slot,
-    vote_account_pubkey: *const Pubkey,
-    identity_keypair: *const Keypair,
-    authorized_voter_keypairs: []Keypair, // TODO Arc
-    vote_signatures: *std.ArrayList(Signature),
-    has_new_vote_been_rooted: bool,
     last_vote_refresh_time: *LastVoteRefreshTime,
     voting_sender: *const stubs.Sender(VoteOp),
-    wait_to_vote_slot: ?Slot,
 ) bool {
     const heaviest_bank_on_same_fork = maybe_heaviest_slot_on_same_fork orelse {
         // Only refresh if blocks have been built on our last vote
@@ -364,18 +344,11 @@ fn maybeRefreshLastVote(
 
     // All criteria are met, refresh the last vote using the blockhash of `heaviest_bank_on_same_fork`
     // Update timestamp for refreshed vote
+    // AUDIT: Rest of code replaces Self::refresh_last_vote in Agave
     replay_tower.refreshLastVoteTimestamp(heaviest_bank_on_same_fork);
 
-    // TODO generate_vote_tx
-    _ = &vote_account_pubkey;
-    _ = &identity_keypair;
-    _ = &authorized_voter_keypairs;
-    _ = &vote_signatures;
-    _ = &has_new_vote_been_rooted;
-    _ = &wait_to_vote_slot;
-    const vote_tx_result: GenerateVoteTxResult = .{
-        .tx = Transaction.EMPTY,
-    };
+    // TODO currently hardcoding to non voting transaction
+    const vote_tx_result: GenerateVoteTxResult = .non_voting;
 
     return switch (vote_tx_result) {
         .tx => |vote_tx| {
