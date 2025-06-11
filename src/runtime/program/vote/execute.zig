@@ -266,7 +266,7 @@ fn executeAuthorize(
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
-    const signers = try ic.ixn_info.getSigners();
+    const signers = ic.ixn_info.getSigners();
 
     try authorize(
         allocator,
@@ -488,7 +488,7 @@ fn executeAuthorizeChecked(
         .withdrawer => VoteAuthorize.withdrawer,
     };
 
-    const signers = try ic.ixn_info.getSigners();
+    const signers = ic.ixn_info.getSigners();
 
     try authorize(
         allocator,

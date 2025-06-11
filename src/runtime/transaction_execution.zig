@@ -20,13 +20,14 @@ const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionTrace = TransactionContext.InstructionTrace;
 const LogCollector = sig.runtime.LogCollector;
-const Ancestors = sig.core.bank.Ancestors;
+const Ancestors = sig.core.status_cache.Ancestors;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;
 const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const EpochStakes = sig.core.stake.EpochStakes;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
+const StatusCache = sig.core.StatusCache;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -44,8 +45,6 @@ const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 //
 // Once the accounts have been loaded, the transaction is commitable, even if its
 // execution fails.
-
-pub const StatusCache = struct {};
 
 pub const RuntimeTransaction = struct {
     pub const Accounts = std.MultiArrayList(sig.core.instruction.InstructionAccount);
@@ -107,7 +106,6 @@ pub const ExecutedTransaction = struct {
 
     pub fn deinit(self: ExecutedTransaction, allocator: std.mem.Allocator) void {
         if (self.log_collector) |lc| lc.deinit(allocator);
-        if (self.return_data) |data| allocator.free(data);
     }
 };
 
@@ -127,7 +125,6 @@ pub const ProcessedTransaction = union(enum(u8)) {
     pub fn deinit(self: ProcessedTransaction, allocator: std.mem.Allocator) void {
         switch (self) {
             .executed => |executed| {
-                executed.loaded_accounts.deinit(allocator);
                 executed.executed_transaction.deinit(allocator);
             },
             else => {},
@@ -174,13 +171,11 @@ pub fn loadAndExecuteTransaction(
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
-    const check_age_result = checkAge(
+    const check_age_result = sig.runtime.check_transactions.checkAge(
         transaction,
         batch_account_cache,
-        environment.ancestors,
         environment.blockhash_queue,
         environment.max_age,
-        &environment.last_blockhash,
         &environment.next_durable_nonce,
         environment.next_lamports_per_signature,
     );
@@ -189,7 +184,7 @@ pub fn loadAndExecuteTransaction(
         .err => |err| return .{ .err = err },
     };
 
-    if (checkStatusCache(
+    if (sig.runtime.check_transactions.checkStatusCache(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
         environment.ancestors,
@@ -216,7 +211,7 @@ pub fn loadAndExecuteTransaction(
         transaction.signature_count,
         batch_account_cache,
         &compute_budget_limits,
-        &maybe_nonce_info,
+        maybe_nonce_info,
         environment.rent_collector,
         environment.feature_set,
         environment.lamports_per_signature,
@@ -267,7 +262,6 @@ pub fn loadAndExecuteTransaction(
     } };
 }
 
-/// TODO: Follow up PR will remove EpochContext and SlotContext from the TransactionContext
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L909
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
@@ -347,53 +341,13 @@ pub fn executeTransaction(
     };
 }
 
-/// Requires full transaction to find nonce account in the event that the transactions recent blockhash
-/// is not in the blockhash queue within the max age. Also worth noting that Agave returns a CheckTransactionDetails
-/// struct which contains a lamports_per_signature field which is unused, hence we return only the nonce account
-/// if it exists.
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
-pub fn checkAge(
-    transaction: *const RuntimeTransaction,
-    batch_account_cache: *BatchAccountCache,
-    ancestors: *const Ancestors,
-    blockhash_queue: *const BlockhashQueue,
-    max_age: u64,
-    last_blockhash: *const Hash,
-    next_durable_nonce: *const Hash,
-    next_lamports_per_signature: u64,
-) TransactionResult(CachedAccount) {
-    _ = transaction;
-    _ = ancestors;
-    _ = batch_account_cache;
-    _ = blockhash_queue;
-    _ = max_age;
-    _ = last_blockhash;
-    _ = next_durable_nonce;
-    _ = next_lamports_per_signature;
-    @panic("not implemented");
-}
-
-/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
-pub fn checkStatusCache(
-    msg_hash: *const Hash,
-    recent_blockhash: *const Hash,
-    ancestors: *const Ancestors,
-    status_cache: *const StatusCache,
-) ?TransactionError {
-    _ = msg_hash;
-    _ = recent_blockhash;
-    _ = status_cache;
-    _ = ancestors;
-    @panic("not implemented");
-}
-
 /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L557
 pub fn checkFeePayer(
     fee_payer: *const Pubkey,
     signature_count: u64,
     batch_account_cache: *BatchAccountCache,
     compute_budget_limits: *const ComputeBudgetLimits,
-    nonce_account: ?*const CachedAccount,
+    nonce_account: ?CachedAccount,
     rent_collector: *const RentCollector,
     feature_set: *const FeatureSet,
     lamports_per_signature: u64,
@@ -413,7 +367,7 @@ pub fn checkFeePayer(
     @panic("not implemented");
 }
 
-test "transaction_execution" {
+test "loadAndExecuteTransactions: no transactions" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
@@ -422,7 +376,7 @@ test "transaction_execution" {
 
     const ancestors: Ancestors = .{};
     const feature_set: FeatureSet = FeatureSet.EMPTY;
-    const status_cache: StatusCache = .{};
+    const status_cache = StatusCache.default();
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
@@ -466,4 +420,89 @@ test "transaction_execution" {
     );
 
     _ = result;
+}
+
+test "loadAndExecuteTransactions: invalid compute budget instruction" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const max_age = 5;
+    const recent_blockhash = Hash.initRandom(prng.random());
+
+    const transaction = RuntimeTransaction{
+        .signature_count = 0,
+        .fee_payer = Pubkey.ZEROES,
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = recent_blockhash,
+        .instruction_infos = &.{.{
+            .program_meta = .{
+                .pubkey = sig.runtime.program.compute_budget.ID,
+                .index_in_transaction = 0,
+            },
+            .account_metas = .{},
+            .instruction_data = &.{},
+        }},
+    };
+
+    var blockhash_queue = BlockhashQueue{
+        .last_hash = null,
+        .max_age = 10,
+        .ages = try .init(
+            allocator,
+            &.{recent_blockhash},
+            &.{.{
+                .fee_calculator = .{ .lamports_per_signature = 5000 },
+                .hash_index = 0,
+                .timestamp = 0,
+            }},
+        ),
+        .last_hash_index = 0,
+    };
+    defer blockhash_queue.deinit(allocator);
+
+    var account_cache = BatchAccountCache{};
+    defer account_cache.deinit(allocator);
+
+    const epoch_stakes = try EpochStakes.initEmpty(allocator);
+    defer epoch_stakes.deinit(allocator);
+
+    const results = try loadAndExecuteTransactions(
+        allocator,
+        &.{transaction},
+        &account_cache,
+        &.{
+            .ancestors = &Ancestors{},
+            .feature_set = &FeatureSet.EMPTY,
+            .status_cache = &StatusCache.default(),
+            .sysvar_cache = &SysvarCache{},
+            .rent_collector = &sig.core.rent_collector.defaultCollector(10),
+            .blockhash_queue = &blockhash_queue,
+            .epoch_stakes = &epoch_stakes,
+            .max_age = max_age,
+            .last_blockhash = recent_blockhash,
+            .next_durable_nonce = Hash.ZEROES,
+            .next_lamports_per_signature = 0,
+            .last_lamports_per_signature = 0,
+            .lamports_per_signature = 0,
+        },
+        &.{
+            .log = false,
+            .log_messages_byte_limit = null,
+        },
+    );
+    defer {
+        for (results) |result| {
+            switch (result) {
+                .ok => |ok| ok.deinit(allocator),
+                .err => |err| err.deinit(allocator),
+            }
+        }
+        allocator.free(results);
+    }
+
+    try std.testing.expectEqual(
+        TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },
+        results[0].err,
+    );
 }
