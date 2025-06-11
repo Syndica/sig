@@ -84,7 +84,6 @@ pub fn checkFeePayer(
 ) error{OutOfMemory}!TransactionResult(struct {
     FeeDetails,
     TransactionRollbacks,
-    LoadedTransactionAccount,
 }) {
     const enable_secp256r1 = feature_set.active.contains(
         sig.runtime.features.ENABLE_SECP256R1_PRECOMPILE,
@@ -138,9 +137,7 @@ pub fn checkFeePayer(
         fee_payer_loaded_rent_epoch,
     );
 
-    return .{
-        .ok = .{ fee_details, rollback_accounts, loaded_fee_payer },
-    };
+    return .{ .ok = .{ fee_details, rollback_accounts } };
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L85
@@ -656,7 +653,7 @@ test "checkAge: nonce account" {
     }
 }
 
-test "checkFeePayer: happy path" {
+test "checkFeePayer: happy path fee payer only" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(0);
@@ -685,7 +682,7 @@ test "checkFeePayer: happy path" {
         .owner = sig.runtime.program.system.ID,
         .data = &.{},
         .executable = false,
-        .rent_epoch = 1,
+        .rent_epoch = 0,
     });
 
     const result = try checkFeePayer(
@@ -699,16 +696,140 @@ test "checkFeePayer: happy path" {
         5000,
     );
 
-    const fee_details = result.ok[0];
-    const rollback_fee_payer = result.ok[1].fee_payer_only.account;
-    const loaded_fee_payer = result.ok[2].account;
+    const fee_details, const rollbacks = result.ok;
 
     try std.testing.expectEqual(5000, fee_details.transaction_fee);
     try std.testing.expectEqual(0, fee_details.prioritization_fee);
 
-    try std.testing.expectEqual(995_000, rollback_fee_payer.lamports);
-    try std.testing.expectEqual(995_000, loaded_fee_payer.lamports);
+    try std.testing.expectEqual(995_000, rollbacks.fee_payer_only.account.lamports);
+    try std.testing.expectEqual(0, rollbacks.fee_payer_only.account.rent_epoch);
+}
 
-    try std.testing.expectEqual(1, rollback_fee_payer.rent_epoch);
-    try std.testing.expectEqual(std.math.maxInt(u64), loaded_fee_payer.rent_epoch);
+test "checkFeePayer: happy path with same nonce and fee payer" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const recent_blockhash = Hash.initRandom(prng.random());
+
+    var transaction = RuntimeTransaction{
+        .signature_count = 1,
+        .fee_payer = Pubkey.initRandom(prng.random()),
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = recent_blockhash,
+        .instruction_infos = &.{},
+    };
+    defer transaction.accounts.deinit(allocator);
+
+    try transaction.accounts.append(
+        allocator,
+        .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
+    );
+
+    var account_cache = BatchAccountCache{};
+    defer account_cache.deinit(allocator);
+
+    try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
+        .lamports = 1_000_000,
+        .owner = sig.runtime.program.system.ID,
+        .data = &.{},
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    var nonce_account = AccountSharedData{
+        .lamports = 1_000,
+        .owner = sig.runtime.program.system.ID,
+        .data = try allocator.dupe(u8, &.{ 0, 0, 0, 0 }),
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    defer allocator.free(nonce_account.data);
+
+    const result = try checkFeePayer(
+        allocator,
+        &transaction,
+        &account_cache,
+        &ComputeBudgetLimits.DEFAULT,
+        .{ .pubkey = transaction.fee_payer, .account = &nonce_account },
+        &sig.core.rent_collector.defaultCollector(10),
+        &sig.runtime.FeatureSet.EMPTY,
+        5000,
+    );
+
+    const fee_details, const rollbacks = result.ok;
+    defer rollbacks.deinit(allocator);
+
+    const rollback_account = rollbacks.same_nonce_and_fee_payer.account;
+
+    try std.testing.expectEqual(5000, fee_details.transaction_fee);
+    try std.testing.expectEqual(0, fee_details.prioritization_fee);
+    try std.testing.expectEqual(995_000, rollback_account.lamports);
+    try std.testing.expectEqual(std.math.maxInt(u64), rollback_account.rent_epoch);
+}
+
+test "checkFeePayer: happy path with separate nonce and fee payer" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const recent_blockhash = Hash.initRandom(prng.random());
+
+    var transaction = RuntimeTransaction{
+        .signature_count = 1,
+        .fee_payer = Pubkey.initRandom(prng.random()),
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = recent_blockhash,
+        .instruction_infos = &.{},
+    };
+    defer transaction.accounts.deinit(allocator);
+
+    try transaction.accounts.append(
+        allocator,
+        .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
+    );
+
+    var account_cache = BatchAccountCache{};
+    defer account_cache.deinit(allocator);
+
+    try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
+        .lamports = 1_000_000,
+        .owner = sig.runtime.program.system.ID,
+        .data = &.{},
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    var nonce_account = AccountSharedData{
+        .lamports = 1_000,
+        .owner = sig.runtime.program.system.ID,
+        .data = try allocator.dupe(u8, &.{ 0, 0, 0, 0 }),
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    defer allocator.free(nonce_account.data);
+
+    const result = try checkFeePayer(
+        allocator,
+        &transaction,
+        &account_cache,
+        &ComputeBudgetLimits.DEFAULT,
+        .{ .pubkey = Pubkey.initRandom(prng.random()), .account = &nonce_account },
+        &sig.core.rent_collector.defaultCollector(10),
+        &sig.runtime.FeatureSet.EMPTY,
+        5000,
+    );
+
+    const fee_details, const rollbacks = result.ok;
+    defer rollbacks.deinit(allocator);
+
+    const rollback_nonce_account = rollbacks.separate_nonce_and_fee_payer[0].account;
+    const rollback_fee_payer_account = rollbacks.separate_nonce_and_fee_payer[1].account;
+
+    try std.testing.expectEqual(5000, fee_details.transaction_fee);
+    try std.testing.expectEqual(0, fee_details.prioritization_fee);
+    try std.testing.expectEqual(1_000, rollback_nonce_account.lamports);
+    try std.testing.expectEqual(0, rollback_nonce_account.rent_epoch);
+    try std.testing.expectEqual(995_000, rollback_fee_payer_account.lamports);
+    try std.testing.expectEqual(std.math.maxInt(u64), rollback_fee_payer_account.rent_epoch);
 }

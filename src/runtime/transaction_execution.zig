@@ -123,7 +123,7 @@ pub const TransactionRollbacks = union(enum(u8)) {
         }
     }
 
-    pub fn deinit(self: TransactionRollbacks, allocator: std.mem.Allocator) !void {
+    pub fn deinit(self: TransactionRollbacks, allocator: std.mem.Allocator) void {
         switch (self) {
             .fee_payer_only => |fee_payer_account| allocator.free(fee_payer_account.account.data),
             .same_nonce_and_fee_payer => |account| allocator.free(account.account.data),
@@ -261,14 +261,10 @@ pub fn loadAndExecuteTransaction(
         environment.feature_set,
         environment.lamports_per_signature,
     );
-    const fees, const rollbacks, const loaded_fee_payer = switch (check_fee_payer_result) {
+    const fees, const rollbacks = switch (check_fee_payer_result) {
         .ok => |result| result,
         .err => |err| return .{ .err = err },
     };
-
-    // NOTE: should we use this value, to prevent double-loading of the fee payer? Seems it doesn't
-    // matter.
-    _ = loaded_fee_payer;
 
     const loaded_accounts_result = try batch_account_cache.loadTransactionAccounts(
         allocator,
