@@ -37,8 +37,6 @@ pub fn execute(
         break :blk program_account.account.owner;
     };
 
-    //std.debug.print("bpf_exec: {s} key: {s}\n", .{program_owner, ic.ixn_info.program_meta.pubkey});
-
     // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L408
     if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
         if (bpf_loader_program.v1.ID.equals(&ic.ixn_info.program_meta.pubkey)) {
@@ -88,9 +86,10 @@ pub fn executeBpfLoaderV4ProgramInstruction(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
     const instruction = try ic.ixn_info.limitedDeserializeInstruction(
         bpf_loader_program.v4.Instruction,
-        sig.net.Packet.DATA_SIZE,
+        &buf,
     );
 
     _ = allocator;
@@ -126,9 +125,10 @@ pub fn executeBpfLoaderV3ProgramInstruction(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void {
+    var buf: [sig.net.Packet.DATA_SIZE]u8 = undefined;
     const instruction = try ic.ixn_info.limitedDeserializeInstruction(
         bpf_loader_program.v3.Instruction,
-        sig.net.Packet.DATA_SIZE,
+        &buf,
     );
 
     return switch (instruction) {

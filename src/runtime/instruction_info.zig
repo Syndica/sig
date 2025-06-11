@@ -125,11 +125,15 @@ pub const InstructionInfo = struct {
     pub fn limitedDeserializeInstruction(
         self: *const InstructionInfo,
         comptime T: type,
-        comptime limit: u64,
+        alloc_buf: []u8,
     ) InstructionError!T {
-        var buf: [limit]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buf);
-        return bincode.readFromSlice(fba.allocator(), T, self.instruction_data, .{}) catch {
+        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
+            self.instruction_data.len,
+            Transaction.MAX_BYTES,
+        )]);
+
+        var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
+        return bincode.read(fba.allocator(), T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
     }
