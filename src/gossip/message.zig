@@ -20,23 +20,23 @@ pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 /// Analogous to [Protocol](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268)
 pub const GossipMessage = union(enum(u32)) {
-    PullRequest: struct { GossipPullFilter, SignedGossipData },
-    PullResponse: struct { Pubkey, []SignedGossipData },
-    PushMessage: struct { Pubkey, []SignedGossipData },
-    PruneMessage: struct { Pubkey, PruneData },
-    PingMessage: Ping,
-    PongMessage: Pong,
+    pull_request: struct { GossipPullFilter, SignedGossipData },
+    pull_response: struct { Pubkey, []SignedGossipData },
+    push_message: struct { Pubkey, []SignedGossipData },
+    prune_message: struct { Pubkey, PruneData },
+    ping_message: Ping,
+    pong_message: Pong,
 
     pub fn verifySignature(self: *GossipMessage) !void {
         switch (self.*) {
-            .PullRequest => |*pull| {
+            .pull_request => |*pull| {
                 var value = pull[1];
                 const is_verified = try value.verify(value.id());
                 if (!is_verified) {
                     return error.InvalidPullRequest;
                 }
             },
-            .PullResponse => |*pull| {
+            .pull_response => |*pull| {
                 const values = pull[1];
                 for (values) |*value| {
                     const is_verified = try value.verify(value.id());
@@ -45,7 +45,7 @@ pub const GossipMessage = union(enum(u32)) {
                     }
                 }
             },
-            .PushMessage => |*push| {
+            .push_message => |*push| {
                 const values = push[1];
                 for (values) |*value| {
                     const is_verified = try value.verify(value.id());
@@ -54,14 +54,14 @@ pub const GossipMessage = union(enum(u32)) {
                     }
                 }
             },
-            .PruneMessage => |*prune| {
+            .prune_message => |*prune| {
                 var data: PruneData = prune[1];
                 data.verify() catch return error.InvalidPruneMessage;
             },
-            .PingMessage => |*ping| {
+            .ping_message => |*ping| {
                 ping.verify() catch return error.InvalidPingMessage;
             },
-            .PongMessage => |*pong| {
+            .pong_message => |*pong| {
                 pong.verify() catch return error.InvalidPongMessage;
             },
         }
@@ -69,16 +69,16 @@ pub const GossipMessage = union(enum(u32)) {
 
     pub fn sanitize(self: *GossipMessage) !void {
         switch (self.*) {
-            .PullRequest => {},
-            .PullResponse => {},
-            .PushMessage => |*msg| {
+            .pull_request => {},
+            .pull_response => {},
+            .push_message => |*msg| {
                 const gossip_values = msg[1];
                 for (gossip_values) |value| {
                     const data: GossipData = value.data;
                     try data.sanitize();
                 }
             },
-            .PruneMessage => |*msg| {
+            .prune_message => |*msg| {
                 const from = msg[0];
                 const value = msg[1];
                 if (!from.equals(&value.pubkey)) {
@@ -87,8 +87,8 @@ pub const GossipMessage = union(enum(u32)) {
                 try sanitizeWallclock(value.wallclock);
             },
             // do nothing
-            .PingMessage => {},
-            .PongMessage => {},
+            .ping_message => {},
+            .pong_message => {},
         }
     }
 };
@@ -105,7 +105,7 @@ test "push message serialization is predictable" {
     var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
 
-    const msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
+    const msg = GossipMessage{ .push_message = .{ pubkey, values.items } };
     const empty_size = bincode.sizeOf(msg, .{});
 
     const keypair = KeyPair.generate();
@@ -114,7 +114,7 @@ test "push message serialization is predictable" {
     try values.append(value);
     try std.testing.expect(values.items.len == 1);
 
-    const msg_with_value = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
+    const msg_with_value = GossipMessage{ .push_message = .{ pubkey, values.items } };
     const msg_value_size = bincode.sizeOf(msg_with_value, .{});
     try std.testing.expectEqual(value_size + empty_size, msg_value_size);
 }
@@ -124,16 +124,26 @@ test "ping message serializes and deserializes correctly" {
 
     var prng = std.Random.DefaultPrng.init(0);
 
-    var original = GossipMessage{ .PingMessage = try Ping.initRandom(prng.random(), &keypair) };
-    var buf = [_]u8{0} ** 1232;
+    var original: GossipMessage = .{
+        .ping_message = try Ping.initRandom(prng.random(), &keypair),
+    };
+    var buffer = [_]u8{0} ** 1232;
+    const serialized = try bincode.writeToSlice(&buffer, original, bincode.Params.standard);
 
-    const serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
+    var deserialized = try bincode.readFromSlice(
+        testing.allocator,
+        GossipMessage,
+        serialized,
+        bincode.Params.standard,
+    );
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
-
-    try testing.expect(original.PingMessage.from.equals(&deserialized.PingMessage.from));
-    try testing.expect(original.PingMessage.signature.eql(&deserialized.PingMessage.signature));
-    try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
+    try testing.expect(original.ping_message.from.equals(&deserialized.ping_message.from));
+    try testing.expect(original.ping_message.signature.eql(&deserialized.ping_message.signature));
+    try testing.expect(std.mem.eql(
+        u8,
+        &original.ping_message.token,
+        &deserialized.ping_message.token,
+    ));
 }
 
 test "test ping pong sig verify" {
@@ -141,10 +151,10 @@ test "test ping pong sig verify" {
 
     var prng = std.Random.DefaultPrng.init(0);
     var ping = try Ping.initRandom(prng.random(), &keypair);
-    var msg = GossipMessage{ .PingMessage = ping };
+    var msg = GossipMessage{ .ping_message = ping };
     try msg.verifySignature();
 
-    var pong = GossipMessage{ .PongMessage = try Pong.init(&ping, &keypair) };
+    var pong = GossipMessage{ .pong_message = try Pong.init(&ping, &keypair) };
     try pong.verifySignature();
 }
 
@@ -185,7 +195,7 @@ test "pull request serializes and deserializes" {
     var filter = try GossipPullFilter.init(allocator);
     defer filter.deinit(allocator);
 
-    const pull: GossipMessage = .{ .PullRequest = .{ filter, value } };
+    const pull: GossipMessage = .{ .pull_request = .{ filter, value } };
 
     var buffer: [1232]u8 = undefined;
     const serialized = try bincode.writeToSlice(&buffer, pull, bincode.Params.standard);
@@ -267,14 +277,14 @@ test "push message serializes and deserializes correctly" {
     };
     const gossip_value = SignedGossipData.initSigned(&kp, data);
     var values = [_]SignedGossipData{gossip_value};
-    const pushmsg = GossipMessage{ .PushMessage = .{ id, &values } };
+    const pushmsg = GossipMessage{ .push_message = .{ id, &values } };
 
     var buf = [_]u8{0} ** 1024;
     const bytes = try bincode.writeToSlice(&buf, pushmsg, bincode.Params.standard);
     try testing.expectEqualSlices(u8, &rust_bytes, bytes);
 }
 
-test "Protocol.PullRequest.ContactInfo signature is valid" {
+test "Protocol.pull_request.ContactInfo signature is valid" {
     var contact_info_pull_response_packet_from_mainnet = [_]u8{
         1,   0,   0,   0,   9,   116, 228, 64,  179, 73,  145, 220, 74,  55,  179, 56,  86,  218,
         47,  62,  172, 162, 127, 102, 37,  146, 103, 117, 255, 245, 248, 212, 101, 163, 188, 231,

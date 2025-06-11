@@ -115,7 +115,7 @@ pub const RepairMessage = union(enum(u8)) {
     const MAX_SERIALIZED_SIZE: usize = 160;
 
     pub fn eql(self: *const Self, other: *const Self) bool {
-        if (!std.mem.eql(u8, @tagName(self.*), @tagName(other.*))) {
+        if (std.meta.activeTag(self.*) != std.meta.activeTag(other.*)) {
             return false;
         }
         switch (self.*) {

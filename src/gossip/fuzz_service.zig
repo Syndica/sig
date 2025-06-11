@@ -298,12 +298,16 @@ pub fn newGossipClient(
 
 pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    const msg_slice = try bincode.writeToSlice(&packet_buf, d, bincode.Params{});
+    const msg_slice = try bincode.writeToSlice(
+        &packet_buf,
+        d,
+        bincode.Params{},
+    );
     return Packet.init(to_addr, packet_buf, msg_slice.len);
 }
 
 pub fn randomPing(random: std.Random, keypair: *const KeyPair) !GossipMessage {
-    return .{ .PingMessage = try Ping.initRandom(random, keypair) };
+    return .{ .ping_message = try Ping.initRandom(random, keypair) };
 }
 
 pub fn randomPingPacket(
@@ -316,7 +320,7 @@ pub fn randomPingPacket(
 }
 
 pub fn randomPong(random: std.Random, keypair: *const KeyPair) !GossipMessage {
-    return .{ .PongMessage = try Pong.initRandom(random, keypair) };
+    return .{ .pong_message = try Pong.initRandom(random, keypair) };
 }
 
 pub fn randomPongPacket(
@@ -366,7 +370,7 @@ pub fn randomPushMessage(
         &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
-        .PushMessage,
+        .push_message,
     );
 }
 
@@ -393,7 +397,7 @@ pub fn randomPullResponse(
         &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
-        .PullResponse,
+        .pull_response,
     );
 }
 
@@ -479,6 +483,6 @@ pub fn randomPullRequestWithContactInfo(
     defer if (!invalid_filter) filter.bloom.deinit(allocator);
 
     // serialize and send as packet
-    const msg: GossipMessage = .{ .PullRequest = .{ filter, contact_info } };
+    const msg: GossipMessage = .{ .pull_request = .{ filter, contact_info } };
     return try serializeToPacket(msg, to_addr);
 }

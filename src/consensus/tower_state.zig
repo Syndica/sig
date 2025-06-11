@@ -19,9 +19,12 @@ pub const TowerVoteState = struct {
     }
 
     pub fn nthRecentLockout(self: *const TowerVoteState, position: usize) ?Lockout {
-        const pos = std.math.sub(usize, self.votes.len, (position +| 1)) catch
-            return null;
-        return self.votes.get(pos);
+        const backwards = std.math.sub(
+            usize,
+            self.votes.len,
+            position +| 1,
+        ) catch return null;
+        return self.votes.get(backwards);
     }
 
     pub fn processNextVoteSlot(
@@ -42,9 +45,10 @@ pub const TowerVoteState = struct {
             const rooted_vote = self.votes.orderedRemove(0);
             self.root_slot = rooted_vote.slot;
         }
-        try self.votes.append(
-            Lockout{ .slot = next_vote_slot, .confirmation_count = 1 },
-        );
+        try self.votes.append(.{
+            .slot = next_vote_slot,
+            .confirmation_count = 1,
+        });
         try self.doubleLockouts();
     }
 
