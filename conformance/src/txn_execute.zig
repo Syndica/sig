@@ -1401,13 +1401,13 @@ pub fn hashSlot(
 
     const initial_hash =
         if (feature_set.active(.remove_accounts_delta_hash, 0))
-            Hash.generateSha256(.{
+            Hash.initMany(&.{
                 Hash.ZEROES,
                 &signature_count_bytes,
                 blockhash,
             })
         else
-            Hash.generateSha256(.{
+            Hash.initMany(&.{
                 Hash.ZEROES,
                 try freeze.deltaMerkleHash(account_reader, allocator, 0),
                 &signature_count_bytes,
@@ -1415,7 +1415,7 @@ pub fn hashSlot(
             });
 
     return if (feature_set.active(.accounts_lt_hash, 0))
-        Hash.generateSha256(.{ initial_hash, sig.core.hash.LtHash.IDENTITY.constBytes() })
+        Hash.initMany(&.{ initial_hash, sig.core.hash.LtHash.IDENTITY.constBytes() })
     else
         initial_hash;
 }

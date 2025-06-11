@@ -25,7 +25,7 @@ pub const ShredVersion = struct {
         var hash = genesis_hash;
         if (maybe_hard_forks) |hard_forks| {
             for (hard_forks.entries.items) |*hard_fork| {
-                hash = Hash.extendAndHash(
+                hash = Hash.extend(
                     hash,
                     std.mem.asBytes(hard_fork),
                 );

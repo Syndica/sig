@@ -24,8 +24,8 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         path: [:0]const u8,
 
         const Self = @This();
-
         const OpenError = Error || std.posix.MakeDirError || std.fs.Dir.StatFileError;
+        pub const name: []const u8 = "RocksDB";
 
         pub fn open(
             allocator: Allocator,
