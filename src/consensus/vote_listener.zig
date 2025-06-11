@@ -172,7 +172,7 @@ pub const VoteListener = struct {
             verified_vote_transactions,
         });
         errdefer recv_thread.join();
-        recv_thread.setName("solCiVoteLstnr") catch {};
+        recv_thread.setName("sigSolCiVoteLstnr") catch {};
 
         const process_votes_thread = try std.Thread.spawn(.{}, processVotesLoop, .{
             allocator,
