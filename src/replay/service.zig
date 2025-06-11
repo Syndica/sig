@@ -167,20 +167,11 @@ fn processConsensus(maybe_deps: ?ConsensusDependencies, newly_computed_slot_stat
             slot,
         );
 
-        var duplicate_slots_to_repair: replay.service.stubs.DuplicateSlotsToRepair = .{};
-        var purge_repair_slot_counter: replay.service.stubs.PurgeRepairSlotCounter = .{};
         try markSlotsDuplicateConfirmed(
-            deps.blockstore,
             deps.progress_map,
             deps.fork_choice,
             duplicate_confirmed_forks,
-            0,
-            .{},
-            .{},
-            &duplicate_slots_to_repair,
-            .{},
-            &purge_repair_slot_counter,
-            .{},
+            0, // TODO get this value
         );
     }
 
@@ -581,18 +572,20 @@ pub const SlotStateUpdate = union(enum) {
 
 /// This function helps maintain the validator's view of which slots
 /// have been duplicate confirmed by the cluster.
+///
+/// TODO
+// duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
+// ancestor_hashes_replay_update_sender: stubs.AncestorHashesReplayUpdateSender,
+// purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
+// blockstore: *BlockstoreReader,
+// duplicate_slot_tracker: stubs.DuplicateSlotsTracker,
+// epoch_slots_frozen_slots: stubs.EpochSlotsFrozenSlots,
+// duplicate_confirmed_slots: stubs.DuplicateConfirmedSlots,
 fn markSlotsDuplicateConfirmed(
-    blockstore: *BlockstoreReader,
     progress_map: *ProgressMap,
     fork_choice: *ForkChoice,
     confirmed_duplicates: []const SlotAndHash,
     root_slot: Slot,
-    duplicate_slot_tracker: stubs.DuplicateSlotsTracker,
-    epoch_slots_frozen_slots: stubs.EpochSlotsFrozenSlots,
-    duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
-    ancestor_hashes_replay_update_sender: stubs.AncestorHashesReplayUpdateSender,
-    purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
-    duplicate_confirmed_slots: stubs.DuplicateConfirmedSlots,
 ) !void {
     for (confirmed_duplicates) |confirmed| {
         const slot = confirmed.slot;
@@ -605,8 +598,7 @@ fn markSlotsDuplicateConfirmed(
             return error.MissingSlot;
 
         slot_progress.value_ptr.*.fork_stats.duplicate_confirmed_hash = hash;
-        // TODO Track slot and hash in duplicate_confirmed_slots?
-        // TODO Create DuplicateConfirmedState
+
         const duplicate_confirmed_state = DuplicateConfirmedState{
             .duplicate_confirmed_hash = hash,
             .slot_status = SlotStatus{ .frozen = hash },
@@ -619,27 +611,20 @@ fn markSlotsDuplicateConfirmed(
                 .duplicate_confirmed = duplicate_confirmed_state,
             },
             fork_choice,
-            duplicate_slots_to_repair,
-            blockstore,
-            &ancestor_hashes_replay_update_sender,
-            purge_repair_slot_counter,
         );
     }
-
-    _ = &duplicate_slot_tracker;
-    _ = &epoch_slots_frozen_slots;
-    _ = &duplicate_confirmed_slots;
 }
 
+// TODO
+// duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
+// blockstore: *const BlockstoreReader,
+// ancestor_hashes_replay_update_sender: *const stubs.AncestorHashesReplayUpdateSender,
+// purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
 fn checkSlotAgreesWithCluster(
     root: Slot,
     slot: Slot,
     slot_state_update: SlotStateUpdate,
     fork_choice: *ForkChoice,
-    duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
-    blockstore: *const BlockstoreReader,
-    ancestor_hashes_replay_update_sender: *const stubs.AncestorHashesReplayUpdateSender,
-    purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
 ) !void {
     // Currently implements SlotStateUpdate::DuplicateConfirmed
     if (slot <= root) {
@@ -677,10 +662,6 @@ fn checkSlotAgreesWithCluster(
     try applyStateChanges(
         slot,
         fork_choice,
-        duplicate_slots_to_repair,
-        blockstore,
-        ancestor_hashes_replay_update_sender,
-        purge_repair_slot_counter,
         state_changes,
     );
 }
@@ -753,13 +734,14 @@ fn generateStateChanges(
     return state_changes;
 }
 
+// TODO need to include:
+// duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
+// ancestor_hashes_replay_update_sender: *const stubs.AncestorHashesReplayUpdateSender,
+// purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
+// blockstore: *const BlockstoreReader,
 fn applyStateChanges(
     slot: Slot,
     fork_choice: *ForkChoice,
-    duplicate_slots_to_repair: *stubs.DuplicateSlotsToRepair,
-    blockstore: *const BlockstoreReader,
-    ancestor_hashes_replay_update_sender: *const stubs.AncestorHashesReplayUpdateSender,
-    purge_repair_slot_counter: *stubs.PurgeRepairSlotCounter,
     state_changes: ResultingStateChanges,
 ) !void {
     var maybe_not_duplicate_confirmed_frozen_hash: ?Hash = null;
@@ -780,7 +762,9 @@ fn applyStateChanges(
                 );
             },
             .repair_duplicate_confirmed_version => |duplicate_confirmed_hash| {
-                duplicate_slots_to_repair.insert(slot, duplicate_confirmed_hash);
+                // TODO
+                _ = &duplicate_confirmed_hash;
+                // duplicate_slots_to_repair.insert(slot, duplicate_confirmed_hash);
             },
             .duplicate_confirmed_slot_matches_cluster => |frozen_hash| {
                 maybe_not_duplicate_confirmed_frozen_hash = null;
@@ -801,12 +785,13 @@ fn applyStateChanges(
                 // )
                 // .unwrap();
                 _ = &new_duplicate_confirmed_slot_hashes;
-                _ = &blockstore;
-                duplicate_slots_to_repair.remove(slot);
-                purge_repair_slot_counter.remove(slot);
+                // duplicate_slots_to_repair.remove(slot);
+                // purge_repair_slot_counter.remove(slot);
             },
             .send_ancestor_hashes_replay_update => |ancestor_hashes_replay_update| {
-                ancestor_hashes_replay_update_sender.send(ancestor_hashes_replay_update);
+                // TODO
+                _ = &ancestor_hashes_replay_update;
+                // ancestor_hashes_replay_update_sender.send(ancestor_hashes_replay_update);
             },
         }
     }
