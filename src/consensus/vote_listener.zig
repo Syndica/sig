@@ -709,7 +709,7 @@ fn processVotesLoop(
             last_process_root = sig.time.Instant.now();
         }
 
-        var confirmed_slots = listenAndConfirmVotes(
+        const confirmed_slots = listenAndConfirmVotes(
             allocator,
             logger,
             verified_vote_transactions_receiver,
@@ -739,7 +739,7 @@ fn processVotesLoop(
                 continue;
             },
         };
-        defer confirmed_slots.deinit(allocator);
+        defer allocator.free(confirmed_slots);
 
         if (TODO_CONFIRMATION_VERIFIER) {
             confirmation_verifier.add_new_optimistic_confirmed_slots(confirmed_slots, ledger_db);
@@ -787,7 +787,7 @@ fn listenAndConfirmVotes(
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     bank_forks: *sig.sync.RwMux(BankForksStub),
-) ListenAndConfirmVotesError!std.ArrayListUnmanaged(ThresholdConfirmedSlot) {
+) ListenAndConfirmVotesError![]const ThresholdConfirmedSlot {
     var gossip_vote_txs_buffer: std.ArrayListUnmanaged(Transaction) = .{};
     defer gossip_vote_txs_buffer.deinit(allocator);
     try gossip_vote_txs_buffer.ensureTotalCapacityPrecise(allocator, 4096);
@@ -845,7 +845,7 @@ fn listenAndConfirmVotes(
         );
     }
 
-    return .{};
+    return &.{};
 }
 
 fn filterAndConfirmWithNewVotes(
@@ -863,7 +863,7 @@ fn filterAndConfirmWithNewVotes(
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     bank_forks: *sig.sync.RwMux(BankForksStub),
-) std.mem.Allocator.Error!std.ArrayListUnmanaged(ThresholdConfirmedSlot) {
+) std.mem.Allocator.Error![]const ThresholdConfirmedSlot {
     var diff = SlotsDiff.EMPTY;
     defer diff.deinit(allocator);
 
@@ -992,7 +992,7 @@ fn filterAndConfirmWithNewVotes(
         //     gossip_vote_slot_confirming_time_us,
         // );
     }
-    return new_optimistic_confirmed_slots;
+    return try new_optimistic_confirmed_slots.toOwnedSlice(allocator);
 }
 
 const VoteProcessingTiming = struct {
