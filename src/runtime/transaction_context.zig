@@ -86,7 +86,6 @@ pub const TransactionContext = struct {
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
     pub fn deinit(self: TransactionContext) void {
-        for (self.accounts) |account| account.deinit(self.allocator);
         self.allocator.free(self.accounts);
         if (self.log_collector) |lc| lc.deinit(self.allocator);
     }
@@ -204,7 +203,7 @@ pub const TransactionReturnData = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L137-L139
 pub const TransactionContextAccount = struct {
     pubkey: Pubkey,
-    account: AccountSharedData,
+    account: *AccountSharedData,
     read_refs: usize,
     write_ref: bool,
 
@@ -226,7 +225,7 @@ pub const TransactionContextAccount = struct {
 
     pub fn init(
         pubkey: Pubkey,
-        account: AccountSharedData,
+        account: *AccountSharedData,
     ) TransactionContextAccount {
         return .{
             .pubkey = pubkey,
@@ -236,16 +235,12 @@ pub const TransactionContextAccount = struct {
         };
     }
 
-    pub fn deinit(self: TransactionContextAccount, allocator: std.mem.Allocator) void {
-        allocator.free(self.account.data);
-    }
-
     pub fn writeWithLock(
         self: *TransactionContextAccount,
     ) ?struct { *AccountSharedData, WLockGuard } {
         if (self.write_ref or self.read_refs > 0) return null;
         self.write_ref = true;
-        return .{ &self.account, .{ .write_ref = &self.write_ref } };
+        return .{ self.account, .{ .write_ref = &self.write_ref } };
     }
 
     pub fn readWithLock(
@@ -253,6 +248,6 @@ pub const TransactionContextAccount = struct {
     ) ?struct { *AccountSharedData, RLockGuard } {
         if (self.write_ref) return null;
         self.read_refs += 1;
-        return .{ &self.account, .{ .read_refs = &self.read_refs } };
+        return .{ self.account, .{ .read_refs = &self.read_refs } };
     }
 };

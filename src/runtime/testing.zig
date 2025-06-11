@@ -19,6 +19,7 @@ const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
+const AccountCache = sig.runtime.account_loader.BatchAccountCache;
 
 pub const ExecuteContextsParams = struct {
     // If a user requires a mutable reference to the created feature set, they should
@@ -83,7 +84,7 @@ pub fn createTransactionContext(
     allocator: std.mem.Allocator,
     random: std.Random,
     params: ExecuteContextsParams,
-) !TransactionContext {
+) !struct { AccountCache, TransactionContext } {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
@@ -108,19 +109,33 @@ pub fn createTransactionContext(
     var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
     errdefer accounts.deinit();
 
+    var account_cache = AccountCache{};
+    errdefer account_cache.deinit(allocator);
+
+    var account_keys = std.ArrayList(Pubkey).init(allocator);
+    defer account_keys.deinit();
+
     for (params.accounts) |account_params| {
-        try accounts.append(
-            TransactionContextAccount.init(
-                account_params.pubkey orelse Pubkey.initRandom(random),
-                .{
-                    .lamports = account_params.lamports,
-                    .data = try allocator.dupe(u8, account_params.data),
-                    .owner = account_params.owner orelse Pubkey.initRandom(random),
-                    .executable = account_params.executable,
-                    .rent_epoch = account_params.rent_epoch,
-                },
-            ),
+        const key = account_params.pubkey orelse Pubkey.initRandom(random);
+        try account_keys.append(key);
+        try account_cache.account_cache.put(
+            allocator,
+            key,
+            .{
+                .lamports = account_params.lamports,
+                .data = try allocator.dupe(u8, account_params.data),
+                .owner = account_params.owner orelse Pubkey.initRandom(random),
+                .executable = account_params.executable,
+                .rent_epoch = account_params.rent_epoch,
+            },
         );
+    }
+
+    for (account_keys.items) |key| {
+        try accounts.append(TransactionContextAccount.init(
+            key,
+            account_cache.account_cache.getPtr(key) orelse unreachable,
+        ));
     }
 
     // Create Return Data
@@ -149,7 +164,7 @@ pub fn createTransactionContext(
         .prev_lamports_per_signature = params.prev_lamports_per_signature,
     };
 
-    return tc;
+    return .{ account_cache, tc };
 }
 
 pub fn deinitTransactionContext(

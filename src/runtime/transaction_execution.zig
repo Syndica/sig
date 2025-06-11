@@ -327,7 +327,7 @@ pub fn executeTransaction(
     for (loaded_accounts, 0..) |account, index| {
         accounts[index] = .{
             .pubkey = account.pubkey,
-            .account = account.account.*, // Copy for now until tc is modified to used shared data
+            .account = account.account,
             .read_refs = 0,
             .write_ref = false,
         };
@@ -679,13 +679,21 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
     const executed_transaction = processed_transaction.executed.executed_transaction;
 
-    // TODO: Change transaction context to use shared data
-    // const sender_account = account_cache.account_cache.get(sender_key).?;
-    // const receiver_account = account_cache.account_cache.get(receiver_key).?;
+    const transaction_fee = processed_transaction.executed.fees.transaction_fee;
+    const prioritization_fee = processed_transaction.executed.fees.prioritization_fee;
+    const rent_collected = processed_transaction.executed.loaded_accounts.rent_collected;
 
-    // try std.testing.expectEqual(89_500, sender_account.lamports);
-    // try std.testing.expectEqual(110_000, receiver_account.lamports);
+    const sender_account = account_cache.account_cache.get(sender_key).?;
+    const receiver_account = account_cache.account_cache.get(receiver_key).?;
 
+    try std.testing.expectEqual(
+        100_000 - 10_000 - transaction_fee - prioritization_fee - rent_collected,
+        sender_account.lamports,
+    );
+    try std.testing.expectEqual(
+        100_000 + 10_000 - rent_collected,
+        receiver_account.lamports,
+    );
     try std.testing.expectEqual(null, executed_transaction.err);
     try std.testing.expectEqual(null, executed_transaction.log_collector);
     try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
