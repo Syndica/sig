@@ -131,8 +131,8 @@ pub const BankForksStub = struct {
     };
 };
 
-pub const ClusterInfoVoteListener = struct {
-    verified_vote_transactions: *VerifiedVoteTransactionsChannel,
+pub const VoteListener = struct {
+    verified_vote_transactions: *sig.sync.Channel(Transaction),
     recv: std.Thread,
     process_votes: std.Thread,
 
@@ -149,19 +149,19 @@ pub const ClusterInfoVoteListener = struct {
 
             /// Channels that will be used to `receive` data.
             receivers: struct {
-                replay_votes: *ReplayVoteChannel,
+                replay_votes: *sig.sync.Channel(vote_parser.ParsedVote),
             },
 
             /// Channels that will be used to `send` data.
             senders: struct {
-                verified_vote: *VerifiedVoteChannel,
-                gossip_verified_vote_hash: *GossipVerifiedVoteHashChannel,
-                bank_notification: ?*BankNotificationChannel,
-                duplicate_confirmed_slot: *DuplicateConfirmedSlotsChannel,
+                verified_vote: *sig.sync.Channel(VerifiedVote),
+                gossip_verified_vote_hash: *sig.sync.Channel(GossipVerifiedVoteHash),
+                bank_notification: ?*sig.sync.Channel(BankNotification),
+                duplicate_confirmed_slot: *sig.sync.Channel(ThresholdConfirmedSlot),
             },
         },
-    ) !ClusterInfoVoteListener {
-        const verified_vote_transactions = try VerifiedVoteTransactionsChannel.create(allocator);
+    ) !VoteListener {
+        const verified_vote_transactions = try sig.sync.Channel(Transaction).create(allocator);
         errdefer verified_vote_transactions.destroy();
 
         const recv_thread = try std.Thread.spawn(.{}, recvLoop, .{
@@ -202,14 +202,14 @@ pub const ClusterInfoVoteListener = struct {
         };
     }
 
-    pub fn joinAndDeinit(self: ClusterInfoVoteListener) void {
+    pub fn joinAndDeinit(self: VoteListener) void {
         self.recv.join();
         self.process_votes.join();
         self.verified_vote_transactions.destroy();
     }
 };
 
-test ClusterInfoVoteListener {
+test VoteListener {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(123);
@@ -259,28 +259,28 @@ test ClusterInfoVoteListener {
         gossip_table.deinit();
     }
 
-    const replay_votes_channel = try ReplayVoteChannel.create(allocator);
+    const replay_votes_channel = try sig.sync.Channel(vote_parser.ParsedVote).create(allocator);
     defer replay_votes_channel.destroy();
 
-    const verified_vote_channel = try VerifiedVoteChannel.create(allocator);
+    const verified_vote_channel = try sig.sync.Channel(VerifiedVote).create(allocator);
     defer verified_vote_channel.destroy();
     defer while (verified_vote_channel.tryReceive()) |verified_vote| {
         _, const vote_slots = verified_vote;
         allocator.free(vote_slots);
     };
 
-    const gossip_verified_vote_hash_channel = try GossipVerifiedVoteHashChannel.create(allocator);
+    const gossip_verified_vote_hash_channel = try sig.sync.Channel(GossipVerifiedVoteHash).create(allocator);
     defer gossip_verified_vote_hash_channel.destroy();
 
-    const bank_notification_channel = try BankNotificationChannel.create(allocator);
+    const bank_notification_channel = try sig.sync.Channel(BankNotification).create(allocator);
     defer bank_notification_channel.destroy();
 
-    const duplicate_confirmed_slot_channel = try DuplicateConfirmedSlotsChannel.create(allocator);
+    const duplicate_confirmed_slot_channel = try sig.sync.Channel(ThresholdConfirmedSlot).create(allocator);
     defer duplicate_confirmed_slot_channel.destroy();
 
     var exit = std.atomic.Value(bool).init(false);
     const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
-    const civl = try ClusterInfoVoteListener.new(allocator, exit_cond, .noop, &vote_tracker, .{
+    const vote_listener = try VoteListener.new(allocator, exit_cond, .noop, &vote_tracker, .{
         .bank_forks_rw = &bank_forks_rw,
         .gossip_table_rw = &gossip_table_rw,
         .ledger_db = {},
@@ -295,7 +295,7 @@ test ClusterInfoVoteListener {
             .duplicate_confirmed_slot = duplicate_confirmed_slot_channel,
         },
     });
-    defer civl.joinAndDeinit();
+    defer vote_listener.joinAndDeinit();
     defer exit_cond.setExit();
 
     {
@@ -638,12 +638,8 @@ test verifyVoteTransaction {
 }
 
 const ThresholdConfirmedSlot = struct { Slot, Hash };
-const GossipVerifiedVoteHashChannel = sig.sync.Channel(struct { Pubkey, Slot, Hash });
-const VerifiedVoteChannel = sig.sync.Channel(struct { Pubkey, []const Slot });
-const DuplicateConfirmedSlotsChannel = sig.sync.Channel(ThresholdConfirmedSlot);
-const ReplayVoteChannel = sig.sync.Channel(vote_parser.ParsedVote);
-const VerifiedVoteTransactionsChannel = sig.sync.Channel(Transaction);
-const BankNotificationChannel = sig.sync.Channel(BankNotification);
+const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
+const VerifiedVote = struct { Pubkey, []const Slot };
 
 /// The expected duration of a slot (400 milliseconds).
 const DEFAULT_MS_PER_SLOT: u64 =
@@ -662,15 +658,15 @@ fn processVotesLoop(
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
 
     // channel
-    verified_vote_transactions_receiver: *VerifiedVoteTransactionsChannel,
-    replay_votes_receiver: *ReplayVoteChannel,
+    verified_vote_transactions_receiver: *sig.sync.Channel(Transaction),
+    replay_votes_receiver: *sig.sync.Channel(vote_parser.ParsedVote),
 
     // listeners
     subscriptions: RpcSubscriptionsStub,
-    gossip_verified_vote_hash_sender: *GossipVerifiedVoteHashChannel,
-    verified_vote_sender: *VerifiedVoteChannel,
-    bank_notification_sender: ?*BankNotificationChannel,
-    duplicate_confirmed_slot_sender: *DuplicateConfirmedSlotsChannel,
+    gossip_verified_vote_hash_sender: *sig.sync.Channel(GossipVerifiedVoteHash),
+    verified_vote_sender: *sig.sync.Channel(VerifiedVote),
+    bank_notification_sender: ?*sig.sync.Channel(BankNotification),
+    duplicate_confirmed_slot_sender: *sig.sync.Channel(ThresholdConfirmedSlot),
 ) !void {
     defer exit.afterExit();
 
@@ -779,15 +775,15 @@ const ListenAndConfirmVotesError = error{
 fn listenAndConfirmVotes(
     allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
-    verified_vote_transactions_receiver: *VerifiedVoteTransactionsChannel,
+    verified_vote_transactions_receiver: *sig.sync.Channel(Transaction),
     vote_tracker: *VoteTracker,
     root_bank: *const BankForksStub.BankStub,
     subscriptions: RpcSubscriptionsStub,
-    gossip_verified_vote_hash_sender: *GossipVerifiedVoteHashChannel,
-    verified_vote_sender: *VerifiedVoteChannel,
-    replay_votes_receiver: *ReplayVoteChannel,
-    bank_notification_sender: ?*BankNotificationChannel,
-    duplicate_confirmed_slot_sender: ?*DuplicateConfirmedSlotsChannel,
+    gossip_verified_vote_hash_sender: *sig.sync.Channel(GossipVerifiedVoteHash),
+    verified_vote_sender: *sig.sync.Channel(VerifiedVote),
+    replay_votes_receiver: *sig.sync.Channel(vote_parser.ParsedVote),
+    bank_notification_sender: ?*sig.sync.Channel(BankNotification),
+    duplicate_confirmed_slot_sender: ?*sig.sync.Channel(ThresholdConfirmedSlot),
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     bank_forks: *sig.sync.RwMux(BankForksStub),
@@ -860,10 +856,10 @@ fn filterAndConfirmWithNewVotes(
     replayed_votes: []const vote_parser.ParsedVote,
     root_bank: *const BankForksStub.BankStub,
     subscriptions: RpcSubscriptionsStub,
-    gossip_verified_vote_hash_sender: *GossipVerifiedVoteHashChannel,
-    verified_vote_sender: *VerifiedVoteChannel,
-    bank_notification_sender: ?*BankNotificationChannel,
-    duplicate_confirmed_slot_sender: ?*DuplicateConfirmedSlotsChannel,
+    gossip_verified_vote_hash_sender: *sig.sync.Channel(GossipVerifiedVoteHash),
+    verified_vote_sender: *sig.sync.Channel(VerifiedVote),
+    bank_notification_sender: ?*sig.sync.Channel(BankNotification),
+    duplicate_confirmed_slot_sender: ?*sig.sync.Channel(ThresholdConfirmedSlot),
     vote_processing_time: ?*VoteProcessingTiming,
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     bank_forks: *sig.sync.RwMux(BankForksStub),
@@ -1151,13 +1147,13 @@ fn trackNewVotesAndNotifyConfirmations(
     vote_tracker: *VoteTracker,
     root_bank: *const BankForksStub.BankStub,
     subscriptions: RpcSubscriptionsStub,
-    verified_vote_sender: *VerifiedVoteChannel,
-    gossip_verified_vote_hash_sender: *GossipVerifiedVoteHashChannel,
+    verified_vote_sender: *sig.sync.Channel(VerifiedVote),
+    gossip_verified_vote_hash_sender: *sig.sync.Channel(GossipVerifiedVoteHash),
     diff: *SlotsDiff,
     new_optimistic_confirmed_slots: *std.ArrayListUnmanaged(ThresholdConfirmedSlot),
     is_gossip_vote: bool,
-    bank_notification_sender: ?*BankNotificationChannel,
-    duplicate_confirmed_slot_sender: ?*DuplicateConfirmedSlotsChannel,
+    bank_notification_sender: ?*sig.sync.Channel(BankNotification),
+    duplicate_confirmed_slot_sender: ?*sig.sync.Channel(ThresholdConfirmedSlot),
     latest_vote_slot_per_validator: *std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
     bank_forks_rw: *sig.sync.RwMux(BankForksStub),
 ) !void {
