@@ -3453,9 +3453,9 @@ fn fillProgressMapForkStats(
     }
 }
 
-const MAX_TEST_TREE_LEN = 100;
+pub const MAX_TEST_TREE_LEN = 100;
 const Tree = struct { root: SlotAndHash, data: std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
-const TestFixture = struct {
+pub const TestFixture = struct {
     fork_choice: HeaviestSubtreeForkChoice,
     ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
