@@ -87,20 +87,19 @@ pub fn verifyPoh(
         if (entry.num_hashes == 0) continue;
 
         for (1..entry.num_hashes) |_| {
-            current_hash = Hash.generateSha256(&current_hash.data);
+            current_hash = Hash.initHash(&current_hash.data);
         }
 
         if (entry.transactions.items.len > 0) {
-            const mixin =
-                try hashTransactions(allocator, preallocated_nodes, entry.transactions.items);
+            const mixin = try hashTransactions(
+                allocator,
+                preallocated_nodes,
+                entry.transactions.items,
+            );
             current_hash = current_hash.extendAndHash(&mixin.data);
-        } else {
-            current_hash = Hash.generateSha256(&current_hash.data);
-        }
+        } else current_hash = Hash.initHash(&current_hash.data);
 
-        if (!current_hash.eql(entry.hash)) {
-            return false;
-        }
+        if (!current_hash.eql(entry.hash)) return false;
     }
 
     return true;
@@ -136,7 +135,7 @@ fn hashTransactions(
     try nodes.ensureTotalCapacity(allocator, capacity);
 
     for (transactions) |tx| for (tx.signatures) |signature| {
-        const hash = Hash.generateSha256(.{ LEAF_PREFIX, &signature.data });
+        const hash = Hash.initHashList(&.{ LEAF_PREFIX, &signature.data });
         nodes.appendAssumeCapacity(hash);
     };
 
@@ -154,7 +153,7 @@ fn hashTransactions(
                 // Duplicate last entry if the level length is odd
                 &nodes.items[prev_level_start + prev_level_idx];
 
-            const hash = Hash.generateSha256(.{ INTERMEDIATE_PREFIX, &lsib.data, &rsib.data });
+            const hash = Hash.initHashList(&.{ INTERMEDIATE_PREFIX, &lsib.data, &rsib.data });
             nodes.appendAssumeCapacity(hash);
         }
         prev_level_start = level_start;

@@ -3089,10 +3089,11 @@ test "state.VoteState.checkSlotsAreValid bad hash" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes{
-        .entries = &.{
-            .{ vote.slots[vote.slots.len - 1], Hash.generateSha256(&vote.hash.data) },
-        },
+    const slot_hashes: SlotHashes = .{
+        .entries = &.{.{
+            vote.slots[vote.slots.len - 1],
+            Hash.initHash(&vote.hash.data),
+        }},
     };
 
     const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &slot_hashes);

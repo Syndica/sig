@@ -1640,7 +1640,7 @@ pub const GossipService = struct {
                 const bytes = bincode.writeToSlice(&buf, gossip_value_ptr.*, bincode.Params.standard) catch {
                     continue;
                 };
-                const value_hash = Hash.generateSha256(bytes);
+                const value_hash = Hash.initHash(bytes);
                 try failed_pull_hashes.insert(self.gossip_data_allocator, value_hash, now);
                 gossip_value_ptr.deinit(self.gossip_data_allocator);
             }

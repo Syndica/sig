@@ -149,7 +149,7 @@ pub const GossipTable = struct {
     pub fn insert(self: *GossipTable, value: SignedGossipData, now: u64) !InsertResult {
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
-        const value_hash = Hash.generateSha256(bytes);
+        const value_hash = Hash.initHash(bytes);
         const metadata = GossipMetadata{
             .signature = value.signature,
             .value_hash = value_hash,

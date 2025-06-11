@@ -312,7 +312,8 @@ pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) type {
     assertIsDatabase(Impl(&.{}));
 
     @setEvalBranchQuota(10_000);
-    const impl_id = sig.core.Hash.generateSha256(@typeName(Impl(&.{}))).base58String();
+    // TODO(sinon): bruh, there is so much wrong with this line of code
+    const impl_id = sig.core.Hash.initHash(@typeName(Impl(&.{}))).base58String();
     const test_dir = sig.TEST_STATE_DIR ++ "blockstore/database/" ++ impl_id.buffer ++ "/";
 
     const Value1 = struct { hello: u16 };

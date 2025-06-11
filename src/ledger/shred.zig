@@ -659,7 +659,7 @@ pub fn getMerkleNode(shred: []const u8) !Hash {
 
 fn getMerkleNodeAt(shred: []const u8, start: usize, end: usize) !Hash {
     if (shred.len < end) return error.InvalidPayloadSize;
-    return Hash.generateSha256(.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
+    return Hash.initHashList(&.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
 }
 
 /// [get_merkle_root](https://github.com/anza-xyz/agave/blob/ed500b5afc77bc78d9890d96455ea7a7f28edbf9/ledger/src/shred/merkle.rs#L702)
@@ -745,9 +745,9 @@ pub fn makeMerkleProof(
     }
 }
 
+/// [agave] https://github.com/anza-xyz/agave/blob/f7f2f5f5acfdf83c2ee2fbc16da998acc06146ff/ledger/src/shred/merkle_tree.rs#L78
 fn joinNodes(lhs: []const u8, rhs: []const u8) Hash {
-    // TODO check
-    return Hash.generateSha256(.{
+    return .initHashList(&.{
         MERKLE_HASH_PREFIX_NODE,
         lhs[0..merkle_proof_entry_size],
         rhs[0..merkle_proof_entry_size],
