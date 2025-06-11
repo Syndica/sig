@@ -1086,7 +1086,7 @@ pub fn executeV3ExtendProgram(
     try commonExtendProgram(allocator, ic, additional_bytes, false);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L1158
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L1171
 pub fn executeV3ExtendProgramChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -2737,97 +2737,142 @@ test "executeV3ExtendProgram" {
 
     // Test with and without the payer helping out to pay for extend.
     for ([_]u32{ 0, 100 }) |help_pay| {
-        std.debug.assert(help_pay < additional_bytes);
+        inline for ([_]bool{ false, true }) |check_authority| {
+            std.debug.assert(help_pay < additional_bytes);
 
-        const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
-        const program_data_lamports =
-            sysvar.Rent.DEFAULT.minimumBalance(initial_program_data.len + additional_bytes) -
-            help_pay;
+            const payer_balance = prng.random().uintAtMost(u32, 1024) + help_pay;
+            const program_data_lamports =
+                sysvar.Rent.DEFAULT.minimumBalance(initial_program_data.len + additional_bytes) -
+                help_pay;
 
-        var compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS;
-        if (help_pay > 0) { // triggers native cpi transfer call
-            compute_units += system_program.COMPUTE_UNITS;
+            var compute_units: u64 = bpf_loader_program.v3.COMPUTE_UNITS;
+            if (help_pay > 0) { // triggers native cpi transfer call
+                compute_units += system_program.COMPUTE_UNITS;
+            }
+
+            try testing.expectProgramExecuteResult(
+                allocator,
+                bpf_loader_program.v3.ID,
+                if (check_authority)
+                    bpf_loader_program.v3.Instruction{
+                        .extend_program_checked = .{ .additional_bytes = additional_bytes },
+                    }
+                else
+                    bpf_loader_program.v3.Instruction{
+                        .extend_program = .{ .additional_bytes = additional_bytes },
+                    },
+                if (check_authority)
+                    &.{
+                        // program_data
+                        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                        // program
+                        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+                        // authority
+                        .{ .is_signer = true, .is_writable = false, .index_in_transaction = 2 },
+                        // system_program
+                        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+                        // payer
+                        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 4 },
+                        // bpf program_id (for instruction)
+                        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 },
+                    }
+                else
+                    &.{
+                        // program_data
+                        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
+                        // program
+                        .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
+                        // system_program
+                        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 3 },
+                        // payer
+                        .{ .is_signer = true, .is_writable = true, .index_in_transaction = 4 },
+                        // bpf program_id (for instruction)
+                        .{ .is_signer = false, .is_writable = false, .index_in_transaction = 5 },
+                    },
+                .{
+                    .accounts = &.{
+                        .{
+                            .pubkey = program_data_account_key,
+                            .data = initial_program_data,
+                            .owner = bpf_loader_program.v3.ID,
+                            .lamports = program_data_lamports,
+                        },
+                        .{
+                            .pubkey = program_account_key,
+                            .data = program_account,
+                            .owner = bpf_loader_program.v3.ID,
+                        },
+                        .{
+                            .pubkey = upgrade_authority_key,
+                            .owner = system_program.ID,
+                        },
+                        .{
+                            .pubkey = system_program.ID,
+                            .owner = ids.NATIVE_LOADER_ID,
+                            .executable = true,
+                        },
+                        .{
+                            .pubkey = payer_account_key,
+                            .lamports = payer_balance,
+                            .owner = system_program.ID,
+                        },
+                        .{
+                            .pubkey = bpf_loader_program.v3.ID,
+                            .owner = ids.NATIVE_LOADER_ID,
+                        },
+                    },
+                    .compute_meter = compute_units,
+                    .sysvar_cache = .{
+                        .rent = sysvar.Rent.DEFAULT,
+                        .clock = clock,
+                    },
+                    .feature_set = if (check_authority)
+                        &.{
+                            .{
+                                .pubkey = features.ENABLE_EXTEND_PROGRAM_CHECKED,
+                                .slot = 0,
+                            },
+                        }
+                    else
+                        &.{},
+                },
+                .{
+                    .accounts = &.{
+                        .{
+                            .pubkey = program_data_account_key,
+                            .data = final_program_data,
+                            .owner = bpf_loader_program.v3.ID,
+                            .lamports = program_data_lamports + help_pay,
+                        },
+                        .{
+                            .pubkey = program_account_key,
+                            .data = program_account,
+                            .owner = bpf_loader_program.v3.ID,
+                        },
+                        .{
+                            .pubkey = upgrade_authority_key,
+                            .owner = system_program.ID,
+                        },
+                        .{
+                            .pubkey = system_program.ID,
+                            .owner = ids.NATIVE_LOADER_ID,
+                            .executable = true,
+                        },
+                        .{
+                            .pubkey = payer_account_key,
+                            .lamports = payer_balance - help_pay,
+                            .owner = system_program.ID,
+                        },
+                        .{
+                            .pubkey = bpf_loader_program.v3.ID,
+                            .owner = ids.NATIVE_LOADER_ID,
+                        },
+                    },
+                    .accounts_resize_delta = additional_bytes,
+                },
+                .{},
+            );
         }
-
-        try testing.expectProgramExecuteResult(
-            allocator,
-            bpf_loader_program.v3.ID,
-            bpf_loader_program.v3.Instruction{
-                .extend_program = .{ .additional_bytes = additional_bytes },
-            },
-            &.{
-                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
-                .{ .is_signer = false, .is_writable = true, .index_in_transaction = 1 },
-                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 2 },
-                .{ .is_signer = true, .is_writable = true, .index_in_transaction = 3 },
-                .{ .is_signer = false, .is_writable = false, .index_in_transaction = 4 },
-            },
-            .{
-                .accounts = &.{
-                    .{
-                        .pubkey = program_data_account_key,
-                        .data = initial_program_data,
-                        .owner = bpf_loader_program.v3.ID,
-                        .lamports = program_data_lamports,
-                    },
-                    .{
-                        .pubkey = program_account_key,
-                        .data = program_account,
-                        .owner = bpf_loader_program.v3.ID,
-                    },
-                    .{
-                        .pubkey = bpf_loader_program.v3.ID,
-                        .owner = ids.NATIVE_LOADER_ID,
-                    },
-                    .{
-                        .pubkey = payer_account_key,
-                        .lamports = payer_balance,
-                        .owner = system_program.ID,
-                    },
-                    .{
-                        .pubkey = system_program.ID,
-                        .owner = ids.NATIVE_LOADER_ID,
-                        .executable = true,
-                    },
-                },
-                .compute_meter = compute_units,
-                .sysvar_cache = .{
-                    .rent = sysvar.Rent.DEFAULT,
-                    .clock = clock,
-                },
-            },
-            .{
-                .accounts = &.{
-                    .{
-                        .pubkey = program_data_account_key,
-                        .data = final_program_data,
-                        .owner = bpf_loader_program.v3.ID,
-                        .lamports = program_data_lamports + help_pay,
-                    },
-                    .{
-                        .pubkey = program_account_key,
-                        .data = program_account,
-                        .owner = bpf_loader_program.v3.ID,
-                    },
-                    .{
-                        .pubkey = bpf_loader_program.v3.ID,
-                        .owner = ids.NATIVE_LOADER_ID,
-                    },
-                    .{
-                        .pubkey = payer_account_key,
-                        .lamports = payer_balance - help_pay,
-                        .owner = system_program.ID,
-                    },
-                    .{
-                        .pubkey = system_program.ID,
-                        .owner = ids.NATIVE_LOADER_ID,
-                        .executable = true,
-                    },
-                },
-                .accounts_resize_delta = additional_bytes,
-            },
-            .{},
-        );
     }
 }
 
