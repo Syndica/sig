@@ -34,6 +34,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         transaction_lock: *RwLock,
 
         const Self = @This();
+        pub const name: []const u8 = "SharedHashMapDB";
 
         pub fn open(
             allocator: Allocator,
