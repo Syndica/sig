@@ -173,7 +173,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     confirmation_progress.num_shreds += num_shreds;
     confirmation_progress.num_entries += entries.items.len;
-    for (entries.items) |e| confirmation_progress.num_txs += e.transactions.items.len;
+    for (entries.items) |e| confirmation_progress.num_txs += e.transactions.len;
 
     return .{ .confirm = try confirmSlot(
         state.allocator,

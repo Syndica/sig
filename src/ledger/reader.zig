@@ -491,14 +491,14 @@ pub const BlockstoreReader = struct {
                 try entries.append(.{
                     .num_hashes = entry.num_hashes,
                     .hash = entry.hash,
-                    .num_transactions = entry.transactions.items.len,
+                    .num_transactions = entry.transactions.len,
                     .starting_transaction_index = starting_transaction_index,
                 });
-                starting_transaction_index += entry.transactions.items.len;
+                starting_transaction_index += entry.transactions.len;
             }
-            try slot_transactions.appendSlice(entry.transactions.items);
-            entry.transactions.deinit(self.allocator);
-            entry.transactions = .{};
+            try slot_transactions.appendSlice(entry.transactions);
+            self.allocator.free(entry.transactions);
+            entry.transactions = &.{};
         }
 
         var txns_with_statuses = try ArrayList(VersionedTransactionWithStatusMeta)
@@ -720,7 +720,7 @@ pub const BlockstoreReader = struct {
         const slot_entries = try self.getSlotEntries(slot, 0);
         // NOTE perf: linear search runs from scratch every time this is called
         for (slot_entries.items) |entry| {
-            for (entry.transactions.items) |transaction| {
+            for (entry.transactions) |transaction| {
                 // NOTE perf: redundant calls to validate every time this is called
                 if (transaction.validate()) |_| {} else |err| {
                     self.logger.warn().logf(

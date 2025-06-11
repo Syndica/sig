@@ -86,9 +86,9 @@ fn scheduleTransactionBatches(
 ) !void {
     var total_transactions: usize = 0;
     for (entries) |entry| {
-        total_transactions += entry.transactions.items.len;
+        total_transactions += entry.transactions.len;
 
-        const batch = try resolveBatch(allocator, accounts_db, entry.transactions.items);
+        const batch = try resolveBatch(allocator, accounts_db, entry.transactions);
         errdefer batch.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch);
@@ -348,3 +348,49 @@ test "confirmSlot: no trailing tick at max height -> BlockError.TrailingEntry" {
         try result.poll(),
     );
 }
+
+// TODO: finish test
+// test "confirmSlot: happy path" {
+//     const allocator = std.testing.allocator;
+//     const Transaction = sig.core.Transaction;
+//     var rng = std.Random.DefaultPrng.init(0);
+
+//     var thread_pool = ThreadPool.init(.{});
+//     var tick_hash_count: u64 = 0;
+
+//     const transactions = [_]Transaction{
+//         try Transaction.initRandom(allocator, rng.random()),
+//         try Transaction.initRandom(allocator, rng.random()),
+//         try Transaction.initRandom(allocator, rng.random()),
+//         try Transaction.initRandom(allocator, rng.random()),
+//         try Transaction.initRandom(allocator, rng.random()),
+//         try Transaction.initRandom(allocator, rng.random()),
+//     };
+//     defer for (transactions) |tx| {
+//         allocator.free(tx.signatures);
+//         allocator.free(tx.msg.account_keys);
+//     };
+
+//     const entry1 = Entry{};
+
+//     const result = try confirmSlot(
+//         std.testing.allocator,
+//         .FOR_TESTS,
+//         undefined,
+//         &thread_pool,
+//         &.{},
+//         .ZEROES,
+//         .{
+//             .hashes_per_tick = 0,
+//             .slot = 0,
+//             .max_tick_height = 1,
+//             .tick_height = 0,
+//             .slot_is_full = false,
+//             .tick_hash_count = &tick_hash_count,
+//         },
+//     );
+//     defer result.destroy();
+
+//     while (try result.poll() == .pending) std.time.sleep(std.time.ns_per_ms);
+//     try std.testing.expectEqual(.done, try result.poll());
+// }

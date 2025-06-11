@@ -8,6 +8,7 @@ pub const hard_forks = @import("hard_forks.zig");
 pub const hash = @import("hash.zig");
 pub const instruction = @import("instruction.zig");
 pub const leader_schedule = @import("leader_schedule.zig");
+pub const poh = @import("poh.zig");
 pub const pubkey = @import("pubkey.zig");
 pub const rent_collector = @import("rent_collector.zig");
 pub const shred = @import("shred.zig");

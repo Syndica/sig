@@ -212,7 +212,10 @@ test "TransactionScheduler: happy path" {
     scheduler.addBatchAssumeCapacity(batch2);
 
     // should be no failures on account collision with the first time this batch was scheduled
+    // scheduler should just know to run it separately
     // scheduler.addBatchAssumeCapacity(batch1);
+    // scheduler.addBatchAssumeCapacity(batch1);
+    // TODO: add this
 
     var i: usize = 0;
     while (try scheduler.poll() == .pending) {

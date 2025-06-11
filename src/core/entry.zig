@@ -15,15 +15,23 @@ pub const Entry = struct {
     /// An unordered list of transactions that were observed before the Entry ID was
     /// generated. They may have been observed before a previous Entry ID but were
     /// pushed back into this list to ensure deterministic interpretation of the ledger.
-    transactions: std.ArrayListUnmanaged(Transaction),
+    transactions: []const Transaction,
 
     pub fn isTick(self: Entry) bool {
-        return self.transactions.items.len == 0;
+        return self.transactions.len == 0;
+    }
+
+    pub fn init(poh_entry: sig.core.poh.PohEntry, transactions: []const Transaction) Entry {
+        return .{
+            .num_hashes = poh_entry.num_hashes,
+            .hash = poh_entry.hash,
+            .transactions = transactions,
+        };
     }
 
     pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
-        for (self.transactions.items) |tx| tx.deinit(allocator);
-        allocator.free(self.transactions.allocatedSlice());
+        for (self.transactions) |tx| tx.deinit(allocator);
+        allocator.free(self.transactions);
     }
 };
 
@@ -90,9 +98,9 @@ pub fn verifyPoh(
             current_hash = Hash.generateSha256(&current_hash.data);
         }
 
-        if (entry.transactions.items.len > 0) {
+        if (entry.transactions.len > 0) {
             const mixin =
-                try hashTransactions(allocator, preallocated_nodes, entry.transactions.items);
+                try hashTransactions(allocator, preallocated_nodes, entry.transactions);
             current_hash = current_hash.extendAndHash(&mixin.data);
         } else {
             current_hash = Hash.generateSha256(&current_hash.data);
@@ -116,7 +124,7 @@ pub fn verifyPoh(
 /// Based on these agave functions for conformance:
 /// - [hash_transactions](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/entry/src/entry.rs#L215)
 /// - [MerkleTree::new](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/merkle-tree/src/merkle_tree.rs#L98)
-fn hashTransactions(
+pub fn hashTransactions(
     allocator: std.mem.Allocator,
     preallocated_nodes: ?*std.ArrayListUnmanaged(Hash),
     transactions: []const Transaction,
@@ -185,10 +193,7 @@ pub const test_entry = struct {
         .num_hashes = 149218308,
         .hash = sig.core.Hash
             .parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd") catch unreachable,
-        .transactions = .{
-            .items = txns[0..2],
-            .capacity = 2,
-        },
+        .transactions = txns[0..2],
     };
 
     pub const as_bytes = [_]u8{
