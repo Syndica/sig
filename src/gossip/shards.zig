@@ -174,12 +174,12 @@ test "gossip.gossip_shards: test shard find" {
             var set = try filterGossipVersionedDatas(std.testing.allocator, values.items, mask, @intCast(mask_bits));
             defer set.deinit();
 
-            var indexs = try gossip_shards.find(std.testing.allocator, mask, @intCast(mask_bits));
-            defer indexs.deinit();
+            var indices = try gossip_shards.find(std.testing.allocator, mask, @intCast(mask_bits));
+            defer indices.deinit();
 
-            try std.testing.expectEqual(set.count(), @as(u32, @intCast(indexs.items.len)));
+            try std.testing.expectEqual(set.count(), @as(u32, @intCast(indices.items.len)));
 
-            for (indexs.items) |index| {
+            for (indices.items) |index| {
                 _ = set.remove(index);
             }
             try std.testing.expectEqual(set.count(), 0);

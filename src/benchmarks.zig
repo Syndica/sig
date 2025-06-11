@@ -265,7 +265,8 @@ pub fn main() !void {
                     try gossip_service.start(.{});
 
                     // download and unpack snapshot
-                    const snapshot_manifests, _ = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
+                    const snapshot_manifests, _ //
+                    = sig.accounts_db.download.getOrDownloadAndUnpackSnapshot(
                         gpa,
                         logger,
                         SNAPSHOT_DIR,
@@ -276,14 +277,12 @@ pub fn main() !void {
                             .min_snapshot_download_speed_mbs = 10,
                             .download_timeout = Duration.fromMinutes(5),
                         },
-                    ) catch |err| {
-                        switch (err) {
-                            error.UnableToDownloadSnapshot => {
-                                logger.err().log("unable to download snapshot, skipping benchmark...");
-                                break :snapshot_benchmark;
-                            },
-                            else => return err,
-                        }
+                    ) catch |err| switch (err) {
+                        error.UnableToDownloadSnapshot => {
+                            logger.err().log("unable to download snapshot, skipping benchmark...");
+                            break :snapshot_benchmark;
+                        },
+                        else => return err,
                     };
                     defer snapshot_manifests.deinit(gpa);
                 }

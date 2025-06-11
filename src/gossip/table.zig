@@ -36,7 +36,7 @@ pub fn AutoArrayHashSet(comptime T: type) type {
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
 /// indexing values (value = arrayhashmap[0]). This allows us to insert data
-/// into the store and track the indexs of different types for
+/// into the store and track the indices of different types for
 /// retrieval. We use the 'cursor' value to track what index is the head of the
 /// store.
 /// Other functions include getters with a cursor
@@ -47,6 +47,7 @@ pub fn AutoArrayHashSet(comptime T: type) type {
 /// are found, the entry with the largest wallclock time (newest) is stored.
 ///
 /// Analogous to [Crds](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L68)
+/// TODO(sinon): convert to unmanaged, we're storing *so* many allocators jesus
 pub const GossipTable = struct {
     store: GossipMap,
 
@@ -81,10 +82,11 @@ pub const GossipTable = struct {
     // NOTE: this allocator is used to free any gossip data inserted into the table
     gossip_data_allocator: std.mem.Allocator,
 
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator, gossip_data_allocator: std.mem.Allocator) !Self {
-        return Self{
+    pub fn init(
+        allocator: std.mem.Allocator,
+        gossip_data_allocator: std.mem.Allocator,
+    ) !GossipTable {
+        return .{
             .store = .{},
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
@@ -95,13 +97,13 @@ pub const GossipTable = struct {
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
             .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
             .shards = try GossipTableShards.init(allocator),
-            .purged = HashTimeQueue.init(allocator),
+            .purged = .EMPTY,
             .allocator = allocator,
             .gossip_data_allocator = gossip_data_allocator,
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *GossipTable) void {
         self.contact_infos.deinit();
         self.shred_versions.deinit();
         self.votes.deinit();
@@ -109,7 +111,7 @@ pub const GossipTable = struct {
         self.duplicate_shreds.deinit();
         self.entries.deinit();
         self.shards.deinit();
-        self.purged.deinit();
+        self.purged.deinit(self.allocator);
 
         var iter = self.pubkey_to_values.iterator();
         while (iter.next()) |entry| {
@@ -144,7 +146,7 @@ pub const GossipTable = struct {
         }
     };
 
-    pub fn insert(self: *Self, value: SignedGossipData, now: u64) !InsertResult {
+    pub fn insert(self: *GossipTable, value: SignedGossipData, now: u64) !InsertResult {
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256(bytes);
@@ -203,10 +205,10 @@ pub const GossipTable = struct {
             if (maybe_node_entry) |node_entry| {
                 try node_entry.value_ptr.put(entry_index, {});
             } else {
-                var indexs = AutoArrayHashSet(usize).init(self.allocator);
-                errdefer indexs.deinit();
-                try indexs.put(entry_index, {});
-                try self.pubkey_to_values.put(origin, indexs);
+                var indices = AutoArrayHashSet(usize).init(self.allocator);
+                errdefer indices.deinit();
+                try indices.put(entry_index, {});
+                try self.pubkey_to_values.put(origin, indices);
             }
 
             result.entry.setVersionedData(versioned_value);
@@ -267,7 +269,7 @@ pub const GossipTable = struct {
             // does not need to be updated.
             std.debug.assert(result.entry.getGossipData().id().equals(&origin));
 
-            try self.purged.insert(old_entry.value_hash, now);
+            try self.purged.insert(self.allocator, old_entry.value_hash, now);
 
             const overwritten_data = result.entry.getGossipData();
             result.entry.setVersionedData(versioned_value);
@@ -282,7 +284,7 @@ pub const GossipTable = struct {
 
             if (current_entry.value_hash.order(&metadata.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
-                try self.purged.insert(metadata.value_hash, now);
+                try self.purged.insert(self.allocator, metadata.value_hash, now);
                 return .IgnoredOldValue;
             } else {
                 // hash is the same then its a duplicate value which isnt stored
@@ -292,7 +294,7 @@ pub const GossipTable = struct {
     }
 
     pub fn insertWithTimeout(
-        self: *Self,
+        self: *GossipTable,
         value: SignedGossipData,
         now: u64,
         timeout: u64,
@@ -307,7 +309,7 @@ pub const GossipTable = struct {
     }
 
     pub fn insertValues(
-        self: *Self,
+        self: *GossipTable,
         now: u64,
         values: []const SignedGossipData,
         timeout: u64,
@@ -319,7 +321,7 @@ pub const GossipTable = struct {
 
     /// Like insertValues, but it accepts an arraylist whose memory can be reused.
     pub fn insertValuesWithResults(
-        self: *Self,
+        self: *GossipTable,
         now: u64,
         values: []const SignedGossipData,
         timeout: u64,
@@ -334,11 +336,11 @@ pub const GossipTable = struct {
         }
     }
 
-    pub fn len(self: *const Self) usize {
+    pub fn length(self: *const GossipTable) usize {
         return self.store.count();
     }
 
-    pub fn updateRecordTimestamp(self: *Self, pubkey: Pubkey, now: u64) void {
+    pub fn updateRecordTimestamp(self: *GossipTable, pubkey: Pubkey, now: u64) void {
         var updated_contact_info = false;
         const labels = .{
             GossipKey{ .ContactInfo = pubkey },
@@ -366,22 +368,25 @@ pub const GossipTable = struct {
     /// Gets both a GossipData and its associated GossipMetadata.
     /// Try not to use this unless absolutely necessary.
     /// Use getData or getMetadata instead if possible,
-    pub fn get(self: *const Self, label: GossipKey) ?GossipVersionedData {
+    pub fn get(self: *const GossipTable, label: GossipKey) ?GossipVersionedData {
         return self.store.get(label);
     }
 
-    pub fn getData(self: *const Self, label: GossipKey) ?GossipData {
+    pub fn getData(self: *const GossipTable, label: GossipKey) ?GossipData {
         return self.store.getData(label);
     }
 
-    pub fn getMetadata(self: *const Self, label: GossipKey) ?GossipMetadata {
+    pub fn getMetadata(self: *const GossipTable, label: GossipKey) ?GossipMetadata {
         return self.store.getMetadata(label);
     }
 
     /// Since a node may be represented with ContactInfo or LegacyContactInfo,
     /// this function checks for both, and efficiently returns the data as
     /// ThreadSafeContactInfo, regardless of how it was received.
-    pub fn getThreadSafeContactInfo(self: *const Self, pubkey: Pubkey) ?ThreadSafeContactInfo {
+    pub fn getThreadSafeContactInfo(
+        self: *const GossipTable,
+        pubkey: Pubkey,
+    ) ?ThreadSafeContactInfo {
         const label = GossipKey{ .ContactInfo = pubkey };
         if (self.store.get(label)) |v| {
             return ThreadSafeContactInfo.fromContactInfo(v.data.ContactInfo);
@@ -466,7 +471,7 @@ pub const GossipTable = struct {
     }
 
     pub fn getClonedEntriesWithCursor(
-        self: *const Self,
+        self: *const GossipTable,
         allocator: std.mem.Allocator,
         buf: []GossipVersionedData,
         caller_cursor: *usize,
@@ -484,7 +489,7 @@ pub const GossipTable = struct {
     /// It should be used in favour of getContactInfos whenever the result crosses
     /// a table lock boundary.
     pub fn getThreadSafeContactInfos(
-        self: *const Self,
+        self: *const GossipTable,
         buf: []ThreadSafeContactInfo,
         minimum_insertion_timestamp: u64,
     ) []ThreadSafeContactInfo {
@@ -500,7 +505,7 @@ pub const GossipTable = struct {
 
     /// Get peers from the gossip table which have the same shred version.
     pub fn getThreadSafeContactInfosMatchingShredVersion(
-        self: Self,
+        self: GossipTable,
         allocator: std.mem.Allocator,
         pubkey: *const Pubkey,
         shred_version: u16,
@@ -527,7 +532,7 @@ pub const GossipTable = struct {
     /// You must provide a buffer to fill with the contact infos. If you want all contact
     /// infos, the buffer should be at least `self.contact_infos.count()` in size.
     pub fn getContactInfos(
-        self: *const Self,
+        self: *const GossipTable,
         buf: []ContactInfo,
         minimum_insertion_timestamp: u64,
     ) []ContactInfo {
@@ -545,7 +550,7 @@ pub const GossipTable = struct {
     /// of a slice. This allows you to avoid an allocation and avoid
     /// copying every value.
     pub fn contactInfoIterator(
-        self: *const Self,
+        self: *const GossipTable,
         minimum_insertion_timestamp: u64,
     ) ContactInfoIterator {
         return .{
@@ -592,18 +597,18 @@ pub const GossipTable = struct {
 
     // ** shard getter fcns **
     pub fn getBitmaskMatches(
-        self: *const Self,
+        self: *const GossipTable,
         alloc: std.mem.Allocator,
         mask: u64,
         mask_bits: u64,
     ) error{OutOfMemory}!std.ArrayList(usize) {
-        const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
-        return indexs;
+        const indices = try self.shards.find(alloc, mask, @intCast(mask_bits));
+        return indices;
     }
 
     // ** helper functions **
     pub fn checkMatchingShredVersion(
-        self: *const Self,
+        self: *const GossipTable,
         pubkey: Pubkey,
         expected_shred_version: u16,
     ) bool {
@@ -630,7 +635,7 @@ pub const GossipTable = struct {
     ///  - removal buffer that is populated here and freed later
     ///  - reference counting for all gossip values
     pub fn remove(
-        self: *Self,
+        self: *GossipTable,
         label: GossipKey,
         now: u64,
     ) error{ LabelNotFound, OutOfMemory }!void {
@@ -663,7 +668,7 @@ pub const GossipTable = struct {
             }
         }
 
-        try self.purged.insert(hash, now);
+        try self.purged.insert(self.allocator, hash, now);
         self.shards.remove(entry_index, &hash);
 
         const cursor_on_insertion = entry.metadata_ptr.cursor_on_insertion;
@@ -723,7 +728,7 @@ pub const GossipTable = struct {
     /// avoid mistakes. The new entry must be acquired from map using the
     /// existing index. The prior entry does not point to the correct item.
     fn accountForSwapRemove(self: *GossipTable, entry_index: usize) void {
-        const table_len = self.len();
+        const table_len = self.length();
         // if (index == table_len) then it was already the last
         // element so we dont need to do anything
         std.debug.assert(entry_index <= table_len);
@@ -771,7 +776,7 @@ pub const GossipTable = struct {
     }
 
     /// Trim when over 90% of max capacity
-    pub fn shouldTrim(self: *const Self, max_pubkey_capacity: usize) bool {
+    pub fn shouldTrim(self: *const GossipTable, max_pubkey_capacity: usize) bool {
         const n_pubkeys = self.pubkey_to_values.count();
         return (10 * n_pubkeys > 9 * max_pubkey_capacity);
     }
@@ -780,7 +785,11 @@ pub const GossipTable = struct {
     /// returns the number of pubkeys removed.
     ///
     /// NOTE: the `now` parameter is used to populate the purged field with the timestamp of the removal.
-    pub fn attemptTrim(self: *Self, now: u64, max_pubkey_capacity: usize) error{OutOfMemory}!u64 {
+    pub fn attemptTrim(
+        self: *GossipTable,
+        now: u64,
+        max_pubkey_capacity: usize,
+    ) error{OutOfMemory}!u64 {
         if (!self.shouldTrim(max_pubkey_capacity)) return 0;
 
         const n_pubkeys = self.pubkey_to_values.count();
@@ -813,7 +822,7 @@ pub const GossipTable = struct {
     }
 
     pub fn removeOldLabels(
-        self: *Self,
+        self: *GossipTable,
         now: u64,
         timeout: u64,
     ) error{OutOfMemory}!u64 {
@@ -829,7 +838,7 @@ pub const GossipTable = struct {
     }
 
     pub fn getOldLabels(
-        self: *Self,
+        self: *GossipTable,
         now: u64,
         timeout: u64,
     ) error{OutOfMemory}!std.ArrayList(GossipKey) {
@@ -879,7 +888,7 @@ pub const GossipTable = struct {
     }
 
     pub fn getOwnedContactInfoByGossipAddr(
-        self: *const Self,
+        self: *const GossipTable,
         gossip_addr: SocketAddr,
     ) !?ContactInfo {
         const contact_indexs = self.contact_infos.keys();
@@ -905,74 +914,69 @@ pub const GossipTable = struct {
 };
 
 pub const HashTimeQueue = struct {
-    // TODO: benchmark other structs?
-    queue: std.ArrayList(HashAndTime),
-    allocator: std.mem.Allocator,
+    queue: std.MultiArrayList(HashAndTime),
 
-    const Self = @This();
+    pub const EMPTY: HashTimeQueue = .{ .queue = .{} };
 
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
-            .queue = std.ArrayList(HashAndTime).init(allocator),
-            .allocator = allocator,
-        };
+    pub fn deinit(self: *HashTimeQueue, allocator: std.mem.Allocator) void {
+        self.queue.deinit(allocator);
     }
 
-    pub fn deinit(self: *Self) void {
-        self.queue.deinit();
+    pub fn length(self: *const HashTimeQueue) usize {
+        return self.queue.len;
     }
 
-    pub fn len(self: *const Self) usize {
-        return self.queue.items.len;
-    }
-
-    pub fn insert(self: *Self, v: Hash, now: u64) error{OutOfMemory}!void {
-        const hat = HashAndTime{
+    pub fn insert(
+        self: *HashTimeQueue,
+        allocator: std.mem.Allocator,
+        v: Hash,
+        now: u64,
+    ) error{OutOfMemory}!void {
+        try self.queue.append(allocator, .{
             .hash = v,
             .timestamp = now,
-        };
-        try self.queue.append(hat);
+        });
     }
 
-    pub fn trim(self: *Self, oldest_timestamp: u64) error{OutOfMemory}!void {
+    pub fn trim(
+        self: *HashTimeQueue,
+        allocator: std.mem.Allocator,
+        oldest_timestamp: u64,
+    ) error{OutOfMemory}!void {
         var i: usize = 0;
-        const length = self.len();
-        while (i < length) {
-            const data_timestamp = self.queue.items[i].timestamp;
-            if (data_timestamp >= oldest_timestamp) {
-                break;
-            }
+        const len = self.length();
+        for (0..len) |_| {
+            const data_timestamp = self.queue.items(.timestamp)[i];
+            if (data_timestamp >= oldest_timestamp) break;
             i += 1;
         }
-
         // remove values up to i
         if (i > 0) {
-            var new_queue = try std.ArrayList(HashAndTime).initCapacity(
-                self.allocator,
-                length - i,
-            );
-            new_queue.appendSliceAssumeCapacity(self.queue.items[i..length]);
-
-            self.queue.deinit();
+            // TODO: maybe doing two loops of orderedRemove could be faster?
+            var new_queue: std.MultiArrayList(HashAndTime) = .{};
+            const old_slice = self.queue.slice();
+            for (
+                old_slice.items(.hash)[i..len],
+                old_slice.items(.timestamp)[i..len],
+            ) |hash, timestamp| {
+                try new_queue.append(allocator, .{
+                    .hash = hash,
+                    .timestamp = timestamp,
+                });
+            }
+            self.queue.deinit(allocator);
             self.queue = new_queue;
         }
-    }
-
-    pub fn getValues(self: *const Self) error{OutOfMemory}!std.ArrayList(Hash) {
-        var hashes = try std.ArrayList(Hash).initCapacity(self.allocator, self.len());
-        for (self.queue.items) |data| {
-            hashes.appendAssumeCapacity(data.hash);
-        }
-        return hashes;
     }
 };
 
 test "remove old values" {
+    const allocator = std.testing.allocator;
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
     var prng = std.Random.DefaultPrng.init(91);
 
-    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     for (0..5) |_| {
@@ -983,7 +987,7 @@ test "remove old values" {
         // TS = 100
         _ = try table.insert(value, 100);
     }
-    try std.testing.expect(table.len() == 5);
+    try std.testing.expect(table.length() == 5);
 
     // cutoff = 150
     const values = try table.getOldLabels(200, 50);
@@ -993,15 +997,16 @@ test "remove old values" {
         try table.remove(value, 200);
     }
 
-    try std.testing.expectEqual(table.len(), 0);
+    try std.testing.expectEqual(table.length(), 0);
 }
 
 test "insert and remove value" {
+    const allocator = std.testing.allocator;
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
     var prng = std.Random.DefaultPrng.init(91);
 
-    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     const value = SignedGossipData.initSigned(
@@ -1015,17 +1020,18 @@ test "insert and remove value" {
 }
 
 test "trim pruned values" {
+    const allocator = std.testing.allocator;
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
     var prng = std.Random.DefaultPrng.init(91);
 
-    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     const N_VALUES = 10;
     const N_TRIM_VALUES = 5;
 
-    var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
+    var values = std.ArrayList(SignedGossipData).init(allocator);
     defer values.deinit();
 
     for (0..N_VALUES) |_| {
@@ -1036,8 +1042,8 @@ test "trim pruned values" {
         _ = try table.insert(value, 100);
         try values.append(value);
     }
-    try std.testing.expectEqual(table.len(), N_VALUES);
-    try std.testing.expectEqual(table.purged.len(), 0);
+    try std.testing.expectEqual(table.length(), N_VALUES);
+    try std.testing.expectEqual(table.purged.length(), 0);
     try std.testing.expectEqual(table.pubkey_to_values.count(), N_VALUES);
 
     for (0..values.items.len) |i| {
@@ -1047,54 +1053,57 @@ test "trim pruned values" {
 
     _ = try table.attemptTrim(0, N_TRIM_VALUES);
 
-    try std.testing.expectEqual(table.len(), N_VALUES - N_TRIM_VALUES);
+    try std.testing.expectEqual(table.length(), N_VALUES - N_TRIM_VALUES);
     try std.testing.expectEqual(table.pubkey_to_values.count(), N_VALUES - N_TRIM_VALUES);
-    try std.testing.expectEqual(table.purged.len(), N_TRIM_VALUES);
+    try std.testing.expectEqual(table.purged.length(), N_TRIM_VALUES);
 
     _ = try table.attemptTrim(0, 0);
-    try std.testing.expectEqual(table.len(), 0);
+    try std.testing.expectEqual(table.length(), 0);
 }
 
 test "gossip.HashTimeQueue: insert multiple values" {
-    var htq = HashTimeQueue.init(std.testing.allocator);
-    defer htq.deinit();
+    const allocator = std.testing.allocator;
+
+    var htq: HashTimeQueue = .EMPTY;
+    defer htq.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
-    try htq.insert(Hash.initRandom(random), 100);
-    try htq.insert(Hash.initRandom(random), 102);
-    try htq.insert(Hash.initRandom(random), 103);
+    try htq.insert(allocator, Hash.initRandom(random), 100);
+    try htq.insert(allocator, Hash.initRandom(random), 102);
+    try htq.insert(allocator, Hash.initRandom(random), 103);
 
-    try htq.trim(102);
-    try std.testing.expect(htq.len() == 2);
+    try htq.trim(allocator, 102);
+    try std.testing.expect(htq.length() == 2);
 
-    try htq.insert(Hash.initRandom(random), 101);
-    try htq.insert(Hash.initRandom(random), 120);
-    try std.testing.expect(htq.len() == 4);
+    try htq.insert(allocator, Hash.initRandom(random), 101);
+    try htq.insert(allocator, Hash.initRandom(random), 120);
+    try std.testing.expect(htq.length() == 4);
 
-    try htq.trim(150);
-    try std.testing.expect(htq.len() == 0);
+    try htq.trim(allocator, 150);
+    try std.testing.expect(htq.length() == 0);
 }
 
 test "gossip.HashTimeQueue: trim pruned values" {
+    const allocator = std.testing.allocator;
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
-    const data = GossipData{
+    const data: GossipData = .{
         .LegacyContactInfo = LegacyContactInfo.initRandom(random),
     };
     var value = SignedGossipData.initSigned(&keypair, data);
 
-    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     // timestamp = 100
     _ = try table.insert(value, 100);
 
     // should lead to prev being pruned
-    var new_data = GossipData{
+    var new_data: GossipData = .{
         .LegacyContactInfo = LegacyContactInfo.initRandom(random),
     };
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
@@ -1103,32 +1112,33 @@ test "gossip.HashTimeQueue: trim pruned values" {
     value = SignedGossipData.initSigned(&keypair, new_data);
     _ = try table.insert(value, 120);
 
-    try std.testing.expectEqual(table.purged.len(), 1);
+    try std.testing.expectEqual(table.purged.length(), 1);
 
     // its timestamp should be 120 so, 130 = clear pruned values
-    try table.purged.trim(130);
+    try table.purged.trim(allocator, 130);
 
-    try std.testing.expectEqual(table.purged.len(), 0);
+    try std.testing.expectEqual(table.purged.length(), 0);
 }
 
 test "insert and get" {
+    const allocator = std.testing.allocator;
     const keypair = try KeyPair.generateDeterministic(@splat(1));
 
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
     var value = SignedGossipData.initRandom(random, &keypair);
 
-    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     _ = try table.insert(value, 0);
 
     const label = value.label();
-    const x = table.get(label).?;
-    _ = x;
+    try std.testing.expect(table.get(label) != null);
 }
 
 test "insert and get contact_info" {
+    const allocator = std.testing.allocator;
     const kp = try KeyPair.generateDeterministic(@splat(1));
     var id = Pubkey.fromPublicKey(&kp.public_key);
 
@@ -1136,18 +1146,19 @@ test "insert and get contact_info" {
     const random = prng.random();
 
     const ci = try ContactInfo.initRandom(
-        std.testing.allocator,
+        allocator,
         random,
         id,
         0,
         0,
         10,
     );
-    var gossip_value = SignedGossipData.initSigned(&kp, .{
-        .ContactInfo = ci,
-    });
+    var gossip_value = SignedGossipData.initSigned(
+        &kp,
+        .{ .ContactInfo = ci },
+    );
 
-    var table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     // test insertion

@@ -39,6 +39,7 @@ pub const Hash = extern struct {
     /// If the passed-in type contains multiple byte slices, it will
     /// iterate/recurse over them in order, updating the hasher for all of them
     /// before finalizing at the end.
+    /// TODO(sinon): this is stupid
     pub fn generateSha256(
         /// May be a slice or array of bytes, or a slice, array, or tuple
         /// containing slices or arrays of bytes nested with arbitrary depth.

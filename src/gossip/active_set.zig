@@ -21,58 +21,47 @@ const MIN_NUM_BLOOM_ITEMS: usize = 512;
 const BLOOM_FALSE_RATE: f64 = 0.1;
 const BLOOM_MAX_BITS: usize = 1024 * 8 * 4;
 
+/// Store pubkeys as keys in the gossip table because the data can change
+/// for each peer. A bloom filter is used to store pruned origins.
 pub const ActiveSet = struct {
-    // store pubkeys as keys in gossip table bc the data can change
-    // For each peer, a bloom filter is used to store pruned origins
-    peers: std.AutoHashMap(Pubkey, Bloom),
-    allocator: std.mem.Allocator,
+    peers: std.AutoHashMapUnmanaged(Pubkey, Bloom),
 
-    const Self = @This();
+    pub const EMPTY: ActiveSet = .{ .peers = .{} };
 
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
-            .peers = std.AutoHashMap(Pubkey, Bloom).init(allocator),
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *ActiveSet, allocator: std.mem.Allocator) void {
         var iter = self.peers.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.deinit();
-        }
-        self.peers.deinit();
+        while (iter.next()) |entry| entry.value_ptr.deinit(allocator);
+        self.peers.deinit(allocator);
     }
 
-    pub fn len(self: *const Self) u32 {
+    pub fn len(self: *const ActiveSet) u32 {
         return self.peers.count();
     }
 
     pub fn initRotate(
-        self: *Self,
+        self: *ActiveSet,
+        allocator: std.mem.Allocator,
         random: std.Random,
         peers: []ThreadSafeContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
-        var iter = self.peers.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.deinit();
+        {
+            var iter = self.peers.iterator();
+            while (iter.next()) |entry| entry.value_ptr.deinit(allocator);
+            self.peers.clearRetainingCapacity();
         }
-        self.peers.clearRetainingCapacity();
 
-        if (peers.len == 0) {
-            return;
-        }
+        if (peers.len == 0) return;
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
         sig.rand.shuffleFocusedRange(random, ThreadSafeContactInfo, peers, 0, size);
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
-            const entry = try self.peers.getOrPut(peers[i].pubkey);
+            const entry = try self.peers.getOrPut(allocator, peers[i].pubkey);
             if (entry.found_existing == false) {
-                // *full* hard restart on blooms -- labs doesnt do this - bug?
+                // TODO: *full* hard restart on blooms -- labs doesnt do this - bug?
                 const bloom = try Bloom.initRandom(
-                    self.allocator,
+                    allocator,
                     random,
                     bloom_num_items,
                     BLOOM_FALSE_RATE,
@@ -83,7 +72,7 @@ pub const ActiveSet = struct {
         }
     }
 
-    pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
+    pub fn prune(self: *ActiveSet, from: Pubkey, origin: Pubkey) void {
         // we only prune peers which we are sending push messages to
         if (self.peers.getEntry(from)) |entry| {
             const origin_bytes = origin.data;
@@ -95,7 +84,7 @@ pub const ActiveSet = struct {
     /// while accounting for peers that have been pruned from
     /// the given origin Pubkey
     pub fn getFanoutPeers(
-        self: *const Self,
+        self: *const ActiveSet,
         allocator: std.mem.Allocator,
         origin: Pubkey,
         table: *const GossipTable,
@@ -131,14 +120,14 @@ pub const ActiveSet = struct {
 };
 
 test "init/denit" {
-    const alloc = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var table = try GossipTable.init(alloc, alloc);
+    var table = try GossipTable.init(allocator, allocator);
     defer table.deinit();
 
     // insert some contacts
     var prng = std.Random.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
+    var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, 10);
     defer gossip_peers.deinit();
 
     for (0..GOSSIP_PUSH_FANOUT) |_| {
@@ -152,15 +141,19 @@ test "init/denit" {
         _ = try table.insert(value, getWallclockMs());
     }
 
-    var active_set = ActiveSet.init(alloc);
-    defer active_set.deinit();
-    try active_set.initRotate(prng.random(), gossip_peers.items);
+    var active_set: ActiveSet = .EMPTY;
+    defer active_set.deinit(allocator);
+    try active_set.initRotate(
+        allocator,
+        prng.random(),
+        gossip_peers.items,
+    );
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
     const origin = Pubkey.initRandom(prng.random());
 
-    var fanout = try active_set.getFanoutPeers(alloc, origin, &table);
+    var fanout = try active_set.getFanoutPeers(allocator, origin, &table);
     defer fanout.deinit();
     const no_prune_fanout_len = fanout.items.len;
     try std.testing.expect(no_prune_fanout_len > 0);
@@ -169,27 +162,31 @@ test "init/denit" {
     const peer_pubkey = iter.next().?.*;
     active_set.prune(peer_pubkey, origin);
 
-    var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &table);
+    var fanout_with_prune = try active_set.getFanoutPeers(allocator, origin, &table);
     defer fanout_with_prune.deinit();
     try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
 }
 
 test "gracefully rotates with duplicate contact ids" {
-    const alloc = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
+    var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(allocator, 10);
     defer gossip_peers.deinit();
 
-    var data = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(alloc);
-    var dupe = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(alloc);
+    var data = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(allocator);
+    var dupe = try LegacyContactInfo.initRandom(prng.random()).toContactInfo(allocator);
     defer data.deinit();
     defer dupe.deinit();
     dupe.pubkey = data.pubkey;
     try gossip_peers.append(ThreadSafeContactInfo.fromContactInfo(data));
     try gossip_peers.append(ThreadSafeContactInfo.fromContactInfo(dupe));
 
-    var active_set = ActiveSet.init(alloc);
-    defer active_set.deinit();
-    try active_set.initRotate(prng.random(), gossip_peers.items);
+    var active_set: ActiveSet = .EMPTY;
+    defer active_set.deinit(allocator);
+    try active_set.initRotate(
+        allocator,
+        prng.random(),
+        gossip_peers.items,
+    );
 }

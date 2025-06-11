@@ -217,7 +217,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
         if (timer.read().gt(TRIM_INTERVAL)) {
             defer timer.reset();
-            const size = gossip_table.len();
+            const size = gossip_table.length();
 
             if (random.boolean()) {
                 // trim the table in half
@@ -225,14 +225,14 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const pubkeys_droppped_count = try gossip_table.attemptTrim(now, max_pubkey_capacity);
                 if (pubkeys_droppped_count == 0) continue;
 
-                logger.info().logf("op(trim): table size: {} -> {}", .{ size, gossip_table.len() });
+                logger.info().logf("op(trim): table size: {} -> {}", .{ size, gossip_table.length() });
             } else {
                 // NOTE: not completely accurate, but good enough
                 const middle_index = insertion_times.items.len / 2;
                 const middle_insert_time = insertion_times.items[middle_index];
                 _ = try gossip_table.removeOldLabels(middle_insert_time, 0);
 
-                logger.info().logf("op(remove-old-labels): table size: {} -> {}", .{ size, gossip_table.len() });
+                logger.info().logf("op(remove-old-labels): table size: {} -> {}", .{ size, gossip_table.length() });
             }
 
             // reset the pubkey list

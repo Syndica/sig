@@ -1,10 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
 const testing = std.testing;
 const bincode = sig.bincode;
-
-const ArrayList = std.ArrayList;
 
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
@@ -12,41 +11,40 @@ const FnvHasher = sig.crypto.FnvHasher;
 
 /// A bloom filter whose bitset is made up of u64 blocks
 pub const Bloom = struct {
-    keys: ArrayList(u64),
+    keys: std.ArrayListUnmanaged(u64),
     bits: DynamicArrayBitSet(u64),
     num_bits_set: u64,
 
     pub const @"!bincode-config:bits" = BitVecConfig(u64);
 
-    pub fn init(alloc: std.mem.Allocator, n_bits: u64, keys: ?ArrayList(u64)) !Bloom {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        n_bits: u64,
+        keys: std.ArrayListUnmanaged(u64),
+    ) !Bloom {
         // note: we do this to match the rust deserialization
         // needs to be power of 2 < 64
-        const bitset_bits = blk: {
-            if (n_bits == 0) {
-                break :blk 0;
-            } else if (n_bits < 64) {
-                break :blk 64;
-            } else {
-                // smallest power of 2 >= 64
-                break :blk std.math.pow(u64, 2, std.math.log2(n_bits));
-            }
+        const bitset_bits = switch (n_bits) {
+            0 => 0,
+            1...63 => 64,
+            else => std.math.pow(u64, 2, std.math.log2(n_bits)),
         };
-
         return .{
-            .keys = keys orelse ArrayList(u64).init(alloc),
-            .bits = try DynamicArrayBitSet(u64).initEmpty(alloc, bitset_bits),
+            .keys = keys,
+            .bits = try DynamicArrayBitSet(u64).initEmpty(allocator, bitset_bits),
             .num_bits_set = 0,
         };
     }
 
-    pub fn deinit(self: *const Bloom) void {
-        self.bits.deinit(self.keys.allocator);
-        self.keys.deinit();
+    pub fn deinit(self: *Bloom, allocator: std.mem.Allocator) void {
+        self.bits.deinit(allocator);
+        self.keys.deinit(allocator);
     }
 
     // used in tests
-    pub fn addKey(self: *Bloom, key: u64) !void {
-        try self.keys.append(key);
+    pub fn addKey(self: *Bloom, key: u64, allocator: std.mem.Allocator) !void {
+        if (!builtin.is_test) @compileError("only use in tests");
+        try self.keys.append(allocator, key);
     }
 
     pub fn add(self: *Bloom, key: []const u8) void {
@@ -62,10 +60,7 @@ pub const Bloom = struct {
     pub fn contains(self: *const Bloom, key: []const u8) bool {
         for (self.keys.items) |hash_index| {
             const i = self.pos(key, hash_index);
-            if (self.bits.isSet(i)) {
-                continue;
-            }
-            return false;
+            if (!self.bits.isSet(i)) return false;
         }
         return true;
     }
@@ -79,7 +74,7 @@ pub const Bloom = struct {
     }
 
     pub fn initRandom(
-        alloc: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         random: std.Random,
         num_items: usize,
         false_rate: f64,
@@ -90,13 +85,12 @@ pub const Bloom = struct {
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
         const n_keys = Bloom.numKeys(@floatFromInt(n_bits), n_items_f);
 
-        var keys = try ArrayList(u64).initCapacity(alloc, n_keys);
-        for (0..n_keys) |_| {
-            const v = random.int(u64);
-            keys.appendAssumeCapacity(v);
+        const keys = try allocator.alloc(u64, n_keys);
+        errdefer allocator.free(keys);
+        for (keys) |*key| {
+            key.* = random.int(u64);
         }
-
-        return init(alloc, n_bits, keys);
+        return try init(allocator, n_bits, .fromOwnedSlice(keys));
     }
 
     fn numBits(num_items: f64, false_rate: f64) f64 {
@@ -105,7 +99,7 @@ pub const Bloom = struct {
         const two: f64 = 2;
 
         // const d: f64 = -4.804530139182015e-01
-        const d: f64 = @log(@as(f64, 1) / (std.math.pow(f64, two, @log(two))));
+        const d: f64 = @log(@as(f64, 1.0) / (std.math.pow(f64, two, @log(two))));
         return std.math.ceil((n * @log(p)) / d);
     }
 
@@ -116,103 +110,113 @@ pub const Bloom = struct {
         if (n == 0) {
             return 0;
         } else {
-            return @intFromFloat(@max(@as(f64, 1), std.math.round((m / n) * @log(@as(f64, 2)))));
+            return @intFromFloat(@max(@as(f64, 1.0), std.math.round((m / n) * @log(@as(f64, 2)))));
         }
     }
 };
 
 test "helper methods match rust" {
+    const allocator = std.testing.allocator;
+
     const n_bits = Bloom.numBits(100.2, 1e-5);
-    try testing.expectEqual(@as(f64, 2402), n_bits);
+    try testing.expectEqual(2402.0, n_bits);
 
     const n_keys = Bloom.numKeys(100.2, 10);
-    try testing.expectEqual(@as(usize, 7), n_keys);
+    try testing.expectEqual(7, n_keys);
 
     var prng = std.Random.Xoshiro256.init(123);
-    var bloom = try Bloom.initRandom(std.testing.allocator, prng.random(), 100, 0.1, 10000);
-    defer bloom.deinit();
+    var bloom = try Bloom.initRandom(allocator, prng.random(), 100, 0.1, 10000);
+    defer bloom.deinit(allocator);
 }
 
 test "serializes/deserializes correctly" {
-    const bloom = try Bloom.init(testing.allocator, 0, null);
+    const allocator = std.testing.allocator;
 
-    var buf: [10000]u8 = undefined;
-    const out = try bincode.writeToSlice(buf[0..], bloom, .{});
+    const bloom = try Bloom.init(allocator, 0, .empty);
 
-    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
-    defer bincode.free(testing.allocator, deserialized);
+    var buffer: [100]u8 = undefined;
+    const out = try bincode.writeToSlice(&buffer, bloom, .{});
 
-    // allocate some memory to make sure were cleaning up too
-    try deserialized.addKey(10);
+    var deserialized: Bloom = try bincode.readFromSlice(allocator, Bloom, out, .{});
+    defer bincode.free(allocator, deserialized);
+
+    // allocate some memory to make sure we're cleaning up too
+    try deserialized.addKey(10, allocator);
+
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
 test "serializes/deserializes correctly with set bits" {
-    var bloom = try Bloom.init(testing.allocator, 128, null);
-    try bloom.addKey(10);
-    // required for memory leaks
-    defer bloom.deinit();
+    const allocator = std.testing.allocator;
 
-    var buf: [10000]u8 = undefined;
-    const out = try bincode.writeToSlice(buf[0..], bloom, .{});
+    var bloom = try Bloom.init(allocator, 128, .empty);
+    defer bloom.deinit(allocator);
 
-    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
-    defer deserialized.deinit();
+    try bloom.addKey(10, allocator);
+
+    var buffer: [100]u8 = undefined;
+    const out = try bincode.writeToSlice(&buffer, bloom, .{});
+
+    var deserialized: Bloom = try bincode.readFromSlice(allocator, Bloom, out, .{});
+    defer deserialized.deinit(allocator);
 
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
 test "serialized bytes equal rust (one key)" {
+    const allocator = std.testing.allocator;
+
     // note: need to init with len 2^i
-    var bloom = try Bloom.init(testing.allocator, 128, null);
-    defer bloom.deinit();
-    try bloom.addKey(1);
+    var bloom = try Bloom.init(allocator, 128, .empty);
+    defer bloom.deinit(allocator);
 
-    const v: [1]u8 = .{1};
-    bloom.add(&v);
+    try bloom.addKey(1, allocator);
+    bloom.add(&.{1});
 
-    var buf: [10000]u8 = undefined;
-    var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    var buffer: [100]u8 = undefined;
+    const bytes = try bincode.writeToSlice(&buffer, bloom, bincode.Params.standard);
 
-    const rust_bytes = .{
-        1, 0, 0, 0,   0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0,
-        0, 0, 0, 0,   0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-    };
-
-    try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
+    try testing.expectEqualSlices(
+        u8,
+        &.{
+            1, 0, 0, 0,   0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0,
+            0, 0, 0, 0,   0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        },
+        bytes,
+    );
 }
 
 test "serialized bytes equal rust (multiple keys)" {
-    var bloom = try Bloom.init(testing.allocator, 128, null);
-    defer bloom.deinit();
+    const allocator = std.testing.allocator;
 
-    try bloom.addKey(1);
-    try bloom.addKey(2);
-    try bloom.addKey(3);
+    var bloom = try Bloom.init(allocator, 128, .empty);
+    defer bloom.deinit(allocator);
 
-    var buf: [10000]u8 = undefined;
+    try bloom.addKey(1, allocator);
+    try bloom.addKey(2, allocator);
+    try bloom.addKey(3, allocator);
 
-    const v: [2]u8 = .{ 1, 2 };
-    bloom.add(&v);
+    bloom.add(&.{ 1, 2 });
+    bloom.add(&.{ 3, 4 });
 
-    const x: [2]u8 = .{ 3, 4 };
-    bloom.add(&x);
-
-    var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    var buffer: [100]u8 = undefined;
+    const bytes = try bincode.writeToSlice(&buffer, bloom, bincode.Params.standard);
 
     // let mut bloom = Bloom::new(128, vec![1, 2, 3]);
     // bloom.add(&[1, 2]);
     // bloom.add(&[3, 4]);
     // println!("{:?}", bincode::serialize(&bloom).unwrap());
 
-    const rust_bytes = .{
-        3,  0,  0, 0,   0, 0,  0, 0, 1, 0, 0, 0, 0, 0, 0,  0, 2, 0,
-        0,  0,  0, 0,   0, 0,  3, 0, 0, 0, 0, 0, 0, 0, 1,  2, 0, 0,
-        0,  0,  0, 0,   0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66,
-        16, 32, 0, 128, 0, 0,  0, 0, 0, 0, 0, 6, 0, 0, 0,  0, 0, 0,
-        0,
-    };
-
-    try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
+    try testing.expectEqualSlices(
+        u8,
+        &.{
+            3,  0,  0, 0,   0, 0,  0, 0, 1, 0, 0, 0, 0, 0, 0,  0, 2, 0,
+            0,  0,  0, 0,   0, 0,  3, 0, 0, 0, 0, 0, 0, 0, 1,  2, 0, 0,
+            0,  0,  0, 0,   0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66,
+            16, 32, 0, 128, 0, 0,  0, 0, 0, 0, 0, 6, 0, 0, 0,  0, 0, 0,
+            0,
+        },
+        bytes,
+    );
 }

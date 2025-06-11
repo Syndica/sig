@@ -869,7 +869,7 @@ pub const Uncompressed = struct {
 // TODO: replace logic with another library
 pub fn BitVec(comptime T: type) type {
     return struct {
-        bits: ?[]T,
+        bits: ?[]const T,
         len: usize,
 
         pub fn clone(self: *const BitVec(T), allocator: std.mem.Allocator) error{OutOfMemory}!BitVec(T) {

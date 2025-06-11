@@ -253,9 +253,6 @@ pub const GossipService = struct {
         var gossip_table = try GossipTable.init(allocator, gossip_data_allocator);
         errdefer gossip_table.deinit();
 
-        // setup the active set for push messages
-        const active_set = ActiveSet.init(allocator);
-
         // setup entrypoints
         var entrypoints = ArrayList(Entrypoint).init(allocator);
         if (maybe_entrypoints) |entrypoint_addrs| {
@@ -275,7 +272,6 @@ pub const GossipService = struct {
 
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
         const my_shred_version = my_contact_info.shred_version;
-        const failed_pull_hashes = HashTimeQueue.init(allocator);
         const metrics = try GossipMetrics.init();
 
         const exit_counter = try allocator.create(Atomic(u64));
@@ -309,8 +305,8 @@ pub const GossipService = struct {
                 .queue = ArrayList(GossipData).init(allocator),
                 .data_allocator = gossip_data_allocator,
             }),
-            .active_set_rw = RwMux(ActiveSet).init(active_set),
-            .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
+            .active_set_rw = RwMux(ActiveSet).init(.EMPTY),
+            .failed_pull_hashes_mux = Mux(HashTimeQueue).init(.EMPTY),
             .entrypoints = entrypoints,
             .ping_cache_rw = RwMux(PingCache).init(ping_cache),
             .logger = gossip_logger,
@@ -366,9 +362,18 @@ pub const GossipService = struct {
         self.entrypoints.deinit();
         self.my_contact_info.deinit();
         deinitMux(&self.gossip_table_rw);
-        deinitMux(&self.active_set_rw);
         deinitMux(&self.ping_cache_rw);
-        deinitMux(&self.failed_pull_hashes_mux);
+
+        {
+            var v, var lg = self.active_set_rw.writeWithLock();
+            defer lg.unlock();
+            v.deinit(self.allocator);
+        }
+        {
+            var v, var lg = self.failed_pull_hashes_mux.writeWithLock();
+            defer lg.unlock();
+            v.deinit(self.allocator);
+        }
 
         {
             // clear and deinit the push quee
@@ -625,8 +630,10 @@ pub const GossipService = struct {
             self.verified_incoming_channel.waitToReceive(exit_condition) catch break;
 
             var msg_count: usize = 0;
-            while (self.verified_incoming_channel.tryReceive()) |message| {
+            while (self.verified_incoming_channel.tryReceive()) |msg| {
                 msg_count += 1;
+                var message = msg;
+                // TODO(sinon): there are like a billion UAFs here
                 switch (message.message) {
                     .PushMessage => |*push| {
                         try push_messages.append(.{
@@ -684,7 +691,7 @@ pub const GossipService = struct {
                         }
 
                         if (should_drop) {
-                            pull[0].deinit();
+                            pull[0].deinit(self.gossip_data_allocator);
                             value.deinit(self.gossip_data_allocator);
                         } else {
                             try pull_requests.append(.{
@@ -799,7 +806,7 @@ pub const GossipService = struct {
                 for (pull_requests.items) |*req| {
                     // NOTE: the contact info (req.value) is inserted into the gossip table
                     // so we only free the filter
-                    req.filter.deinit();
+                    req.filter.deinit(self.gossip_data_allocator);
                 }
                 pull_requests.clearRetainingCapacity();
             }
@@ -980,7 +987,7 @@ pub const GossipService = struct {
                     });
                 }
 
-                try self.rotateActiveSet(random);
+                try self.rotateActiveSet(self.allocator, random);
             }
 
             // publish metrics
@@ -1018,7 +1025,11 @@ pub const GossipService = struct {
         self.metrics.verified_channel_length.set(self.verified_incoming_channel.len());
     }
 
-    pub fn rotateActiveSet(self: *Self, random: std.Random) !void {
+    pub fn rotateActiveSet(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        random: std.Random,
+    ) !void {
         const now = getWallclockMs();
         var buf: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
         const gossip_peers = try self.getThreadSafeGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
@@ -1049,7 +1060,11 @@ pub const GossipService = struct {
         var active_set_lock = self.active_set_rw.write();
         defer active_set_lock.unlock();
         var active_set: *ActiveSet = active_set_lock.mut();
-        try active_set.initRotate(random, valid_gossip_peers[0..valid_gossip_indexs.items.len]);
+        try active_set.initRotate(
+            allocator,
+            random,
+            valid_gossip_peers[0..valid_gossip_indexs.items.len],
+        );
     }
 
     /// logic for building new push messages which are sent to peers from the
@@ -1251,29 +1266,25 @@ pub const GossipService = struct {
         }
 
         // compute failed pull gossip hash values
-        const failed_pull_hashes_array = blk: {
-            var failed_pull_hashes, var failed_pull_hashes_lock = self.failed_pull_hashes_mux.writeWithLock();
-            defer failed_pull_hashes_lock.unlock();
-
-            break :blk try failed_pull_hashes.getValues();
-        };
-        defer failed_pull_hashes_array.deinit();
+        const failed_pull_hashes, //
+        var failed_pull_hashes_lock = self.failed_pull_hashes_mux.writeWithLock();
+        defer failed_pull_hashes_lock.unlock();
 
         // build gossip filters
-        var filters = try pull_request.buildGossipPullFilters(
+        const filters = try pull_request.buildGossipPullFilters(
             self.allocator,
             random,
             &self.gossip_table_rw,
-            &failed_pull_hashes_array,
+            failed_pull_hashes.queue.items(.hash),
             bloom_size,
             MAX_NUM_PULL_REQUESTS,
         );
-        defer pull_request.deinitGossipPullFilters(&filters);
+        defer pull_request.deinitGossipPullFilters(filters, self.allocator);
 
         // build packet responses
         var n_packets: usize = 0;
-        if (num_peers != 0) n_packets += filters.items.len;
-        if (entrypoint_index != null) n_packets += filters.items.len;
+        if (num_peers != 0) n_packets += filters.len;
+        if (entrypoint_index != null) n_packets += filters.len;
 
         var packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
         packet_batch.appendNTimesAssumeCapacity(Packet.ANY_EMPTY, n_packets);
@@ -1289,7 +1300,7 @@ pub const GossipService = struct {
 
         if (num_peers != 0) {
             const my_shred_version = self.my_contact_info.shred_version;
-            for (filters.items) |filter_i| {
+            for (filters) |filter_i| {
                 // TODO: incorperate stake weight in random sampling
                 const peer_index = random.intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
@@ -1312,7 +1323,7 @@ pub const GossipService = struct {
         // append entrypoint msgs
         if (entrypoint_index) |entrypoint_idx| {
             const entrypoint = self.entrypoints.items[entrypoint_idx];
-            for (filters.items) |filter| {
+            for (filters) |filter| {
                 const packet = &packet_batch.items[packet_index];
                 const message: GossipMessage = .{ .PullRequest = .{ filter, my_contact_info_value } };
                 try packet.populateFromBincode(entrypoint.addr, message);
@@ -1630,7 +1641,7 @@ pub const GossipService = struct {
                     continue;
                 };
                 const value_hash = Hash.generateSha256(bytes);
-                try failed_pull_hashes.insert(value_hash, now);
+                try failed_pull_hashes.insert(self.gossip_data_allocator, value_hash, now);
                 gossip_value_ptr.deinit(self.gossip_data_allocator);
             }
         }
@@ -1856,7 +1867,7 @@ pub const GossipService = struct {
             var gossip_table, var gossip_table_lg = self.gossip_table_rw.writeWithLock();
             defer gossip_table_lg.unlock();
 
-            try gossip_table.purged.trim(purged_cutoff_timestamp);
+            try gossip_table.purged.trim(self.allocator, purged_cutoff_timestamp);
 
             // TODO: condition timeout on stake weight:
             // - values from nodes with non-zero stake: epoch duration
@@ -1872,7 +1883,7 @@ pub const GossipService = struct {
             var failed_pull_hashes, var failed_pull_hashes_lg = self.failed_pull_hashes_mux.writeWithLock();
             defer failed_pull_hashes_lg.unlock();
 
-            try failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
+            try failed_pull_hashes.trim(self.allocator, failed_insert_cutoff_timestamp);
         }
     }
 
@@ -2209,16 +2220,16 @@ pub fn gossipDataToPackets(
     if (gossip_values.len == 0)
         return ArrayList(Packet).init(allocator);
 
-    const indexs = try chunkValuesIntoPacketIndexes(
+    const indices = try chunkValuesIntoPacketIndexes(
         allocator,
         gossip_values,
         MAX_PUSH_MESSAGE_PAYLOAD_SIZE,
     );
-    defer indexs.deinit();
-    var chunk_iter = std.mem.window(usize, indexs.items, 2, 1);
+    defer indices.deinit();
+    var chunk_iter = std.mem.window(usize, indices.items, 2, 1);
 
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    var packets = try ArrayList(Packet).initCapacity(allocator, indexs.items.len -| 1);
+    var packets = try ArrayList(Packet).initCapacity(allocator, indices.items.len -| 1);
     errdefer packets.deinit();
 
     while (chunk_iter.next()) |window| {
@@ -2479,7 +2490,7 @@ test "handling prune messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.initRotate(prng.random(), peers.items);
+        try as.initRotate(allocator, prng.random(), peers.items);
         as_lock.unlock();
     }
 
@@ -2570,7 +2581,7 @@ test "handling pull responses" {
 
     var lg = gossip_service.failed_pull_hashes_mux.lock();
     var failed_pull_hashes: *HashTimeQueue = lg.mut();
-    try std.testing.expect(failed_pull_hashes.len() == 5);
+    try std.testing.expect(failed_pull_hashes.length() == 5);
     lg.unlock();
 }
 
@@ -2617,7 +2628,7 @@ test "handle old prune & pull request message" {
     const N_FILTER_BITS = 1;
     const bloom = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
     const filter: GossipPullFilter = .{
-        .filter = bloom,
+        .bloom = bloom,
         // this is why we wanted atleast one hash_bit == 1
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
@@ -2638,7 +2649,7 @@ test "handle old prune & pull request message" {
     // NOTE: need fresh bloom filter because it gets deinit
     const bloom2 = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
     const filter2 = GossipPullFilter{
-        .filter = bloom2,
+        .bloom = bloom2,
         // this is why we wanted atleast one hash_bit == 1
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
@@ -2754,7 +2765,7 @@ test "handle pull request" {
     defer bloom.deinit();
 
     const filter: GossipPullFilter = .{
-        .filter = bloom,
+        .bloom = bloom,
         // this is why we wanted atleast one hash_bit == 1
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
@@ -2989,7 +3000,7 @@ test "test build push messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.initRotate(prng.random(), peers.items);
+        try as.initRotate(allocator, prng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
     }
@@ -3003,7 +3014,7 @@ test "test build push messages" {
     try gossip_service.drainPushQueueToGossipTable(getWallclockMs());
 
     var clg = gossip_service.gossip_table_rw.read();
-    try std.testing.expect(clg.get().len() == 11);
+    try std.testing.expect(clg.get().length() == 11);
     clg.unlock();
 
     var cursor: u64 = 0;
@@ -3065,7 +3076,7 @@ test "test large push messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.initRotate(prng.random(), peers.items);
+        try as.initRotate(allocator, prng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
     }

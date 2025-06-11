@@ -145,7 +145,6 @@ files_excluded_from_line_length_check = [
     "src/gossip/fuzz_table.zig",
     "src/gossip/message.zig",
     "src/gossip/ping_pong.zig",
-    "src/gossip/pull_request.zig",
     "src/gossip/service.zig",
     "src/gossip/shards.zig",
     "src/ledger/cleanup_service.zig",

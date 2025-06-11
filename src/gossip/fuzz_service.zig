@@ -429,27 +429,27 @@ pub fn randomPullRequestWithContactInfo(
 
     // only consider the first bit so we know well get matches
     var bloom = try Bloom.initRandom(allocator, random, 100, 0.1, N_FILTER_BITS);
-    defer bloom.deinit();
+    defer bloom.deinit(allocator);
 
-    var filter = GossipPullFilter{
-        .filter = bloom,
-        .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
+    var filter: GossipPullFilter = .{
+        .bloom = bloom,
+        .mask = (~@as(u64, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
     };
 
     // const invalid_filter = rng.boolean();
     const invalid_filter = false;
     if (invalid_filter) {
-        filter.mask = (~@as(usize, 0)) >> random.intRangeAtMost(u6, 1, 10);
+        filter.mask = (~@as(u64, 0)) >> random.intRangeAtMost(u6, 1, 10);
         filter.mask_bits = random.intRangeAtMost(u6, 1, 10);
 
         // add more random hashes
         for (0..5) |_| {
             const rand_value = try randomSignedGossipData(allocator, random, true);
-            var buf: [PACKET_DATA_SIZE]u8 = undefined;
-            const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
+            var buffer: [PACKET_DATA_SIZE]u8 = undefined;
+            const bytes = try bincode.writeToSlice(&buffer, rand_value, bincode.Params.standard);
             const value_hash = Hash.generateSha256(bytes);
-            filter.filter.add(&value_hash.data);
+            filter.bloom.add(&value_hash.data);
         }
     } else {
         // add some valid hashes
@@ -457,25 +457,25 @@ pub fn randomPullRequestWithContactInfo(
 
         for (0..5) |_| {
             const rand_value = try randomSignedGossipData(allocator, random, true);
-            var buf: [PACKET_DATA_SIZE]u8 = undefined;
-            const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
+            var buffer: [PACKET_DATA_SIZE]u8 = undefined;
+            const bytes = try bincode.writeToSlice(&buffer, rand_value, bincode.Params.standard);
             const value_hash = Hash.generateSha256(bytes);
             filter_set.add(&value_hash);
         }
 
-        var filters = try filter_set.consumeForGossipPullFilters(allocator, random, 1);
-        filter.filter = filters.items[0].filter;
-        filter.mask = filters.items[0].mask;
-        filter.mask_bits = filters.items[0].mask_bits;
+        var filters = try filter_set.getFiltersAndDeinit(allocator, random, 1);
+        defer allocator.free(filters);
 
-        for (filters.items[1..]) |*filter_i| {
-            filter_i.filter.deinit();
-        }
-        filters.deinit();
+        // `filter` takes ownership of the bloom filter here
+        filter.bloom = filters[0].bloom;
+        filter.mask = filters[0].mask;
+        filter.mask_bits = filters[0].mask_bits;
+
+        for (filters[1..]) |*f| f.bloom.deinit(allocator);
     }
-    defer if (!invalid_filter) filter.filter.deinit();
+    defer if (!invalid_filter) filter.bloom.deinit(allocator);
 
     // serialize and send as packet
-    const msg = GossipMessage{ .PullRequest = .{ filter, contact_info } };
+    const msg: GossipMessage = .{ .PullRequest = .{ filter, contact_info } };
     return try serializeToPacket(msg, to_addr);
 }

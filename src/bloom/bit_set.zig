@@ -1,3 +1,6 @@
+//! Fork of stdlib bit_set `ArrayBitSet` that allows changing the elemenet
+//! type of the underlying mask array.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;

@@ -32,7 +32,7 @@ pub fn filterSignedGossipDatas(
     const jitter = random.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
-    var bloom = filter.filter;
+    var bloom = filter.bloom;
 
     var match_indexs = try gossip_table.getBitmaskMatches(
         allocator,
@@ -75,8 +75,9 @@ const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 
 test "gossip.pull_response: test filtering values works" {
     if (true) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
 
-    const gossip_table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    const gossip_table = try GossipTable.init(allocator, allocator);
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
     defer {
         var lg = gossip_table_rw.write();
@@ -84,7 +85,7 @@ test "gossip.pull_response: test filtering values works" {
     }
 
     // insert a some value
-    const kp = try KeyPair.generateDeterministic([_]u8{1} ** 32);
+    const kp = try KeyPair.generateDeterministic(@splat(1));
 
     var prng = std.Random.DefaultPrng.init(18);
     const random = prng.random();
@@ -99,16 +100,16 @@ test "gossip.pull_response: test filtering values works" {
     const max_bytes = 10;
 
     // recver
-    const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
+    const failed_pull_hashes = std.ArrayList(Hash).init(allocator);
     var filters = try buildGossipPullFilters(
-        std.testing.allocator,
+        allocator,
         random,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
     );
-    defer deinitGossipPullFilters(&filters);
+    defer deinitGossipPullFilters(filters.toOwnedSlice() catch unreachable, allocator);
     var filter = filters.items[0];
 
     // corresponding value
@@ -118,9 +119,10 @@ test "gossip.pull_response: test filtering values works" {
     legacy_contact_info.id = id;
     legacy_contact_info.wallclock = random.int(u64);
 
-    var gossip_value = SignedGossipData.initSigned(&kp, .{
-        .LegacyContactInfo = legacy_contact_info,
-    });
+    var gossip_value = SignedGossipData.initSigned(
+        &kp,
+        .{ .LegacyContactInfo = legacy_contact_info },
+    );
 
     // insert more values which the filters should be missing
     lg = gossip_table_rw.write();
@@ -142,8 +144,5 @@ test "gossip.pull_response: test filtering values works" {
     defer values.deinit();
     lg.unlock();
 
-    std.testing.expect(values.items.len > 0) catch |err| {
-        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
-        return err;
-    };
+    try std.testing.expect(values.items.len > 0);
 }
