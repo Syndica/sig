@@ -323,6 +323,7 @@ pub fn executeTransaction(
         TransactionContextAccount,
         loaded_accounts.len,
     );
+    defer allocator.free(accounts);
     for (loaded_accounts, 0..) |account, index| {
         accounts[index] = .{
             .pubkey = account.pubkey,
@@ -461,20 +462,11 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         }},
     };
 
-    var blockhash_queue = BlockhashQueue{
-        .last_hash = null,
-        .max_age = 10,
-        .ages = try .init(
-            allocator,
-            &.{recent_blockhash},
-            &.{.{
-                .fee_calculator = .{ .lamports_per_signature = 5000 },
-                .hash_index = 0,
-                .timestamp = 0,
-            }},
-        ),
-        .last_hash_index = 0,
-    };
+    var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
+        allocator,
+        recent_blockhash,
+        5000,
+    );
     defer blockhash_queue.deinit(allocator);
 
     var account_cache = BatchAccountCache{};
@@ -521,4 +513,183 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         TransactionError{ .InstructionError = .{ 0, .InvalidInstructionData } },
         results[0].err,
     );
+}
+
+test "loadAndExecuteTransaction: simple transfer transaction" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const sender_key = Pubkey.initRandom(prng.random());
+    const receiver_key = Pubkey.initRandom(prng.random());
+    const recent_blockhash = Hash.initRandom(prng.random());
+
+    const transfer_instruction_data = try sig.bincode.writeAlloc(
+        allocator,
+        sig.runtime.program.system.Instruction{
+            .transfer = .{
+                .lamports = 10_000,
+            },
+        },
+        .{},
+    );
+    defer allocator.free(transfer_instruction_data);
+
+    var accounts = std.MultiArrayList(AccountMeta){};
+    defer accounts.deinit(allocator);
+    try accounts.append(allocator, .{
+        .pubkey = sender_key,
+        .is_signer = true,
+        .is_writable = true,
+    });
+    try accounts.append(allocator, .{
+        .pubkey = receiver_key,
+        .is_signer = false,
+        .is_writable = true,
+    });
+    try accounts.append(allocator, .{
+        .pubkey = sig.runtime.program.system.ID,
+        .is_signer = false,
+        .is_writable = false,
+    });
+
+    const transaction = RuntimeTransaction{
+        .signature_count = 1,
+        .fee_payer = sender_key,
+        .msg_hash = Hash.initRandom(prng.random()),
+        .recent_blockhash = recent_blockhash,
+        .instruction_infos = &.{.{
+            .program_meta = .{
+                .pubkey = sig.runtime.program.system.ID,
+                .index_in_transaction = 2,
+            },
+            .account_metas = try .fromSlice(&.{ // sender, receiver, system program
+                .{
+                    .pubkey = sender_key,
+                    .index_in_transaction = 0,
+                    .index_in_callee = 0,
+                    .index_in_caller = 0,
+                    .is_signer = true,
+                    .is_writable = true,
+                },
+                .{
+                    .pubkey = receiver_key,
+                    .index_in_transaction = 1,
+                    .index_in_callee = 1,
+                    .index_in_caller = 1,
+                    .is_signer = false,
+                    .is_writable = true,
+                },
+            }),
+            .instruction_data = transfer_instruction_data,
+        }},
+        .accounts = accounts,
+    };
+
+    var account_cache = BatchAccountCache{};
+    defer account_cache.deinit(allocator);
+    try account_cache.account_cache.put(
+        allocator,
+        sender_key,
+        .{
+            .lamports = 100_000,
+            .data = &.{},
+            .owner = sig.runtime.program.system.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    );
+    try account_cache.account_cache.put(
+        allocator,
+        receiver_key,
+        .{
+            .lamports = 100_000,
+            .data = &.{},
+            .owner = sig.runtime.program.system.ID,
+            .executable = false,
+            .rent_epoch = 0,
+        },
+    );
+    try account_cache.account_cache.put(
+        allocator,
+        sig.runtime.program.system.ID,
+        .{
+            .lamports = 1,
+            .data = &.{},
+            .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+            .executable = true,
+            .rent_epoch = 0,
+        },
+    );
+
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(allocator);
+
+    const feature_set = FeatureSet.EMPTY;
+    defer feature_set.deinit(allocator);
+
+    var status_cache = StatusCache.default();
+    defer status_cache.deinit(allocator);
+
+    const sysvar_cache = SysvarCache{};
+    defer sysvar_cache.deinit(allocator);
+
+    const rent_collector = sig.core.rent_collector.defaultCollector(10);
+
+    var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
+        allocator,
+        recent_blockhash,
+        5000,
+    );
+    defer blockhash_queue.deinit(allocator);
+
+    const epoch_stakes = try EpochStakes.initEmpty(allocator);
+    defer epoch_stakes.deinit(allocator);
+
+    const environment = TransactionExecutionEnvironment{
+        .ancestors = &ancestors,
+        .feature_set = &feature_set,
+        .status_cache = &status_cache,
+        .sysvar_cache = &sysvar_cache,
+        .rent_collector = &rent_collector,
+        .blockhash_queue = &blockhash_queue,
+        .epoch_stakes = &epoch_stakes,
+        .max_age = 0,
+        .last_blockhash = transaction.recent_blockhash,
+        .next_durable_nonce = Hash.ZEROES,
+        .next_lamports_per_signature = 0,
+        .last_lamports_per_signature = 0,
+        .lamports_per_signature = 5000, // Default value
+    };
+
+    const config = TransactionExecutionConfig{
+        .log = false,
+        .log_messages_byte_limit = null,
+    };
+
+    const result = try loadAndExecuteTransaction(
+        allocator,
+        &transaction,
+        &account_cache,
+        &environment,
+        &config,
+    );
+
+    const processed_transaction = result.ok;
+    defer processed_transaction.deinit(allocator);
+
+    const executed_transaction = processed_transaction.executed.executed_transaction;
+
+    // TODO: Change transaction context to use shared data
+    // const sender_account = account_cache.account_cache.get(sender_key).?;
+    // const receiver_account = account_cache.account_cache.get(receiver_key).?;
+
+    // try std.testing.expectEqual(89_500, sender_account.lamports);
+    // try std.testing.expectEqual(110_000, receiver_account.lamports);
+
+    try std.testing.expectEqual(null, executed_transaction.err);
+    try std.testing.expectEqual(null, executed_transaction.log_collector);
+    try std.testing.expectEqual(1, executed_transaction.instruction_trace.?.len);
+    try std.testing.expectEqual(null, executed_transaction.return_data);
+    try std.testing.expectEqual(199_850, executed_transaction.compute_meter);
+    try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
 }

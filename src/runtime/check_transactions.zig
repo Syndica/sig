@@ -14,7 +14,6 @@ const BatchAccountCache = sig.runtime.account_loader.BatchAccountCache;
 const CachedAccount = sig.runtime.account_loader.CachedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
 const FeatureSet = sig.runtime.FeatureSet;
-const LoadedTransactionAccount = BatchAccountCache.LoadedTransactionAccount;
 const NonceData = sig.runtime.nonce.Data;
 const NonceState = sig.runtime.nonce.State;
 const NonceVersions = sig.runtime.nonce.Versions;
@@ -471,20 +470,11 @@ test "checkAge: recent blockhash" {
         .instruction_infos = &.{},
     };
 
-    var blockhash_queue = BlockhashQueue{
-        .last_hash = null,
-        .max_age = 10,
-        .ages = try .init(
-            allocator,
-            &.{recent_blockhash},
-            &.{.{
-                .fee_calculator = .{ .lamports_per_signature = 5000 },
-                .hash_index = 0,
-                .timestamp = 0,
-            }},
-        ),
-        .last_hash_index = 0,
-    };
+    var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
+        allocator,
+        recent_blockhash,
+        5000,
+    );
     defer blockhash_queue.deinit(allocator);
 
     { // Check valid recent blockhash ok
