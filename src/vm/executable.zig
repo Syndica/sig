@@ -4,13 +4,10 @@ const sig = @import("../sig.zig");
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;
 const syscalls = sig.vm.syscalls;
-const features = sig.runtime.features;
 
 const Elf = sig.vm.elf.Elf;
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
-const ComputeBudget = sig.runtime.ComputeBudget;
-const FeatureSet = sig.runtime.FeatureSet;
 
 pub const Executable = struct {
     bytes: []const u8,
@@ -972,78 +969,5 @@ pub const Config = struct {
 
     pub fn stackSize(config: Config) u64 {
         return config.stack_frame_size * config.max_call_depth;
-    }
-
-    /// TODO: create config in a Instruction/TransactionContext to be accessed by:
-    /// - src/runtime/program/bpf-loader/execute.zig:deployProgram
-    /// - src/runtime/program/bpf/execute.zig:execute
-    /// [agave] https://github.com/anza-xyz/agave/blob/7be24c24cdd882f85276ff3594815783f72ff5e7/programs/bpf_loader/src/syscalls/mod.rs#L324
-    pub fn createEnvironmentV1(
-        compute_budget: *const ComputeBudget,
-        feature_set: *const FeatureSet,
-        reject_deployment_of_broken_elfs: bool,
-        debugging_features: bool,
-    ) Config {
-        const direct_mapping = feature_set.active.contains(
-            features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
-        );
-
-        const min_sbpf_version: sbpf.Version = if (!feature_set.active.contains(
-            features.DISABLE_SBPF_V0_EXECUTION,
-        ) or feature_set.active.contains(
-            features.REENABLE_SBPF_V0_EXECUTION,
-        )) .v0 else .v3;
-
-        const max_sbpf_version: sbpf.Version = if (feature_set.active.contains(
-            features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION,
-        )) .v3 else if (feature_set.active.contains(
-            features.ENABLE_SBPF_V2_DEPLOYMENT_AND_EXECUTION,
-        )) .v2 else if (feature_set.active.contains(
-            features.ENABLE_SBPF_V1_DEPLOYMENT_AND_EXECUTION,
-        )) .v1 else .v0;
-
-        std.debug.assert(max_sbpf_version.gte(min_sbpf_version));
-
-        return .{
-            .max_call_depth = compute_budget.max_call_depth,
-            .stack_frame_size = compute_budget.stack_frame_size,
-            .enable_address_translation = true,
-            .enable_stack_frame_gaps = !direct_mapping,
-            .instruction_meter_checkpoint_distance = 10_000,
-            .enable_instruction_meter = true,
-            .enable_instruction_tracing = debugging_features,
-            .enable_symbol_and_section_labels = debugging_features,
-            .reject_broken_elfs = reject_deployment_of_broken_elfs,
-            .noop_instruction_rate = 256,
-            .sanitize_user_provided_values = true,
-            .minimum_version = min_sbpf_version,
-            .maximum_version = max_sbpf_version,
-            .optimize_rodata = false,
-            .aligned_memory_mapping = !direct_mapping,
-        };
-    }
-
-    /// [agave] https://github.com/anza-xyz/agave/blob/7be24c24cdd882f85276ff3594815783f72ff5e7/programs/bpf_loader/src/syscalls/mod.rs#L558
-    pub fn createEnvironmentV2(
-        compute_budget: *const ComputeBudget,
-        debugging_features: bool,
-    ) Config {
-        return .{
-            .max_call_depth = compute_budget.max_call_depth,
-            .stack_frame_size = compute_budget.stack_frame_size,
-            .enable_address_translation = true,
-            .enable_stack_frame_gaps = false,
-            .instruction_meter_checkpoint_distance = 10_000,
-            .enable_instruction_meter = true,
-            .enable_instruction_tracing = debugging_features,
-            .enable_symbol_and_section_labels = debugging_features,
-            .reject_broken_elfs = true,
-            .noop_instruction_rate = 256,
-            .sanitize_user_provided_values = true,
-            .minimum_version = .reserved,
-            .maximum_version = .reserved,
-            .optimize_rodata = true,
-            .aligned_memory_mapping = true,
-        };
     }
 };
