@@ -176,7 +176,7 @@ pub const RentCollector = struct {
         address: *const Pubkey,
     ) error{InsufficientFundsForRent}!void {
         if (sig.runtime.ids.Incinerator.equals(address)) return;
-        if (transitionAllowed(pre, post)) return error.InsufficientFundsForRent;
+        if (!transitionAllowed(pre, post)) return error.InsufficientFundsForRent;
     }
 };
 

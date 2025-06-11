@@ -27,6 +27,7 @@ const SysvarCache = sig.runtime.SysvarCache;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
+const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
@@ -50,14 +51,12 @@ const InstructionTrace = TransactionContext.InstructionTrace;
 // execution fails.
 
 pub const RuntimeTransaction = struct {
-    pub const Accounts = std.MultiArrayList(sig.core.instruction.InstructionAccount);
-
     signature_count: u64,
     fee_payer: Pubkey,
     msg_hash: Hash,
     recent_blockhash: Hash,
     instruction_infos: []const InstructionInfo,
-    accounts: Accounts = .{},
+    accounts: std.MultiArrayList(AccountMeta) = .{},
 };
 
 pub const TransactionExecutionEnvironment = struct {

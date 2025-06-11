@@ -6,6 +6,7 @@ const Ancestors = sig.core.status_cache.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
+const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const account_loader = sig.runtime.account_loader;
 const AccountSharedData = sig.runtime.AccountSharedData;
@@ -287,8 +288,7 @@ fn validateFeePayer(
         pre_rent_state,
         post_rent_state,
         &payer.pubkey,
-    ) catch
-        return .{ .InsufficientFundsForRent = .{ .account_index = 0 } };
+    ) catch return .{ .InsufficientFundsForRent = .{ .account_index = 0 } };
 
     return null;
 }
@@ -562,7 +562,7 @@ test "checkAge: nonce account" {
     );
     defer allocator.free(instruction_data);
 
-    var accounts = sig.runtime.transaction_execution.RuntimeTransaction.Accounts{};
+    var accounts = std.MultiArrayList(AccountMeta){};
     defer accounts.deinit(allocator);
     try accounts.append(
         allocator,
@@ -654,4 +654,61 @@ test "checkAge: nonce account" {
         },
         .err => return error.ExpectedOk,
     }
+}
+
+test "checkFeePayer: happy path" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const recent_blockhash = Hash.initRandom(prng.random());
+
+    var transaction = RuntimeTransaction{
+        .signature_count = 1,
+        .fee_payer = Pubkey.initRandom(prng.random()),
+        .msg_hash = Hash.ZEROES,
+        .recent_blockhash = recent_blockhash,
+        .instruction_infos = &.{},
+    };
+    defer transaction.accounts.deinit(allocator);
+
+    try transaction.accounts.append(
+        allocator,
+        .{ .pubkey = transaction.fee_payer, .is_signer = true, .is_writable = true },
+    );
+
+    var account_cache = BatchAccountCache{};
+    defer account_cache.deinit(allocator);
+
+    try account_cache.account_cache.put(allocator, transaction.fee_payer, .{
+        .lamports = 1_000_000,
+        .owner = sig.runtime.program.system.ID,
+        .data = &.{},
+        .executable = false,
+        .rent_epoch = 1,
+    });
+
+    const result = try checkFeePayer(
+        allocator,
+        &transaction,
+        &account_cache,
+        &ComputeBudgetLimits.DEFAULT,
+        null,
+        &sig.core.rent_collector.defaultCollector(10),
+        &sig.runtime.FeatureSet.EMPTY,
+        5000,
+    );
+
+    const fee_details = result.ok[0];
+    const rollback_fee_payer = result.ok[1].fee_payer_only.account;
+    const loaded_fee_payer = result.ok[2].account;
+
+    try std.testing.expectEqual(5000, fee_details.transaction_fee);
+    try std.testing.expectEqual(0, fee_details.prioritization_fee);
+
+    try std.testing.expectEqual(995_000, rollback_fee_payer.lamports);
+    try std.testing.expectEqual(995_000, loaded_fee_payer.lamports);
+
+    try std.testing.expectEqual(1, rollback_fee_payer.rent_epoch);
+    try std.testing.expectEqual(std.math.maxInt(u64), loaded_fee_payer.rent_epoch);
 }

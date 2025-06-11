@@ -7,6 +7,7 @@ const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
 const CollectedInfo = sig.core.rent_collector.CollectedInfo;
+const AccountMeta = sig.core.instruction.InstructionAccount;
 
 const AccountSharedData = runtime.AccountSharedData;
 const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
@@ -615,7 +616,7 @@ fn newTestingEnv() TestingEnv {
 fn emptyTxWithKeys(allocator: std.mem.Allocator, keys: []const Pubkey) !RuntimeTransaction {
     if (!@import("builtin").is_test) @compileError("transactionWithKeys for testing only");
 
-    var accounts = RuntimeTransaction.Accounts{};
+    var accounts = std.MultiArrayList(AccountMeta){};
     errdefer accounts.deinit(allocator);
     for (keys) |key| {
         try accounts.append(allocator, .{
@@ -680,7 +681,7 @@ test "loadTransactionAccounts sysvar instruction" {
     );
     defer batch_account_cache.deinit(allocator);
 
-    var accounts = RuntimeTransaction.Accounts{};
+    var accounts = std.MultiArrayList(AccountMeta){};
     defer accounts.deinit(allocator);
     try accounts.append(allocator, sig.core.instruction.InstructionAccount{
         .pubkey = runtime.ids.SYSVAR_INSTRUCTIONS_ID,
@@ -861,7 +862,7 @@ test "constructInstructionsAccount" {
     const fee_payer_address = Pubkey.initRandom(prng.random());
     const instruction_address = Pubkey.initRandom(prng.random());
 
-    var accounts = RuntimeTransaction.Accounts{};
+    var accounts = std.MultiArrayList(AccountMeta){};
     defer accounts.deinit(allocator);
     try accounts.append(allocator, sig.core.instruction.InstructionAccount{
         .pubkey = fee_payer_address,
