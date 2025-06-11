@@ -291,7 +291,7 @@ pub fn loadAndExecuteTransaction(
     const executed_transaction = try executeTransaction(
         allocator,
         transaction,
-        &loaded_accounts,
+        loaded_accounts.accounts.constSlice(),
         &compute_budget_limits,
         environment,
         config,
@@ -311,12 +311,13 @@ pub fn loadAndExecuteTransaction(
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
     transaction: *const RuntimeTransaction,
-    loaded_accounts: *const LoadedTransactionAccounts,
+    loaded_accounts: []const CachedAccount,
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}!ExecutedTransaction {
     const compute_budget = compute_budget_limits.intoComputeBudget();
+
     const log_collector = if (config.log)
         LogCollector.init(config.log_messages_byte_limit)
     else
@@ -324,9 +325,9 @@ pub fn executeTransaction(
 
     const accounts = try allocator.alloc(
         TransactionContextAccount,
-        loaded_accounts.accounts.len,
+        loaded_accounts.len,
     );
-    for (loaded_accounts.accounts.slice(), 0..) |account, index| {
+    for (loaded_accounts, 0..) |account, index| {
         accounts[index] = .{
             .pubkey = account.pubkey,
             .account = account.account.*, // Copy for now until tc is modified to used shared data
