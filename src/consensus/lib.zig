@@ -5,9 +5,9 @@ pub const tower = @import("tower.zig");
 pub const tower_state = @import("tower_state.zig");
 pub const tower_storage = @import("tower_storage.zig");
 pub const unimplemented = @import("unimplemented.zig");
-pub const vote_transaction = @import("vote_transaction.zig");
-pub const vote_tracker = @import("vote_tracker.zig");
 pub const vote_listener = @import("vote_listener.zig");
+pub const vote_tracker = @import("vote_tracker.zig");
+pub const vote_transaction = @import("vote_transaction.zig");
 comptime {
     _ = @import("vote_parser.zig");
 }
