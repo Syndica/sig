@@ -5,7 +5,6 @@ const sig = @import("../sig.zig");
 const BuiltinProgram = sig.vm.BuiltinProgram;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
-const RwMux = sig.sync.RwMux;
 const Slot = sig.core.Slot;
 
 const HashMap = std.AutoArrayHashMapUnmanaged;
@@ -167,7 +166,12 @@ pub const ProgramCache = struct {
         entry: Entry,
     ) error{OutOfMemory}!void {
         const versions = (try (self.index.entries.getOrPutValue(allocator, key, .{}))).value_ptr;
-        const partition_point = std.sort.partitionPoint(Entry, versions.items, entry, Entry.partition);
+        const partition_point = std.sort.partitionPoint(
+            Entry,
+            versions.items,
+            entry,
+            Entry.partition,
+        );
         if (Entry.compare(entry, versions.items[partition_point]) == .eq) {
             // replace entry
             versions.items[partition_point] = entry;
@@ -189,7 +193,12 @@ pub const ProgramCache = struct {
 
         const versions = (try (self.index.entries.getOrPutValue(allocator, key, .{}))).value_ptr;
 
-        const partition_point = std.sort.partitionPoint(Entry, versions.items, entry, Entry.partition);
+        const partition_point = std.sort.partitionPoint(
+            Entry,
+            versions.items,
+            entry,
+            Entry.partition,
+        );
 
         if (Entry.compare(entry, versions.items[partition_point]) == .eq) {
             // replace entry
@@ -209,7 +218,10 @@ pub const ProgramCache = struct {
         }
     }
 
-    pub fn getEnvironmentForEpoch(self: *const ProgramCache, epoch: Epoch) ProgramRuntimeEnvironments {
+    pub fn getEnvironmentForEpoch(
+        self: *const ProgramCache,
+        epoch: Epoch,
+    ) ProgramRuntimeEnvironments {
         if (epoch == self.last_rerooting.@"1") return self.current_environment;
         return self.next_environmment orelse self.current_environment;
     }
