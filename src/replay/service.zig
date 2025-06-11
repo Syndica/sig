@@ -544,37 +544,23 @@ fn handleVotableBank(
 
     // TODO update_commitment_cache
 
-    try push_vote(
-        allocator,
+    try pushVote(
         replay_tower,
     );
 }
 
-fn push_vote(
-    allocator: std.mem.Allocator,
+fn pushVote(
     replay_tower: *ReplayTower,
 ) !void {
-    // TODO generate_vote_tx
-    const vote_tx_result: GenerateVoteTxResult = .{
-        .tx = Transaction.EMPTY,
-    };
+
+    // TODO Transaction generation to be implemented.
+    // Currently hardcoding to non voting transaction.
+    const vote_tx_result: GenerateVoteTxResult = .non_voting;
 
     switch (vote_tx_result) {
         .tx => |vote_tx| {
-            replay_tower.refreshLastVoteTxBlockhash(vote_tx.msg.recent_blockhash);
-            // TODO save the tower
-            const saved_tower = replay_tower;
-            const lockouts = replay_tower.tower.vote_state.votes.constSlice();
-            var tower_slots: ArrayListUnmanaged(Slot) = try ArrayListUnmanaged(Slot).initCapacity(
-                allocator,
-                lockouts.len,
-            );
-            for (lockouts) |lockout| {
-                tower_slots.appendAssumeCapacity(lockout.slot);
-            }
-            // Use saved_tower and tower_slots in vote_sender
-            _ = &saved_tower;
-            _ = &tower_slots;
+            _ = &vote_tx;
+            // TODO to be implemented
         },
         .non_voting => {
             replay_tower.markLastVoteTxBlockhashNonVoting();
