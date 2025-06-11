@@ -1624,14 +1624,14 @@ test "vote_parser.parseVoteTransaction" {
     var prng = std.Random.DefaultPrng.init(42);
     const random = prng.random();
     try vote_parser.testParseVoteTransaction(null, random);
-    try vote_parser.testParseVoteTransaction(Hash.generateSha256(&[_]u8{42}), random);
+    try vote_parser.testParseVoteTransaction(Hash.init(&.{42}), random);
 }
 
 test "vote_parser.parseSanitizedVoteTransaction" {
     var prng = std.Random.DefaultPrng.init(43);
     const random = prng.random();
     try vote_parser.testParseSanitizedVoteTransaction(null, random);
-    try vote_parser.testParseSanitizedVoteTransaction(Hash.generateSha256(&[_]u8{43}), random);
+    try vote_parser.testParseSanitizedVoteTransaction(Hash.init(&.{43}), random);
 }
 
 test verifyVoteTransaction {
