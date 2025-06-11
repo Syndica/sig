@@ -1,60 +1,76 @@
 //! Implements a basic ProgramCache. Currently designed to meet consensus, and not much more.
-
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Slot = sig.core.Slot;
+const BuiltinProgram = sig.vm.BuiltinProgram;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
+const RwMux = sig.sync.RwMux;
+const Slot = sig.core.Slot;
 
 const HashMap = std.AutoArrayHashMapUnmanaged;
 const ArrayList = std.ArrayListUnmanaged;
 
-const RwMux = sig.sync.RwMux;
+// I don't really understand this, need some context on the VM
+const ProgramRuntimeEnvironment = sig.vm.BuiltinProgram;
 
-const ProgramRuntimeEnv = struct {};
+const ProgramRuntimeEnvironments = struct {
+    v1: ProgramRuntimeEnvironment = .{},
+    v2: ProgramRuntimeEnvironment = .{},
+};
 
-/// Verified program
-const Executable = sig.vm.Executable;
-const BuiltinProgram = struct {};
+/// A verified program
+const Executable = struct {
+    // NOTE: caching this seems a bit useless? We save on ELF parsing; Agave caches JIT code.
+    executable: sig.vm.Executable,
 
-// TODO: data types from consensus?
-const ForkId = struct {};
-// TODO: data types from consensus?
+    function_registry: sig.vm.Registry(u64),
+    loader: BuiltinProgram,
+};
+
 const ForkGraph = struct {
+    // TODO: need to plug in some data from replay for this.
+    // sig.replay.trackers.SlotTracker is the closest type I know of
+    // We will need the fork graph for the agave methods:
+    //     - finish_cooperative_loading_task (called by replenish_program_cache to make a ProgramCacheForTxBatch - not needed now)
+    //     - prune (removes unnecessary entries before rerooting - not needed now)
+    //     - extract (seems only needed for ProgramCacheForTxBatch stuff - not needed now)
+
+    // NOTE: forks on Solana are about block inclusion - i.e. which slots are occupied. This means
+    // that we can distinguish forks using slot numbers.
+
     /// is the deployed program visible & available to our current slot+fork?
     fn isProgramAvailable(
         self: *const ForkGraph,
         program_deployed_slot: Slot,
-        program_deployed_fork: ForkId,
         current_slot: Slot,
-        current_fork: ForkId,
     ) bool {
         _ = self;
         _ = program_deployed_slot;
-        _ = program_deployed_fork;
         _ = current_slot;
-        _ = current_fork;
         @panic("TODO");
     }
 
     /// for pruning entries
-    fn isForkOrphaned(self: *const ForkGraph, fork: ForkId) bool {
+    fn isForkOrphaned(self: *const ForkGraph, fork: Slot) bool {
         _ = self;
         _ = fork;
         @panic("TODO");
     }
 };
 
+/// [agave] https://github.com/anza-xyz/agave/blob/452f4600842159e099a84bf18cca19408da103c9/program-runtime/src/loaded_programs.rs#L32
+const DELAY_VISIBILITY_SLOT_OFFSET = 1;
+
 /// [agave] https://github.com/anza-xyz/agave/blob/452f4600842159e099a84bf18cca19408da103c9/program-runtime/src/loaded_programs.rs#L622
-/// effectively a global, "fork graph aware"
+/// effectively a global, and "fork graph aware"
 pub const ProgramCache = struct {
     index: Index = .{},
 
     last_rerooting: struct { Slot, Epoch },
 
-    current_environment: ProgramRuntimeEnv,
-    next_environmment: ?ProgramRuntimeEnv,
+    current_environment: ProgramRuntimeEnvironments,
+    next_environmment: ?ProgramRuntimeEnvironments,
 
     fork_graph: *const ForkGraph,
 
@@ -84,7 +100,7 @@ pub const ProgramCache = struct {
         /// [agave] https://github.com/anza-xyz/agave/blob/452f4600842159e099a84bf18cca19408da103c9/program-runtime/src/loaded_programs.rs#L127
         const Type = union(enum) {
             /// Tombstone for programs which currently do not pass the verifier but could if the feature set changed.
-            failed_verification_with: ProgramRuntimeEnv,
+            failed_verification_with: ProgramRuntimeEnvironments,
             /// Tombstone for programs that were either explicitly closed or never deployed.
             ///
             /// It's also used for accounts belonging to program loaders, that don't actually contain program code (e.g. buffer accounts for LoaderV3 programs).
@@ -94,12 +110,28 @@ pub const ProgramCache = struct {
             /// Successfully verified but not currently compiled.
             ///
             /// It continues to track usage statistics even when the compiled executable of the program is evicted from memory.
-            unloaded: ProgramRuntimeEnv,
+            unloaded: ProgramRuntimeEnvironments,
             /// Verified and compiled program
             loaded: Executable,
             /// A built-in program which is not stored on-chain but backed into and distributed with the validator
             builtin: BuiltinProgram,
         };
+
+        fn newTombstone(slot: Slot, owner: Owner, reason: Type) Entry {
+            return Entry{
+                .program = reason,
+                .owner = owner,
+                .program_account_size = 0,
+                .effective_slot = slot,
+                .deployment_slot = slot,
+            };
+        }
+
+        fn isImplicitDelayVisibilityTombstone(self: Entry, slot: Slot) bool {
+            if (self.program == .builtin) return false;
+            if (slot < self.deployment_slot or slot >= self.effective_slot) return false;
+            return self.effective_slot -| self.deployment_slot == DELAY_VISIBILITY_SLOT_OFFSET;
+        }
 
         fn compare(context: Entry, item: Entry) std.math.Order {
             return switch (std.math.order(context.effective_slot, item.effective_slot)) {
@@ -107,6 +139,7 @@ pub const ProgramCache = struct {
                 .eq => std.math.order(context.deployment_slot, item.deployment_slot),
             };
         }
+
         fn partition(context: Entry, item: Entry) bool {
             return compare(context, item) == .gt;
         }
@@ -176,9 +209,32 @@ pub const ProgramCache = struct {
         }
     }
 
-    pub fn getEnvironmentForEpoch(self: *const ProgramCache, epoch: Epoch) ProgramRuntimeEnv {
+    pub fn getEnvironmentForEpoch(self: *const ProgramCache, epoch: Epoch) ProgramRuntimeEnvironments {
         if (epoch == self.last_rerooting.@"1") return self.current_environment;
         return self.next_environmment orelse self.current_environment;
+    }
+
+    /// [agave] https://github.com/anza-xyz/agave/blob/452f4600842159e099a84bf18cca19408da103c9/program-runtime/src/loaded_programs.rs#L760
+    pub fn find(
+        self: *const ProgramCache,
+        allocator: std.mem.Allocator,
+        key: Pubkey,
+    ) error{OutOfMemory}!?[]Entry {
+        // NOTE: the agave version of this function is implemented on `ProgramCacheForTxBatch`.
+        // As far as I can tell right now, this (and its modified_entries) field is just an
+        // optimisation and isn't needed for consensus.
+        const entries = self.index.entries.get(key) orelse return null;
+
+        const copied_entries = try allocator.alloc(Entry, entries.items.len);
+        errdefer allocator.free(copied_entries);
+
+        for (entries, copied_entries) |entry, *copy| copy.* =
+            if (entry.isImplicitDelayVisibilityTombstone())
+                Entry.newTombstone(entry.deployment_slot, entry.owner, .delay_visibility)
+            else
+                entry;
+
+        return copied_entries;
     }
 };
 
