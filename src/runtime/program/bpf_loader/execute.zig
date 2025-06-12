@@ -459,7 +459,6 @@ pub fn executeV3DeployWithMaxDataLen(
             ic.tc,
             new_program_id,
             ic.ixn_info.program_meta.pubkey,
-            V3State.PROGRAM_SIZE +| program_data_len,
             buffer_data[V3State.BUFFER_METADATA_SIZE..],
             clock.slot,
         );
@@ -689,7 +688,6 @@ pub fn executeV3Upgrade(
             ic.tc,
             new_program_id,
             ic.ixn_info.program_meta.pubkey,
-            V3State.PROGRAM_SIZE +| progdata.len,
             buffer.constAccountData()[buf.data_offset..],
             clock.slot,
         );
@@ -1266,7 +1264,6 @@ fn commonExtendProgram(
             ic.tc,
             program_key,
             ic.ixn_info.program_meta.pubkey,
-            V3State.PROGRAM_SIZE +| new_len,
             data[V3State.PROGRAM_DATA_METADATA_SIZE..],
             clock_slot,
         );
@@ -1512,12 +1509,9 @@ pub fn deployProgram(
     tc: *TransactionContext,
     program_id: Pubkey,
     owner_id: Pubkey,
-    account_size: u64,
     data: []const u8,
     slot: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
-    _ = account_size;
-
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var syscalls = vm.syscalls.register(
         allocator,
@@ -2873,6 +2867,88 @@ test "executeV3ExtendProgram" {
                 .{},
             );
         }
+    }
+
+    // Test extend_program disabled when ENABLE_EXTEND_PROGRAM_CHECKED is enabled
+    {
+        var tc = try sig.runtime.testing.createTransactionContext(
+            allocator,
+            prng.random(),
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+                .sysvar_cache = .{
+                    .rent = sysvar.Rent.DEFAULT,
+                    .clock = clock,
+                },
+                .feature_set = &.{
+                    .{
+                        .pubkey = features.ENABLE_EXTEND_PROGRAM_CHECKED,
+                        .slot = 0,
+                    },
+                },
+            },
+        );
+        defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+
+        const instruction_info = try sig.runtime.testing.createInstructionInfo(
+            &tc,
+            bpf_loader_program.v3.ID,
+            bpf_loader_program.v3.Instruction{
+                .extend_program = .{ .additional_bytes = 0 },
+            },
+            &.{},
+        );
+        defer instruction_info.deinit(allocator);
+
+        try std.testing.expectError(
+            InstructionError.InvalidInstructionData,
+            sig.runtime.executor.executeInstruction(allocator, &tc, instruction_info),
+        );
+        try std.testing.expectEqual(tc.compute_meter, 0);
+    }
+
+    // Test extend_program_checked disabled when ENABLE_EXTEND_PROGRAM_CHECKED is not present.
+    {
+        var tc = try sig.runtime.testing.createTransactionContext(
+            allocator,
+            prng.random(),
+            .{
+                .accounts = &.{
+                    .{
+                        .pubkey = bpf_loader_program.v3.ID,
+                        .owner = ids.NATIVE_LOADER_ID,
+                    },
+                },
+                .compute_meter = bpf_loader_program.v3.COMPUTE_UNITS,
+                .sysvar_cache = .{
+                    .rent = sysvar.Rent.DEFAULT,
+                    .clock = clock,
+                },
+            },
+        );
+        defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+
+        const instruction_info = try sig.runtime.testing.createInstructionInfo(
+            &tc,
+            bpf_loader_program.v3.ID,
+            bpf_loader_program.v3.Instruction{
+                .extend_program_checked = .{ .additional_bytes = 0 },
+            },
+            &.{},
+        );
+        defer instruction_info.deinit(allocator);
+
+        try std.testing.expectError(
+            InstructionError.InvalidInstructionData,
+            sig.runtime.executor.executeInstruction(allocator, &tc, instruction_info),
+        );
+        try std.testing.expectEqual(tc.compute_meter, 0);
     }
 }
 
