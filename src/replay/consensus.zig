@@ -453,8 +453,7 @@ fn checkAndHandleNewRoot(
     // TODO need to get parents
     _ = &root_tracker;
 
-    // TODO revisit this
-    const rooted_slots = try slot_tracker.activeSlots(allocator);
+    const rooted_slots = try slot_tracker.parents(allocator, new_root);
 
     if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
     // TODO implement leader_schedule_cache.set_root.
