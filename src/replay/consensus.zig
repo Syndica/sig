@@ -16,6 +16,7 @@ const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
+const EpochTracker = sig.replay.trackers.EpochTracker;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
@@ -38,6 +39,7 @@ pub const ConsensusDependencies = struct {
     replay_tower: *ReplayTower,
     progress_map: *ProgressMap,
     slot_tracker: *SlotTracker,
+    epoch_tracker: *EpochTracker,
     fork_choice: *ForkChoice,
     blockstore_reader: *BlockstoreReader,
     vote_account: Pubkey,
@@ -53,10 +55,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const heaviest_slot_on_same_voted_fork =
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
 
-    // TODO replace hardcoded value.
-    const forks_root: Slot = 0;
-    var in_vote_only_mode = AtomicBool.init(false);
-    const heaviest_epoch: Epoch = 0;
+    const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
     const ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
     const descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
 
@@ -70,13 +69,6 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     const bits = try sig.bloom.bit_set.DynamicArrayBitSet(u64).initEmpty(deps.allocator, 10);
     defer bits.deinit(deps.allocator);
     const slot_history = SlotHistory{ .bits = bits, .next_slot = 0 };
-
-    // Looks like this is mostly used for logging? So maybe it can be skipped?
-    checkForVoteOnlyMode(
-        heaviest_slot,
-        forks_root,
-        &in_vote_only_mode,
-    );
 
     const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
         deps.allocator,
@@ -389,17 +381,6 @@ pub const GenerateVoteTxResult = union(enum) {
     // TODO add Transaction
     tx: Transaction,
 };
-
-// Looks like this is mostly used for logging? So maybe it can be skipped?
-fn checkForVoteOnlyMode(
-    heaviest_bank_slot: Slot,
-    forks_root: Slot,
-    in_vote_only_mode: *AtomicBool,
-) void {
-    _ = &heaviest_bank_slot;
-    _ = &forks_root;
-    _ = &in_vote_only_mode;
-}
 
 fn handleVotableBank(
     allocator: std.mem.Allocator,
