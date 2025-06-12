@@ -40,7 +40,7 @@ pub fn confirmSlot(
     verify_ticks_params: VerifyTicksParams,
 ) !*ConfirmSlotFuture {
     const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries.len);
-    errdefer future.destroy();
+    errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
         future.status = .{ .err = .{ .invalid_block = block_error } };
@@ -108,7 +108,6 @@ pub const ConfirmSlotStatus = union(enum) {
 /// agave: confirm_slot and confirm_slot_entries
 /// fd: runtime_process_txns_in_microblock_stream
 pub const ConfirmSlotFuture = struct {
-    allocator: Allocator,
     scheduler: TransactionScheduler,
     poh_verifier: HomogeneousThreadPool(PohTask),
 
@@ -134,7 +133,6 @@ pub const ConfirmSlotFuture = struct {
         errdefer allocator.free(future);
 
         future.* = ConfirmSlotFuture{
-            .allocator = allocator,
             .poh_verifier = poh_verifier,
             .scheduler = scheduler,
             .status = .pending,
@@ -143,10 +141,10 @@ pub const ConfirmSlotFuture = struct {
         return future;
     }
 
-    pub fn destroy(self: *ConfirmSlotFuture) void {
+    pub fn destroy(self: *ConfirmSlotFuture, allocator: Allocator) void {
         self.scheduler.deinit();
-        self.poh_verifier.deinit(self.allocator);
-        self.allocator.destroy(self);
+        self.poh_verifier.deinit(allocator);
+        allocator.destroy(self);
     }
 
     pub fn poll(self: *ConfirmSlotFuture) !ConfirmSlotStatus {
@@ -317,7 +315,7 @@ test "confirmSlot happy path: trivial case" {
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer future.destroy();
+    defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.debug.print("failed with: {any}\n", .{result});
@@ -350,7 +348,7 @@ test "confirmSlot happy path: partial slot" {
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer future.destroy();
+    defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.debug.print("failed with: {any}\n", .{result});
@@ -383,7 +381,7 @@ test "confirmSlot happy path: full slot" {
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer future.destroy();
+    defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.debug.print("failed with: {any}\n", .{result});
@@ -416,7 +414,7 @@ test "confirmSlot fail: full slot not marked full -> .InvalidLastTick" {
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer future.destroy();
+    defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.debug.print("failed with: {any}\n", .{result});
@@ -452,7 +450,7 @@ test "confirmSlot fail: no trailing tick at max height -> .TrailingEntry" {
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer future.destroy();
+    defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.debug.print("failed with: {any}\n", .{result});
@@ -493,7 +491,7 @@ test "confirmSlot fail: invalid poh chain" {
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer future.destroy();
+    defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.debug.print("failed with: {any}\n", .{result});
@@ -529,7 +527,7 @@ test "confirmSlot fail: sigverify" {
             .tick_hash_count = &tick_hash_count,
         },
     );
-    defer future.destroy();
+    defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
     errdefer std.debug.print("failed with: {any}\n", .{result});

@@ -76,6 +76,10 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     }
 
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }){};
+    defer {
+        for (slot_statuses.items) |status| status[1].confirm.destroy(state.allocator);
+        slot_statuses.deinit(state.allocator);
+    }
     for (active_slots) |slot| {
         const result = try replaySlot(state, slot);
         try slot_statuses.append(state.allocator, .{ slot, result });
