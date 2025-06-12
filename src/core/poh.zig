@@ -18,10 +18,8 @@ pub const Poh = struct {
     /// Counter for the number of ticks that happened so far
     tick_count: u64,
 
-    const Self = @This();
-
-    pub fn init(start_hash: Hash, hashes_per_tick: u64, starting_tick_count: u64) Self {
-        return Self{
+    pub fn init(start_hash: Hash, hashes_per_tick: u64, starting_tick_count: u64) Poh {
+        return .{
             .latest_hash = start_hash,
             .num_hashes = 0,
             .hashes_per_tick = hashes_per_tick,
@@ -35,7 +33,7 @@ pub const Poh = struct {
     /// stops hashing when it hashes up to as many times as either:
     /// - state `self.remaining_hashes - 1`
     /// - parameter `max_num_hashes`
-    pub fn hash(self: *Self, max_num_hashes: u64) bool {
+    pub fn hash(self: *Poh, max_num_hashes: u64) bool {
         const num_hashes = @min(self.remaining_hashes -| 1, max_num_hashes);
         for (0..num_hashes) |_| {
             self.latest_hash = self.latest_hash.extendAndHash(.{});
@@ -51,7 +49,7 @@ pub const Poh = struct {
     /// recording the mixin.
     ///
     /// Calling this function when hashes_per_tick < 2 has undefined behavior.
-    pub fn recordAndMaybeTick(self: *Self, mixin: Hash) struct {
+    pub fn recordAndMaybeTick(self: *Poh, mixin: Hash) struct {
         maybe_tick: ?PohEntry,
         record: PohEntry,
     } {
@@ -68,7 +66,7 @@ pub const Poh = struct {
     ///
     /// If this returns null, that means you need to tick first and then try
     /// processing this record again.
-    pub fn tryRecord(self: *Self, mixin: Hash) ?PohEntry {
+    pub fn tryRecord(self: *Poh, mixin: Hash) ?PohEntry {
         if (self.remaining_hashes == 1) {
             return null; // needs a tick first
         }
@@ -86,7 +84,7 @@ pub const Poh = struct {
 
     /// Calculate the hash for a tick entry, without a mixin hash, and increment
     /// the tick counter
-    pub fn tick(self: *Self) ?PohEntry {
+    pub fn tick(self: *Poh) ?PohEntry {
         self.latest_hash = self.latest_hash.extendAndHash(.{});
         self.num_hashes += 1;
         self.remaining_hashes -= 1;
