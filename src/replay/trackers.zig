@@ -38,6 +38,23 @@ pub const SlotTracker = struct {
         }
         return try list.toOwnedSlice(allocator);
     }
+
+    pub fn parents(
+        self: *const SlotTracker,
+        allocator: Allocator,
+        slot: Slot,
+    ) Allocator.Error![]const Slot {
+        var found_parents = std.ArrayListUnmanaged(Slot){};
+        defer found_parents.deinit(allocator);
+
+        var maybe_current = self.slots.get(slot);
+        while (maybe_current) |current| {
+            try found_parents.append(allocator, current.constants.parent_slot);
+            maybe_current = self.slots.get(current.constants.parent_slot);
+        }
+
+        return found_parents.toOwnedSlice(allocator);
+    }
 };
 
 pub const EpochTracker = struct {
