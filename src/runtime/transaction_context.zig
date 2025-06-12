@@ -40,6 +40,7 @@ pub const TransactionContext = struct {
     sysvar_cache: *const SysvarCache,
 
     /// Transaction accounts
+    /// TransactionContextAccount contains a non-owning reference to an AccountSharedData
     accounts: []TransactionContextAccount,
 
     /// Used by CPI to access serialized account metadata.
