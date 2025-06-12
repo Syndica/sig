@@ -7,9 +7,10 @@ const memory = sig.vm.memory;
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
 const Executable = sig.vm.Executable;
-const BuiltinProgram = sig.vm.BuiltinProgram;
 const TransactionContext = sig.runtime.TransactionContext;
 const ExecutionError = sig.vm.ExecutionError;
+const Syscall = sig.vm.Syscall;
+const Registry = sig.vm.Registry;
 
 pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
 
@@ -19,7 +20,7 @@ pub const Vm = struct {
 
     registers: RegisterMap,
     memory_map: MemoryMap,
-    loader: *const BuiltinProgram,
+    loader: *const Registry(Syscall),
 
     vm_addr: u64,
     call_frames: std.ArrayListUnmanaged(CallFrame),
@@ -38,7 +39,7 @@ pub const Vm = struct {
         allocator: std.mem.Allocator,
         executable: *const Executable,
         memory_map: MemoryMap,
-        loader: *const BuiltinProgram,
+        loader: *const Registry(Syscall),
         stack_len: u64,
         ctx: *TransactionContext,
     ) error{OutOfMemory}!Vm {
@@ -586,7 +587,7 @@ pub const Vm = struct {
             => {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
-                    if (self.loader.functions.lookupKey(inst.imm)) |entry| {
+                    if (self.loader.lookupKey(inst.imm)) |entry| {
                         registers.set(.r0, 0);
                         try entry.value(
                             self.transaction_context,
@@ -625,7 +626,7 @@ pub const Vm = struct {
                     .{ true, true };
 
                 if (external) {
-                    if (self.loader.functions.lookupKey(inst.imm)) |entry| {
+                    if (self.loader.lookupKey(inst.imm)) |entry| {
                         resolved = true;
                         registers.set(.r0, 0);
                         try entry.value(
