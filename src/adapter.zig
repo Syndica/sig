@@ -71,7 +71,7 @@ pub const EpochContextManager = struct {
     }
 
     pub fn slotLeaders(self: *Self) sig.core.leader_schedule.SlotLeaders {
-        return sig.core.leader_schedule.SlotLeaders.init(self, getLeader);
+        return .{ .ecm = self };
     }
 };
 

@@ -1574,9 +1574,8 @@ test "recovery" {
     const data_shreds = shreds[0..34];
     const code_shreds = shreds[34..68];
 
-    var leader_schedule = OneSlotLeaders{
-        .leader = try Pubkey.parseBase58String("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
-    };
+    const leader_pubkey =
+        try Pubkey.parseBase58String("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn");
 
     const is_repairs = try allocator.alloc(bool, code_shreds.len);
     defer allocator.free(is_repairs);
@@ -1585,7 +1584,7 @@ test "recovery" {
     const result = try state.inserter.insertShreds(
         code_shreds,
         is_repairs,
-        .{ .slot_leaders = leader_schedule.provider() },
+        .{ .slot_leaders = .{ .one_slot = leader_pubkey } },
     );
     result.deinit();
 
@@ -1598,18 +1597,6 @@ test "recovery" {
 
     // TODO: verify index integrity
 }
-
-const OneSlotLeaders = struct {
-    leader: Pubkey,
-
-    fn getLeader(self: *OneSlotLeaders, _: Slot) ?Pubkey {
-        return self.leader;
-    }
-
-    fn provider(self: *OneSlotLeaders) SlotLeaders {
-        return SlotLeaders.init(self, OneSlotLeaders.getLeader);
-    }
-};
 
 const loadShredsFromFile = ledger.tests.loadShredsFromFile;
 const deinitShreds = ledger.tests.deinitShreds;

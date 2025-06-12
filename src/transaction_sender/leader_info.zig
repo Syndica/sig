@@ -120,7 +120,8 @@ pub const LeaderInfo = struct {
     }
 
     fn getSlotLeader(self: *LeaderInfo, slot: Slot) !?Pubkey {
-        if (self.leader_schedule_cache.slotLeader(slot)) |leader| return leader;
+        const slot_leader = self.leader_schedule_cache.slotLeaders();
+        if (slot_leader.get(slot)) |leader| return leader;
 
         const epoch, const slot_index =
             self.leader_schedule_cache.epoch_schedule.getEpochAndSlotIndex(slot);

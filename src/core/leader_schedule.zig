@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
@@ -10,31 +11,32 @@ const Slot = sig.core.Slot;
 const WeightedRandomSampler = sig.rand.WeightedRandomSampler;
 const EpochSchedule = sig.core.EpochSchedule;
 const RwMux = sig.sync.RwMux;
+const EpochContextManager = sig.adapter.EpochContextManager;
 
 pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
 pub const MAX_CACHED_LEADER_SCHEDULES: usize = 10;
 
-/// interface to express a dependency on slot leaders
-pub const SlotLeaders = struct {
-    state: *anyopaque,
-    getFn: *const fn (*anyopaque, Slot) ?Pubkey,
-
-    pub fn init(
-        state: anytype,
-        getSlotLeader: fn (@TypeOf(state), Slot) ?Pubkey,
-    ) SlotLeaders {
-        return .{
-            .state = state,
-            .getFn = struct {
-                fn genericFn(generic_state: *anyopaque, slot: Slot) ?Pubkey {
-                    return getSlotLeader(@alignCast(@ptrCast(generic_state)), slot);
-                }
-            }.genericFn,
-        };
-    }
+pub const SlotLeaders = union(enum) {
+    lsc: *LeaderScheduleCache,
+    ecm: *EpochContextManager,
+    one_slot: if (builtin.is_test) Pubkey else noreturn,
 
     pub fn get(self: SlotLeaders, slot: Slot) ?Pubkey {
-        return self.getFn(self.state, slot);
+        switch (self) {
+            .lsc => |lsc| {
+                const epoch, const slot_index = lsc.epoch_schedule.getEpochAndSlotIndex(slot);
+                const leader_schedules, var leader_schedules_lg = lsc.leader_schedules.readWithLock();
+                defer leader_schedules_lg.unlock();
+                return if (leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
+            },
+            .ecm => |ecm| {
+                const epoch, const slot_index = ecm.schedule.getEpochAndSlotIndex(slot);
+                const context = ecm.contexts.get(epoch) orelse return null;
+                defer ecm.contexts.release(context);
+                return context.leader_schedule[slot_index];
+            },
+            .one_slot => |leader| return leader,
+        }
     }
 };
 
@@ -64,7 +66,7 @@ pub const LeaderScheduleCache = struct {
     }
 
     pub fn slotLeaders(self: *Self) SlotLeaders {
-        return SlotLeaders.init(self, LeaderScheduleCache.slotLeader);
+        return .{ .lsc = self };
     }
 
     pub fn put(self: *Self, epoch: Epoch, leader_schedule: LeaderSchedule) !void {
@@ -76,13 +78,6 @@ pub const LeaderScheduleCache = struct {
         }
 
         try leader_schedules.put(epoch, leader_schedule);
-    }
-
-    pub fn slotLeader(self: *Self, slot: Slot) ?Pubkey {
-        const epoch, const slot_index = self.epoch_schedule.getEpochAndSlotIndex(slot);
-        const leader_schedules, var leader_schedules_lg = self.leader_schedules.readWithLock();
-        defer leader_schedules_lg.unlock();
-        return if (leader_schedules.get(epoch)) |schedule| schedule.slot_leaders[slot_index] else null;
     }
 
     pub fn uniqueLeaders(self: *Self, allocator: std.mem.Allocator) ![]const Pubkey {
