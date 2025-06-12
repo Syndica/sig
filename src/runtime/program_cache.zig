@@ -10,22 +10,15 @@ const Slot = sig.core.Slot;
 const HashMap = std.AutoArrayHashMapUnmanaged;
 const ArrayList = std.ArrayListUnmanaged;
 
-// I don't really understand this, need some context on the VM
-const ProgramRuntimeEnvironment = sig.vm.BuiltinProgram;
-
-const ProgramRuntimeEnvironments = struct {
-    v1: ProgramRuntimeEnvironment = .{},
-    v2: ProgramRuntimeEnvironment = .{},
+// NOTE: SIMD-0177 (unmerged as of June 2025) introduces ABI v2. Ignoring this for now.
+const ProgramRuntimeEnvironment = struct {
+    config: sig.vm.Config = .{},
+    syscall_registry: sig.vm.Registry(sig.vm.syscalls.Syscall) = .{},
 };
 
 /// A verified program
-const Executable = struct {
-    // NOTE: caching this seems a bit useless? We save on ELF parsing; Agave caches JIT code.
-    executable: sig.vm.Executable,
-
-    function_registry: sig.vm.Registry(u64),
-    loader: BuiltinProgram,
-};
+// NOTE: caching this seems a bit useless? We save on ELF parsing; Agave caches JIT code.
+const Executable = sig.vm.Executable;
 
 const ForkGraph = struct {
     // TODO: need to plug in some data from replay for this.
@@ -37,6 +30,8 @@ const ForkGraph = struct {
 
     // NOTE: forks on Solana are about block inclusion - i.e. which slots are occupied. This means
     // that we can distinguish forks using slot numbers.
+
+    // we could reimplement ForkGraph::relationship, but I think we only need two know about these two cases.
 
     /// is the deployed program visible & available to our current slot+fork?
     fn isProgramAvailable(
@@ -68,13 +63,16 @@ pub const ProgramCache = struct {
 
     last_rerooting: struct { Slot, Epoch },
 
-    current_environment: ProgramRuntimeEnvironments,
-    next_environmment: ?ProgramRuntimeEnvironments,
+    // thought: does it make sense for these to live in here?
+    current_environment: ProgramRuntimeEnvironment,
+    next_environmment: ?ProgramRuntimeEnvironment, // for epoch transitions
 
-    fork_graph: *const ForkGraph,
+    fork_graph: *const ForkGraph = &.{},
 
     /// [agave] https://github.com/anza-xyz/agave/blob/452f4600842159e099a84bf18cca19408da103c9/program-runtime/src/loaded_programs.rs#L180
     /// "Holds a program version at a specific address and on a specific slot / fork.""
+    // pretty much 1:1 with Agave's ProgramCacheEntry, except we don't have atomic counters for
+    // stats/eviction, and Type has been simplified.
     const Entry = struct {
         program: Type,
 
@@ -98,22 +96,19 @@ pub const ProgramCache = struct {
 
         /// [agave] https://github.com/anza-xyz/agave/blob/452f4600842159e099a84bf18cca19408da103c9/program-runtime/src/loaded_programs.rs#L127
         const Type = union(enum) {
-            /// Tombstone for programs which currently do not pass the verifier but could if the feature set changed.
-            failed_verification_with: ProgramRuntimeEnvironments,
+            /// Did not pass the verifier, but could potentially work next epoch.
+            failed_verification,
             /// Tombstone for programs that were either explicitly closed or never deployed.
             ///
             /// It's also used for accounts belonging to program loaders, that don't actually contain program code (e.g. buffer accounts for LoaderV3 programs).
             closed,
             /// Tombstone for programs which have recently been modified but the new version is not visible yet.
             delay_visibility,
-            /// Successfully verified but not currently compiled.
-            ///
-            /// It continues to track usage statistics even when the compiled executable of the program is evicted from memory.
-            unloaded: ProgramRuntimeEnvironments,
             /// Verified and compiled program
             loaded: Executable,
-            /// A built-in program which is not stored on-chain but backed into and distributed with the validator
-            builtin: BuiltinProgram,
+
+            // unloaded field seems unnecessary: "verified but not currently compiled"
+            // I don't think we need the builtin field, at least for now
         };
 
         fn newTombstone(slot: Slot, owner: Owner, reason: Type) Entry {
@@ -127,8 +122,8 @@ pub const ProgramCache = struct {
         }
 
         fn isImplicitDelayVisibilityTombstone(self: Entry, slot: Slot) bool {
-            if (self.program == .builtin) return false;
-            if (slot < self.deployment_slot or slot >= self.effective_slot) return false;
+            if (slot < self.deployment_slot) return false;
+            if (slot >= self.effective_slot) return false;
             return self.effective_slot -| self.deployment_slot == DELAY_VISIBILITY_SLOT_OFFSET;
         }
 
@@ -154,6 +149,11 @@ pub const ProgramCache = struct {
         loading_entries: sig.sync.Mux(HashMap(Pubkey, Slot)) = .init(.{}),
     };
 
+    pub fn deinit(self: *ProgramCache, allocator: std.mem.Allocator) void {
+        for (self.index.entries.values()) |*entry_list| entry_list.deinit(allocator);
+        self.index.entries.deinit(allocator);
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/452f4600842159e099a84bf18cca19408da103c9/program-runtime/src/loaded_programs.rs#L740
     /// Replaces any existing entries, if any.
     // NOTE: why does agave call this "replenish"?
@@ -172,7 +172,10 @@ pub const ProgramCache = struct {
             entry,
             Entry.partition,
         );
-        if (Entry.compare(entry, versions.items[partition_point]) == .eq) {
+        if (versions.items.len > 0 and Entry.compare(
+            entry,
+            versions.items[partition_point],
+        ) == .eq) {
             // replace entry
             versions.items[partition_point] = entry;
         } else {
@@ -200,18 +203,16 @@ pub const ProgramCache = struct {
             Entry.partition,
         );
 
-        if (Entry.compare(entry, versions.items[partition_point]) == .eq) {
-            // replace entry
-            const existing_entry = &versions.items[partition_point];
-
-            const is_valid_entry_replacement =
-                (existing_entry.program == .builtin and entry.program == .builtin) or
-                (existing_entry.program == .unloaded and entry.program == .loaded);
+        if (versions.items.len > 0 and Entry.compare(
+            entry,
+            versions.items[partition_point],
+        ) == .eq) {
+            // entry replacement is only valid if the new entry is loaded and the existing is
+            // unloaded (or both are builtins).
+            // We do not have either of these kinds, so entry replacement is always invalid.
 
             // TODO: agave logs here instead of panicking. Not sure why this would ever happen?
-            if (!is_valid_entry_replacement) @panic("invalid entry replacement");
-
-            existing_entry.* = entry;
+            @panic("invalid entry replacement");
         } else {
             // insert entry
             try versions.insert(allocator, partition_point, entry);
@@ -221,7 +222,7 @@ pub const ProgramCache = struct {
     pub fn getEnvironmentForEpoch(
         self: *const ProgramCache,
         epoch: Epoch,
-    ) ProgramRuntimeEnvironments {
+    ) ProgramRuntimeEnvironment {
         if (epoch == self.last_rerooting.@"1") return self.current_environment;
         return self.next_environmment orelse self.current_environment;
     }
@@ -229,32 +230,30 @@ pub const ProgramCache = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/452f4600842159e099a84bf18cca19408da103c9/program-runtime/src/loaded_programs.rs#L760
     pub fn find(
         self: *const ProgramCache,
-        allocator: std.mem.Allocator,
         key: Pubkey,
-    ) error{OutOfMemory}!?[]Entry {
+        slot: Slot,
+    ) ?Entry {
         // NOTE: the agave version of this function is implemented on `ProgramCacheForTxBatch`.
         // As far as I can tell right now, this (and its modified_entries) field is just an
         // optimisation and isn't needed for consensus.
         const entries = self.index.entries.get(key) orelse return null;
 
-        const copied_entries = try allocator.alloc(Entry, entries.items.len);
-        errdefer allocator.free(copied_entries);
+        const latest_entry = entries.items[entries.items.len - 1];
 
-        for (entries, copied_entries) |entry, *copy| copy.* =
-            if (entry.isImplicitDelayVisibilityTombstone())
-                Entry.newTombstone(entry.deployment_slot, entry.owner, .delay_visibility)
-            else
-                entry;
-
-        return copied_entries;
+        // why convert implicit tombstones into explicit ones? Feels weird.
+        return if (latest_entry.isImplicitDelayVisibilityTombstone(slot)) blk: {
+            break :blk Entry.newTombstone(
+                latest_entry.deployment_slot,
+                latest_entry.owner,
+                .delay_visibility,
+            );
+        } else latest_entry;
     }
 };
 
-// TODO: remove this
-test {
-    var skip_test: bool = true;
-    _ = &skip_test;
-    if (skip_test) return error.SkipZigTest;
+test "program cache basic usage" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
 
     var cache: ProgramCache = .{
         .fork_graph = undefined,
@@ -262,9 +261,41 @@ test {
         .next_environmment = .{},
         .last_rerooting = .{ 0, 0 },
     };
-    _ = try cache.insertEntry(
-        std.testing.allocator,
-        Pubkey.ZEROES,
-        ProgramCache.Entry.DEFAULT,
-    );
+    defer cache.deinit(allocator);
+
+    const loaded_entry: ProgramCache.Entry = .{
+        .deployment_slot = 0,
+        .effective_slot = 1,
+        .owner = .loader_v1,
+        .program = .{ .loaded = undefined },
+        .program_account_size = 100,
+    };
+
+    const k1 = Pubkey.initRandom(prng.random());
+    try cache.insertEntryUnchecked(allocator, k1, loaded_entry);
+
+    const replacement_entry: ProgramCache.Entry = .{
+        .deployment_slot = 2,
+        .effective_slot = 3,
+        .owner = .loader_v1,
+        .program = .{ .loaded = undefined },
+        .program_account_size = 100,
+    };
+
+    const k2 = Pubkey.initRandom(prng.random());
+    try cache.insertEntry(allocator, k2, replacement_entry);
+
+    {
+        const entry = cache.find(k1, 0) orelse @panic("missing");
+        try std.testing.expect(entry.program == .delay_visibility);
+        try std.testing.expect(!entry.isImplicitDelayVisibilityTombstone(0));
+    }
+
+    {
+        const entry = cache.find(k2, 3) orelse @panic("missing");
+        try std.testing.expect(entry.program == .loaded);
+        try std.testing.expect(entry.isImplicitDelayVisibilityTombstone(2));
+    }
+
+    try std.testing.expectEqual(ProgramRuntimeEnvironment{}, cache.getEnvironmentForEpoch(0));
 }
