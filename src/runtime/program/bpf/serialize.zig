@@ -886,16 +886,16 @@ test "serializeParameters" {
             };
 
             const pre_accounts = blk: {
-                var accounts = std.ArrayList(struct {
+                var accounts = try std.ArrayListUnmanaged(struct {
                     pubkey: Pubkey,
                     account: AccountSharedData,
-                }).init(allocator);
+                }).initCapacity(allocator, tc.accounts.len);
                 errdefer {
                     for (accounts.items) |account| allocator.free(account.account.data);
-                    accounts.deinit();
+                    accounts.deinit(allocator);
                 }
                 for (tc.accounts) |account| {
-                    try accounts.append(.{
+                    accounts.appendAssumeCapacity(.{
                         .pubkey = account.pubkey,
                         .account = .{
                             .lamports = account.account.lamports,
@@ -906,7 +906,7 @@ test "serializeParameters" {
                         },
                     });
                 }
-                break :blk try accounts.toOwnedSlice();
+                break :blk try accounts.toOwnedSlice(allocator);
             };
             defer {
                 for (pre_accounts) |account| allocator.free(account.account.data);

@@ -106,18 +106,24 @@ pub fn createTransactionContext(
     errdefer sysvar_cache.deinit(allocator);
 
     // Create Accounts
-    var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
-    errdefer accounts.deinit();
+    var accounts = try std.ArrayListUnmanaged(TransactionContextAccount).initCapacity(
+        allocator,
+        params.accounts.len,
+    );
+    errdefer accounts.deinit(allocator);
 
     var account_cache = AccountCache{};
     errdefer account_cache.deinit(allocator);
 
-    var account_keys = std.ArrayList(Pubkey).init(allocator);
-    defer account_keys.deinit();
+    var account_keys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
+        allocator,
+        params.accounts.len,
+    );
+    defer account_keys.deinit(allocator);
 
     for (params.accounts) |account_params| {
         const key = account_params.pubkey orelse Pubkey.initRandom(random);
-        try account_keys.append(key);
+        account_keys.appendAssumeCapacity(key);
         try account_cache.account_cache.put(
             allocator,
             key,
@@ -132,7 +138,7 @@ pub fn createTransactionContext(
     }
 
     for (account_keys.items) |key| {
-        try accounts.append(TransactionContextAccount.init(
+        accounts.appendAssumeCapacity(TransactionContextAccount.init(
             key,
             account_cache.account_cache.getPtr(key) orelse unreachable,
         ));
@@ -149,7 +155,7 @@ pub fn createTransactionContext(
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
         .epoch_stakes = epoch_stakes,
-        .accounts = try accounts.toOwnedSlice(),
+        .accounts = try accounts.toOwnedSlice(allocator),
         .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
