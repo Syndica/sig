@@ -121,6 +121,7 @@ pub const InstructionInfo = struct {
         return data;
     }
 
+    /// Identical to deserializeInstruction but using `alloc_buf` to avoid heap allocation.
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/1276772ee61fbd1f8a60cfec7cd553aa4f6a55f3/bincode/src/lib.rs#L9
     pub fn limitedDeserializeInstruction(
         self: *const InstructionInfo,
