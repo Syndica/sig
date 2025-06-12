@@ -539,12 +539,7 @@ test "confirmSlot fail: sigverify" {
     );
 }
 
-pub fn testAwait(
-    future: anytype,
-) !ret: {
-    const poll = @typeInfo(@TypeOf(future)).pointer.child.poll;
-    break :ret @typeInfo(@typeInfo(@TypeOf(poll)).@"fn".return_type.?).error_union.payload;
-} {
+pub fn testAwait(future: anytype) !@TypeOf(future.poll()) {
     var i: usize = 0;
     while (try future.poll() == .pending) {
         std.time.sleep(std.time.ns_per_ms);
