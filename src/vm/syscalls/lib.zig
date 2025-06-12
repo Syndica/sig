@@ -19,7 +19,7 @@ const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
 const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
-const BuiltinProgram = sig.vm.BuiltinProgram;
+const Registry = sig.vm.Registry;
 const FeatureSet = sig.runtime.features.FeatureSet;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
@@ -45,20 +45,20 @@ pub fn register(
     feature_set: *const FeatureSet,
     slot: u64,
     is_deploy: bool,
-) !BuiltinProgram {
+) !Registry(Syscall) {
     // Register syscalls
-    var syscalls = BuiltinProgram{};
+    var syscalls = Registry(Syscall){};
     errdefer syscalls.deinit(allocator);
 
     // Abort
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "abort",
         abort,
     );
 
     // Panic
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_panic_",
         panic,
@@ -66,7 +66,7 @@ pub fn register(
 
     // Alloc Free
     if (!is_deploy) {
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_alloc_free",
             allocFree,
@@ -74,65 +74,65 @@ pub fn register(
     }
 
     // Logging
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_log_",
         log,
     );
 
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_log_64_",
         log64,
     );
 
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_log_pubkey",
         logPubkey,
     );
 
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_log_compute_units_",
         logComputeUnits,
     );
 
     // Log Data
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_log_data",
         logData,
     );
 
     // Program derived addresses
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_create_program_address",
         createProgramAddress,
     );
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_try_find_program_address",
         findProgramAddress,
     );
 
     // Sha256, Keccak256, Secp256k1Recover
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_sha256",
         hash.sha256,
     );
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_keccak256",
         hash.keccak256,
     );
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", secp256k1Recover,);
+    // _ = try syscalls.registerHashed(allocator, "sol_secp256k1_recover", secp256k1Recover,);
 
     // Blake3
     if (feature_set.isActive(features.BLAKE3_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_blake3",
             hash.blake3,
@@ -141,17 +141,17 @@ pub fn register(
 
     // Elliptic Curve
     if (feature_set.isActive(features.CURVE25519_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_curve_validate_point",
             ecc.curvePointValidation,
         );
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_curve_group_op",
             ecc.curveGroupOp,
         );
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_curve_multiscalar_mul",
             ecc.curveMultiscalarMul,
@@ -159,100 +159,100 @@ pub fn register(
     }
 
     // Sysvars
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_get_clock_sysvar",
         sysvar.getClock,
     );
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_get_epoch_schedule_sysvar",
         sysvar.getEpochSchedule,
     );
     if (!feature_set.isActive(features.DISABLE_FEES_SYSVAR, slot)) {
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_get_fees_sysvar",
             sysvar.getFees,
         );
     }
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_get_rent_sysvar",
         sysvar.getRent,
     );
     if (feature_set.isActive(features.LAST_RESTART_SLOT_SYSVAR, slot)) {
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_get_last_restart_slot",
             sysvar.getLastRestartSlot,
         );
     }
 
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_get_epoch_rewards_sysvar",
         sysvar.getEpochRewards,
     );
 
     // Memory
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_memcpy_",
         memops.memcpy,
     );
 
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_memmove_",
         memops.memmove,
     );
 
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_memset_",
         memops.memset,
     );
 
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_memcmp_",
         memops.memcmp,
     );
 
     // Processed Sibling
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_get_processed_sibling_instruction",
         getProcessedSiblingInstruction,
     );
 
     // Stack Height
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_get_stack_height",
         getStackHeight,
     );
 
     // Return Data
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_set_return_data",
         setReturnData,
     );
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_get_return_data",
         getReturnData,
     );
 
     // Cross Program Invocation
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_invoke_signed_c",
         cpi.invokeSignedC,
     );
-    _ = try syscalls.functions.registerHashed(
+    _ = try syscalls.registerHashed(
         allocator,
         "sol_invoke_signed_rust",
         cpi.invokeSignedRust,
@@ -260,7 +260,7 @@ pub fn register(
 
     // Memory Allocator
     if (!feature_set.isActive(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_alloc_free_",
             allocFree,
@@ -269,17 +269,17 @@ pub fn register(
 
     // Alt_bn128
     // if (feature_set.isActive(feature_set.ENABLE_ALT_BN128_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,);
+    //     _ = try syscalls.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,);
     // }
 
     // Big_mod_exp
     // if (feature_set.isActive(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", bigModExp,);
+    //     _ = try syscalls.registerHashed(allocator, "sol_big_mod_exp", bigModExp,);
     // }
 
     // Poseidon
     if (feature_set.isActive(features.ENABLE_POSEIDON_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_poseidon",
             hash.poseidon,
@@ -288,7 +288,7 @@ pub fn register(
 
     // Remaining Compute Units
     if (feature_set.isActive(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
+        _ = try syscalls.registerHashed(
             allocator,
             "sol_remaining_compute_units",
             remainingComputeUnits,
@@ -297,17 +297,17 @@ pub fn register(
 
     // Alt_bn_128_compression
     // if (feature_set.isActive(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", altBn128Compression,);
+    //     _ = try syscalls.registerHashed(allocator, "sol_alt_bn_128_compression", altBn128Compression,);
     // }
 
     // Sysvar Getter
     if (feature_set.isActive(features.GET_SYSVAR_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", sysvar.getSysvar);
+        _ = try syscalls.registerHashed(allocator, "sol_get_sysvar", sysvar.getSysvar);
     }
 
     // Get Epoch Stake
     if (feature_set.isActive(features.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake);
+        _ = try syscalls.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake);
     }
 
     return syscalls;

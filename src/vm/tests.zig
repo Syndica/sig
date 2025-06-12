@@ -9,7 +9,8 @@ const executor = sig.runtime.executor;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const Elf = sig.vm.elf.Elf;
 const Executable = sig.vm.Executable;
-const BuiltinProgram = sig.vm.BuiltinProgram;
+const Registry = sig.vm.Registry;
+const Syscall = sig.vm.syscalls.Syscall;
 const Config = sig.vm.Config;
 const Region = sig.vm.memory.Region;
 const MemoryMap = sig.vm.memory.MemoryMap;
@@ -44,7 +45,7 @@ fn testAsmWithMemory(
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
@@ -1986,7 +1987,7 @@ test "pqr" {
         const config: Config = .{ .maximum_version = .v2 };
 
         var registry: sig.vm.Registry(u64) = .{};
-        var loader: BuiltinProgram = .{};
+        var loader: Registry(Syscall) = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
@@ -2036,7 +2037,7 @@ test "pqr divide by zero" {
         const config: Config = .{ .maximum_version = .v2 };
 
         var registry: sig.vm.Registry(u64) = .{};
-        var loader: BuiltinProgram = .{};
+        var loader: Registry(Syscall) = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
@@ -2298,11 +2299,11 @@ pub fn testElfWithSyscalls(
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     defer loader.deinit(allocator);
 
     for (extra_syscalls) |syscall| {
-        _ = try loader.functions.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
             syscall.name,
             syscall.builtin_fn,
@@ -2547,11 +2548,11 @@ fn testVerifyTextBytesWithSyscalls(
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     defer loader.deinit(allocator);
 
     for (extra_syscalls) |syscall| {
-        _ = try loader.functions.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
             syscall.name,
             syscall.builtin_fn,
@@ -2581,11 +2582,11 @@ fn testVerifyWithSyscalls(
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     defer loader.deinit(allocator);
 
     for (extra_syscalls) |syscall| {
-        _ = try loader.functions.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
             syscall.name,
             syscall.builtin_fn,
