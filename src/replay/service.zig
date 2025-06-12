@@ -92,11 +92,12 @@ const ReplayState = struct {
     }
 
     fn deinit(self: *ReplayState) void {
-        self.execution.deinit();
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
         self.allocator.destroy(self.thread_pool);
+        self.slot_tracker.deinit(self.allocator);
         self.allocator.destroy(self.slot_tracker);
+        self.epochs.deinit(self.allocator);
         self.allocator.destroy(self.epochs);
     }
 };

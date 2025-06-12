@@ -59,10 +59,6 @@ pub const ReplayExecutionState = struct {
             .progress_map = ProgressMap.INIT,
         };
     }
-
-    pub fn deinit(self: ReplayExecutionState) void {
-        self.epochs.deinit(self.allocator);
-    }
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
