@@ -809,7 +809,7 @@ test "serializeParameters" {
                     },
                 },
             );
-            defer deinitTransactionContext(allocator, tc);
+            defer deinitTransactionContext(allocator, &tc);
 
             const instruction_info = try createInstructionInfo(
                 &tc,

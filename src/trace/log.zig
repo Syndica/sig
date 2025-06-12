@@ -163,7 +163,7 @@ pub const ChannelPrintLogger = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.handle) |handle| {
-            std.time.sleep(std.time.ns_per_ms * 5);
+            std.Thread.sleep(std.time.ns_per_ms * 5);
             self.exit.store(true, .seq_cst);
             handle.join();
         }
@@ -235,7 +235,7 @@ pub const ChannelPrintLogger = struct {
     fn allocBuf(self: *const Self, size: u64) ![]u8 {
         for (0..100) |_| {
             return self.log_allocator.alloc(u8, size) catch {
-                std.time.sleep(std.time.ns_per_ms);
+                std.Thread.sleep(std.time.ns_per_ms);
                 if (self.exit.load(.monotonic)) {
                     return error.MemoryBlockedWithExitSignaled;
                 }
@@ -440,7 +440,7 @@ test "channel logger" {
     }, stream.writer());
 
     logger.logger().log(.info, "hello world");
-    std.time.sleep(10 * std.time.ns_per_ms);
+    std.Thread.sleep(10 * std.time.ns_per_ms);
     logger.deinit();
 
     const actual = stream.getWritten();

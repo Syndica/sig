@@ -199,7 +199,7 @@ pub const GeyserWriter = struct {
             const buf = self.io_allocator.alloc(u8, total_len) catch {
                 // no memory available rn - unlock and wait
                 self.metrics.recycle_fba_empty_loop_count.inc();
-                std.time.sleep(std.time.ns_per_ms);
+                std.Thread.sleep(std.time.ns_per_ms);
                 if (self.exit.load(.acquire)) {
                     return error.MemoryBlockedWithExitSignaled;
                 }

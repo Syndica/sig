@@ -664,7 +664,7 @@ pub const BenchmarkChannel = struct {
         }
 
         ctx.start.set();
-        std.time.sleep(1 * std.time.ns_per_s);
+        std.Thread.sleep(1 * std.time.ns_per_s);
 
         const popped = ctx.popped.load(.acquire); // NOTE: should happen-before len() read.
         const total = popped + ctx.channel.len();

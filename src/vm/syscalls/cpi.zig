@@ -1427,7 +1427,7 @@ const TestContext = struct {
             },
             .compute_meter = std.math.maxInt(u64),
         });
-        errdefer testing.deinitTransactionContext(allocator, tc.*);
+        errdefer testing.deinitTransactionContext(allocator, tc);
 
         try sig.runtime.executor.pushInstruction(tc, try testing.createInstructionInfo(
             tc,
@@ -1446,7 +1446,7 @@ const TestContext = struct {
     }
 
     fn deinit(self: *TestContext, allocator: std.mem.Allocator) void {
-        testing.deinitTransactionContext(allocator, self.tc.*);
+        testing.deinitTransactionContext(allocator, self.tc);
         allocator.destroy(self.tc);
         self.ic.deinit(allocator);
     }

@@ -58,7 +58,7 @@ pub fn main() !void {
                 var gauge = try reg.getOrCreateGauge("seconds_hand", u64);
                 var hist = try reg.getOrCreateHistogram("hist", &DEFAULT_BUCKETS);
                 while (true) {
-                    std.time.sleep(1_000_000_000);
+                    std.Thread.sleep(1_000_000_000);
                     secs_counter.inc();
                     gauge.set(@as(u64, @intCast(std.time.timestamp())) % @as(u64, 60));
                     hist.observe(1.1);

@@ -555,7 +555,7 @@ test "edwards curve group operations" {
             .compute_meter = total_compute,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer sig.runtime.testing.deinitTransactionContext(allocator, &tc);
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
@@ -686,7 +686,7 @@ test "ristretto curve group operations" {
             .compute_meter = 10_000,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer sig.runtime.testing.deinitTransactionContext(allocator, &tc);
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
@@ -820,7 +820,7 @@ test "multiscalar multiplication" {
             .compute_meter = total_compute,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer sig.runtime.testing.deinitTransactionContext(allocator, &tc);
 
     {
         registers.set(.r1, 0); // CURVE25519_EDWARDS
@@ -912,7 +912,7 @@ test "multiscalar multiplication large" {
             .compute_meter = 500_000,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer sig.runtime.testing.deinitTransactionContext(allocator, &tc);
 
     {
         tc.compute_meter = 500_000;

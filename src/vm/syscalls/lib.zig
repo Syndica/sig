@@ -982,7 +982,7 @@ test findProgramAddress {
             },
         },
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer testing.deinitTransactionContext(allocator, &tc);
 
     const cost = tc.compute_budget.create_program_address_units;
     const address = sig.runtime.program.bpf_loader.v3.ID;
@@ -1097,7 +1097,7 @@ test createProgramAddress {
             },
         },
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer testing.deinitTransactionContext(allocator, &tc);
 
     const cost = tc.compute_budget.create_program_address_units;
     const address = sig.runtime.program.bpf_loader.v3.ID;
@@ -1256,7 +1256,7 @@ test allocFree {
         prng.random(),
         .{},
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer sig.runtime.testing.deinitTransactionContext(allocator, &tc);
 
     const heap = try allocator.alloc(u8, 4096);
     defer allocator.free(heap);
@@ -1305,7 +1305,7 @@ test getProcessedSiblingInstruction {
     var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &account_params,
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer testing.deinitTransactionContext(allocator, &tc);
 
     const trace_indexes: [8]u8 = std.simd.iota(u8, 8);
     for ([_]u8{ 1, 2, 3, 2, 2, 3, 4, 3 }, 0..) |stack_height, index_in_trace| {
@@ -1465,7 +1465,7 @@ test getEpochStake {
             },
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer sig.runtime.testing.deinitTransactionContext(allocator, &tc);
 
     // Test get total stake
     {
@@ -1579,7 +1579,7 @@ test "set and get return data" {
             .compute_meter = 10_000,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer sig.runtime.testing.deinitTransactionContext(allocator, &tc);
 
     const program_id = sig.runtime.program.bpf_loader.v2.ID;
     const instr_info = sig.runtime.InstructionInfo{

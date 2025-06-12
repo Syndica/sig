@@ -207,7 +207,7 @@ pub fn start(
                     try file.seekTo(0);
                     try file.setEndPos(0);
                     _ = trakr.print(file.writer()) catch unreachable;
-                    std.time.sleep(std.time.ns_per_s);
+                    std.Thread.sleep(std.time.ns_per_s);
                 }
             }
         }.run, .{ deps.exit, shred_tracker });

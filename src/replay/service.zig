@@ -80,7 +80,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     // TODO: replay_active_banks
     // _ = try replay.execution.replayActiveSlots(&state.execution);
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     handleEdgeCases();
 

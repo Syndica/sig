@@ -576,9 +576,9 @@ test "eql follows slices" {
     defer std.testing.allocator.free(b_slice);
     a_slice[0] = 1;
     b_slice[0] = 1;
-    const a = Foo{ .slice = a_slice };
-    const b = Foo{ .slice = b_slice };
+    const b: Foo = .{ .slice = b_slice };
+    const a: Foo = .{ .slice = a_slice };
     try std.testing.expect(eql(a, b));
     try std.testing.expect(!eqlCustom(a, b, .{ .follow_pointers = .no }));
-    try std.testing.expect(!std.meta.eql(a, b));
+    try std.testing.expectEqualSlices(u8, a.slice, b.slice);
 }

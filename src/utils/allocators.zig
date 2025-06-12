@@ -150,7 +150,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                             if (config.thread_safe) self.mux.unlock();
                             defer if (config.thread_safe) self.mux.lock();
                             // wait some time and try to collapse again.
-                            std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
+                            std.Thread.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
                             // NOTE: this is because there may be new free records
                             // (which were free'd by some other consumer thread) which
                             // can be collapsed and the alloc call will then succeed.
@@ -180,7 +180,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                             if (config.thread_safe) self.mux.unlock();
                             defer if (config.thread_safe) self.mux.lock();
                             // wait some time and try to collapse again.
-                            std.time.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
+                            std.Thread.sleep(std.time.ns_per_ms * config.collapse_sleep_ms);
                             // NOTE: this is because there may be new free records
                             // (which were free'd by some other consumer thread) which
                             // can be collapsed and the alloc call will then succeed.

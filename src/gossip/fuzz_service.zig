@@ -237,7 +237,7 @@ pub fn fuzz(
             std.debug.print("{d} messages sent\n", .{msg_count});
             last_print_msg_count = msg_count;
         }
-        std.time.sleep(SLEEP_TIME.asNanos());
+        std.Thread.sleep(SLEEP_TIME.asNanos());
     }
 }
 

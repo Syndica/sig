@@ -417,7 +417,7 @@ test "pushInstruction" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer testing.deinitTransactionContext(allocator, &tc);
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -502,7 +502,7 @@ test "processNextInstruction" {
             .compute_meter = system_program.COMPUTE_UNITS,
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer testing.deinitTransactionContext(allocator, &tc);
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -565,7 +565,7 @@ test "popInstruction" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer testing.deinitTransactionContext(allocator, &tc);
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -649,7 +649,7 @@ test "prepareCpiInstructionInfo" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer testing.deinitTransactionContext(allocator, &tc);
 
     const caller = try testing.createInstructionInfo(
         &tc,
@@ -799,7 +799,7 @@ test "sumAccountLamports" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer testing.deinitTransactionContext(allocator, &tc);
 
     {
         // Success: 0 + 1 + 2 + 3 = 6
