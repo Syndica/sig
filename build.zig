@@ -214,13 +214,15 @@ pub fn build(b: *Build) void {
     }
     addInstallAndRun(b, sig_step, sig_exe, config);
 
+    const unit_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/tests.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+        .imports = imports,
+    });
+
     const unit_tests_exe = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tests.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports,
-        }),
+        .root_module = unit_test_mod,
         .sanitize_thread = config.enable_tsan,
         .filters = config.filters orelse &.{},
         .use_llvm = config.use_llvm,
@@ -303,6 +305,11 @@ pub fn build(b: *Build) void {
         .install_subdir = "docs",
     });
     docs_step.dependOn(&install_sig_docs.step);
+
+    const check = b.step("check", "Checks that the tests compile (for incremental use)");
+    const check_exe = b.addTest(.{ .root_module = unit_test_mod });
+    check_exe.generated_bin = null;
+    check.dependOn(&check_exe.step);
 }
 
 /// the standard approach for installing and running the executables produced in
