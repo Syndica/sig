@@ -564,3 +564,38 @@ test "maybeRefreshLastVote - no heaviest slot on same fork" {
 
     try testing.expectEqual(false, result);
 }
+
+test "maybeRefreshLastVote - no landed vote" {
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    const root = SlotAndHash{
+        .slot = 0,
+        .hash = Hash.initRandom(random),
+    };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var replay_tower = try createTestReplayTower(
+        std.testing.allocator,
+        1,
+        0.67,
+    );
+
+    var last_vote_refresh_time: LastVoteRefreshTime = .{
+        .last_refresh_time = sig.time.Instant.now(),
+        .last_print_time = sig.time.Instant.now(),
+    };
+
+    // not vote in progress map.
+    try testing.expectEqual(0, fixture.progress.map.count());
+    const result = sig.replay.consensus.maybeRefreshLastVote(
+        &replay_tower,
+        &fixture.progress,
+        10, // Not in progress map.
+        &last_vote_refresh_time,
+    );
+
+    try testing.expectEqual(false, result);
+}
