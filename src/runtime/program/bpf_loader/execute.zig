@@ -1434,7 +1434,6 @@ pub fn deployProgram(
     var syscalls = vm.syscalls.register(
         allocator,
         tc.feature_set,
-        0,
         false,
     ) catch |err| {
         try tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
