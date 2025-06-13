@@ -160,6 +160,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         max_concurrent_tasks: ?usize,
 
         pub const Task = TaskType;
+        pub const TaskError = @typeInfo(TaskResult).error_union.error_set;
 
         const Self = @This();
 
@@ -257,7 +258,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// - done: all succeeded.
         /// - pending: some are still running.
         /// - err: all completed, and at least one failed.
-        pub fn pollFallible(self: *Self) union(enum) { done, pending, err: anyerror } {
+        pub fn pollFallible(self: *Self) union(enum) { done, pending, err: TaskError } {
             for (self.tasks.items) |task| {
                 if (!task.done.load(.acquire)) {
                     return .pending;
