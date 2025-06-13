@@ -1391,7 +1391,7 @@ pub const ReplayTower = struct {
     }
 };
 
-const BlockhashStatus = union(enum) {
+pub const BlockhashStatus = union(enum) {
     /// No vote since restart
     uninitialized,
     /// Non voting validator
