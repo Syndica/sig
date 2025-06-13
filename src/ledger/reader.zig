@@ -1213,19 +1213,20 @@ pub const BlockstoreReader = struct {
         db: *BlockstoreDB,
         allocator: Allocator,
         slots: []const Slot,
-    ) !std.AutoArrayHashMapUnmanaged(Slot, ArrayList(Slot)) {
+    ) !std.AutoArrayHashMapUnmanaged(Slot, std.ArrayListUnmanaged(Slot)) {
         // TODO perf: support multi_get in db
-        var map = std.AutoArrayHashMapUnmanaged(Slot, ArrayList(Slot)).empty;
+        var map = std.AutoArrayHashMapUnmanaged(Slot, std.ArrayListUnmanaged(Slot)).empty;
         errdefer {
-            for (map.values()) |*list| list.deinit();
+            for (map.values()) |*list| list.deinit(allocator);
             map.deinit(allocator);
         }
         for (slots) |slot| {
             if (try db.get(allocator, schema.slot_meta, slot)) |meta| {
-                errdefer meta.child_slots.deinit();
+                var child_slots = meta.child_slots;
+                errdefer child_slots.deinit();
                 var cdi = meta.completed_data_indexes;
                 cdi.deinit();
-                try map.put(allocator, slot, meta.child_slots);
+                try map.put(allocator, slot, child_slots.moveToUnmanaged());
             }
         }
         return map;

@@ -162,7 +162,7 @@ fn trackNewSlots(
     var next_slots = try BlockstoreReader
         .getSlotsSince(blockstore_db, allocator, frozen_slots_since_root.items);
     defer {
-        for (next_slots.values()) |*list| list.deinit();
+        for (next_slots.values()) |*list| list.deinit(allocator);
         next_slots.deinit(allocator);
     }
 
