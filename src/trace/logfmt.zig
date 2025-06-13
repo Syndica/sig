@@ -1,6 +1,7 @@
 const std = @import("std");
-const time = @import("../time/time.zig");
-const Level = @import("level.zig").Level;
+const sig = @import("../sig.zig");
+
+const Level = sig.trace.Level;
 
 /// Return the format string for the type when used as a value in a field.
 fn fieldFmtString(comptime Value: type) []const u8 {
@@ -28,12 +29,10 @@ pub fn writeLog(
     args: anytype,
 ) !void {
     // format time as ISO8601
-    const utc_format = "YYYY-MM-DDTHH:mm:ss.SSS";
-    try std.fmt.format(writer, "time=", .{});
-    const now = time.DateTime.now();
-    try now.format(utc_format, .{}, writer);
-    try writer.writeByte('Z');
-
+    try writer.print(
+        "time={[0]YYYY}-{[0]MM}-{[0]DD}T{[0]HH}:{[0]mm}:{[0]ss}.{[0]SSS}Z",
+        .{sig.time.DateTime.fromEpochMs(sig.time.clock.now())},
+    );
     try writeLogWithoutTime(writer, maybe_scope, level, fields, fmt, args);
 }
 

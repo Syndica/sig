@@ -28,7 +28,6 @@ const StatusCache = sig.accounts_db.StatusCache;
 const createGeyserWriter = sig.geyser.core.createGeyserWriter;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getShredAndIPFromEchoServer = sig.net.echo.getShredAndIPFromEchoServer;
-const getWallclockMs = sig.time.getWallclockMs;
 const globalRegistry = sig.prometheus.globalRegistry;
 const servePrometheus = sig.prometheus.servePrometheus;
 
@@ -1748,7 +1747,7 @@ fn startGossip(
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
 
-    var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
+    var contact_info = ContactInfo.init(allocator, my_pubkey, sig.time.clock.now(), 0);
     errdefer contact_info.deinit();
 
     try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, app_base.my_port));

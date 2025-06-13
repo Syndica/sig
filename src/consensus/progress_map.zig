@@ -267,7 +267,7 @@ pub const ForkProgress = struct {
         params: struct {
             bank: *const stubs.Bank,
             /// Should usually be `.now()`.
-            now: sig.time.Instant,
+            now: std.time.Instant,
             validator_identity: *const Pubkey,
             validator_vote_pubkey: *const Pubkey,
             prev_leader_slot: ?Slot,
@@ -306,7 +306,7 @@ pub const ForkProgress = struct {
 
     pub const InitParams = struct {
         /// Should usually be `.now()`.
-        now: sig.time.Instant,
+        now: std.time.Instant,
         last_entry: Hash,
         prev_leader_slot: ?Slot,
         validator_stake_info: ?ValidatorStakeInfo,
@@ -318,7 +318,7 @@ pub const ForkProgress = struct {
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!ForkProgress {
         return ForkProgress.init(allocator, .{
-            .now = sig.time.Instant.now(),
+            .now = sig.time.clock.sample(),
             .last_entry = Hash.ZEROES,
             .prev_leader_slot = 0,
             .validator_stake_info = ValidatorStakeInfo.DEFAULT,
@@ -630,7 +630,7 @@ pub const PropagatedStats = struct {
 };
 
 pub const RetransmitInfo = struct {
-    retry_time: sig.time.Instant,
+    retry_time: std.time.Instant,
     retry_iteration: u32,
 };
 
@@ -808,7 +808,7 @@ pub const blockstore_processor = struct {
         /// Moment when the `ConfirmationTiming` instance was created.  Used to track the total wall
         /// clock time from the moment the first shard for the slot is received and to the moment the
         /// slot is complete.
-        started: sig.time.Instant,
+        started: std.time.Instant,
 
         /// Wall clock time used by the slot confirmation code, including PoH/signature verification,
         /// and replay.  As replay can run in parallel with the verification, this value can not be
@@ -845,7 +845,7 @@ pub const blockstore_processor = struct {
 
         pub fn initEmptyZeroes(
             /// Should usually be `.now()`.
-            started: sig.time.Instant,
+            started: std.time.Instant,
         ) ConfirmationTiming {
             return .{
                 .started = started,
@@ -1221,7 +1221,7 @@ test "ForkProgress.init" {
     var prng = std.Random.DefaultPrng.init(3744);
     const random = prng.random();
 
-    const now = sig.time.Instant.now();
+    const now = sig.time.clock.sample();
     var bank: stubs.Bank = .{
         .data = try sig.core.BankFields.initRandom(allocator, random, 128),
     };
@@ -1484,7 +1484,7 @@ test testForkProgressIsPropagatedOnInit {
     // If the given validator_stake_info == null, then this is not
     // a leader slot and is_propagated == false
     try testForkProgressIsPropagatedOnInit(false, .{
-        .now = sig.time.Instant.now(),
+        .now = sig.time.clock.sample(),
         .last_entry = Hash.ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = null,
@@ -1494,7 +1494,7 @@ test testForkProgressIsPropagatedOnInit {
 
     // If the stake is zero, then threshold is always achieved
     try testForkProgressIsPropagatedOnInit(true, .{
-        .now = sig.time.Instant.now(),
+        .now = sig.time.clock.sample(),
         .last_entry = Hash.ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = blk: {
@@ -1509,7 +1509,7 @@ test testForkProgressIsPropagatedOnInit {
     // If the stake is non zero, then threshold is not achieved unless
     // validator has enough stake by itself to pass threshold
     try testForkProgressIsPropagatedOnInit(false, .{
-        .now = sig.time.Instant.now(),
+        .now = sig.time.clock.sample(),
         .last_entry = Hash.ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = blk: {
@@ -1523,7 +1523,7 @@ test testForkProgressIsPropagatedOnInit {
 
     // Give the validator enough stake by itself to pass threshold
     try testForkProgressIsPropagatedOnInit(true, .{
-        .now = sig.time.Instant.now(),
+        .now = sig.time.clock.sample(),
         .last_entry = Hash.ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = blk: {
@@ -1540,7 +1540,7 @@ test testForkProgressIsPropagatedOnInit {
     // with is_propagated == false, otherwise propagation tests will fail to run
     // the proper checks (most will auto-pass without checking anything)
     try testForkProgressIsPropagatedOnInit(false, .{
-        .now = sig.time.Instant.now(),
+        .now = sig.time.clock.sample(),
         .last_entry = Hash.ZEROES,
         .prev_leader_slot = 9,
         .validator_stake_info = ValidatorStakeInfo.DEFAULT,
@@ -1620,7 +1620,7 @@ fn forkProgressInitRandom(
     errdefer propagated_stats.deinit(allocator);
 
     const replay_stats = try replaySlotStatsInitRandom(allocator, random, .{
-        .started = sig.time.Instant.UNIX_EPOCH,
+        .started = sig.time.Duration.zero.asInstant(),
         .totals = .{
             .per_program_timings_len = 4,
             .program_timings_len = .{
@@ -1653,7 +1653,7 @@ fn forkProgressInitRandom(
         .replay_stats = .{ .arc_ed = .{ .rwlock_ed = replay_stats } },
         .replay_progress = .{ .arc_ed = .{ .rwlock_ed = replay_progress } },
         .retransmit_info = .{
-            .retry_time = sig.time.Instant.UNIX_EPOCH,
+            .retry_time = sig.time.Duration.zero.asInstant(),
             .retry_iteration = random.int(u32),
         },
         .num_blocks_on_fork = random.int(u64),
@@ -1854,7 +1854,7 @@ fn replaySlotStatsInitRandom(
     allocator: std.mem.Allocator,
     random: std.Random,
     params: struct {
-        started: sig.time.Instant,
+        started: std.time.Instant,
         totals: ExecuteDetailsTimingsInitRandomParams,
         slowest_thread: ExecuteDetailsTimingsInitRandomParams,
     },

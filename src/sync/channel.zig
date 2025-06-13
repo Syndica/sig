@@ -668,7 +668,7 @@ pub const BenchmarkChannel = struct {
 
         const popped = ctx.popped.load(.acquire); // NOTE: should happen-before len() read.
         const total = popped + ctx.channel.len();
-        return .{ .ns = std.time.ns_per_s / total };
+        return .fromNanos(std.time.ns_per_s / total);
     }
 };
 

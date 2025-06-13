@@ -18,7 +18,6 @@ const ClusterType = sig.core.ClusterType;
 const RwMux = sig.sync.RwMux;
 const Channel = sig.sync.Channel;
 const Duration = sig.time.Duration;
-const Instant = sig.time.Instant;
 const Timer = sig.time.Timer;
 const Logger = sig.trace.log.Logger;
 const ScopedLogger = sig.trace.log.ScopedLogger;
@@ -119,7 +118,7 @@ pub const Service = struct {
     fn receiveTransactionsThread(self: *Service) !void {
         errdefer self.exit.store(true, .monotonic);
 
-        var last_batch_sent = Instant.now();
+        var last_batch_sent = sig.time.clock.sample();
         var transaction_batch = std.AutoArrayHashMap(Signature, TransactionInfo).init(self.allocator);
         defer transaction_batch.deinit();
 
@@ -140,14 +139,15 @@ pub const Service = struct {
                     continue;
                 }
 
+                const now = sig.time.clock.sample();
                 if (transaction_batch.count() >= self.config.batch_size or
-                    last_batch_sent.elapsed().asNanos() >= self.config.batch_send_rate.asNanos())
+                    now.since(last_batch_sent) >= self.config.batch_send_rate.asNanos())
                 {
                     const leader_addresses = try self.getLeaderAddresses();
                     defer self.allocator.free(leader_addresses);
 
                     try self.sendTransactions(transaction_batch.values(), leader_addresses);
-                    last_batch_sent = Instant.now();
+                    last_batch_sent = sig.time.clock.sample();
 
                     self.transaction_pool.addTransactions(transaction_batch.values()) catch {
                         self.logger.warn().log("Transaction pool is full, dropping transactions");
@@ -318,7 +318,7 @@ pub const Service = struct {
             }
         }
 
-        const last_sent_time = Instant.now();
+        const last_sent_time = sig.time.clock.sample();
         for (transactions) |*tx| {
             tx.last_sent_time = last_sent_time;
         }
