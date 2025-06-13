@@ -148,15 +148,13 @@ pub const TransactionScheduler = struct {
     fn tryScheduleSome(self: *TransactionScheduler) !?TransactionError {
         while (self.batches.items.len > self.batches_started) {
             const batch = self.batches.items[self.batches_started];
-            self.locks.lockStrict(self.allocator, batch.accounts) catch |e| {
-                switch (e) {
-                    error.LockFailed => if (self.batches_started == self.batches_finished) {
-                        return .AccountInUse;
-                    } else {
-                        break;
-                    },
-                    else => return e,
-                }
+            self.locks.lockStrict(self.allocator, batch.accounts) catch |e| switch (e) {
+                error.LockFailed => if (self.batches_started == self.batches_finished) {
+                    return .AccountInUse;
+                } else {
+                    break;
+                },
+                else => return e,
             };
             assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .transactions = batch.transactions,
