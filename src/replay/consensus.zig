@@ -56,8 +56,8 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         (try deps.fork_choice.heaviestSlotOnSameVotedFork(deps.replay_tower)) orelse null;
 
     const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
-    const ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)) = .{};
-    const descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .{};
+    const ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)) = .empty;
+    const descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)) = .empty;
 
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = sig.time.Instant.now(),
