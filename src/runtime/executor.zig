@@ -59,9 +59,8 @@ pub fn pushInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
     // [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_executor.c#L1001-L1011
-    if (program_id.equals(&ids.NATIVE_LOADER_ID)) {
+    if (program_id.equals(&ids.NATIVE_LOADER_ID))
         return InstructionError.UnsupportedProgramId;
-    }
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
@@ -73,8 +72,6 @@ pub fn pushInstruction(
             return InstructionError.ReentrancyNotAllowed;
         }
     }
-
-    // TODO: syscall_context.push(None)
 
     // Push the instruction onto the stack and trace, creating the instruction context
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L366-L403

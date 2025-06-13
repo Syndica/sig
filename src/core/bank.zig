@@ -576,6 +576,27 @@ pub const BlockhashQueue = struct {
             .max_age = random.int(usize),
         };
     }
+
+    pub fn initWithSingleEntry(
+        allocator: std.mem.Allocator,
+        entry_hash: Hash,
+        entry_lamports_per_signature: u64,
+    ) !BlockhashQueue {
+        return .{
+            .last_hash = entry_hash,
+            .max_age = 0,
+            .ages = try .init(
+                allocator,
+                &.{entry_hash},
+                &.{.{
+                    .fee_calculator = .{ .lamports_per_signature = entry_lamports_per_signature },
+                    .hash_index = 0,
+                    .timestamp = 0,
+                }},
+            ),
+            .last_hash_index = 0,
+        };
+    }
 };
 
 pub const BlockhashQueueAges = std.AutoArrayHashMapUnmanaged(Hash, HashAge);
