@@ -532,7 +532,6 @@ fn resetFork(
 }
 
 const testing = std.testing;
-const BlockhashStatus = sig.consensus.replay_tower.BlockhashStatus;
 const TestFixture = sig.consensus.replay_tower.TestFixture;
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
 
