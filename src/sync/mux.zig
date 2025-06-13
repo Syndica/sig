@@ -125,6 +125,14 @@ pub fn Mux(comptime T: type) type {
                 .valid = true,
             };
         }
+
+        /// Acquires the lock just long enough to shallow copy the item, and
+        /// returns the copy.
+        pub fn readCopy(self: *Self) T {
+            self.private.m.lock();
+            defer self.private.m.unlock();
+            return self.private.v;
+        }
     };
 }
 
@@ -255,6 +263,12 @@ pub fn RwMux(comptime T: type) type {
             };
         }
 
+        pub fn set(self: *Self, item: T) void {
+            self.private.r.lock();
+            defer self.private.r.unlock();
+            self.private.v = item;
+        }
+
         /// `read` returns a `RLockGuard` after acquiring a `read` lock
         pub fn read(self: *Self) RLockGuard {
             self.private.r.lockShared();
@@ -268,6 +282,14 @@ pub fn RwMux(comptime T: type) type {
             var lock_guard = self.read();
             const t = lock_guard.get();
             return .{ t, lock_guard };
+        }
+
+        /// Acquires the lock just long enough to shallow copy the item, and
+        /// returns the copy.
+        pub fn readCopy(self: *Self) T {
+            self.private.r.lockShared();
+            defer self.private.r.unlockShared();
+            return self.private.v;
         }
 
         pub fn writeWithLock(self: *Self) struct { Mutable(T), WLockGuard } {

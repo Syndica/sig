@@ -75,7 +75,50 @@ pub const Transaction = struct {
         };
     }
 
-    pub const InitOwnedMsgWithSigningKeypairsError = error{
+    /// Basic transaction with randomized addresses and data.
+    ///
+    /// The number of instructions, pubkeys, and program/writable/signer/readonly
+    /// indexes are hardcoded, not randomized.
+    pub fn initRandom(allocator: std.mem.Allocator, random: std.Random) !Transaction {
+        const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+        const keypair = try KeyPair.generateDeterministic(.{random.int(u8)} ** 32);
+        const signer = Pubkey.fromPublicKey(&keypair.public_key);
+
+        const account_keys = try allocator.dupe(Pubkey, &.{
+            signer,
+            Pubkey.initRandom(random),
+            Pubkey.initRandom(random),
+        });
+        errdefer allocator.free(account_keys);
+
+        const data = try allocator.alloc(u8, random.intRangeAtMost(usize, 0, 256));
+        errdefer allocator.free(data);
+        random.bytes(data);
+
+        const account_indexes = try allocator.dupe(u8, &.{ 0, 1 });
+        errdefer allocator.free(account_indexes);
+
+        const instructions = try allocator.dupe(Instruction, &.{.{
+            .program_index = 2,
+            .account_indexes = account_indexes,
+            .data = data,
+        }});
+        errdefer allocator.free(instructions);
+
+        const message = Message{
+            .signature_count = 1,
+            .readonly_signed_count = 0,
+            .readonly_unsigned_count = 1,
+            .account_keys = account_keys,
+            .recent_blockhash = Hash.initRandom(random),
+            .instructions = instructions,
+            .address_lookups = &.{},
+        };
+
+        return try initOwnedMessageWithSigningKeypairs(allocator, .v0, message, &.{keypair});
+    }
+
+    pub const InitOwnedMessageWithSigningKeypairsError = error{
         /// Failed to serialize the provided message.
         BadMessage,
         /// Failed to sign the message with one of the keypairs.
@@ -85,13 +128,13 @@ pub const Transaction = struct {
     /// Takes ownership of the passed in `msg`, and signs it with all of the given keypairs.
     /// Assumes `msg` was allocated using the given `allocator`, since that will also be used
     /// to allocate space for the signatures.
-    pub fn initOwnedMsgWithSigningKeypairs(
+    pub fn initOwnedMessageWithSigningKeypairs(
         allocator: std.mem.Allocator,
         version: Version,
-        msg: Message,
+        message: Message,
         keypairs: []const sig.identity.KeyPair,
-    ) InitOwnedMsgWithSigningKeypairsError!Transaction {
-        const msg_bytes_bounded = msg.serializeBounded(version) catch return error.BadMessage;
+    ) InitOwnedMessageWithSigningKeypairsError!Transaction {
+        const msg_bytes_bounded = message.serializeBounded(version) catch return error.BadMessage;
         const msg_bytes = msg_bytes_bounded.constSlice();
 
         const signatures = try allocator.alloc(Signature, keypairs.len);
@@ -105,7 +148,7 @@ pub const Transaction = struct {
         return .{
             .signatures = signatures,
             .version = version,
-            .msg = msg,
+            .msg = message,
         };
     }
 

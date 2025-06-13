@@ -1229,7 +1229,7 @@ const vote_parser = struct {
                 null,
             );
             errdefer vote_tx_msg.deinit(allocator);
-            break :blk try Transaction.initOwnedMsgWithSigningKeypairs(
+            break :blk try Transaction.initOwnedMessageWithSigningKeypairs(
                 allocator,
                 .legacy,
                 vote_tx_msg,
@@ -1270,7 +1270,7 @@ const vote_parser = struct {
             null,
         );
         errdefer vote_tx_msg.deinit(allocator);
-        return try Transaction.initOwnedMsgWithSigningKeypairs(
+        return try Transaction.initOwnedMessageWithSigningKeypairs(
             allocator,
             .legacy,
             vote_tx_msg,

@@ -23,6 +23,7 @@ pub fn ScopedLogger(comptime scope: ?[]const u8) type {
 
         /// Can be used in tests to minimize the amount of logging during tests.
         pub const TEST_DEFAULT_LEVEL: Level = .warn;
+        pub const FOR_TESTS: Self = .{ .direct_print = .{ .max_level = TEST_DEFAULT_LEVEL } };
 
         pub fn unscoped(self: Self) Logger {
             return self.withScope(null);

@@ -491,14 +491,14 @@ pub const BlockstoreReader = struct {
                 try entries.append(.{
                     .num_hashes = entry.num_hashes,
                     .hash = entry.hash,
-                    .num_transactions = entry.transactions.items.len,
+                    .num_transactions = entry.transactions.len,
                     .starting_transaction_index = starting_transaction_index,
                 });
-                starting_transaction_index += entry.transactions.items.len;
+                starting_transaction_index += entry.transactions.len;
             }
-            try slot_transactions.appendSlice(entry.transactions.items);
-            entry.transactions.deinit(self.allocator);
-            entry.transactions = .{};
+            try slot_transactions.appendSlice(entry.transactions);
+            self.allocator.free(entry.transactions);
+            entry.transactions = &.{};
         }
 
         var txns_with_statuses = try ArrayList(VersionedTransactionWithStatusMeta)
@@ -720,7 +720,7 @@ pub const BlockstoreReader = struct {
         const slot_entries = try self.getSlotEntries(slot, 0);
         // NOTE perf: linear search runs from scratch every time this is called
         for (slot_entries.items) |entry| {
-            for (entry.transactions.items) |transaction| {
+            for (entry.transactions) |transaction| {
                 // NOTE perf: redundant calls to validate every time this is called
                 if (transaction.validate()) |_| {} else |err| {
                     self.logger.warn().logf(
@@ -1209,22 +1209,24 @@ pub const BlockstoreReader = struct {
     /// element's children slots.
     ///
     /// Analogous to [get_slots_since](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3821)
-    pub fn getSlotsSince(self: *Self, slots: []const Slot) !AutoHashMap(Slot, ArrayList(Slot)) {
+    pub fn getSlotsSince(
+        db: *BlockstoreDB,
+        allocator: Allocator,
+        slots: []const Slot,
+    ) !std.AutoArrayHashMapUnmanaged(Slot, std.ArrayListUnmanaged(Slot)) {
         // TODO perf: support multi_get in db
-        var map = AutoHashMap(Slot, ArrayList(Slot)).init(self.allocator);
+        var map = std.AutoArrayHashMapUnmanaged(Slot, std.ArrayListUnmanaged(Slot)).empty;
         errdefer {
-            var iter = map.iterator();
-            while (iter.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
-            map.deinit();
+            for (map.values()) |*list| list.deinit(allocator);
+            map.deinit(allocator);
         }
         for (slots) |slot| {
-            if (try self.db.get(self.allocator, schema.slot_meta, slot)) |meta| {
-                errdefer meta.child_slots.deinit();
+            if (try db.get(allocator, schema.slot_meta, slot)) |meta| {
+                var child_slots = meta.child_slots;
+                errdefer child_slots.deinit();
                 var cdi = meta.completed_data_indexes;
                 cdi.deinit();
-                try map.put(slot, meta.child_slots);
+                try map.put(allocator, slot, child_slots.moveToUnmanaged());
             }
         }
         return map;

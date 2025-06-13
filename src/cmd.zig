@@ -1172,10 +1172,15 @@ fn validator(
         .{sig.replay.service.ReplayDependencies{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
+            .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
             .exit = app_base.exit,
             .blockstore_reader = blockstore_reader,
             .accounts_db = &loaded_snapshot.accounts_db,
             .epoch_schedule = bank_fields.epoch_schedule,
+            .slot_leaders = epoch_context_manager.slotLeaders(),
+            .root_slot = bank_fields.slot,
+            .root_slot_constants = .fromBankFields(bank_fields),
+            .root_slot_state = try .fromBankFields(allocator, bank_fields),
         }},
     );
 
