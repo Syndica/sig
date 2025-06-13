@@ -182,8 +182,14 @@ pub const SlotState = struct {
 
     pub fn fromFrozenParent(allocator: Allocator, parent: *SlotState) !SlotState {
         if (!parent.isFrozen()) return error.SlotNotFrozen;
+        const blockhash_queue = foo: {
+            var bhq = parent.blockhash_queue.read();
+            defer bhq.unlock();
+            break :foo try bhq.get().clone(allocator);
+        };
+        errdefer blockhash_queue.deinit(allocator);
         return .{
-            .blockhash_queue = .init(try parent.blockhash_queue.readClone(allocator)),
+            .blockhash_queue = .init(blockhash_queue),
             .hash = .init(null),
             .capitalization = .init(parent.capitalization.load(.monotonic)),
             .transaction_count = .init(parent.transaction_count.load(.monotonic)),
