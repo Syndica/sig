@@ -79,7 +79,7 @@ pub const Config = struct {
             ) orelse false,
             .use_llvm = b.option(
                 bool,
-                "use_llvm",
+                "use-llvm",
                 "If disabled, uses experimental self-hosted backend. Only works for x86_64-linux",
             ) orelse true,
             .force_pic = b.option(
@@ -214,14 +214,15 @@ pub fn build(b: *Build) void {
     }
     addInstallAndRun(b, sig_step, sig_exe, config);
 
-    const unit_tests_exe = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tests.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports,
-        }),
+    const unit_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/tests.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+        .imports = imports,
         .sanitize_thread = config.enable_tsan,
+    });
+    const unit_tests_exe = b.addTest(.{
+        .root_module = unit_test_mod,
         .filters = config.filters orelse &.{},
         .use_llvm = config.use_llvm,
     });
@@ -303,6 +304,11 @@ pub fn build(b: *Build) void {
         .install_subdir = "docs",
     });
     docs_step.dependOn(&install_sig_docs.step);
+
+    const check_step = b.step("check", "Checks that sig compiles (useful for development)");
+    const check_test = b.addTest(.{ .root_module = unit_test_mod });
+    check_test.generated_bin = null;
+    check_step.dependOn(&check_test.step);
 }
 
 /// the standard approach for installing and running the executables produced in

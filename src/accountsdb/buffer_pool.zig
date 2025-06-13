@@ -26,8 +26,7 @@ const FrameOffset = u10; // 0..=FRAME_SIZE
 
 comptime {
     // assert our FRAME_SIZE fits in FrameOffset
-    const offset: FrameOffset = FRAME_SIZE;
-    _ = offset;
+    std.debug.assert(FRAME_SIZE <= std.math.maxInt(FrameOffset));
 }
 
 const FrameRef = packed struct(u32) {
