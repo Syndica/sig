@@ -121,6 +121,24 @@ pub const InstructionInfo = struct {
         return data;
     }
 
+    /// Identical to deserializeInstruction but using `alloc_buf` to avoid heap allocation.
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/1276772ee61fbd1f8a60cfec7cd553aa4f6a55f3/bincode/src/lib.rs#L9
+    pub fn limitedDeserializeInstruction(
+        self: *const InstructionInfo,
+        comptime T: type,
+        alloc_buf: []u8,
+    ) InstructionError!T {
+        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
+            self.instruction_data.len,
+            Transaction.MAX_BYTES,
+        )]);
+
+        var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
+        return bincode.read(fba.allocator(), T, fbs.reader(), .{}) catch {
+            return InstructionError.InvalidInstructionData;
+        };
+    }
+
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
     pub fn checkNumberOfAccounts(
         self: *const InstructionInfo,

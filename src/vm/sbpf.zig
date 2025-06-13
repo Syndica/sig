@@ -20,6 +20,7 @@ pub const Version = enum(u32) {
     /// SIMD-0178, SIMD-0179, SIMD-0189
     v3,
     /// support other versions as well!
+    reserved,
     _,
 
     /// Enable SIMD-0166: SBPF dynamic stack frames
