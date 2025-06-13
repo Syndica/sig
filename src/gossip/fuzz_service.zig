@@ -24,13 +24,12 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Duration = sig.time.Duration;
 const Channel = sig.sync.Channel;
 
-const getWallclockMs = sig.time.getWallclockMs;
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
 
 const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 
 const SHRED_VERSION = 19;
-const SLEEP_TIME = Duration.zero();
+const SLEEP_TIME: Duration = .zero;
 // const SLEEP_TIME = Duration.fromMillis(10);
 // const SLEEP_TIME = Duration.fromSecs(10);
 
@@ -283,7 +282,7 @@ pub fn newGossipClient(
     var keypair = KeyPair.generate();
 
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-    const now = getWallclockMs();
+    const now = sig.time.clock.now();
     var contact_info = ContactInfo.init(allocator, pubkey, now, shred_version);
     try contact_info.setSocket(.gossip, address);
 
@@ -336,7 +335,7 @@ pub fn randomSignedGossipData(
 ) !SignedGossipData {
     const keypair = KeyPair.generate();
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-    const now = getWallclockMs();
+    const now = sig.time.clock.now();
     const info_pubkey = if (should_pass_sig_verification) pubkey else Pubkey.initRandom(random);
     // TODO: support other types of gossip data
     const info = ContactInfo.init(allocator, info_pubkey, now, SHRED_VERSION);

@@ -215,7 +215,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             },
         }
 
-        if (timer.read().gt(TRIM_INTERVAL)) {
+        if (timer.read().asNanos() > TRIM_INTERVAL.asNanos()) {
             defer timer.reset();
             const size = gossip_table.len();
 

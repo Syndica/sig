@@ -197,7 +197,7 @@ pub const ShredInserter = struct {
         is_repaired: []const bool,
         options: Options,
     ) !Result {
-        const timestamp = sig.time.Instant.now();
+        const timestamp = sig.time.clock.sample();
         ///////////////////////////
         // check inputs for validity and edge cases
         //

@@ -31,6 +31,8 @@ const Hash = sig.core.Hash;
 
 const RwMux = sig.sync.RwMux;
 
+const Duration = sig.time.Duration;
+
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
@@ -64,7 +66,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 
     const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
 
-    const now = sig.time.Instant.now();
+    const now = sig.time.clock.sample();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = now,
         .last_print_time = now,
@@ -131,8 +133,8 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 }
 
 const LastVoteRefreshTime = struct {
-    last_refresh_time: sig.time.Instant,
-    last_print_time: sig.time.Instant,
+    last_refresh_time: std.time.Instant,
+    last_print_time: std.time.Instant,
 };
 
 /// Determines whether to refresh and submit an updated version of the last vote based on several conditions.
@@ -195,10 +197,12 @@ fn maybeRefreshLastVote(
     // If our last landed vote on this fork is greater than the vote recorded in our tower
     // this means that our tower is old AND on chain adoption has failed. Warn the operator
     // as they could be submitting slashable votes.
+
+    const now = sig.time.clock.sample();
     if (latest_landed_vote_slot > last_voted_slot and
-        last_vote_refresh_time.last_print_time.elapsed().asSecs() >= 1)
+        now.since(last_vote_refresh_time.last_print_time) > Duration.fromSecs(1).asNanos())
     {
-        last_vote_refresh_time.last_print_time = sig.time.Instant.now();
+        last_vote_refresh_time.last_print_time = sig.time.clock.sample();
         // TODO log
     }
 
@@ -225,8 +229,8 @@ fn maybeRefreshLastVote(
         _ = last_vote_tx_blockhash;
     }
 
-    if (last_vote_refresh_time.last_refresh_time.elapsed().asMillis() <
-        MAX_VOTE_REFRESH_INTERVAL_MILLIS)
+    if (now.since(last_vote_refresh_time.last_refresh_time) <
+        Duration.fromMillis(MAX_VOTE_REFRESH_INTERVAL_MILLIS).asNanos())
     {
         // This avoids duplicate refresh in case there are multiple forks descending from our last voted fork
         // It also ensures that if the first refresh fails we will continue attempting to refresh at an interval no less
@@ -453,7 +457,7 @@ test "maybeRefreshLastVote - no heaviest slot on same fork" {
     );
     defer replay_tower.deinit(std.testing.allocator);
 
-    const now = sig.time.Instant.now();
+    const now = sig.time.clock.sample();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = now,
         .last_print_time = now,
@@ -487,7 +491,7 @@ test "maybeRefreshLastVote - no landed vote" {
     );
     defer replay_tower.deinit(std.testing.allocator);
 
-    const now = sig.time.Instant.now();
+    const now = sig.time.clock.sample();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = now,
         .last_print_time = now,
@@ -566,7 +570,7 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
         },
     };
 
-    const now = sig.time.Instant.now();
+    const now = sig.time.clock.sample();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = now,
         .last_print_time = now,
@@ -645,7 +649,7 @@ test "maybeRefreshLastVote - non voting validator" {
 
     replay_tower.last_vote_tx_blockhash = .non_voting;
 
-    const now = sig.time.Instant.now();
+    const now = sig.time.clock.sample();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = now,
         .last_print_time = now,
@@ -724,7 +728,7 @@ test "maybeRefreshLastVote - hotspare validator" {
 
     replay_tower.last_vote_tx_blockhash = .hot_spare;
 
-    const now = sig.time.Instant.now();
+    const now = sig.time.clock.sample();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         .last_refresh_time = now,
         .last_print_time = now,
@@ -803,7 +807,7 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
 
     replay_tower.last_vote_tx_blockhash = .{ .blockhash = Hash.ZEROES };
 
-    const now = sig.time.Instant.now();
+    const now = sig.time.clock.sample();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         // Will last_vote_refresh_time.last_refresh_time.elapsed().asMillis() as zero
         // thereby satisfying the test condition of that value being
@@ -885,11 +889,12 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
 
     replay_tower.last_vote_tx_blockhash = .{ .blockhash = Hash.ZEROES };
 
+    const now = sig.time.clock.sample();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
-        .last_refresh_time = sig.time.Instant.now().sub(
-            sig.time.Duration.fromMillis(MAX_VOTE_REFRESH_INTERVAL_MILLIS),
-        ),
-        .last_print_time = sig.time.Instant.now(),
+        .last_refresh_time = Duration.fromInstant(now).sub(
+            .fromMillis(MAX_VOTE_REFRESH_INTERVAL_MILLIS),
+        ).asInstant(),
+        .last_print_time = now,
     };
 
     const result = sig.replay.consensus.maybeRefreshLastVote(

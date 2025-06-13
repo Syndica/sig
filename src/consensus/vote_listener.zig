@@ -11,6 +11,7 @@ const Transaction = sig.core.Transaction;
 const TransactionMessage = sig.core.transaction.Message;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VoteTracker = sig.consensus.VoteTracker;
+const Duration = sig.time.Duration;
 
 pub const BankForksStub = struct {
     root_slot: Slot,
@@ -387,7 +388,7 @@ fn processVotesLoop(
     var latest_vote_slot_per_validator: std.AutoArrayHashMapUnmanaged(Pubkey, Slot) = .{};
     defer latest_vote_slot_per_validator.deinit(allocator);
 
-    var last_process_root = sig.time.Instant.now();
+    var last_process_root = sig.time.clock.sample();
 
     var vote_processing_time = VoteProcessingTiming.ZEROES;
 
@@ -398,7 +399,8 @@ fn processVotesLoop(
             break :blk bank_forks.rootBank();
         };
 
-        if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
+        const now = sig.time.clock.sample();
+        if (now.since(last_process_root) > Duration.fromMillis(DEFAULT_MS_PER_SLOT).asNanos()) {
             if (TODO_CONFIRMATION_VERIFIER) {
                 const unrooted_optimistic_slots = confirmation_verifier
                     .verify_for_unrooted_optimistic_slots(&root_bank, ledger_db);
@@ -412,7 +414,7 @@ fn processVotesLoop(
                 );
             }
             vote_tracker.progressWithNewRootBank(allocator, root_bank.slot);
-            last_process_root = sig.time.Instant.now();
+            last_process_root = sig.time.clock.sample();
         }
 
         const confirmed_slots = listenAndConfirmVotes(
@@ -492,10 +494,13 @@ fn listenAndConfirmVotes(
     defer replay_votes_buffer.deinit(allocator);
     try replay_votes_buffer.ensureTotalCapacityPrecise(allocator, 4096);
 
-    var remaining_wait_time = sig.time.Duration.fromMillis(200);
-    while (remaining_wait_time.gt(sig.time.Duration.zero())) {
-        const start = sig.time.Instant.now();
-        defer remaining_wait_time = remaining_wait_time.saturatingSub(start.elapsed());
+    var remaining_wait_time = sig.time.Duration.fromMillis(200).asNanos();
+    while (remaining_wait_time > 0) {
+        const start = sig.time.clock.sample();
+        defer {
+            const now = sig.time.clock.sample();
+            remaining_wait_time = remaining_wait_time -| now.since(start);
+        }
 
         const gossip_vote_txs: []const Transaction = blk: {
             gossip_vote_txs_buffer.clearRetainingCapacity();

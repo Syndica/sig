@@ -20,7 +20,6 @@ const ClientVersion = sig.version.ClientVersion;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 
-const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;
 
@@ -517,7 +516,7 @@ pub const LegacyContactInfo = struct {
 
     pub fn default(id: Pubkey) LegacyContactInfo {
         const unspecified_addr = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, 0);
-        const wallclock = getWallclockMs();
+        const wallclock = sig.time.clock.now();
 
         return LegacyContactInfo{
             .id = id,
@@ -549,7 +548,7 @@ pub const LegacyContactInfo = struct {
             .rpc = SocketAddr.initRandom(random),
             .rpc_pubsub = SocketAddr.initRandom(random),
             .serve_repair = SocketAddr.initRandom(random),
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
             .shred_version = random.int(u16),
         };
     }
@@ -614,7 +613,7 @@ pub const Vote = struct {
         return Vote{
             .from = Pubkey.initRandom(random),
             .transaction = Transaction.EMPTY,
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
             .slot = random.int(u64),
         };
     }
@@ -677,7 +676,7 @@ pub const LowestSlot = struct {
             .lowest = random.int(u64),
             .slots = &slots,
             .stash = &stash,
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
         };
     }
 };
@@ -729,7 +728,7 @@ pub const AccountsHashes = struct {
         return .{
             .from = Pubkey.initRandom(random),
             .hashes = &.{},
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
         };
     }
 
@@ -768,7 +767,7 @@ pub const EpochSlots = struct {
         return EpochSlots{
             .from = Pubkey.initRandom(random),
             .slots = &slice,
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
         };
     }
 
@@ -891,7 +890,7 @@ pub const LegacyVersion = struct {
     pub fn initRandom(random: std.Random) LegacyVersion {
         return LegacyVersion{
             .from = Pubkey.initRandom(random),
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
             .version = LegacyVersion1.initRandom(random),
         };
     }
@@ -931,7 +930,7 @@ pub const Version = struct {
     pub fn default(from: Pubkey) Self {
         return Self{
             .from = from,
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
             .version = LegacyVersion2.CURRENT,
         };
     }
@@ -939,7 +938,7 @@ pub const Version = struct {
     pub fn initRandom(random: std.Random) Version {
         return Version{
             .from = Pubkey.initRandom(random),
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
             .version = LegacyVersion2.initRandom(random),
         };
     }
@@ -992,7 +991,7 @@ pub const NodeInstance = struct {
     pub fn initRandom(random: std.Random) Self {
         return Self{
             .from = Pubkey.initRandom(random),
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
             .timestamp = random.int(u64),
             .token = random.int(u64),
         };
@@ -1080,7 +1079,7 @@ pub const DuplicateShred = struct {
 
         return DuplicateShred{
             .from = Pubkey.initRandom(random),
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
             .slot = random.int(u64),
             .shred_index = random.int(u32),
             .shred_type = ShredType.Data,
@@ -1122,7 +1121,7 @@ pub const SnapshotHashes = struct {
             .from = Pubkey.initRandom(random),
             .full = .{ .slot = random.int(u64), .hash = Hash.initRandom(random) },
             .incremental = IncrementalSnapshotsList.EMPTY,
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
         };
     }
 

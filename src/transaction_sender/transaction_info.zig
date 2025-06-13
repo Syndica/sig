@@ -1,10 +1,11 @@
+const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Transaction = sig.core.Transaction;
-const Instant = sig.time.Instant;
+const Instant = std.time.Instant;
 const Duration = sig.time.Duration;
 
 /// TransactionInfo is a wrapper around a transaction that includes additional
@@ -57,7 +58,8 @@ pub const TransactionInfo = struct {
 
     pub fn shouldRetry(self: *const TransactionInfo, wait_between_retries: Duration) bool {
         if (self.last_sent_time) |lst| {
-            return lst.elapsed().asNanos() >= wait_between_retries.asNanos();
+            const now = sig.time.clock.sample();
+            return now.since(lst) >= wait_between_retries.asNanos();
         }
         return true;
     }

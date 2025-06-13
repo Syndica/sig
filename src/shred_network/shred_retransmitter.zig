@@ -407,7 +407,7 @@ pub const RetransmitServiceMetrics = struct {
 
     // logging info
     logging_fields: struct {
-        last_log_instant: sig.time.Instant,
+        last_log_instant: std.time.Instant,
     },
 
     // metrics prefix
@@ -425,12 +425,13 @@ pub const RetransmitServiceMetrics = struct {
     pub fn init() !RetransmitServiceMetrics {
         var self: RetransmitServiceMetrics = undefined;
         std.debug.assert(try globalRegistry().initFields(&self) == 1);
-        self.logging_fields = .{ .last_log_instant = sig.time.Instant.now() };
+        self.logging_fields = .{ .last_log_instant = sig.time.clock.sample() };
         return self;
     }
 
     pub fn maybeLog(self: *RetransmitServiceMetrics, logger: Logger) void {
-        if (self.logging_fields.last_log_instant.elapsed().asMillis() > 250) {
+        const now = sig.time.clock.sample();
+        if (now.since(self.logging_fields.last_log_instant) > Duration.fromMillis(250).asNanos()) {
             logger.info().logf(
                 "turbine-retransmit: received={} retransmitted={} skipped={}:{}:{}",
                 .{
@@ -441,7 +442,7 @@ pub const RetransmitServiceMetrics = struct {
                     self.shred_id_filtered_count.get(),
                 },
             );
-            self.logging_fields.last_log_instant = sig.time.Instant.now();
+            self.logging_fields.last_log_instant = sig.time.clock.sample();
         }
     }
 };

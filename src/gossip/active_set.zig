@@ -12,8 +12,6 @@ const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipTable = sig.gossip.table.GossipTable;
 
-const getWallclockMs = sig.time.getWallclockMs;
-
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 pub const GOSSIP_PUSH_FANOUT: usize = 6;
 
@@ -149,7 +147,7 @@ test "init/denit" {
         const value = SignedGossipData.initSigned(&keypair, .{
             .LegacyContactInfo = data,
         });
-        _ = try table.insert(value, getWallclockMs());
+        _ = try table.insert(value, sig.time.clock.now());
     }
 
     var active_set = ActiveSet.init(alloc);

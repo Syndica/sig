@@ -193,7 +193,7 @@ pub const RepairService = struct {
         var oldest_slot_needing_repair: u64 = 0;
         var newest_slot_needing_repair: u64 = 0;
         var repairs = ArrayList(RepairRequest).init(self.allocator);
-        if (!try self.shred_tracker.identifyMissing(&self.report, sig.time.Instant.now())) {
+        if (!try self.shred_tracker.identifyMissing(&self.report, sig.time.clock.sample())) {
             return repairs;
         }
         var individual_count: usize = 0;
@@ -284,18 +284,25 @@ fn maxRequesterThreads() u32 {
 fn sleepRepair(num_requests: u64, last_iteration: Duration) void {
     // time we'd like the entire loop to take for this number of repairs
     const target = Duration.fromMillis(num_requests / 8);
-    const bounded = target.min(MAX_REPAIR_LOOP_DURATION_TARGET).max(MIN_REPAIR_LOOP_DURATION);
+    const bounded = @max(
+        @min(target.asNanos(), MAX_REPAIR_LOOP_DURATION_TARGET.asNanos()),
+        MIN_REPAIR_LOOP_DURATION.asNanos(),
+    );
 
     // amount of time to sleep after last_iteration to reach the target
-    const remaining_sleep_for_target = bounded.saturatingSub(last_iteration);
+    const remaining_sleep_for_target = bounded -| last_iteration.asNanos();
 
     // if overwhelmed by generating many repair requests, this ensures there is
     // a pause between them to dedicate more CPU to process some incoming
     // shreds. This supplements MIN_REPAIR_DELAY to ensure repairs are actively
     // being processed no more than 80% of the time.
-    const take_a_break = last_iteration.div(4);
+    const take_a_break = last_iteration.asNanos() / 4;
 
-    std.time.sleep(remaining_sleep_for_target.max(MIN_REPAIR_DELAY).max(take_a_break).asNanos());
+    std.time.sleep(@max(
+        remaining_sleep_for_target,
+        MIN_REPAIR_DELAY.asNanos(),
+        take_a_break,
+    ));
 }
 
 /// The maximum time that we want the repair loop to take.
