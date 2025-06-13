@@ -154,14 +154,17 @@ test "stable_log" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try createTransactionContext(
+    var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{
             .log_collector = LogCollector.default(),
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const program_id =
         Pubkey.parseBase58String("SigDefau1tPubkey111111111111111111111111111") catch unreachable;
