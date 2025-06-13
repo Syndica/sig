@@ -406,7 +406,7 @@ test "pushInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -417,7 +417,10 @@ test "pushInstruction" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -490,7 +493,7 @@ test "processNextInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -502,7 +505,10 @@ test "processNextInstruction" {
             .compute_meter = system_program.COMPUTE_UNITS,
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -554,7 +560,7 @@ test "popInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -565,7 +571,10 @@ test "popInstruction" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -636,7 +645,7 @@ test "prepareCpiInstructionInfo" {
     var prng = std.Random.DefaultPrng.init(0);
 
     var feature_set = try allocator.create(FeatureSet);
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -649,7 +658,10 @@ test "prepareCpiInstructionInfo" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const caller = try testing.createInstructionInfo(
         &tc,
@@ -787,7 +799,7 @@ test "sumAccountLamports" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -799,7 +811,10 @@ test "sumAccountLamports" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     {
         // Success: 0 + 1 + 2 + 3 = 6

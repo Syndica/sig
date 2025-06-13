@@ -974,7 +974,7 @@ test findProgramAddress {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = Pubkey.initRandom(prng.random()),
@@ -982,7 +982,10 @@ test findProgramAddress {
             },
         },
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const cost = tc.compute_budget.create_program_address_units;
     const address = sig.runtime.program.bpf_loader.v3.ID;
@@ -1089,7 +1092,7 @@ test createProgramAddress {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = Pubkey.initRandom(prng.random()),
@@ -1097,7 +1100,10 @@ test createProgramAddress {
             },
         },
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const cost = tc.compute_budget.create_program_address_units;
     const address = sig.runtime.program.bpf_loader.v3.ID;
@@ -1251,12 +1257,15 @@ test allocFree {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{},
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const heap = try allocator.alloc(u8, 4096);
     defer allocator.free(heap);
@@ -1302,10 +1311,13 @@ test getProcessedSiblingInstruction {
         .owner = sig.runtime.program.bpf_loader.v2.ID,
     };
 
-    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &account_params,
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const trace_indexes: [8]u8 = std.simd.iota(u8, 8);
     for ([_]u8{ 1, 2, 3, 2, 2, 3, 4, 3 }, 0..) |stack_height, index_in_trace| {
@@ -1448,7 +1460,7 @@ test getEpochStake {
     const target_vote_address = Pubkey.initRandom(prng.random());
     const total_epoch_stake = 200_000_000_000_000;
 
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -1465,7 +1477,10 @@ test getEpochStake {
             },
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     // Test get total stake
     {
@@ -1568,7 +1583,7 @@ test "set and get return data" {
     var id_buffer: [32]u8 = .{0} ** 32;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -1579,7 +1594,10 @@ test "set and get return data" {
             .compute_meter = 10_000,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const program_id = sig.runtime.program.bpf_loader.v2.ID;
     const instr_info = sig.runtime.InstructionInfo{

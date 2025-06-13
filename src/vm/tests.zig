@@ -69,12 +69,16 @@ fn testAsmWithMemory(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    var tc = try createTransactionContext(
+    var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{ .compute_meter = expected[1] },
     );
-    defer deinitTranactionContext(allocator, tc);
+    defer {
+        deinitTranactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
     var vm = try Vm.init(
         allocator,
         &executable,
@@ -1898,12 +1902,15 @@ test "pqr" {
     program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
     var prng = std.Random.DefaultPrng.init(10);
-    var tc = try createTransactionContext(
+    var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{ .compute_meter = 6 },
     );
-    defer deinitTranactionContext(allocator, tc);
+    defer {
+        deinitTranactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const max_int = std.math.maxInt(u64);
     inline for (
@@ -2043,12 +2050,15 @@ test "pqr divide by zero" {
         const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
         var prng = std.Random.DefaultPrng.init(10);
 
-        var tc = try createTransactionContext(
+        var cache, var tc = try createTransactionContext(
             allocator,
             prng.random(),
             .{ .compute_meter = 2 },
         );
-        defer deinitTranactionContext(allocator, tc);
+        defer {
+            deinitTranactionContext(allocator, tc);
+            cache.deinit(allocator);
+        }
 
         var vm = try Vm.init(
             allocator,
@@ -2321,7 +2331,7 @@ pub fn testElfWithSyscalls(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    var tc = try createTransactionContext(
+    var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -2331,7 +2341,10 @@ pub fn testElfWithSyscalls(
             .compute_meter = expected[1],
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const instr_info = InstructionInfo{
         .program_meta = .{
@@ -2932,14 +2945,17 @@ pub fn testSyscall(
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{.{
             .pubkey = sig.core.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }},
         .compute_meter = config.compute_meter,
     });
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(
