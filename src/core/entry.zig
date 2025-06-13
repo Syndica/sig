@@ -184,16 +184,14 @@ test "Entry serialization and deserialization" {
 }
 
 pub const test_entry = struct {
-    var txns = [_]Transaction{
-        sig.core.transaction.transaction_v0_example.as_struct,
-        sig.core.transaction.transaction_v0_example.as_struct,
-    };
-
     pub const as_struct = Entry{
         .num_hashes = 149218308,
         .hash = sig.core.Hash
             .parseBase58String("G8T3smgLc4XavAtxScD3u4FTAqPtwbFCEJKwJbfoECcd") catch unreachable,
-        .transactions = txns[0..2],
+        .transactions = &.{
+            sig.core.transaction.transaction_v0_example.as_struct,
+            sig.core.transaction.transaction_v0_example.as_struct,
+        },
     };
 
     pub const as_bytes = [_]u8{
