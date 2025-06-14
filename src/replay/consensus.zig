@@ -401,14 +401,13 @@ fn checkAndHandleNewRoot(
     new_root: Slot,
 ) !void {
     // get the root bank before squash.
+    if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
     var root_tracker = slot_tracker.slots.get(new_root) orelse return error.MissingSlot;
     const maybe_root_hash, var hash_lg = root_tracker.state.hash.readWithLock();
     defer hash_lg.unlock();
     const root_hash = maybe_root_hash.* orelse return error.MissingHash;
 
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
-
-    if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
     // TODO implement leader_schedule_cache.set_root.
     // TODO have this a seperate function?
     {
@@ -1000,6 +999,36 @@ test "checkAndHandleNewRoot - missing slot" {
     defer fixture.deinit(testing.allocator);
 
     var slot_tracker: SlotTracker = SlotTracker{ .slots = .{} };
+    defer {
+        var it = slot_tracker.slots.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.constants.hard_forks.deinit(testing.allocator);
+        }
+        slot_tracker.slots.deinit(testing.allocator);
+    }
+
+    try slot_tracker.slots.put(testing.allocator, root.slot, .{
+        .constants = .{
+            .slot = 0,
+            .parent_slot = 0,
+            .parent_hash = Hash.ZEROES,
+            .block_height = 0,
+            .hard_forks = try .initRandom(random, testing.allocator, 10),
+            .max_tick_height = 0,
+            .fee_rate_governor = .initRandom(random),
+            .epoch_reward_status = .inactive,
+        },
+        .state = .{
+            .hash = RwMux(?Hash).init(null),
+            .capitalization = std.atomic.Value(u64).init(0),
+            .transaction_count = std.atomic.Value(u64).init(0),
+            .tick_height = std.atomic.Value(u64).init(0),
+            .collected_rent = std.atomic.Value(u64).init(0),
+            .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+            }),
+        },
+    });
 
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
@@ -1026,7 +1055,7 @@ test "checkAndHandleNewRoot - missing slot" {
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
-        1, // Non-existent slot
+        123, // Non-existent slot
     );
 
     try testing.expectError(error.MissingSlot, result);
