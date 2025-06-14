@@ -408,6 +408,8 @@ fn checkAndHandleNewRoot(
     const root_hash = maybe_root_hash.* orelse return error.MissingHash;
 
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
+    defer allocator.free(rooted_slots);
+
     // TODO implement leader_schedule_cache.set_root.
     // TODO have this a seperate function?
     {
