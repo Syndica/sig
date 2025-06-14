@@ -898,10 +898,6 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
     var prng = std.Random.DefaultPrng.init(91);
     const random = prng.random();
 
-    const root = SlotAndHash{
-        .slot = 0,
-        .hash = Hash.initRandom(random),
-    };
     const hash3 = SlotAndHash{
         .slot = 3,
         .hash = Hash.initRandom(random),
@@ -912,6 +908,10 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
     };
     const hash1 = SlotAndHash{
         .slot = 1,
+        .hash = Hash.initRandom(random),
+    };
+    const root = SlotAndHash{
+        .slot = 0,
         .hash = Hash.initRandom(random),
     };
 
@@ -1173,4 +1173,126 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     );
 
     try testing.expectError(error.EmptySlotTracker, result);
+}
+
+test "checkAndHandleNewRoot - success" {
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    const hash3 = SlotAndHash{
+        .slot = 3,
+        .hash = Hash.initRandom(random),
+    };
+    const hash2 = SlotAndHash{
+        .slot = 2,
+        .hash = Hash.initRandom(random),
+    };
+    const hash1 = SlotAndHash{
+        .slot = 1,
+        .hash = Hash.initRandom(random),
+    };
+    const root = SlotAndHash{
+        .slot = 0,
+        .hash = Hash.initRandom(random),
+    };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var slot_tracker: SlotTracker = SlotTracker{ .slots = .{} };
+    defer {
+        var it = slot_tracker.slots.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.constants.hard_forks.deinit(testing.allocator);
+        }
+        slot_tracker.slots.deinit(testing.allocator);
+    }
+
+    try slot_tracker.slots.put(testing.allocator, hash2.slot, .{
+        .constants = .{
+            .slot = hash2.slot,
+            .parent_slot = hash1.slot,
+            .parent_hash = Hash.ZEROES,
+            .block_height = 0,
+            .hard_forks = try .initRandom(random, testing.allocator, 10),
+            .max_tick_height = 0,
+            .fee_rate_governor = .initRandom(random),
+            .epoch_reward_status = .inactive,
+        },
+        .state = .{
+            .hash = RwMux(?Hash).init(hash2.hash),
+            .capitalization = std.atomic.Value(u64).init(0),
+            .transaction_count = std.atomic.Value(u64).init(0),
+            .tick_height = std.atomic.Value(u64).init(0),
+            .collected_rent = std.atomic.Value(u64).init(0),
+            .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+            }),
+        },
+    });
+    try slot_tracker.slots.put(testing.allocator, hash3.slot, .{
+        .constants = .{
+            .slot = hash3.slot,
+            .parent_slot = hash2.slot,
+            .parent_hash = Hash.ZEROES,
+            .block_height = 0,
+            .hard_forks = try .initRandom(random, testing.allocator, 10),
+            .max_tick_height = 0,
+            .fee_rate_governor = .initRandom(random),
+            .epoch_reward_status = .inactive,
+        },
+        .state = .{
+            .hash = RwMux(?Hash).init(hash3.hash),
+            .capitalization = std.atomic.Value(u64).init(0),
+            .transaction_count = std.atomic.Value(u64).init(0),
+            .tick_height = std.atomic.Value(u64).init(0),
+            .collected_rent = std.atomic.Value(u64).init(0),
+            .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+            }),
+        },
+    });
+
+    // Add some entries to progress map that should be removed
+    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    trees1.appendSliceAssumeCapacity(&[3]TreeNode{
+        .{ hash1, root },
+        .{ hash2, hash1 },
+        .{ hash3, hash2 },
+    });
+
+    try fixture.fill_fork(
+        testing.allocator,
+        .{ .root = root, .data = trees1 },
+    );
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
+    defer registry.deinit();
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var blockstore_reader = try BlockstoreReader.init(
+        testing.allocator,
+        .noop,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    try testing.expectEqual(3, fixture.progress.map.count());
+    try testing.expect(fixture.progress.map.contains(hash1.slot));
+    try checkAndHandleNewRoot(
+        testing.allocator,
+        &blockstore_reader,
+        &slot_tracker,
+        &fixture.progress,
+        &fixture.fork_choice,
+        hash3.slot,
+    );
+
+    try testing.expectEqual(2, fixture.progress.map.count());
+    try testing.expect(!fixture.progress.map.contains(hash1.slot));
 }
