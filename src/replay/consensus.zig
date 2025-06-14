@@ -404,8 +404,6 @@ fn checkAndHandleNewRoot(
     var root_tracker = slot_tracker.slots.get(new_root) orelse return error.MissingSlot;
     const root_hash, var hash_lg = root_tracker.state.hash.readWithLock();
     defer hash_lg.unlock();
-    // TODO need to get parents
-    _ = &root_tracker;
 
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
 
@@ -438,8 +436,9 @@ fn checkAndHandleNewRoot(
     // Update the progress map.
     // TODO Move to its own function?
     {
-        var to_remove = std.ArrayList(Slot).init(
+        var to_remove = try std.ArrayListUnmanaged(Slot).initCapacity(
             allocator,
+            progress.map.count(),
         );
         defer to_remove.deinit();
 
@@ -447,7 +446,7 @@ fn checkAndHandleNewRoot(
         while (it.next()) |entry| {
             // TODO should frozen state be taking into consideration.
             if (slot_tracker.slots.get(entry.key_ptr.*) == null) {
-                try to_remove.append(entry.key_ptr.*);
+                to_remove.appendAssumeCapacity(entry.key_ptr.*);
             }
         }
 
