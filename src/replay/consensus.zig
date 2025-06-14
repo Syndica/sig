@@ -167,6 +167,8 @@ const LastVoteRefreshTime = struct {
 /// - Contains updated metadata (timestamp/blockhash)
 /// - Generates a new signature
 /// - Will be processed as a separate transaction by the network
+///
+/// Analogous to [maybe_refresh_last_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2606)
 fn maybeRefreshLastVote(
     replay_tower: *ReplayTower,
     progress: *const ProgressMap,
@@ -216,6 +218,7 @@ fn maybeRefreshLastVote(
     };
 
     // TODO Need need a FIFO queue of `recent_blockhash` items
+    // Add after transaction scheduling.
     if (maybe_last_vote_tx_blockhash) |last_vote_tx_blockhash| {
         // Check the blockhash queue to see if enough blocks have been built on our last voted fork
         _ = &last_vote_tx_blockhash;
@@ -335,6 +338,10 @@ pub const GenerateVoteTxResult = union(enum) {
     tx: Transaction,
 };
 
+/// Handles a votable bank by recording the vote, update commitment cache,
+/// potentially processing a new root, and pushing the vote.
+///
+/// Analogous to [handle_votable_bank](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2388)
 fn handleVotableBank(
     allocator: std.mem.Allocator,
     blockstore_reader: *BlockstoreReader,
@@ -369,6 +376,14 @@ fn handleVotableBank(
     );
 }
 
+/// Pushes a new vote transaction to the network and updates tower state.
+///
+/// - Generates a new vote transaction.
+/// - Updates the tower's last vote blockhash.
+/// - Creates a saved tower state.
+/// - Sends the vote operation to the voting sender.
+///
+/// Analogous to [push_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2775)
 fn pushVote(
     replay_tower: *ReplayTower,
 ) !void {
@@ -391,6 +406,15 @@ fn pushVote(
     }
 }
 
+/// Processes a new root slot by updating various system components to reflect the new root.
+///
+/// - Validates the new root exists and has a hash.
+/// - Gets all slots rooted at the new root.
+/// - Updates ledger state with the new roots.
+/// - Cleans up progress map for non-existent slots.
+/// - Updates fork choice with the new root.
+///
+/// Analogous to [check_and_handle_new_root](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L4002)
 fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
     blockstore_reader: *BlockstoreReader,
