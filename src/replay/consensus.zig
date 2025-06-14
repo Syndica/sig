@@ -503,7 +503,6 @@ test "maybeRefreshLastVote - no heaviest slot on same fork" {
     defer fixture.deinit(testing.allocator);
 
     var replay_tower = try createTestReplayTower(
-        std.testing.allocator,
         1,
         0.67,
     );
@@ -536,7 +535,6 @@ test "maybeRefreshLastVote - no landed vote" {
     defer fixture.deinit(testing.allocator);
 
     var replay_tower = try createTestReplayTower(
-        std.testing.allocator,
         1,
         0.67,
     );
@@ -600,7 +598,6 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
     }
 
     var replay_tower = try createTestReplayTower(
-        std.testing.allocator,
         1,
         0.67,
     );
@@ -682,7 +679,6 @@ test "maybeRefreshLastVote - non voting validator" {
     }
 
     var replay_tower = try createTestReplayTower(
-        std.testing.allocator,
         1,
         0.67,
     );
@@ -767,7 +763,6 @@ test "maybeRefreshLastVote - hotspare validator" {
     }
 
     var replay_tower = try createTestReplayTower(
-        std.testing.allocator,
         1,
         0.67,
     );
@@ -852,7 +847,6 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
     }
 
     var replay_tower = try createTestReplayTower(
-        std.testing.allocator,
         1,
         0.67,
     );
@@ -940,7 +934,6 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
     }
 
     var replay_tower = try createTestReplayTower(
-        std.testing.allocator,
         1,
         0.67,
     );
