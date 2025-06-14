@@ -440,7 +440,7 @@ fn checkAndHandleNewRoot(
             allocator,
             progress.map.count(),
         );
-        defer to_remove.deinit();
+        defer to_remove.deinit(allocator);
 
         var it = progress.map.iterator();
         while (it.next()) |entry| {
