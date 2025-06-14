@@ -480,6 +480,7 @@ fn resetFork(
 
 const testing = std.testing;
 const TreeNode = sig.consensus.fork_choice.TreeNode;
+const TestDB = sig.ledger.tests.TestDB;
 const TestFixture = sig.consensus.replay_tower.TestFixture;
 const MAX_TEST_TREE_LEN = sig.consensus.replay_tower.MAX_TEST_TREE_LEN;
 const Lockout = sig.runtime.program.vote.state.Lockout;
@@ -976,4 +977,49 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
 
     try testing.expectEqual(true, result);
     try testing.expectEqual(.non_voting, replay_tower.last_vote_tx_blockhash);
+}
+
+test "checkAndHandleNewRoot - missing slot" {
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    const root = SlotAndHash{
+        .slot = 0,
+        .hash = Hash.initRandom(random),
+    };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var slot_tracker: SlotTracker = SlotTracker{ .slots = .{} };
+
+    const logger = .noop;
+    var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var blockstore_reader = try BlockstoreReader.init(
+        testing.allocator,
+        logger,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    // Try to check a slot that doesn't exist in the tracker
+    const result = checkAndHandleNewRoot(
+        testing.allocator,
+        &blockstore_reader,
+        &slot_tracker,
+        &fixture.progress,
+        &fixture.fork_choice,
+        1, // Non-existent slot
+    );
+
+    try testing.expectError(error.MissingSlot, result);
 }
