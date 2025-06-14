@@ -404,6 +404,7 @@ fn checkAndHandleNewRoot(
     var root_tracker = slot_tracker.slots.get(new_root) orelse return error.MissingSlot;
     const maybe_root_hash, var hash_lg = root_tracker.state.hash.readWithLock();
     defer hash_lg.unlock();
+    const root_hash = maybe_root_hash.* orelse return error.MissingHash;
 
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
 
@@ -491,6 +492,7 @@ const TestFixture = sig.consensus.replay_tower.TestFixture;
 const MAX_TEST_TREE_LEN = sig.consensus.replay_tower.MAX_TEST_TREE_LEN;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const createTestReplayTower = sig.consensus.replay_tower.createTestReplayTower;
+const LtHash = sig.core.hash.LtHash;
 
 test "maybeRefreshLastVote - no heaviest slot on same fork" {
     var prng = std.Random.DefaultPrng.init(91);
@@ -1028,4 +1030,79 @@ test "checkAndHandleNewRoot - missing slot" {
     );
 
     try testing.expectError(error.MissingSlot, result);
+}
+
+test "checkAndHandleNewRoot - missing hash" {
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    const root = SlotAndHash{
+        .slot = 0,
+        .hash = Hash.initRandom(random),
+    };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var slot_tracker: SlotTracker = SlotTracker{ .slots = .{} };
+    defer {
+        var it = slot_tracker.slots.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.constants.hard_forks.deinit(testing.allocator);
+        }
+        slot_tracker.slots.deinit(testing.allocator);
+    }
+
+    try slot_tracker.slots.put(testing.allocator, root.slot, .{
+        .constants = .{
+            .slot = 0,
+            .parent_slot = 0,
+            .parent_hash = Hash.ZEROES,
+            .block_height = 0,
+            .hard_forks = try .initRandom(random, testing.allocator, 10),
+            .max_tick_height = 0,
+            .fee_rate_governor = .initRandom(random),
+            .epoch_reward_status = .inactive,
+        },
+        .state = .{
+            .hash = RwMux(?Hash).init(null),
+            .capitalization = std.atomic.Value(u64).init(0),
+            .transaction_count = std.atomic.Value(u64).init(0),
+            .tick_height = std.atomic.Value(u64).init(0),
+            .collected_rent = std.atomic.Value(u64).init(0),
+            .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+            }),
+        },
+    });
+
+    const logger = .noop;
+    var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var blockstore_reader = try BlockstoreReader.init(
+        testing.allocator,
+        logger,
+        db,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    // Try to check a slot that doesn't exist in the tracker
+    const result = checkAndHandleNewRoot(
+        testing.allocator,
+        &blockstore_reader,
+        &slot_tracker,
+        &fixture.progress,
+        &fixture.fork_choice,
+        root.slot, // Non-existent hash
+    );
+
+    try testing.expectError(error.MissingHash, result);
 }
