@@ -15,6 +15,8 @@ const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
 
+const EpochStakeMap = sig.core.stake.EpochStakeMap;
+
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -45,6 +47,9 @@ pub const ConsensusDependencies = struct {
     ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
     descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
+    slot_history: SlotHistory,
+    epoch_stakes: EpochStakeMap,
+    latest_validator_votes_for_frozen_banks: LatestValidatorVotesForFrozenBanks,
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
@@ -63,13 +68,6 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         .last_refresh_time = sig.time.Instant.now(),
         .last_print_time = sig.time.Instant.now(),
     };
-    
-    const latest_validator_votes_for_frozen_banks = LatestValidatorVotesForFrozenBanks{
-        .max_gossip_frozen_votes = .{},
-    };
-    const bits = try sig.bloom.bit_set.DynamicArrayBitSet(u64).initEmpty(deps.allocator, 10);
-    defer bits.deinit(deps.allocator);
-    const slot_history = SlotHistory{ .bits = bits, .next_slot = 0 };
 
     const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
         deps.allocator,
@@ -79,10 +77,10 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         &deps.ancestors,
         &deps.descendants,
         deps.progress_map,
-        &latest_validator_votes_for_frozen_banks,
+        &deps.latest_validator_votes_for_frozen_banks,
         deps.fork_choice,
-        .{},
-        &slot_history,
+        deps.epoch_stakes,
+        &deps.slot_history,
     );
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
     const maybe_reset_slot = vote_and_reset_forks.reset_slot;
