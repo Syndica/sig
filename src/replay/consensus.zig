@@ -402,17 +402,15 @@ fn checkAndHandleNewRoot(
 ) !void {
     // get the root bank before squash.
     var root_tracker = slot_tracker.slots.get(new_root) orelse return error.MissingSlot;
-    const root_hash, var hash_lg = root_tracker.state.hash.readWithLock();
+    const maybe_root_hash, var hash_lg = root_tracker.state.hash.readWithLock();
     defer hash_lg.unlock();
 
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
 
     if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
     // TODO implement leader_schedule_cache.set_root.
-
     // TODO have this a seperate function?
     {
-        // TODO revisit these values.
         var lowest_cleanup_slot = RwMux(Slot).init(0);
         var max_root = std.atomic.Value(Slot).init(0);
         var registry = sig.prometheus.Registry(.{}).init(allocator);
@@ -433,6 +431,14 @@ fn checkAndHandleNewRoot(
     }
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
+    // TODO
+    // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
+    // - Set root on slot tracker: let removed_banks = bank_forks.write().unwrap().set_root(
+    //        new_root,
+    //        snapshot_controller,
+    //        highest_super_majority_root,
+    //    )?
+    //
     // Update the progress map.
     // TODO Move to its own function?
     {
@@ -458,7 +464,7 @@ fn checkAndHandleNewRoot(
     // Update forkchoice
     try fork_choice.setTreeRoot(&.{
         .slot = new_root,
-        .hash = root_hash.* orelse return error.MissingHash,
+        .hash = root_hash,
     });
 }
 
