@@ -187,6 +187,11 @@ pub const ProgressMap = struct {
         return &fork_progress.fork_stats;
     }
 
+    pub fn isDead(self: ProgressMap, slot: Slot) ?bool {
+        const fork_progress = self.map.getPtr(slot) orelse return null;
+        return fork_progress.is_dead;
+    }
+
     pub fn getHash(self: *const ProgressMap, slot: Slot) ?Hash {
         const fork_progress = self.map.get(slot) orelse return null;
         return fork_progress.fork_stats.bank_hash;
