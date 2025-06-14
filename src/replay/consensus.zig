@@ -317,52 +317,6 @@ fn towerDuplicateConfirmedForks(
     return try duplicate_confirmed_forks.toOwnedSlice(allocator);
 }
 
-// TODO Revisit
-const stubs = struct {
-    pub const DuplicateSlotsTracker = struct {};
-    pub const EpochSlotsFrozenSlots = struct {};
-    pub const DuplicateSlotsToRepair = struct {
-        pub fn insert(self: @This(), slot: Slot, hash: Hash) void {
-            _ = &self;
-            _ = &slot;
-            _ = &hash;
-        }
-        pub fn remove(self: @This(), slot: Slot) void {
-            _ = &self;
-            _ = &slot;
-        }
-    };
-    pub const PurgeRepairSlotCounter = struct {
-        pub fn remove(self: @This(), slot: Slot) void {
-            _ = &self;
-            _ = &slot;
-        }
-    };
-    pub const DuplicateConfirmedSlots = struct {};
-    pub const UnfrozenGossipVerifiedVoteHashes = struct {};
-    pub const ReplayLoopTiming = struct {};
-    pub const AncestorHashesReplayUpdateSender = struct {
-        pub fn send(self: @This(), update: AncestorHashesReplayUpdate) void {
-            _ = &self;
-            _ = &update;
-        }
-    };
-    pub const BankForks = struct {};
-    pub const PohRecorder = struct {};
-    pub const ClusterInfo = struct {};
-    pub const PartitionInfo = struct {};
-    pub const CommitmentAggregationData = struct {};
-    pub const RpcSubscriptions = struct {};
-    pub const SnapshotController = struct {};
-    pub const BlockCommitmentCache = struct {};
-    pub const BankNotificationSenderConfig = struct {};
-    pub const BankWithScheduler = struct {};
-    pub fn Sender(t: type) type {
-        _ = &t;
-        return struct {};
-    }
-};
-
 pub const AncestorHashesReplayUpdate = union(enum) {
     dead: Slot,
     dead_duplicate_confirmed: Slot,
@@ -516,9 +470,6 @@ fn resetFork(
     last_reset_hash: Hash,
     last_blockhash: Hash,
     last_reset_bank_descendants: std.ArrayList(Slot),
-    poh_recorder: stubs.PohRecorder,
-    cluster_info: stubs.ClusterInfo,
-    partition_info: stubs.PartitionInfo,
 ) !void {
     _ = &progress;
     _ = &blockstore;
@@ -526,9 +477,6 @@ fn resetFork(
     _ = &last_reset_hash;
     _ = &last_blockhash;
     _ = &last_reset_bank_descendants;
-    _ = &poh_recorder;
-    _ = &cluster_info;
-    _ = &partition_info;
 }
 
 const testing = std.testing;
