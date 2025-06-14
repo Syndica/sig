@@ -890,3 +890,91 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
 
     try testing.expectEqual(false, result);
 }
+
+test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockhash as non voting" {
+    var prng = std.Random.DefaultPrng.init(91);
+    const random = prng.random();
+
+    const root = SlotAndHash{
+        .slot = 0,
+        .hash = Hash.initRandom(random),
+    };
+    const hash3 = SlotAndHash{
+        .slot = 3,
+        .hash = Hash.initRandom(random),
+    };
+    const hash2 = SlotAndHash{
+        .slot = 2,
+        .hash = Hash.initRandom(random),
+    };
+    const hash1 = SlotAndHash{
+        .slot = 1,
+        .hash = Hash.initRandom(random),
+    };
+
+    var fixture = try TestFixture.init(testing.allocator, root);
+    defer fixture.deinit(testing.allocator);
+
+    var trees1 = try std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN).init(0);
+    trees1.appendSliceAssumeCapacity(&[3]TreeNode{
+        .{ hash1, root },
+        .{ hash2, hash1 },
+        .{ hash3, hash2 },
+    });
+
+    try fixture.fill_fork(
+        testing.allocator,
+        .{ .root = root, .data = trees1 },
+    );
+
+    // Update fork stat
+    if (fixture.progress.getForkStats(hash3.slot)) |fork_stat| {
+        fork_stat.*.my_latest_landed_vote = hash2.slot;
+    }
+
+    var replay_tower = try createTestReplayTower(
+        std.testing.allocator,
+        1,
+        0.67,
+    );
+
+    var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
+        std.testing.allocator,
+        3,
+    );
+    defer expected_slots.deinit(std.testing.allocator);
+    var lockouts = [_]Lockout{
+        Lockout{ .slot = 3, .confirmation_count = 3 },
+        Lockout{ .slot = 4, .confirmation_count = 2 },
+        Lockout{ .slot = 5, .confirmation_count = 1 },
+    };
+    try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+    replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
+        .tower_sync = sig.runtime.program.vote.state.TowerSync{
+            .lockouts = expected_slots,
+            .root = null,
+            .hash = Hash.ZEROES,
+            .timestamp = null,
+            .block_id = Hash.ZEROES,
+        },
+    };
+
+    replay_tower.last_vote_tx_blockhash = .{ .blockhash = Hash.ZEROES };
+
+    var last_vote_refresh_time: LastVoteRefreshTime = .{
+        .last_refresh_time = sig.time.Instant.now().sub(
+            sig.time.Duration.fromMillis(MAX_VOTE_REFRESH_INTERVAL_MILLIS),
+        ),
+        .last_print_time = sig.time.Instant.now(),
+    };
+
+    const result = sig.replay.consensus.maybeRefreshLastVote(
+        &replay_tower,
+        &fixture.progress,
+        hash3.slot,
+        &last_vote_refresh_time,
+    );
+
+    try testing.expectEqual(true, result);
+    try testing.expectEqual(.non_voting, replay_tower.last_vote_tx_blockhash);
+}
