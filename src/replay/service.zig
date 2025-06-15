@@ -1,8 +1,8 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const replay = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
+const AtomicBool = std.atomic.Value(bool);
 
 const ThreadPool = sig.sync.ThreadPool;
 
@@ -11,8 +11,16 @@ const BlockstoreReader = sig.ledger.BlockstoreReader;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay");
 
+const processConsensus = sig.replay.consensus.processConsensus;
+
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
+// Give at least 4 leaders the chance to pack our vote
+const REFRESH_VOTE_BLOCKHEIGHT: usize = 16;
+
+pub const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
+pub const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
@@ -84,7 +92,8 @@ fn advanceReplay(state: *ReplayState) !void {
 
     handleEdgeCases();
 
-    processConsensus();
+    // TODO: Pass in the consensus deps
+    try processConsensus(null);
 
     // TODO: dump_then_repair_correct_slots
 
@@ -102,24 +111,6 @@ fn handleEdgeCases() void {
 
     // TODO: process_duplicate_slots
 
-}
-
-fn processConsensus() void {
-    // TODO: for each slot:
-    //           tower_duplicate_confirmed_forks
-    //           mark_slots_duplicate_confirmed
-
-    // TODO: select_forks
-
-    // TODO: check_for_vote_only_mode
-
-    // TODO: select_vote_and_reset_forks
-
-    // TODO: if vote_bank.is_none: maybe_refresh_last_vote
-
-    // TODO: handle_votable_bank
-
-    // TODO: if reset_bank: Reset onto a fork
 }
 
 /// stub to represent struct coming in the next pr (already implemented)
