@@ -28,6 +28,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const AccountMeta = sig.core.instruction.InstructionAccount;
+const VmEnvironment = sig.vm.Environment;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
@@ -67,6 +68,8 @@ pub const TransactionExecutionEnvironment = struct {
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
     epoch_stakes: *const EpochStakes,
+    vm_environment: *const VmEnvironment,
+    next_vm_environment: ?*const VmEnvironment,
 
     max_age: u64,
     last_blockhash: Hash,
@@ -338,6 +341,8 @@ pub fn executeTransaction(
         .feature_set = environment.feature_set,
         .epoch_stakes = environment.epoch_stakes,
         .sysvar_cache = environment.sysvar_cache,
+        .vm_environment = environment.vm_environment,
+        .next_vm_environment = environment.next_vm_environment,
         .accounts = accounts,
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -404,6 +409,8 @@ test "loadAndExecuteTransactions: no transactions" {
     defer blockhash_queue.deinit(allocator);
     const epoch_stakes: EpochStakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
+    const vm_environment = VmEnvironment{};
+    defer vm_environment.deinit(allocator);
 
     const environment: TransactionExecutionEnvironment = .{
         .ancestors = &ancestors,
@@ -413,6 +420,8 @@ test "loadAndExecuteTransactions: no transactions" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
+        .vm_environment = &vm_environment,
+        .next_vm_environment = null,
 
         .max_age = 0,
         .last_blockhash = Hash.ZEROES,
@@ -485,6 +494,8 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
             .status_cache = &StatusCache.default(),
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
+            .vm_environment = &VmEnvironment{},
+            .next_vm_environment = null,
             .blockhash_queue = &blockhash_queue,
             .epoch_stakes = &epoch_stakes,
             .max_age = max_age,
@@ -645,6 +656,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const epoch_stakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
 
+    const vm_environment = VmEnvironment{};
+    defer vm_environment.deinit(allocator);
+
     const environment = TransactionExecutionEnvironment{
         .ancestors = &ancestors,
         .feature_set = &feature_set,
@@ -653,6 +667,8 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
+        .vm_environment = &vm_environment,
+        .next_vm_environment = null,
         .max_age = 0,
         .last_blockhash = transaction.recent_blockhash,
         .next_durable_nonce = Hash.ZEROES,

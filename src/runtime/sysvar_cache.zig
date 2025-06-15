@@ -35,8 +35,8 @@ pub const SysvarCache = struct {
     stake_history_obj: ?StakeHistory = null,
 
     // deprecated sysvars, these should be removed once practical
-    fees: ?Fees = null,
-    recent_blockhashes: ?RecentBlockhashes = null,
+    fees_obj: ?Fees = null,
+    recent_blockhashes_obj: ?RecentBlockhashes = null,
 
     pub fn deinit(self: SysvarCache, allocator: std.mem.Allocator) void {
         if (self.clock) |clock| allocator.free(clock);
@@ -48,7 +48,7 @@ pub const SysvarCache = struct {
         if (self.slot_hashes_obj) |slot_hashes_obj| slot_hashes_obj.deinit(allocator);
         if (self.stake_history) |stake_history| allocator.free(stake_history);
         if (self.stake_history_obj) |stake_history_obj| stake_history_obj.deinit(allocator);
-        if (self.recent_blockhashes) |recent_blockhashes| recent_blockhashes.deinit(allocator);
+        if (self.recent_blockhashes_obj) |recent_blockhashes| recent_blockhashes.deinit(allocator);
     }
 
     /// Returns the sysvar as an object if it is supported
@@ -70,8 +70,8 @@ pub const SysvarCache = struct {
             LastRestartSlot => self.deserialize(allocator, LastRestartSlot),
             SlotHashes => self.slot_hashes_obj orelse error.UnsupportedSysvar,
             StakeHistory => self.stake_history_obj orelse error.UnsupportedSysvar,
-            Fees => self.fees orelse error.UnsupportedSysvar,
-            RecentBlockhashes => self.recent_blockhashes orelse error.UnsupportedSysvar,
+            Fees => self.fees_obj orelse error.UnsupportedSysvar,
+            RecentBlockhashes => self.recent_blockhashes_obj orelse error.UnsupportedSysvar,
             else => @compileError("Invalid Sysvar"),
         };
     }

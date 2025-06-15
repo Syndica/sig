@@ -19,16 +19,6 @@ pub const FeatureSet = struct {
         active_.deinit(allocator);
     }
 
-    pub fn isActive(
-        self: *const FeatureSet,
-        feature: Pubkey,
-        slot: Slot,
-    ) bool {
-        if (self.active.get(feature)) |activated_slot|
-            return slot >= activated_slot;
-        return false;
-    }
-
     pub fn allEnabled(allocator: std.mem.Allocator) !FeatureSet {
         var feature_set = FeatureSet.EMPTY;
         for (FEATURES) |feature| try feature_set.active.put(allocator, feature, 0);

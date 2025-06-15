@@ -105,6 +105,11 @@ pub fn createTransactionContext(
     sysvar_cache.* = try createSysvarCache(allocator, params.sysvar_cache);
     errdefer sysvar_cache.deinit(allocator);
 
+    // Create VmEnvironment
+    const vm_environment = try allocator.create(sig.vm.Environment);
+    vm_environment.* = sig.vm.Environment{ .loader = .{}, .config = .{} };
+    errdefer vm_environment.deinit(allocator);
+
     // Create Accounts
     var accounts = try std.ArrayListUnmanaged(TransactionContextAccount).initCapacity(
         allocator,
@@ -155,6 +160,8 @@ pub fn createTransactionContext(
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
         .epoch_stakes = epoch_stakes,
+        .vm_environment = vm_environment,
+        .next_vm_environment = null, // Not used in tests
         .accounts = try accounts.toOwnedSlice(allocator),
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -188,6 +195,9 @@ pub fn deinitTransactionContext(
 
     tc.epoch_stakes.deinit(allocator);
     allocator.destroy(tc.epoch_stakes);
+
+    tc.vm_environment.deinit(allocator);
+    allocator.destroy(tc.vm_environment);
 
     tc.deinit();
 }
@@ -291,9 +301,9 @@ pub fn createSysvarCache(
             ),
         };
     }
-    sysvar_cache.fees = params.fees;
+    sysvar_cache.fees_obj = params.fees;
     if (params.recent_blockhashes) |recent_blockhashes| {
-        sysvar_cache.recent_blockhashes = .{
+        sysvar_cache.recent_blockhashes_obj = .{
             .entries = try allocator.dupe(
                 sysvar.RecentBlockhashes.Entry,
                 recent_blockhashes.entries,

@@ -23,6 +23,13 @@ pub const RecentBlockhashes = struct {
         allocator.free(self.entries);
     }
 
+    pub fn last(self: RecentBlockhashes) ?Entry {
+        return if (self.entries.len > 0)
+            self.entries[self.entries.len - 1]
+        else
+            null;
+    }
+
     pub fn isEmpty(self: RecentBlockhashes) bool {
         return self.entries.len == 0;
     }
