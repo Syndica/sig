@@ -44,16 +44,21 @@ pub const SlotTracker = struct {
         allocator: Allocator,
         slot: Slot,
     ) Allocator.Error![]const Slot {
-        var found_parents = std.ArrayListUnmanaged(Slot){};
-        defer found_parents.deinit(allocator);
+        var parents_list = std.ArrayListUnmanaged(Slot){};
+        errdefer parents_list.deinit(allocator);
 
-        var maybe_current = self.slots.get(slot);
-        while (maybe_current) |current| {
-            try found_parents.append(allocator, current.constants.parent_slot);
-            maybe_current = self.slots.get(current.constants.parent_slot);
+        var current_slot = slot;
+        while (self.slots.get(current_slot)) |current| {
+            const parent_slot = current.constants.parent_slot;
+            try parents_list.append(allocator, parent_slot);
+
+            // Stop if we've reached a root slot (parent points to itself)
+            if (parent_slot == current_slot) break;
+
+            current_slot = parent_slot;
         }
 
-        return found_parents.toOwnedSlice(allocator);
+        return try parents_list.toOwnedSlice(allocator);
     }
 };
 
