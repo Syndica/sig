@@ -29,6 +29,7 @@ const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 const VmEnvironment = sig.vm.Environment;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
@@ -195,6 +196,7 @@ pub fn loadAndExecuteTransactions(
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
+    const program_map = ProgramMap{};
     const transaction_results = try allocator.alloc(
         TransactionResult(ProcessedTransaction),
         transactions.len,
@@ -206,6 +208,7 @@ pub fn loadAndExecuteTransactions(
             batch_account_cache,
             environment,
             config,
+            &program_map,
         );
     }
     return transaction_results;
@@ -218,6 +221,7 @@ pub fn loadAndExecuteTransaction(
     batch_account_cache: *BatchAccountCache,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
+    program_map: *const ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
     const check_age_result = sig.runtime.check_transactions.checkAge(
         transaction,
@@ -294,6 +298,7 @@ pub fn loadAndExecuteTransaction(
         &compute_budget_limits,
         environment,
         config,
+        program_map,
     );
 
     return .{ .ok = .{
@@ -314,6 +319,7 @@ pub fn executeTransaction(
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
+    program_map: *const ProgramMap,
 ) error{OutOfMemory}!ExecutedTransaction {
     const compute_budget = compute_budget_limits.intoComputeBudget();
 
@@ -343,6 +349,7 @@ pub fn executeTransaction(
         .sysvar_cache = environment.sysvar_cache,
         .vm_environment = environment.vm_environment,
         .next_vm_environment = environment.next_vm_environment,
+        .program_map = program_map,
         .accounts = accounts,
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -656,9 +663,6 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const epoch_stakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
 
-    const vm_environment = VmEnvironment{};
-    defer vm_environment.deinit(allocator);
-
     const environment = TransactionExecutionEnvironment{
         .ancestors = &ancestors,
         .feature_set = &feature_set,
@@ -667,7 +671,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
-        .vm_environment = &vm_environment,
+        .vm_environment = &VmEnvironment{},
         .next_vm_environment = null,
         .max_age = 0,
         .last_blockhash = transaction.recent_blockhash,
@@ -688,6 +692,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         &account_cache,
         &environment,
         &config,
+        &ProgramMap{},
     );
 
     const processed_transaction = result.ok;

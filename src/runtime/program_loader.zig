@@ -12,12 +12,13 @@ const Syscall = sig.vm.Syscall;
 const Config = sig.vm.Config;
 const VmEnvironment = sig.vm.Environment;
 
+pub const ProgramMap = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram);
+
 pub const LoadedProgram = union(enum(u8)) {
     failed,
     loaded: struct {
         executable: Executable,
         source: []const u8,
-        deployment_slot: u64,
     },
 
     pub fn deinit(self: LoadedProgram, allocator: std.mem.Allocator) void {
@@ -37,8 +38,8 @@ pub fn loadPrograms(
     accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
     enviroment: *const VmEnvironment,
     slot: u64,
-) error{OutOfMemory}!std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram) {
-    var programs = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram){};
+) error{OutOfMemory}!ProgramMap {
+    var programs = ProgramMap{};
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |pubkey, account| {
@@ -80,12 +81,14 @@ pub fn loadProgram(
         allocator.free(source);
         return .failed;
     };
+    errdefer executable.deinit(allocator);
+
+    executable.verify(&environment.loader) catch return .failed;
 
     return .{
         .loaded = .{
             .executable = executable,
             .source = source,
-            .deployment_slot = deployment_slot,
         },
     };
 }
@@ -211,14 +214,11 @@ test "loadPrograms: load valid v3 program" {
 
     switch (loaded_programs.get(program_key).?) {
         .failed => std.debug.panic("Program failed to load!", .{}),
-        .loaded => |loaded_program| try std.testing.expectEqual(
-            program_deployment_slot,
-            loaded_program.deployment_slot,
-        ),
+        .loaded => {},
     }
 }
 
-fn createV3ProgramAccountData(
+pub fn createV3ProgramAccountData(
     allocator: std.mem.Allocator,
     program_data_key: Pubkey,
     program_deployment_slot: u64,

@@ -31,7 +31,7 @@ pub const Environment = struct {
             .loader = try initV1Loader(
                 allocator,
                 feature_set,
-                false,
+                reject_deployment_of_broken_elfs,
             ),
             .config = initV1Config(
                 feature_set,
