@@ -17,6 +17,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochStakes = sig.core.stake.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
+const VmEnvironment = sig.vm.Environment;
 
 pub fn main() !void {
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -52,11 +53,16 @@ pub fn main() !void {
     const sysvar_cache = SysvarCache{};
     defer sysvar_cache.deinit(gpa);
 
+    const vm_environment = VmEnvironment{};
+    defer vm_environment.deinit(gpa);
+
     var tc: TransactionContext = .{
         .allocator = gpa,
         .feature_set = &feature_set,
         .epoch_stakes = &epoch_stakes,
         .sysvar_cache = &sysvar_cache,
+        .vm_environment = &vm_environment,
+        .next_vm_environment = null,
         .accounts = &.{},
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -73,7 +79,7 @@ pub fn main() !void {
     };
     defer tc.deinit();
 
-    var loader = try sig.vm.syscalls.register(gpa, &feature_set, 0, true);
+    var loader = try sig.vm.Environment.initV1Loader(gpa, &feature_set, true);
     defer loader.deinit(gpa);
 
     const config: Config = .{

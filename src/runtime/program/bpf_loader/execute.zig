@@ -1513,16 +1513,17 @@ pub fn deployProgram(
     slot: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
-    var syscalls = vm.syscalls.register(
+    var environment = vm.Environment.initV1(
         allocator,
         tc.feature_set,
-        0,
+        &tc.compute_budget,
         false,
+        true,
     ) catch |err| {
         try tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
         return InstructionError.ProgramEnvironmentSetupFailure;
     };
-    defer syscalls.deinit(allocator);
+    defer environment.deinit(allocator);
 
     // Copy the program data to a new buffer
     const source = try allocator.dupe(u8, data);
@@ -1532,27 +1533,8 @@ pub fn deployProgram(
     var executable = vm.Executable.fromBytes(
         allocator,
         source,
-        &syscalls,
-        // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L290
-        // [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed8df53595afb8770531cf4ca938e449cf7/src/vm.rs#L92-L107
-        // TODO: This should not be hardcoded
-        .{
-            .max_call_depth = 64,
-            .stack_frame_size = 4096,
-            .enable_address_translation = true,
-            .enable_stack_frame_gaps = true,
-            .instruction_meter_checkpoint_distance = 10_000,
-            .enable_instruction_meter = true,
-            .enable_instruction_tracing = false,
-            .enable_symbol_and_section_labels = false,
-            .reject_broken_elfs = false,
-            .noop_instruction_rate = 256,
-            .sanitize_user_provided_values = true,
-            .optimize_rodata = true,
-            .aligned_memory_mapping = true,
-            .maximum_version = vm.sbpf.Version.v3,
-            .minimum_version = vm.sbpf.Version.v0,
-        },
+        &environment.loader,
+        environment.config,
     ) catch |err| {
         try tc.log("{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;

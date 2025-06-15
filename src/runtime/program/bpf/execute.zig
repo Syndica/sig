@@ -11,19 +11,18 @@ const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const Registry = sig.vm.Registry;
-const Syscall = sig.vm.Syscall;
+const Syscall = sig.vm.syscalls.Syscall;
 
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) ExecutionError!void {
-
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
     const direct_mapping = ic.tc.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
-    var executable, var syscalls, const source = blk: {
+    var executable, var environment, const source = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
 
@@ -40,16 +39,17 @@ pub fn execute(
         }
 
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
-        var syscalls = vm.syscalls.register(
+        var environment = vm.Environment.initV1(
             allocator,
             ic.tc.feature_set,
-            0,
+            &ic.tc.compute_budget,
+            false,
             false,
         ) catch |err| {
             try ic.tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
         };
-        errdefer syscalls.deinit(allocator);
+        errdefer environment.deinit(allocator);
 
         // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L357-L374
         const min_sbpf_version: vm.sbpf.Version = if (!feature_set.contains(
@@ -76,26 +76,17 @@ pub fn execute(
         const executable = vm.Executable.fromBytes(
             allocator,
             source,
-            &syscalls,
-            .{
-                .max_call_depth = ic.tc.compute_budget.max_call_depth,
-                .stack_frame_size = ic.tc.compute_budget.stack_frame_size,
-                .enable_address_translation = true,
-                .enable_stack_frame_gaps = !direct_mapping,
-                .aligned_memory_mapping = !direct_mapping,
-                .minimum_version = min_sbpf_version,
-                .maximum_version = max_sbpf_version,
-                .optimize_rodata = false,
-            },
+            &environment.loader,
+            environment.config,
         ) catch |err| {
             try ic.tc.log("{s}", .{@errorName(err)});
             return InstructionError.InvalidAccountData;
         };
-        break :blk .{ executable, syscalls, source };
+        break :blk .{ executable, environment, source };
     };
     defer {
         executable.deinit(allocator);
-        syscalls.deinit(allocator);
+        environment.deinit(allocator);
         allocator.free(source);
     }
 
@@ -134,7 +125,7 @@ pub fn execute(
             ic.tc,
             &executable,
             regions.items,
-            &syscalls,
+            &environment.loader,
         ) catch |err| {
             try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;

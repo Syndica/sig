@@ -10,6 +10,7 @@ const Executable = sig.vm.Executable;
 const Registry = sig.vm.Registry;
 const Syscall = sig.vm.Syscall;
 const Config = sig.vm.Config;
+const VmEnvironment = sig.vm.Environment;
 
 pub const LoadedProgram = union(enum(u8)) {
     failed,
@@ -33,53 +34,60 @@ pub const LoadedProgram = union(enum(u8)) {
 
 pub fn loadPrograms(
     allocator: std.mem.Allocator,
-    accounts: std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
-    loader: *const Registry(Syscall),
-    config: *const Config,
+    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    enviroment: *const VmEnvironment,
     slot: u64,
 ) error{OutOfMemory}!std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram) {
     var programs = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram){};
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |pubkey, account| {
-        if (!account.executable) continue;
-
-        const deployment_slot, const executable_bytes = loadDeploymentSlotAndExecutableBytes(
-            allocator,
-            &account,
-            &accounts,
-        ) orelse {
-            try programs.put(allocator, pubkey, .failed);
-            continue;
-        };
-
-        if (deployment_slot >= slot) {
-            try programs.put(allocator, pubkey, .failed);
-            continue;
-        }
-
-        const source = try allocator.dupe(u8, executable_bytes);
-        const executable = Executable.fromBytes(
-            allocator,
-            source,
-            loader,
-            config.*,
-        ) catch {
-            allocator.free(source);
-            try programs.put(allocator, pubkey, .failed);
-            continue;
-        };
-
-        try programs.put(allocator, pubkey, .{
-            .loaded = .{
-                .executable = executable,
-                .source = source,
-                .deployment_slot = deployment_slot,
-            },
-        });
+        if (account.executable)
+            try programs.put(allocator, pubkey, try loadProgram(
+                allocator,
+                &account,
+                accounts,
+                enviroment,
+                slot,
+            ));
     }
 
     return programs;
+}
+
+pub fn loadProgram(
+    allocator: std.mem.Allocator,
+    account: *const AccountSharedData,
+    accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
+    environment: *const VmEnvironment,
+    slot: u64,
+) !LoadedProgram {
+    const deployment_slot, const executable_bytes = loadDeploymentSlotAndExecutableBytes(
+        allocator,
+        account,
+        accounts,
+    ) orelse return .failed;
+
+    if (deployment_slot >= slot) return .failed;
+
+    const source = try allocator.dupe(u8, executable_bytes);
+    const executable = Executable.fromBytes(
+        allocator,
+        source,
+        &environment.loader,
+        environment.config,
+    ) catch {
+        allocator.free(source);
+        return .failed;
+    };
+
+    return .{
+        .loaded = .{
+            .executable = executable,
+            .source = source,
+            .deployment_slot = deployment_slot,
+        },
+    };
 }
 
 pub fn loadDeploymentSlotAndExecutableBytes(
@@ -184,15 +192,16 @@ test "loadPrograms: load valid v3 program" {
         },
     );
 
-    const loader = Registry(Syscall){};
-    const config = Config{};
+    const environment = VmEnvironment{
+        .loader = .{},
+        .config = .{},
+    };
     const slot = program_deployment_slot + 1;
 
     var loaded_programs = try loadPrograms(
         allocator,
-        accounts,
-        &loader,
-        &config,
+        &accounts,
+        &environment,
         slot,
     );
     defer {

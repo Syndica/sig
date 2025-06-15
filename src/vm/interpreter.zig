@@ -9,7 +9,7 @@ const Instruction = sbpf.Instruction;
 const Executable = sig.vm.Executable;
 const TransactionContext = sig.runtime.TransactionContext;
 const ExecutionError = sig.vm.ExecutionError;
-const Syscall = sig.vm.Syscall;
+const Syscall = sig.vm.syscalls.Syscall;
 const Registry = sig.vm.Registry;
 
 pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
