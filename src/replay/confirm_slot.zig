@@ -318,7 +318,7 @@ test "confirmSlot happy path: trivial case" {
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
-    errdefer std.debug.print("failed with: {any}\n", .{result});
+    errdefer std.log.err("failed with: {any}\n", .{result});
     try std.testing.expectEqual(.done, result);
 }
 
@@ -351,7 +351,7 @@ test "confirmSlot happy path: partial slot" {
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
-    errdefer std.debug.print("failed with: {any}\n", .{result});
+    errdefer std.log.err("failed with: {any}\n", .{result});
     try std.testing.expectEqual(.done, result);
 }
 
@@ -384,7 +384,7 @@ test "confirmSlot happy path: full slot" {
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
-    errdefer std.debug.print("failed with: {any}\n", .{result});
+    errdefer std.log.err("failed with: {any}\n", .{result});
     try std.testing.expectEqual(.done, result);
 }
 
@@ -417,7 +417,7 @@ test "confirmSlot fail: full slot not marked full -> .InvalidLastTick" {
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
-    errdefer std.debug.print("failed with: {any}\n", .{result});
+    errdefer std.log.err("failed with: {any}\n", .{result});
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_block = .InvalidLastTick } },
         result,
@@ -453,7 +453,7 @@ test "confirmSlot fail: no trailing tick at max height -> .TrailingEntry" {
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
-    errdefer std.debug.print("failed with: {any}\n", .{result});
+    errdefer std.log.err("failed with: {any}\n", .{result});
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_block = .TrailingEntry } },
         result,
@@ -494,7 +494,7 @@ test "confirmSlot fail: invalid poh chain" {
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
-    errdefer std.debug.print("failed with: {any}\n", .{result});
+    errdefer std.log.err("failed with: {any}\n", .{result});
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_block = .InvalidEntryHash } },
         result,
@@ -530,7 +530,7 @@ test "confirmSlot fail: sigverify" {
     defer future.destroy(std.testing.allocator);
 
     const result = try testAwait(future);
-    errdefer std.debug.print("failed with: {any}\n", .{result});
+    errdefer std.log.err("failed with: {any}\n", .{result});
     try std.testing.expectEqual(
         ConfirmSlotStatus{ .err = .{ .invalid_transaction = .SignatureFailure } },
         result,
