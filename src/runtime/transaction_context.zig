@@ -21,6 +21,7 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 const Rent = sig.runtime.sysvar.Rent;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
 const VmEnvironment = sig.vm.Environment;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
@@ -45,6 +46,9 @@ pub const TransactionContext = struct {
     // prior to the next epoch. For all other slots, next is null.
     vm_environment: *const VmEnvironment,
     next_vm_environment: ?*const VmEnvironment,
+
+    // Program map is used to laod and invoke valid BPF programs.
+    program_map: *const ProgramMap,
 
     /// Transaction accounts
     /// TransactionContextAccount contains a non-owning reference to an AccountSharedData

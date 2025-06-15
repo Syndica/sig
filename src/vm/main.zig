@@ -18,6 +18,7 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochStakes = sig.core.stake.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
 const VmEnvironment = sig.vm.Environment;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub fn main() !void {
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -44,24 +45,16 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(gpa, sbpf.MAX_FILE_SIZE);
     defer gpa.free(bytes);
 
-    const feature_set = FeatureSet.EMPTY;
-    defer feature_set.deinit(gpa);
-
     const epoch_stakes = try EpochStakes.initEmpty(gpa);
     defer epoch_stakes.deinit(gpa);
 
-    const sysvar_cache = SysvarCache{};
-    defer sysvar_cache.deinit(gpa);
-
-    const vm_environment = VmEnvironment{};
-    defer vm_environment.deinit(gpa);
-
     var tc: TransactionContext = .{
         .allocator = gpa,
-        .feature_set = &feature_set,
+        .feature_set = &FeatureSet.EMPTY,
         .epoch_stakes = &epoch_stakes,
-        .sysvar_cache = &sysvar_cache,
-        .vm_environment = &vm_environment,
+        .sysvar_cache = &SysvarCache{},
+        .vm_environment = &VmEnvironment{},
+        .program_map = &ProgramMap{},
         .next_vm_environment = null,
         .accounts = &.{},
         .serialized_accounts = .{},
@@ -79,7 +72,7 @@ pub fn main() !void {
     };
     defer tc.deinit();
 
-    var loader = try sig.vm.Environment.initV1Loader(gpa, &feature_set, true);
+    var loader = try sig.vm.Environment.initV1Loader(gpa, &FeatureSet.EMPTY, true);
     defer loader.deinit(gpa);
 
     const config: Config = .{
