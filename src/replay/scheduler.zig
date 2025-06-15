@@ -232,7 +232,7 @@ test "TransactionScheduler: failed account locks" {
     const tx = try Transaction.initRandom(allocator, rng.random());
     defer tx.deinit(allocator);
 
-    const unresolved_batch = .{ tx, tx };
+    const unresolved_batch = [_]Transaction{ tx, tx };
 
     {
         const batch1 = try replay.resolve_lookup
