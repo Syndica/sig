@@ -22,6 +22,7 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 const AccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 const LoadedProgram = sig.runtime.program_loader.LoadedProgram;
+const VmEnvironment = sig.vm.Environment;
 
 pub const ExecuteContextsParams = struct {
     // If a user requires a mutable reference to the created feature set, they should
@@ -32,10 +33,11 @@ pub const ExecuteContextsParams = struct {
     epoch_stakes: []const EpochStakeParam = &.{},
 
     // Programs to be inseted into the program map.
-    programs: []const ProgramEntry = &.{},
+    program_map: *const ProgramMap = &.{},
 
-    // Vm Environment
-    vm_environment: ?sig.vm.Environment = null,
+    // Environment used to load and verify programs.
+    vm_environment: *const VmEnvironment = &.{},
+    next_vm_environment: ?*const VmEnvironment = null,
 
     // Slot Context
     sysvar_cache: SysvarCacheParams = .{},
@@ -71,11 +73,6 @@ pub const ExecuteContextsParams = struct {
         stake_history: ?sysvar.StakeHistory = null,
         fees: ?sysvar.Fees = null,
         recent_blockhashes: ?sysvar.RecentBlockhashes = null,
-    };
-
-    pub const ProgramEntry = struct {
-        key: Pubkey,
-        value: LoadedProgram,
     };
 
     pub const AccountParams = struct {
@@ -117,29 +114,6 @@ pub fn createTransactionContext(
     const sysvar_cache = try allocator.create(SysvarCache);
     sysvar_cache.* = try createSysvarCache(allocator, params.sysvar_cache);
     errdefer sysvar_cache.deinit(allocator);
-
-    // Create VmEnvironment
-    const vm_environment = try allocator.create(sig.vm.Environment);
-    vm_environment.* = params.vm_environment orelse sig.vm.Environment{
-        .loader = .{},
-        .config = .{},
-    };
-    errdefer vm_environment.deinit(allocator);
-
-    // Create ProgramMap
-    const program_map = try allocator.create(ProgramMap);
-    program_map.* = ProgramMap{};
-    errdefer {
-        for (program_map.values()) |loaded_program| loaded_program.deinit(allocator);
-        program_map.deinit(allocator);
-    }
-    for (params.programs) |entry| {
-        try program_map.put(
-            allocator,
-            entry.key,
-            entry.value,
-        );
-    }
 
     // Create Accounts
     var accounts = try std.ArrayListUnmanaged(TransactionContextAccount).initCapacity(
@@ -191,9 +165,9 @@ pub fn createTransactionContext(
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
         .epoch_stakes = epoch_stakes,
-        .vm_environment = vm_environment,
-        .next_vm_environment = null, // Not used in tests
-        .program_map = program_map,
+        .vm_environment = params.vm_environment,
+        .next_vm_environment = params.next_vm_environment,
+        .program_map = params.program_map,
         .accounts = try accounts.toOwnedSlice(allocator),
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -227,14 +201,6 @@ pub fn deinitTransactionContext(
 
     tc.epoch_stakes.deinit(allocator);
     allocator.destroy(tc.epoch_stakes);
-
-    tc.vm_environment.deinit(allocator);
-    allocator.destroy(tc.vm_environment);
-
-    var program_map = tc.program_map.*;
-    for (program_map.values()) |value| value.deinit(allocator);
-    program_map.deinit(allocator);
-    allocator.destroy(tc.program_map);
 
     tc.deinit();
 }

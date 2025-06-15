@@ -90,14 +90,18 @@ test "hello_world" {
         false,
         false,
     );
+    defer environment.deinit(allocator);
 
-    const loaded_program = try program_loader.loadProgram(
+    var program_map = try program_loader.loadPrograms(
         allocator,
-        accounts_map.getPtr(program_key).?,
         &accounts_map,
         &environment,
         program_deployment_slot + 1,
     );
+    defer {
+        for (program_map.values()) |value| value.deinit(allocator);
+        program_map.deinit(allocator);
+    }
 
     const accounts = &[_]AccountParams{.{
         .pubkey = program_key,
@@ -108,11 +112,6 @@ test "hello_world" {
         .rent_epoch = std.math.maxInt(u64),
     }};
 
-    const programs = &[_]ProgramEntry{.{
-        .key = program_key,
-        .value = loaded_program,
-    }};
-
     try expectProgramExecuteResult(
         allocator,
         program_key,
@@ -121,8 +120,8 @@ test "hello_world" {
         .{
             .accounts = accounts,
             .compute_meter = 137,
-            .programs = programs,
-            .vm_environment = environment,
+            .program_map = &program_map,
+            .vm_environment = &environment,
             .feature_set = &.{
                 .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
             },
@@ -130,7 +129,7 @@ test "hello_world" {
         .{
             .accounts = accounts,
         },
-        .{},
+        .{ .print_logs = true },
     );
 }
 
