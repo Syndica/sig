@@ -521,7 +521,9 @@ pub const BlockhashQueue = struct {
     /// hashes older than `max_age` will be dropped from the queue
     max_age: usize,
 
-    pub const DEFAULT = BlockhashQueue.init(300);
+    pub const DEFAULT = BlockhashQueue.init(MAX_RECENT_BLOCKHASHES);
+
+    const MAX_RECENT_BLOCKHASHES = 300;
 
     pub fn init(max_age: usize) BlockhashQueue {
         return .{
