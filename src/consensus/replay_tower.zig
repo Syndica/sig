@@ -3459,9 +3459,9 @@ pub const MAX_TEST_TREE_LEN = 100;
 const Tree = struct { root: SlotAndHash, data: std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
 pub const TestFixture = struct {
     fork_choice: HeaviestSubtreeForkChoice,
-    ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
-    descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
-    progress: ProgressMap = ProgressMap.INIT,
+    ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty,
+    descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .empty,
+    progress: ProgressMap = .INIT,
     epoch_stake_map: EpochStakeMap,
 
     pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
@@ -3474,30 +3474,13 @@ pub const TestFixture = struct {
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
         self.fork_choice.deinit();
         self.progress.deinit(allocator);
+        sig.core.stake.epochStakeMapDeinit(self.epoch_stake_map, allocator);
 
-        {
-            var it = self.epoch_stake_map.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.stakes.deinit(allocator);
-                entry.value_ptr.epoch_authorized_voters.deinit(allocator);
-            }
-            self.epoch_stake_map.deinit(allocator);
-        }
+        for (self.descendants.values()) |descendant| descendant.deinit();
+        self.descendants.deinit(allocator);
 
-        {
-            var it = self.descendants.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
-            self.descendants.deinit(allocator);
-        }
-        {
-            var it = self.ancestors.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
-            self.ancestors.deinit(allocator);
-        }
+        for (self.ancestors.values()) |ancestor| ancestor.deinit();
+        self.ancestors.deinit(allocator);
     }
 
     pub fn update_fork_stat_lockout(self: *TestFixture, slot: Slot, locked_out: bool) void {
@@ -3531,14 +3514,11 @@ pub const TestFixture = struct {
             // Populate forkchoice
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
             // Populate progress map
-            var fp = try ForkProgress.zeroes(allocator);
+            var fp: ForkProgress = try .zeroes(allocator);
+            errdefer fp.deinit(allocator);
             fp.fork_stats.computed = true;
             fp.fork_stats.my_latest_landed_vote = null;
-            try self.progress.map.putNoClobber(
-                allocator,
-                tree[0].slot,
-                fp,
-            );
+            try self.progress.map.putNoClobber(allocator, tree[0].slot, fp);
         }
 
         try self.descendants.ensureTotalCapacity(allocator, input_tree.data.len);
@@ -3750,13 +3730,15 @@ pub fn extendForkTree(
 
     for (extension.keys(), extension.values()) |slot, e_children| {
         var extension_children = e_children;
-        var original_children = original.getPtr(slot) orelse {
-            try original.put(allocator, slot, try extension_children.clone());
+        const original_children = original.getPtr(slot) orelse {
+            try original.ensureUnusedCapacity(allocator, 1);
+            original.putAssumeCapacity(slot, try extension_children.clone());
             continue;
         };
 
+        try original_children.ensureUnusedCapacity(extension_children.count());
         for (extension_children.items()) |extension_child| {
-            try original_children.put(extension_child);
+            original_children.putAssumeCapacity(extension_child);
         }
     }
 }
