@@ -297,6 +297,15 @@ test trackNewSlots {
         },
     };
 
+    var lsc = sig.core.leader_schedule.LeaderScheduleCache.init(allocator, .DEFAULT);
+    defer {
+        var map = lsc.leader_schedules.write();
+        map.mut().deinit();
+        map.unlock();
+    }
+    try lsc.put(0, leader_schedule);
+    const slot_leaders = lsc.slotLeaders();
+
     // slot tracker should start with only 0
     try expectSlotTracker(&slot_tracker, leader_schedule, &.{.{ 0, 0 }}, &.{ 1, 2, 3, 4, 5, 6 });
 
@@ -306,7 +315,7 @@ test trackNewSlots {
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
-        leader_schedule.slotLeaders(0),
+        slot_leaders,
         undefined,
     );
     try expectSlotTracker(
@@ -322,7 +331,7 @@ test trackNewSlots {
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
-        leader_schedule.slotLeaders(0),
+        slot_leaders,
         undefined,
     );
     try expectSlotTracker(
@@ -339,7 +348,7 @@ test trackNewSlots {
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
-        leader_schedule.slotLeaders(0),
+        slot_leaders,
         undefined,
     );
     try expectSlotTracker(
@@ -357,7 +366,7 @@ test trackNewSlots {
         &blockstore_db,
         &slot_tracker,
         &epoch_tracker,
-        leader_schedule.slotLeaders(0),
+        slot_leaders,
         undefined,
     );
     try expectSlotTracker(
