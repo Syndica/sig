@@ -273,9 +273,9 @@ test "TransactionScheduler: signature verification failure" {
         try .initRandom(tx_arena.allocator(), rng.random()),
     };
 
-    const replaced_sigs = try allocator.dupe(sig.core.Signature, transactions[5].signatures);
+    const replaced_sigs = try tx_arena.allocator()
+        .dupe(sig.core.Signature, transactions[5].signatures);
     replaced_sigs[0].data[0] +%= 1;
-    allocator.free(transactions[5].signatures);
     transactions[5].signatures = replaced_sigs;
 
     {
