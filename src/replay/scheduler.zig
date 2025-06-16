@@ -156,6 +156,10 @@ pub const TransactionScheduler = struct {
                 },
                 else => return e,
             };
+            // trySchedule will always return true, meaning the task was
+            // scheduled successfully, because the thread pool does not have a
+            // maximum number of tasks. See the `null` value passed into
+            // HomogeneousThreadPool.initBorrowed
             assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .transactions = batch.transactions,
                 .results = &self.results,
