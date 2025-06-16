@@ -22,7 +22,7 @@ const SlotState = sig.core.SlotState;
 /// will end as soon as the items are removed.
 pub const SlotTracker = struct {
     slots: std.AutoArrayHashMapUnmanaged(Slot, *Element),
-    root: std.atomic.Value(Slot),
+    root: Slot,
 
     const Element = struct {
         constants: SlotConstants,
@@ -36,8 +36,8 @@ pub const SlotTracker = struct {
 
     pub fn init(root_slot: Slot) SlotTracker {
         return .{
-            .slots = .{},
-            .root = .init(root_slot),
+            .slots = .empty,
+            .root = root_slot,
         };
     }
 

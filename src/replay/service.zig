@@ -148,7 +148,7 @@ fn trackNewSlots(
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
 ) !void {
-    const root = slot_tracker.root.load(.monotonic);
+    const root = slot_tracker.root;
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
 
