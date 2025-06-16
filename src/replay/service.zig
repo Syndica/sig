@@ -156,7 +156,7 @@ fn trackNewSlots(
         .initCapacity(allocator, frozen_slots.count());
     defer frozen_slots_since_root.deinit(allocator);
     for (frozen_slots.keys()) |slot| if (slot >= root) {
-        try frozen_slots_since_root.append(allocator, slot);
+        frozen_slots_since_root.appendAssumeCapacity(slot);
     };
 
     var next_slots = try BlockstoreReader
