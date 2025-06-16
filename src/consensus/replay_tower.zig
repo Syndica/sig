@@ -31,7 +31,7 @@ const ProgressMap = sig.consensus.ProgressMap;
 const Tower = sig.consensus.tower.Tower;
 const TowerError = sig.consensus.tower.TowerError;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
-const VotedStakes = sig.consensus.tower.VotedStakes;
+const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 
 const Stake = u64;
 
@@ -3353,7 +3353,7 @@ pub fn createTestReplayTower(
 fn isSlotConfirmed(
     replay_tower: *const ReplayTower,
     slot: Slot,
-    voted_stakes: *const sig.consensus.tower.VotedStakes,
+    voted_stakes: *const sig.consensus.progress_map.consensus.VotedStakes,
     total_stake: u64,
 ) bool {
     if (!builtin.is_test) {
