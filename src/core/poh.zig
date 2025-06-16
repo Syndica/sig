@@ -156,33 +156,43 @@ pub fn testPoh(valid_signatures: bool) !struct { Poh, std.BoundedArray(sig.core.
     try expect(poh.hash(100));
     try expectEqual(null, poh.tryRecord(mixin1));
 
+    const entry = struct {
+        pub fn init(poh_entry: PohEntry, txs: []const Transaction) sig.core.Entry {
+            return .{
+                .num_hashes = poh_entry.num_hashes,
+                .hash = poh_entry.hash,
+                .transactions = txs,
+            };
+        }
+    };
+
     // record/tick negotiation
     const result1 = poh.recordAndMaybeTick(mixin1);
-    try entries.append(.init(result1.maybe_tick.?, &.{}));
-    try entries.append(.init(result1.record, batch1));
+    try entries.append(entry.init(result1.maybe_tick.?, &.{}));
+    try entries.append(entry.init(result1.record, batch1));
 
     try expect(!poh.hash(10));
 
     // just record
     const result2 = poh.recordAndMaybeTick(mixin2);
     try expectEqual(null, result2.maybe_tick);
-    try entries.append(.init(result2.record, batch2));
+    try entries.append(entry.init(result2.record, batch2));
 
     // tick/hash negotiation
     try expectEqual(null, poh.tick());
     try expect(poh.hash(20));
-    try entries.append(.init(poh.tick().?, &.{}));
+    try entries.append(entry.init(poh.tick().?, &.{}));
     try expect(!poh.hash(18));
     try expectEqual(null, poh.tick());
-    try entries.append(.init(poh.tick().?, &.{}));
+    try entries.append(entry.init(poh.tick().?, &.{}));
 
     // just record
     const result3 = poh.tryRecord(mixin3).?;
-    try entries.append(.init(result3, batch3));
+    try entries.append(entry.init(result3, batch3));
 
     // end with a tick
     try expect(poh.hash(20));
-    try entries.append(.init(poh.tick().?, &.{}));
+    try entries.append(entry.init(poh.tick().?, &.{}));
 
     return .{ poh, entries };
 }

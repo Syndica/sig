@@ -21,14 +21,6 @@ pub const Entry = struct {
         return self.transactions.len == 0;
     }
 
-    pub fn init(poh_entry: sig.core.poh.PohEntry, transactions: []const Transaction) Entry {
-        return .{
-            .num_hashes = poh_entry.num_hashes,
-            .hash = poh_entry.hash,
-            .transactions = transactions,
-        };
-    }
-
     pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
         for (self.transactions) |tx| tx.deinit(allocator);
         allocator.free(self.transactions);
