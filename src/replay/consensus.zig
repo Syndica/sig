@@ -394,14 +394,16 @@ fn checkAndHandleNewRoot(
     }
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
+    slot_tracker.root = new_root;
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
-    // - Set root on slot tracker: let removed_banks = bank_forks.write().unwrap().set_root(
-    //        new_root,
-    //        snapshot_controller,
-    //        highest_super_majority_root,
-    //    )?
-    //
+    // - Extra operations as part of setting new root:
+    //   - cleare reward cache root_bank.clear_epoch_rewards_cache
+    //   - extend banks banks.extend(parents.iter());
+    //   - operations around snapshot_controller
+    //   - After setting a new root, prune the banks that are no longer on rooted paths self.prune_non_rooted(root, highest_super_majority_root);
+    //   -
+
     // Update the progress map.
     // TODO Move to its own function?
     {
@@ -954,7 +956,7 @@ test "checkAndHandleNewRoot - missing slot" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var slot_tracker: SlotTracker = SlotTracker{ .slots = .{} };
+    var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
     defer {
         var it = slot_tracker.slots.iterator();
         while (it.next()) |entry| {
@@ -1029,7 +1031,7 @@ test "checkAndHandleNewRoot - missing hash" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var slot_tracker: SlotTracker = SlotTracker{ .slots = .{} };
+    var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
     defer {
         var it = slot_tracker.slots.iterator();
         while (it.next()) |entry| {
@@ -1104,7 +1106,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var slot_tracker: SlotTracker = SlotTracker{ .slots = .{} };
+    var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
     const logger = .noop;
     var registry = sig.prometheus.Registry(.{}).init(testing.allocator);
     defer registry.deinit();
@@ -1160,7 +1162,7 @@ test "checkAndHandleNewRoot - success" {
     var fixture = try TestFixture.init(testing.allocator, root);
     defer fixture.deinit(testing.allocator);
 
-    var slot_tracker: SlotTracker = SlotTracker{ .slots = .{} };
+    var slot_tracker: SlotTracker = SlotTracker{ .root = root.slot, .slots = .{} };
     defer {
         var it = slot_tracker.slots.iterator();
         while (it.next()) |entry| {
