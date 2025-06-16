@@ -3,14 +3,12 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 
 const SortedSet = sig.utils.collections.SortedSet;
 const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
-const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
@@ -257,66 +255,6 @@ fn maybeRefreshLastVote(
         },
         else => false,
     };
-}
-
-/// Identifies and returns slots that should be marked as "duplicate confirmed" based on
-/// the validator's voting state and stake distribution.
-///
-/// "Duplicate confirmed" means the slot has received enough stake-weighted votes
-/// from validators to be considered definitively confirmed by the network,
-/// even if there are multiple competing versions of that slot.
-///
-/// This means the slot becomes a valid candidate for fork selection and
-/// can influence which chain the validator builds upon.
-///
-/// Note: 1. This is "duplicate confirmed", which is different from "regular" confirmation,
-/// where a slot is simply processed and frozen.
-/// Note: 2. The slot is skipped if it is already duplicate confirmed in the progress map's fork state
-///          or if the slot is not already frozen.
-fn towerDuplicateConfirmedForks(
-    allocator: std.mem.Allocator,
-    progress_map: *const ProgressMap,
-    slot_tracker: *const SlotTracker,
-    vote_stakes: VotedStakes,
-    total_stake: u64,
-    slot: Slot,
-) ![]const SlotAndHash {
-    var duplicate_confirmed_forks: ArrayListUnmanaged(SlotAndHash) = .{};
-
-    var it = progress_map.map.iterator();
-    while (it.next()) |entry| {
-        const entry_slot = entry.key_ptr.*;
-        const fork_progress = entry.value_ptr.*;
-        if (fork_progress.fork_stats.duplicate_confirmed_hash != null) continue;
-
-        var found_slot = slot_tracker.slots.get(entry_slot) orelse
-            return error.MissingSlot;
-
-        //TODO should found_slot.state.hash be a mutex
-        const found_slot_hash = found_slot.state.hash.read().get().* orelse
-            return error.MissingSlotInTracker;
-        var state = found_slot.state;
-        if (!state.isFrozen()) {
-            continue;
-        }
-
-        const is_slot_duplicate_confirmed = isSlotDuplicateConfirmed(
-            slot,
-            &vote_stakes,
-            total_stake,
-        );
-
-        if (is_slot_duplicate_confirmed) {
-            try duplicate_confirmed_forks.append(
-                allocator,
-                SlotAndHash{
-                    .slot = slot,
-                    .hash = found_slot_hash,
-                },
-            );
-        }
-    }
-    return try duplicate_confirmed_forks.toOwnedSlice(allocator);
 }
 
 pub const AncestorHashesReplayUpdate = union(enum) {
