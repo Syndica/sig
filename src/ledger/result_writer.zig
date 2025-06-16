@@ -110,58 +110,143 @@ pub const LedgerResultWriter = struct {
     /// agave: set_duplicate_confirmed_slots_and_hashes
     pub fn setDuplicateConfirmedSlotsAndHashes(
         self: *Self,
-        duplicate_confirmed_slot_hashes: []struct { Slot, Hash },
+        duplicate_confirmed_slot_hashes: []const struct { Slot, Hash },
     ) !void {
-        var write_batch = try self.db.initWriteBatch();
+        var setter = try self.setDuplicateConfirmedSlotsAndHashesIncremental();
+        defer setter.deinit();
+        errdefer setter.cancel();
+
         for (duplicate_confirmed_slot_hashes) |slot_hash| {
-            const slot, const frozen_hash = slot_hash;
-            const data = FrozenHashVersioned{ .current = FrozenHashStatus{
+            const slot, const hash = slot_hash;
+            try setter.addSlotAndHash(slot, hash);
+        }
+
+        try setter.commit();
+    }
+
+    /// Returns a struct which can be used to enact the same operation as `setDuplicateConfirmedSlotsAndHashes`, incrementally.
+    pub fn setDuplicateConfirmedSlotsAndHashesIncremental(
+        self: *Self,
+    ) !SetDuplicateConfirmedSlotsAndHashesIncremental {
+        return .{
+            .result_writer = self,
+            .write_batch = try self.db.initWriteBatch(),
+            .is_committed = false,
+        };
+    }
+    pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
+        result_writer: *Self,
+        write_batch: BlockstoreDB.WriteBatch,
+        is_committed: bool,
+
+        pub fn deinit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
+            std.debug.assert(self.is_committed);
+            self.write_batch.deinit();
+        }
+
+        pub fn addSlotAndHash(
+            self: *SetDuplicateConfirmedSlotsAndHashesIncremental,
+            slot: Slot,
+            frozen_hash: Hash,
+        ) !void {
+            std.debug.assert(!self.is_committed);
+            const data: FrozenHashVersioned = .{ .current = .{
                 .frozen_hash = frozen_hash,
                 .is_duplicate_confirmed = true,
             } };
-            try write_batch.put(schema.bank_hash, slot, data);
+            try self.write_batch.put(schema.bank_hash, slot, data);
         }
-        try self.db.commit(&write_batch);
-    }
+
+        pub fn cancel(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
+            std.debug.assert(!self.is_committed);
+            self.is_committed = true;
+        }
+
+        pub fn commit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) !void {
+            std.debug.assert(!self.is_committed);
+            try self.result_writer.db.commit(&self.write_batch);
+            self.is_committed = true;
+        }
+    };
 
     /// agave: set_roots
     pub fn setRoots(self: *Self, rooted_slots: []const Slot) !void {
-        var write_batch = try self.db.initWriteBatch();
-        defer write_batch.deinit();
-        var max_new_rooted_slot: Slot = 0;
-        for (rooted_slots) |slot| {
-            max_new_rooted_slot = @max(max_new_rooted_slot, slot);
-            try write_batch.put(schema.rooted_slots, slot, true);
+        var setter = try self.setRootsIncremental();
+        defer setter.deinit();
+        errdefer setter.cancel();
+        for (rooted_slots) |rooted_slot| try setter.addRoot(rooted_slot);
+        try setter.commit();
+    }
+
+    /// Returns a struct which can be used to enact the same operation as `setRoots`, incrementally.
+    pub fn setRootsIncremental(self: *Self) !SetRootsIncremental {
+        return .{
+            .result_writer = self,
+            .write_batch = try self.db.initWriteBatch(),
+            .max_new_rooted_slot = 0,
+            .is_committed = false,
+        };
+    }
+
+    pub const SetRootsIncremental = struct {
+        result_writer: *Self,
+        write_batch: BlockstoreDB.WriteBatch,
+        max_new_rooted_slot: Slot,
+        is_committed: bool,
+
+        pub fn deinit(self: *SetRootsIncremental) void {
+            std.debug.assert(self.is_committed);
+            self.write_batch.deinit();
         }
 
-        try self.db.commit(&write_batch);
-        _ = self.max_root.fetchMax(max_new_rooted_slot, .monotonic);
-    }
+        pub fn addRoot(self: *SetRootsIncremental, rooted_slot: Slot) !void {
+            std.debug.assert(!self.is_committed);
+            self.max_new_rooted_slot = @max(self.max_new_rooted_slot, rooted_slot);
+            try self.write_batch.put(schema.rooted_slots, rooted_slot, true);
+        }
+
+        pub fn cancel(self: *SetRootsIncremental) void {
+            std.debug.assert(!self.is_committed);
+            self.is_committed = true;
+        }
+
+        pub fn commit(self: *SetRootsIncremental) !void {
+            std.debug.assert(!self.is_committed);
+            try self.result_writer.db.commit(&self.write_batch);
+            _ = self.result_writer.max_root.fetchMax(self.max_new_rooted_slot, .monotonic);
+            self.is_committed = true;
+        }
+    };
 
     /// agave: mark_slots_as_if_rooted_normally_at_startup
     pub fn markSlotsAsIfRootedNormallyAtStartup(
         self: *Self,
-        slot_maybe_hashes: []struct { Slot, ?Hash },
+        slot_maybe_hashes: []const struct { Slot, ?Hash },
         with_hash: bool,
     ) !void {
-        var slots = try ArrayList(Slot).initCapacity(self.allocator, slot_maybe_hashes.len);
-        defer slots.deinit();
-        for (slot_maybe_hashes) |slot_hash| {
-            slots.appendAssumeCapacity(slot_hash[0]);
+        {
+            var root_setter = try self.setRootsIncremental();
+            defer root_setter.deinit();
+            errdefer root_setter.cancel();
+            for (slot_maybe_hashes) |slot_maybe_hash| {
+                const slot, _ = slot_maybe_hash;
+                try root_setter.addRoot(slot);
+            }
+            try root_setter.commit();
         }
-        try self.setRoots(slots.items);
+
         if (with_hash) {
-            var slot_hashes = try ArrayList(struct { Slot, Hash })
-                .initCapacity(self.allocator, slot_maybe_hashes.len);
-            defer slot_hashes.deinit();
+            var slot_hash_setter = try self.setDuplicateConfirmedSlotsAndHashesIncremental();
+            defer slot_hash_setter.deinit();
+            errdefer slot_hash_setter.cancel();
             for (slot_maybe_hashes) |slot_hash| {
                 const slot, const maybe_hash = slot_hash;
-                slot_hashes.appendAssumeCapacity(.{
+                try slot_hash_setter.addSlotAndHash(
                     slot,
                     maybe_hash orelse return error.MissingHash,
-                });
+                );
             }
-            try self.setDuplicateConfirmedSlotsAndHashes(slot_hashes.items);
+            try slot_hash_setter.commit();
         }
     }
 
