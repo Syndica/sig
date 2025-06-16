@@ -251,7 +251,9 @@ fn verifyTicks(
 
 /// Analogous to [BlockstoreProcessorError](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L779)
 pub const ConfirmSlotError = union(enum) {
-    failed_to_load_entries: anyerror,
+    /// Payload is a statically lived string that provides some context on the
+    /// failure to load entries, normally the name of an error.
+    failed_to_load_entries: []const u8,
     failed_to_load_meta,
     /// failed to replay bank 0, did you forget to provide a snapshot
     failed_to_replay_bank_0,
