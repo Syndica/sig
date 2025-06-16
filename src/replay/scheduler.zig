@@ -192,15 +192,16 @@ test "TransactionScheduler: happy path" {
     var scheduler = try TransactionScheduler.initCapacity(allocator, 10, &thread_pool);
     defer scheduler.deinit();
 
+    var tx_arena = std.heap.ArenaAllocator.init(allocator);
+    defer tx_arena.deinit();
     const transactions = [_]Transaction{
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
     };
-    defer for (transactions) |tx| tx.deinit(allocator);
 
     {
         const batch1 = try replay.resolve_lookup
@@ -261,15 +262,16 @@ test "TransactionScheduler: signature verification failure" {
     var scheduler = try TransactionScheduler.initCapacity(allocator, 10, &thread_pool);
     defer scheduler.deinit();
 
+    var tx_arena = std.heap.ArenaAllocator.init(allocator);
+    defer tx_arena.deinit();
     var transactions = [_]Transaction{
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
-        try Transaction.initRandom(allocator, rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
+        try .initRandom(tx_arena.allocator(), rng.random()),
     };
-    defer for (transactions) |tx| tx.deinit(allocator);
 
     const replaced_sigs = try allocator.dupe(sig.core.Signature, transactions[5].signatures);
     replaced_sigs[0].data[0] +%= 1;
