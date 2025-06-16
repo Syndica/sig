@@ -879,11 +879,15 @@ pub const AccountDataHandle = union(enum) {
     }
 
     /// Copies data into specified buffer.
+    ///
+    /// Returns the number of bytes written into buf, which should be equal to
+    /// @min(self.len() - start, buf.len)
     pub fn read(
         self: *const AccountDataHandle,
         start: FileOffset,
         buf: []u8,
     ) u32 {
+        std.debug.assert(start <= self.len());
         const end: FileOffset = @intCast(start + buf.len);
 
         switch (self.*) {
@@ -907,6 +911,7 @@ pub const AccountDataHandle = union(enum) {
             bytes_copied += @intCast(copy_len);
         }
 
+        std.debug.assert(bytes_copied == @min(self.len() - start, buf.len));
         return bytes_copied;
     }
 
