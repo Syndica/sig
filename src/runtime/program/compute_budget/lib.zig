@@ -40,7 +40,7 @@ pub fn entrypoint(
 test "compute_budget Instruction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var tx = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -53,9 +53,13 @@ test "compute_budget Instruction" {
             .compute_meter = COMPUTE_UNITS,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    const tc = &tx[1];
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+        tx[0].deinit(allocator);
+    }
 
-    try sig.runtime.executor.executeInstruction(allocator, &tc, .{
+    try sig.runtime.executor.executeInstruction(allocator, tc, .{
         .account_metas = .{},
         .instruction_data = &.{},
         .program_meta = .{ .index_in_transaction = 0, .pubkey = ID },

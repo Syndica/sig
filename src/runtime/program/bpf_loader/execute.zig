@@ -2871,7 +2871,7 @@ test "executeV3ExtendProgram" {
 
     // Test extend_program disabled when ENABLE_EXTEND_PROGRAM_CHECKED is enabled
     {
-        var tc = try sig.runtime.testing.createTransactionContext(
+        var tx = try sig.runtime.testing.createTransactionContext(
             allocator,
             prng.random(),
             .{
@@ -2894,10 +2894,14 @@ test "executeV3ExtendProgram" {
                 },
             },
         );
-        defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        const tc = &tx[1];
+        defer {
+            sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+            tx[0].deinit(allocator);
+        }
 
         const instruction_info = try sig.runtime.testing.createInstructionInfo(
-            &tc,
+            tc,
             bpf_loader_program.v3.ID,
             bpf_loader_program.v3.Instruction{
                 .extend_program = .{ .additional_bytes = 0 },
@@ -2908,14 +2912,14 @@ test "executeV3ExtendProgram" {
 
         try std.testing.expectError(
             InstructionError.InvalidInstructionData,
-            sig.runtime.executor.executeInstruction(allocator, &tc, instruction_info),
+            sig.runtime.executor.executeInstruction(allocator, tc, instruction_info),
         );
         try std.testing.expectEqual(tc.compute_meter, 0);
     }
 
     // Test extend_program_checked disabled when ENABLE_EXTEND_PROGRAM_CHECKED is not present.
     {
-        var tc = try sig.runtime.testing.createTransactionContext(
+        var tx = try sig.runtime.testing.createTransactionContext(
             allocator,
             prng.random(),
             .{
@@ -2932,10 +2936,14 @@ test "executeV3ExtendProgram" {
                 },
             },
         );
-        defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        const tc = &tx[1];
+        defer {
+            sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+            tx[0].deinit(allocator);
+        }
 
         const instruction_info = try sig.runtime.testing.createInstructionInfo(
-            &tc,
+            tc,
             bpf_loader_program.v3.ID,
             bpf_loader_program.v3.Instruction{
                 .extend_program_checked = .{ .additional_bytes = 0 },
@@ -2946,7 +2954,7 @@ test "executeV3ExtendProgram" {
 
         try std.testing.expectError(
             InstructionError.InvalidInstructionData,
-            sig.runtime.executor.executeInstruction(allocator, &tc, instruction_info),
+            sig.runtime.executor.executeInstruction(allocator, tc, instruction_info),
         );
         try std.testing.expectEqual(tc.compute_meter, 0);
     }
