@@ -186,6 +186,8 @@ const ProcessBatchTask = struct {
 test "TransactionScheduler: happy path" {
     const allocator = std.testing.allocator;
     const Transaction = sig.core.Transaction;
+    const resolveBatchGeneric = replay.resolve_lookup.resolveBatchGeneric;
+
     var rng = std.Random.DefaultPrng.init(123);
 
     var thread_pool = ThreadPool.init(.{});
@@ -204,12 +206,10 @@ test "TransactionScheduler: happy path" {
     };
 
     {
-        const batch1 = try replay.resolve_lookup
-            .resolveBatchGeneric(allocator, .noop, {}, transactions[0..3]);
+        const batch1 = try resolveBatchGeneric(allocator, .noop, {}, transactions[0..3]);
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try replay.resolve_lookup
-            .resolveBatchGeneric(allocator, .noop, {}, transactions[3..6]);
+        const batch2 = try resolveBatchGeneric(allocator, .noop, {}, transactions[3..6]);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -228,6 +228,8 @@ test "TransactionScheduler: happy path" {
 test "TransactionScheduler: failed account locks" {
     const allocator = std.testing.allocator;
     const Transaction = sig.core.Transaction;
+    const resolveBatchGeneric = replay.resolve_lookup.resolveBatchGeneric;
+
     var rng = std.Random.DefaultPrng.init(0);
 
     var thread_pool = ThreadPool.init(.{});
@@ -240,8 +242,7 @@ test "TransactionScheduler: failed account locks" {
     const unresolved_batch = [_]Transaction{ tx, tx };
 
     {
-        const batch1 = try replay.resolve_lookup
-            .resolveBatchGeneric(allocator, .noop, {}, &unresolved_batch);
+        const batch1 = try resolveBatchGeneric(allocator, .noop, {}, &unresolved_batch);
         errdefer batch1.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -256,6 +257,8 @@ test "TransactionScheduler: failed account locks" {
 test "TransactionScheduler: signature verification failure" {
     const allocator = std.testing.allocator;
     const Transaction = sig.core.Transaction;
+    const resolveBatchGeneric = replay.resolve_lookup.resolveBatchGeneric;
+
     var rng = std.Random.DefaultPrng.init(0);
 
     var thread_pool = ThreadPool.init(.{});
@@ -279,12 +282,10 @@ test "TransactionScheduler: signature verification failure" {
     transactions[5].signatures = replaced_sigs;
 
     {
-        const batch1 = try replay.resolve_lookup
-            .resolveBatchGeneric(allocator, .noop, {}, transactions[0..3]);
+        const batch1 = try resolveBatchGeneric(allocator, .noop, {}, transactions[0..3]);
         errdefer batch1.deinit(allocator);
 
-        const batch2 = try replay.resolve_lookup
-            .resolveBatchGeneric(allocator, .noop, {}, transactions[3..6]);
+        const batch2 = try resolveBatchGeneric(allocator, .noop, {}, transactions[3..6]);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
