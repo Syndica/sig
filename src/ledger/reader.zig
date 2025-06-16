@@ -1210,8 +1210,8 @@ pub const BlockstoreReader = struct {
     ///
     /// Analogous to [get_slots_since](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3821)
     pub fn getSlotsSince(
-        db: *BlockstoreDB,
         allocator: Allocator,
+        db: *BlockstoreDB,
         slots: []const Slot,
     ) !std.AutoArrayHashMapUnmanaged(Slot, std.ArrayListUnmanaged(Slot)) {
         // TODO perf: support multi_get in db
