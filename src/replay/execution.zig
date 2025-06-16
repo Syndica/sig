@@ -78,6 +78,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     }
     for (active_slots) |slot| {
         const result = try replaySlot(state, slot);
+        errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
     for (slot_statuses.items) |slot_status| {
