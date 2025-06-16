@@ -19,7 +19,7 @@ const InstructionContext = sig.runtime.InstructionContext;
 pub const PROGRAM_ENTRYPOINTS = initProgramEntrypoints();
 pub const PRECOMPILE_ENTRYPOINTS = initPrecompileEntrypoints();
 
-const EntrypointFn = *const fn (
+pub const EntrypointFn = *const fn (
     std.mem.Allocator,
     *InstructionContext,
 ) (error{OutOfMemory} || InstructionError)!void;

@@ -1512,6 +1512,8 @@ pub fn deployProgram(
     data: []const u8,
     slot: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
+    std.debug.print("deployProgram: program_id:{s} owner_id:{s} data:{}\n", .{program_id, owner_id, data.len});
+
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
     var syscalls = vm.syscalls.register(
         allocator,
@@ -1560,8 +1562,17 @@ pub fn deployProgram(
     defer executable.deinit(allocator);
 
     try tc.log("Deploying program {}", .{program_id});
-    _ = slot;
-    _ = owner_id;
+
+    const clock = tc.sysvar_cache.get(sysvar.Clock) catch sysvar.Clock.DEFAULT;
+    std.debug.print("deployed {} (exists:{}) to slot:{} < {} = {}\n", .{program_id, 
+        tc.program_cache.contains(program_id), slot, clock.slot, slot <= clock.slot});
+    if (false) {
+        const deployed_data = try allocator.dupe(u8, data);
+        errdefer allocator.free(deployed_data);
+        try tc.program_cache.put(allocator, program_id, .{ .deployed = deployed_data });
+    } else {
+        _ = tc.program_cache.remove(program_id); // DelayVisible
+    }
 }
 
 test "executeV3InitializeBuffer" {

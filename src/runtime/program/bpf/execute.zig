@@ -26,16 +26,33 @@ pub fn execute(
         defer program_account.release();
 
         const feature_set = &ic.tc.feature_set.active;
+        const remove_accounts_executable = feature_set.contains(
+            features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
+        );
 
         // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!feature_set.contains(
-            features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
-        ) and
+        if (!remove_accounts_executable and
             !program_account.account.executable)
         {
             try ic.tc.log("Program is not executable", .{});
             return InstructionError.IncorrectProgramId;
         }
+
+        const program_cache_entry = ic.tc.program_cache.get(program_account.pubkey) orelse {
+            if (remove_accounts_executable) {
+                return InstructionError.UnsupportedProgramId;
+            } else {
+                return InstructionError.InvalidAccountData;
+            }
+        };
+
+        const program_data: []const u8 = switch (program_cache_entry) {
+            .builtin => |entrypoint| {
+                return entrypoint(allocator, ic);
+            },
+            .loaded => |data| data,
+            .deployed => |data| data,
+        };
 
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
         var syscalls = vm.syscalls.register(
@@ -67,7 +84,7 @@ pub fn execute(
         std.debug.assert(max_sbpf_version.gte(min_sbpf_version));
 
         // Clone required to prevent modification of underlying account elf
-        const source = try allocator.dupe(u8, program_account.account.data);
+        const source = try allocator.dupe(u8, program_data);
         errdefer allocator.free(source);
 
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L133-L143

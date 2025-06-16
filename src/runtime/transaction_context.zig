@@ -39,6 +39,8 @@ pub const TransactionContext = struct {
     // This exists per-slot.
     sysvar_cache: *const SysvarCache,
 
+    program_cache: std.AutoHashMapUnmanaged(Pubkey, Program) = .{},
+
     /// Transaction accounts
     accounts: []TransactionContextAccount,
 
@@ -75,6 +77,12 @@ pub const TransactionContext = struct {
     prev_blockhash: Hash,
     prev_lamports_per_signature: u64,
 
+    pub const Program = union(enum) {
+        builtin: sig.runtime.program.EntrypointFn,
+        loaded: []const u8,
+        deployed: []u8,
+    };
+
     pub const InstructionStack = std.BoundedArray(
         InstructionContext,
         MAX_INSTRUCTION_STACK_DEPTH,
@@ -85,10 +93,62 @@ pub const TransactionContext = struct {
         depth: u8,
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
-    pub fn deinit(self: TransactionContext) void {
+    pub fn deinit(this: TransactionContext) void {
+        var self = this;
+        
+        var it = self.program_cache.iterator();
+        while (it.next()) |e| switch (e.value_ptr.*) {
+            .deployed => |data| self.allocator.free(data),
+            else => {},
+        };
+
+        self.program_cache.deinit(self.allocator);
         for (self.accounts) |account| account.deinit(self.allocator);
         self.allocator.free(self.accounts);
         if (self.log_collector) |lc| lc.deinit(self.allocator);
+    }
+
+    pub fn initializeProgramCache(tc: *TransactionContext) !void {
+        const allocator = tc.allocator;
+        const sysvar_cache = tc.sysvar_cache;
+        const sysvar = sig.runtime.sysvar;
+
+        const builtins = sig.runtime.program.PROGRAM_ENTRYPOINTS;
+        for (builtins.keys()) |id_slice| {
+            const id = try sig.core.Pubkey.parseBase58String(id_slice);
+            const func = builtins.get(id_slice).?;
+            try tc.program_cache.put(allocator, id, .{ .builtin = func });
+        }
+
+        const clock = sysvar_cache.get(sysvar.Clock) catch sysvar.Clock.DEFAULT;
+        for (tc.accounts) |acc| {
+            // std.debug.print("owner:{} id:{}\n", .{acc.account.owner, acc.pubkey});
+            if (acc.account.owner.equals(&sig.runtime.program.bpf_loader.v3.ID)) blk: {
+                const V3State = sig.runtime.program.bpf_loader.v3.State;
+                const state = sig.bincode.readFromSlice(allocator, V3State, acc.account.data, .{}) catch break :blk;
+                // std.debug.print("  state:{any}\n", .{state});
+                switch (state) {
+                    .program => |args| {
+                        const idx = tc.getAccountIndex(args.programdata_address) orelse break :blk;
+                        const pdata = tc.accounts[idx].account.data;
+                        const pstate = sig.bincode.readFromSlice(allocator, V3State, pdata, .{}) catch break :blk;
+                        switch (pstate) {
+                            .program_data => |pargs| {
+                                // std.debug.print("  {} clock:{} pargs_slot:{} data:{}\n", .{pargs.slot <= clock.slot, clock.slot, pargs.slot, pdata[V3State.PROGRAM_DATA_METADATA_SIZE..].len});
+                                if (pargs.slot < clock.slot) {
+                                    try tc.program_cache.put(allocator, acc.pubkey, .{ .loaded = pdata[V3State.PROGRAM_DATA_METADATA_SIZE..] });
+                                    continue;
+                                }
+                            },
+                            else => {},
+                        }
+                    },
+                    else => {},
+                }
+            } else {
+                try tc.program_cache.put(allocator, acc.pubkey, .{ .loaded = acc.account.data });
+            }
+        }
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233
