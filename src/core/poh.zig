@@ -55,9 +55,8 @@ pub const Poh = struct {
     } {
         assert(self.hashes_per_tick > 1);
         var maybe_tick: ?PohEntry = null;
-        var record: PohEntry = undefined;
-        if (self.remaining_hashes == 1) maybe_tick = self.tick() orelse unreachable;
-        record = self.tryRecord(mixin) orelse unreachable;
+        if (self.remaining_hashes == 1) maybe_tick = self.tick().?;
+        const record = self.tryRecord(mixin).?;
         return .{ .maybe_tick = maybe_tick, .record = record };
     }
 
