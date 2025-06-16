@@ -295,7 +295,7 @@ pub const BlockError = enum {
     DuplicateBlock,
 };
 
-test "confirmSlot happy path: trivial case" {
+test "happy path: trivial case" {
     var thread_pool = ThreadPool.init(.{});
     var tick_hash_count: u64 = 0;
 
@@ -322,7 +322,7 @@ test "confirmSlot happy path: trivial case" {
     try std.testing.expectEqual(.done, result);
 }
 
-test "confirmSlot happy path: partial slot" {
+test "happy path: partial slot" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
@@ -355,7 +355,7 @@ test "confirmSlot happy path: partial slot" {
     try std.testing.expectEqual(.done, result);
 }
 
-test "confirmSlot happy path: full slot" {
+test "happy path: full slot" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
@@ -388,7 +388,7 @@ test "confirmSlot happy path: full slot" {
     try std.testing.expectEqual(.done, result);
 }
 
-test "confirmSlot fail: full slot not marked full -> .InvalidLastTick" {
+test "fail: full slot not marked full -> .InvalidLastTick" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
@@ -424,7 +424,7 @@ test "confirmSlot fail: full slot not marked full -> .InvalidLastTick" {
     );
 }
 
-test "confirmSlot fail: no trailing tick at max height -> .TrailingEntry" {
+test "fail: no trailing tick at max height -> .TrailingEntry" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
@@ -462,7 +462,7 @@ test "confirmSlot fail: no trailing tick at max height -> .TrailingEntry" {
 
 // TODO: finish tests
 
-test "confirmSlot fail: invalid poh chain" {
+test "fail: invalid poh chain" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
@@ -501,7 +501,7 @@ test "confirmSlot fail: invalid poh chain" {
     );
 }
 
-test "confirmSlot fail: sigverify" {
+test "fail: sigverify" {
     const allocator = std.testing.allocator;
 
     var thread_pool = ThreadPool.init(.{});
