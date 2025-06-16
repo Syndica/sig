@@ -1476,7 +1476,6 @@ test "addNodePubkeyInternal" {
             random,
             allocator,
             8,
-            error{ RandomErrorA, RandomErrorB, RandomErrorC },
         );
         errdefer comptime unreachable;
         epoch_vote_accounts.putAssumeCapacity(pubkey, .{ 1, vote_account });
@@ -1539,7 +1538,6 @@ test "addNodePubkeyInternal" {
             random,
             allocator,
             8,
-            error{ RandomErrorA, RandomErrorB, RandomErrorC },
         );
         errdefer comptime unreachable;
         epoch_vote_accounts.putAssumeCapacity(pubkey, .{ 1, vote_account });
