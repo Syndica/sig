@@ -58,18 +58,18 @@ pub const TransactionContext = struct {
     serialized_accounts: std.BoundedArray(
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
-    ),
+    ) = .{},
 
     /// Used by syscall.allocFree to implement sbrk bump allocation
     bpf_alloc_pos: u64 = 0,
 
-    instruction_stack: InstructionStack,
-    instruction_trace: InstructionTrace,
+    instruction_stack: InstructionStack = .{},
+    instruction_trace: InstructionTrace = .{},
     top_level_instruction_index: u16 = 0,
-    return_data: TransactionReturnData,
+    return_data: TransactionReturnData = .{},
 
     /// Total change to account data size within transaction
-    accounts_resize_delta: i64,
+    accounts_resize_delta: i64 = 0,
 
     /// Instruction compute meter, for tracking compute units consumed against
     /// the designated compute budget during program execution.
@@ -78,9 +78,9 @@ pub const TransactionContext = struct {
 
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.custom will be returned
-    custom_error: ?u32,
+    custom_error: ?u32 = null,
 
-    log_collector: ?LogCollector,
+    log_collector: ?LogCollector = null,
     rent: Rent,
 
     /// Previous blockhash and lamports per signature from the blockhash queue
@@ -216,8 +216,8 @@ pub const TransactionReturnData = struct {
 pub const TransactionContextAccount = struct {
     pubkey: Pubkey,
     account: *AccountSharedData,
-    read_refs: usize,
-    write_ref: bool,
+    read_refs: usize = 0,
+    write_ref: bool = false,
 
     pub const RLockGuard = struct {
         read_refs: *usize,
