@@ -11,7 +11,6 @@ const AccountParams = ExecuteContextParams.AccountParams;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const VmEnvironment = sig.vm.Environment;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
-const FeatureSet = sig.runtime.features.FeatureSet;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const FeatureParams = sig.runtime.testing.ExecuteContextsParams.FeatureParams;
 

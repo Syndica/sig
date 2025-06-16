@@ -21,7 +21,6 @@ const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const AccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
-const LoadedProgram = sig.runtime.program_loader.LoadedProgram;
 const VmEnvironment = sig.vm.Environment;
 
 pub const ExecuteContextsParams = struct {

@@ -7,9 +7,6 @@ const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 const Executable = sig.vm.Executable;
-const Registry = sig.vm.Registry;
-const Syscall = sig.vm.Syscall;
-const Config = sig.vm.Config;
 const VmEnvironment = sig.vm.Environment;
 
 pub const ProgramMap = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram);
