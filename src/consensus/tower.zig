@@ -24,7 +24,7 @@ const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 
-const DUPLICATE_THRESHOLD = sig.consensus.unimplemented.DUPLICATE_THRESHOLD;
+const DUPLICATE_THRESHOLD = sig.replay.service.DUPLICATE_THRESHOLD;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
