@@ -73,7 +73,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
 
     var slot_statuses = std.ArrayListUnmanaged(struct { Slot, ReplaySlotStatus }).empty;
     defer {
-        for (slot_statuses.items) |status| status[1].confirm.destroy(state.allocator);
+        for (slot_statuses.items) |status| status[1].deinit(state.allocator);
         slot_statuses.deinit(state.allocator);
     }
     for (active_slots) |slot| {
@@ -113,6 +113,13 @@ const ReplaySlotStatus = union(enum) {
 
     /// The slot is being confirmed, poll this to await the result.
     confirm: *ConfirmSlotFuture,
+
+    fn deinit(self: ReplaySlotStatus, allocator: Allocator) void {
+        switch (self) {
+            .confirm => |future| future.destroy(allocator),
+            else => {},
+        }
+    }
 };
 
 /// Replay the transactions from any entries in the slot that we've received but
