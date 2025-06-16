@@ -205,11 +205,11 @@ test "TransactionScheduler: happy path" {
 
     {
         const batch1 = try replay.resolve_lookup
-            .resolveBatch(allocator, undefined, transactions[0..3]);
+            .resolveBatchGeneric(allocator, .noop, {}, transactions[0..3]);
         errdefer batch1.deinit(allocator);
 
         const batch2 = try replay.resolve_lookup
-            .resolveBatch(allocator, undefined, transactions[3..6]);
+            .resolveBatchGeneric(allocator, .noop, {}, transactions[3..6]);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -241,7 +241,7 @@ test "TransactionScheduler: failed account locks" {
 
     {
         const batch1 = try replay.resolve_lookup
-            .resolveBatch(allocator, undefined, &unresolved_batch);
+            .resolveBatchGeneric(allocator, .noop, {}, &unresolved_batch);
         errdefer batch1.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
@@ -280,11 +280,11 @@ test "TransactionScheduler: signature verification failure" {
 
     {
         const batch1 = try replay.resolve_lookup
-            .resolveBatch(allocator, undefined, transactions[0..3]);
+            .resolveBatchGeneric(allocator, .noop, {}, transactions[0..3]);
         errdefer batch1.deinit(allocator);
 
         const batch2 = try replay.resolve_lookup
-            .resolveBatch(allocator, undefined, transactions[3..6]);
+            .resolveBatchGeneric(allocator, .noop, {}, transactions[3..6]);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
