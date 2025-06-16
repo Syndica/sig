@@ -54,9 +54,10 @@ pub const SlotTracker = struct {
         constants: SlotConstants,
         state: SlotState,
     ) !void {
+        try self.slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
         elem.* = .{ .constants = constants, .state = state };
-        try self.slots.put(allocator, slot, elem);
+        self.slots.putAssumeCapacity(slot, elem);
     }
 
     pub fn get(self: *const SlotTracker, slot: Slot) ?Reference {
