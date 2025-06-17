@@ -119,6 +119,26 @@ pub const ExtendProgram = struct {
     };
 };
 
+pub const ExtendProgramChecked = struct {
+    /// Number of bytes to extend the program data.
+    additional_bytes: u32,
+
+    pub const AccountIndex = enum(u3) {
+        /// `[WRITE]` The ProgramData account.
+        program_data = 0,
+        /// `[WRITE]` The ProgramData account's associated Program account.
+        program = 1,
+        /// `[SIGNER]` The authority.
+        authority = 2,
+        /// `[]` System program (`solana_sdk::system_program::id()`),
+        /// optional used to transfer lamports from the payer to the ProgramData account.
+        system_program = 3,
+        /// `[WRITE, SIGNER]` The payer account, optional, that will pay necessary rent exemption
+        /// costs for the increased storage size.
+        payer = 4,
+    };
+};
+
 pub const Migrate = struct {
     pub const AccountIndex = enum(u2) {
         /// `[WRITE]` The ProgramData account.
@@ -283,4 +303,20 @@ pub const Instruction = union(enum) {
     ///   1. `[writable]` The Program account.
     ///   2. `[signer]` The current authority.
     migrate: Migrate,
+
+    /// Extend a program's ProgramData account by the specified number of bytes.
+    /// Only upgradeable programs can be extended.
+    ///
+    /// This instruction differs from ExtendProgram in that the authority is a
+    /// required signer.
+    ///
+    /// # Account references
+    ///   0. `[writable]` The ProgramData account.
+    ///   1. `[writable]` The ProgramData account's associated Program account.
+    ///   2. `[signer]` The authority.
+    ///   3. `[]` System program (`solana_sdk::system_program::id()`), optional, used to transfer
+    ///      lamports from the payer to the ProgramData account.
+    ///   4. `[signer]` The payer account, optional, that will pay necessary rent exemption costs
+    ///      for the increased storage size.
+    extend_program_checked: ExtendProgramChecked,
 };

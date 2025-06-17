@@ -38,6 +38,12 @@ pub const Elf = struct {
         shdrs: []align(1) const elf.Elf64_Shdr,
         phdrs: []align(1) const elf.Elf64_Phdr,
 
+        /// [agave] https://github.com/anza-xyz/sbpf/blob/56e14672804ae762030e2f620aae6b6e6fa50d34/src/elf_parser/mod.rs#L120-L129
+        fn checkOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) !void {
+            if (a_end <= b_start or b_end <= a_start) return;
+            return error.Overlap;
+        }
+
         fn parse(bytes: []const u8) !Headers {
             // There aren't enough bytes in the ELF file to contain a header.
             if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
@@ -56,21 +62,64 @@ pub const Elf = struct {
                 return error.InvalidFileHeader;
             }
 
-            // Compute the size of the section headers in the ELF in bytes.
-            const shsize = try std.math.mul(u64, header.e_shnum, @sizeOf(elf.Elf64_Shdr));
-            // A slice representing the section headers, re-interpreted into `Elf64_Shdr`.
-            const shdrs = std.mem.bytesAsSlice(
-                elf.Elf64_Shdr,
-                try safeSlice(bytes, header.e_shoff, shsize),
-            );
-
             // Compute the size of the program headers in the ELF in bytes.
-            const phsize = try std.math.mul(u64, header.e_phnum, @sizeOf(elf.Elf64_Phdr));
+            const ph_size = try std.math.mul(u64, header.e_phnum, @sizeOf(elf.Elf64_Phdr));
+            const ph_end = try std.math.add(u64, header.e_phoff, ph_size);
+            try checkOverlap(0, @sizeOf(elf.Elf64_Ehdr), header.e_phoff, ph_end);
+
             // A slice representing the program headers, re-interpreted into `Elf64_Phdr`.
             const phdrs = std.mem.bytesAsSlice(
                 elf.Elf64_Phdr,
-                try safeSlice(bytes, header.e_phoff, phsize),
+                try safeSlice(bytes, header.e_phoff, ph_size),
             );
+
+            // Compute the size of the section headers in the ELF in bytes.
+            const sh_size = try std.math.mul(u64, header.e_shnum, @sizeOf(elf.Elf64_Shdr));
+            const sh_end = try std.math.add(u64, header.e_shoff, sh_size);
+            try checkOverlap(0, @sizeOf(elf.Elf64_Ehdr), header.e_shoff, sh_end);
+            try checkOverlap(header.e_phoff, ph_end, header.e_shoff, sh_end);
+
+            // A slice representing the section headers, re-interpreted into `Elf64_Shdr`.
+            const shdrs = std.mem.bytesAsSlice(
+                elf.Elf64_Shdr,
+                try safeSlice(bytes, header.e_shoff, sh_size),
+            );
+
+            if (!(shdrs.len > 0 and shdrs[0].sh_type == elf.SHT_NULL)) {
+                return error.InvalidSectionHeader;
+            }
+
+            // Validate program header address ranges.
+            var vaddr: elf.Elf64_Addr = 0;
+            for (phdrs) |phdr| {
+                if (phdr.p_type != elf.PT_LOAD) continue;
+                if (phdr.p_vaddr < vaddr) return error.InvalidProgramHeader;
+                defer vaddr = phdr.p_vaddr;
+
+                const file_offset = try std.math.add(usize, phdr.p_offset, phdr.p_filesz);
+                if (file_offset > bytes.len) {
+                    return error.OutOfBounds;
+                }
+            }
+
+            var offset: usize = 0;
+            for (shdrs) |shdr| {
+                if (shdr.sh_type == elf.SHT_NOBITS) continue;
+                const start = shdr.sh_offset;
+                const end = try std.math.add(usize, start, shdr.sh_size);
+
+                try checkOverlap(0, @sizeOf(elf.Elf64_Ehdr), start, end);
+                try checkOverlap(header.e_phoff, ph_end, start, end);
+                try checkOverlap(header.e_shoff, sh_end, start, end);
+
+                if (start < offset) return error.SectionNotInOrder;
+                offset = end;
+                if (offset > bytes.len) return error.OutOfBounds;
+            }
+
+            if (header.e_shstrndx != elf.SHN_UNDEF and shdrs.len <= header.e_shstrndx) {
+                return error.OutOfBounds;
+            }
 
             return .{
                 .bytes = bytes,
@@ -1165,9 +1214,11 @@ test "strict header corrupt file header" {
     const expected_results: [@sizeOf(elf.Elf64_Ehdr)]?error{
         InvalidFileHeader,
         OutOfBounds,
+        Overlap,
         VersionUnsupported,
     } =
-        .{error.InvalidFileHeader} ** 33 ++
+        .{error.InvalidFileHeader} ** 32 ++
+        .{error.Overlap} ** 1 ++
         .{error.OutOfBounds} ** 15 ++
         .{error.VersionUnsupported} ** 4 ++
         .{error.InvalidFileHeader} ** 4 ++
@@ -1233,7 +1284,10 @@ test "strict header corrupt program header" {
             copy[true_offset] = 0xAF;
 
             var loader: BuiltinProgram = .{};
-            var result = Elf.parse(allocator, copy, &loader, .{});
+            var result = Elf.parse(allocator, copy, &loader, .{}) catch |e| switch (e) {
+                error.OutOfBounds => error.InvalidProgramHeader,
+                else => e,
+            };
             defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
             if (expected) |err| {

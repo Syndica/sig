@@ -193,7 +193,7 @@ test poseidon {
             .{ .name = "log", .builtin_fn = sig.vm.syscalls.log },
             .{ .name = "sol_panic_", .builtin_fn = sig.vm.syscalls.panic },
         },
-        .{ 0, 48526 },
+        .{ 0, 48596 },
     );
 }
 
