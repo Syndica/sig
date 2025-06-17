@@ -113,6 +113,10 @@ pub fn loadDeploymentSlotAndExecutableBytes(
         const program_data_account = accounts.getPtr(program_data_key) orelse
             return null;
 
+        if (program_data_account.data.len < bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE) {
+            return null;
+        }
+
         const program_metadata_bytes =
             program_data_account.data[0..bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE];
         const program_elf_bytes =
