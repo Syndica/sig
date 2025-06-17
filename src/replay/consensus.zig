@@ -42,6 +42,7 @@ pub const ConsensusDependencies = struct {
     epoch_tracker: *EpochTracker,
     fork_choice: *ForkChoice,
     blockstore_reader: *BlockstoreReader,
+    ledger_result_writer: *LedgerResultWriter,
     ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
     descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
@@ -117,6 +118,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
             deps.replay_tower,
             deps.progress_map,
             deps.fork_choice,
+            deps.ledger_result_writer,
         );
     }
 
@@ -282,7 +284,7 @@ pub const GenerateVoteTxResult = union(enum) {
 /// Analogous to [handle_votable_bank](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2388)
 fn handleVotableBank(
     allocator: std.mem.Allocator,
-    blockstore_reader: *BlockstoreReader,
+    ledger_result_writer: *LedgerResultWriter,
     vote_slot: Slot,
     vote_hash: Hash,
     slot_tracker: *SlotTracker,
@@ -299,7 +301,7 @@ fn handleVotableBank(
     if (maybe_new_root) |new_root| {
         try checkAndHandleNewRoot(
             allocator,
-            blockstore_reader,
+            ledger_result_writer,
             slot_tracker,
             progress,
             fork_choice,
@@ -355,7 +357,7 @@ fn pushVote(
 /// Analogous to [check_and_handle_new_root](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L4002)
 fn checkAndHandleNewRoot(
     allocator: std.mem.Allocator,
-    blockstore_reader: *BlockstoreReader,
+    ledger_result_writer: *LedgerResultWriter,
     slot_tracker: *SlotTracker,
     progress: *ProgressMap,
     fork_choice: *ForkChoice,
@@ -372,26 +374,7 @@ fn checkAndHandleNewRoot(
     defer allocator.free(rooted_slots);
 
     // TODO implement leader_schedule_cache.set_root.
-    // TODO have this a seperate function?
-    {
-        var lowest_cleanup_slot = RwMux(Slot).init(0);
-        var max_root = std.atomic.Value(Slot).init(0);
-        var registry = sig.prometheus.Registry(.{}).init(allocator);
-        defer registry.deinit();
-
-        var writer = LedgerResultWriter{
-            .allocator = allocator,
-            .db = blockstore_reader.db,
-            .logger = .noop,
-            .lowest_cleanup_slot = &lowest_cleanup_slot,
-            .max_root = &max_root,
-            .scan_and_fix_roots_metrics = try registry.initStruct(
-                sig.ledger.result_writer.ScanAndFixRootsMetrics,
-            ),
-        };
-
-        try writer.setRoots(rooted_slots);
-    }
+    try ledger_result_writer.setRoots(rooted_slots);
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
     slot_tracker.root = new_root;
@@ -993,7 +976,8 @@ test "checkAndHandleNewRoot - missing slot" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var blockstore_reader = try BlockstoreReader.init(
+
+    var ledger_result_writer = try LedgerResultWriter.init(
         testing.allocator,
         logger,
         db,
@@ -1005,7 +989,7 @@ test "checkAndHandleNewRoot - missing slot" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         testing.allocator,
-        &blockstore_reader,
+        &ledger_result_writer,
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
@@ -1068,7 +1052,8 @@ test "checkAndHandleNewRoot - missing hash" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var blockstore_reader = try BlockstoreReader.init(
+
+    var ledger_result_writer = try LedgerResultWriter.init(
         testing.allocator,
         logger,
         db,
@@ -1080,7 +1065,7 @@ test "checkAndHandleNewRoot - missing hash" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         testing.allocator,
-        &blockstore_reader,
+        &ledger_result_writer,
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
@@ -1112,7 +1097,8 @@ test "checkAndHandleNewRoot - empty slot tracker" {
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var blockstore_reader = try BlockstoreReader.init(
+
+    var ledger_result_writer = try LedgerResultWriter.init(
         testing.allocator,
         logger,
         db,
@@ -1124,7 +1110,7 @@ test "checkAndHandleNewRoot - empty slot tracker" {
     // Try to check a slot that doesn't exist in the tracker
     const result = checkAndHandleNewRoot(
         testing.allocator,
-        &blockstore_reader,
+        &ledger_result_writer,
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,
@@ -1232,7 +1218,8 @@ test "checkAndHandleNewRoot - success" {
     defer registry.deinit();
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
-    var blockstore_reader = try BlockstoreReader.init(
+
+    var ledger_result_writer = try LedgerResultWriter.init(
         testing.allocator,
         .noop,
         db,
@@ -1245,7 +1232,7 @@ test "checkAndHandleNewRoot - success" {
     try testing.expect(fixture.progress.map.contains(hash1.slot));
     try checkAndHandleNewRoot(
         testing.allocator,
-        &blockstore_reader,
+        &ledger_result_writer,
         &slot_tracker,
         &fixture.progress,
         &fixture.fork_choice,

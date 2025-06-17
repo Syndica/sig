@@ -7,6 +7,7 @@ const tracy = @import("tracy");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
+const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const ChannelPrintLogger = sig.trace.ChannelPrintLogger;
 const ClusterType = sig.core.ClusterType;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -1090,6 +1091,19 @@ fn validator(
         max_root,
     );
 
+    const ledger_result_writer = try allocator.create(LedgerResultWriter);
+    defer allocator.destroy(ledger_result_writer);
+    ledger_result_writer.* = try LedgerResultWriter.init(
+        allocator,
+        app_base.logger.unscoped(),
+        blockstore_db,
+        try app_base.metrics_registry.initStruct(
+            sig.ledger.result_writer.ScanAndFixRootsMetrics,
+        ),
+        lowest_cleanup_slot,
+        max_root,
+    );
+
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger.unscoped(),
         blockstore_reader,
@@ -1175,6 +1189,7 @@ fn validator(
             .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
             .exit = app_base.exit,
             .blockstore_reader = blockstore_reader,
+            .ledger_result_writer = ledger_result_writer,
             .accounts_db = &loaded_snapshot.accounts_db,
             .epoch_schedule = bank_fields.epoch_schedule,
             .slot_leaders = epoch_context_manager.slotLeaders(),
