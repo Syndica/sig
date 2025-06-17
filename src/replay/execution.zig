@@ -176,19 +176,25 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     // out more usages of this struct.
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
 
-    const entries, const num_shreds, const slot_is_full = try state.blockstore_reader
-        .getSlotEntriesWithShredInfo(slot, confirmation_progress.num_shreds, false);
+    const entries, const num_shreds, const slot_is_full =
+        try state.blockstore_reader.getSlotEntriesWithShredInfo(
+            state.allocator,
+            slot,
+            confirmation_progress.num_shreds,
+            false,
+        );
+    defer state.allocator.free(entries);
 
     confirmation_progress.num_shreds += num_shreds;
-    confirmation_progress.num_entries += entries.items.len;
-    for (entries.items) |e| confirmation_progress.num_txs += e.transactions.len;
+    confirmation_progress.num_entries += entries.len;
+    for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
 
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
         state.accounts_db,
         state.thread_pool,
-        entries.items,
+        entries,
         confirmation_progress.last_entry,
         .{
             .tick_height = slot_info.state.tickHeight(),
