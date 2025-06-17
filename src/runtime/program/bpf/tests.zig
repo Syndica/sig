@@ -590,7 +590,7 @@ test "basic direct mapping" {
         },
         .{
             .accounts = accounts,
-            .compute_meter = 106,
+            .compute_meter = 109,
             .program_map = &program_map,
             .vm_environment = &environment,
             .feature_set = feature_params,
