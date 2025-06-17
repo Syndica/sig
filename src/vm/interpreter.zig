@@ -96,7 +96,9 @@ pub const Vm = struct {
     fn dispatchSyscall(self: *Vm, entry: anytype) !void {
         self.instruction_count = self.prev_instruction_meter - self.instruction_count;
         if (self.executable.config.enable_instruction_meter) {
-            self.transaction_context.consumeUnchecked(self.prev_instruction_meter - self.instruction_count);
+            self.transaction_context.consumeUnchecked(
+                self.prev_instruction_meter - self.instruction_count,
+            );
         }
 
         defer {
