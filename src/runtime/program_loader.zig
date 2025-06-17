@@ -40,14 +40,14 @@ pub fn loadPrograms(
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |pubkey, account| {
-        if (account.executable)
-            try programs.put(allocator, pubkey, try loadProgram(
-                allocator,
-                &account,
-                accounts,
-                enviroment,
-                slot,
-            ));
+        if (!account.executable) continue;
+        try programs.put(allocator, pubkey, try loadProgram(
+            allocator,
+            &account,
+            accounts,
+            enviroment,
+            slot,
+        ));
     }
 
     return programs;

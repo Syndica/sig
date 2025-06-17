@@ -24,10 +24,8 @@ pub const RecentBlockhashes = struct {
     }
 
     pub fn last(self: RecentBlockhashes) ?Entry {
-        return if (self.entries.len > 0)
-            self.entries[self.entries.len - 1]
-        else
-            null;
+        if (self.entries.len == 0) return null;
+        return self.entries[self.entries.len - 1];
     }
 
     pub fn isEmpty(self: RecentBlockhashes) bool {

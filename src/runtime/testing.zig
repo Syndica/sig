@@ -31,7 +31,7 @@ pub const ExecuteContextsParams = struct {
     feature_set: []const FeatureParams = &.{},
     epoch_stakes: []const EpochStakeParam = &.{},
 
-    // Programs to be inseted into the program map.
+    // Programs to be inserted into the program map.
     program_map: *const ProgramMap = &.{},
 
     // Environment used to load and verify programs.

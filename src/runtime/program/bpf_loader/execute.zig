@@ -1541,7 +1541,10 @@ pub fn deployProgram(
     defer executable.deinit(allocator);
 
     executable.verify(&environment.loader) catch |err| {
-        try tc.log("{s}", .{@errorName(err)});
+        try tc.log(
+            "executable failed to verify: pubkey={s} error={s}",
+            .{ program_id, @errorName(err) },
+        );
         return InstructionError.InvalidAccountData;
     };
 

@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const account_loader = sig.runtime.account_loader;
+const program_loader = sig.runtime.program_loader;
 const executor = sig.runtime.executor;
 const compute_budget_program = sig.runtime.program.compute_budget;
 
@@ -72,6 +73,7 @@ pub const TransactionExecutionEnvironment = struct {
     vm_environment: *const VmEnvironment,
     next_vm_environment: ?*const VmEnvironment,
 
+    slot: u64,
     max_age: u64,
     last_blockhash: Hash,
     next_durable_nonce: Hash,
@@ -196,7 +198,13 @@ pub fn loadAndExecuteTransactions(
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
-    const program_map = ProgramMap{};
+    const program_map = try program_loader.loadPrograms(
+        allocator,
+        &batch_account_cache.account_cache,
+        environment.vm_environment,
+        environment.slot,
+    );
+
     const transaction_results = try allocator.alloc(
         TransactionResult(ProcessedTransaction),
         transactions.len,
@@ -430,6 +438,7 @@ test "loadAndExecuteTransactions: no transactions" {
         .vm_environment = &vm_environment,
         .next_vm_environment = null,
 
+        .slot = 0,
         .max_age = 0,
         .last_blockhash = Hash.ZEROES,
         .next_durable_nonce = Hash.ZEROES,
@@ -505,6 +514,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
             .next_vm_environment = null,
             .blockhash_queue = &blockhash_queue,
             .epoch_stakes = &epoch_stakes,
+            .slot = 0,
             .max_age = max_age,
             .last_blockhash = recent_blockhash,
             .next_durable_nonce = Hash.ZEROES,
@@ -673,6 +683,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .epoch_stakes = &epoch_stakes,
         .vm_environment = &VmEnvironment{},
         .next_vm_environment = null,
+        .slot = 0,
         .max_age = 0,
         .last_blockhash = transaction.recent_blockhash,
         .next_durable_nonce = Hash.ZEROES,
