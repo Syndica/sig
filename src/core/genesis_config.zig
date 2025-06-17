@@ -339,6 +339,7 @@ test "genesis_config deserialize mainnet config" {
 // }
 // ```
 test "FeeRateGovernor.initDerived conforms with agave" {
+    // zig fmt: off
     var input = FeeRateGovernor{ .lamports_per_signature = 1569526149, .target_lamports_per_signature = 1498255309, .target_signatures_per_slot = 3177457594, .min_lamports_per_signature = 0, .max_lamports_per_signature = 3419321597, .burn_percent = 201 };
     var latest_signatures_per_slot: u64 = 3591040104;
     var expected = FeeRateGovernor{ .lamports_per_signature = 1644438914, .target_lamports_per_signature = 1498255309, .target_signatures_per_slot = 3177457594, .min_lamports_per_signature = 749127654, .max_lamports_per_signature = 14982553090, .burn_percent = 201 };
@@ -938,4 +939,5 @@ test "FeeRateGovernor.initDerived conforms with agave" {
     expected = FeeRateGovernor{ .lamports_per_signature = 0, .target_lamports_per_signature = 0, .target_signatures_per_slot = 3285008881, .min_lamports_per_signature = 1, .max_lamports_per_signature = 0, .burn_percent = 105 };
     actual = FeeRateGovernor.initDerived(&input, latest_signatures_per_slot);
     try std.testing.expectEqual(expected, actual);
+    // zig fmt: on
 }
