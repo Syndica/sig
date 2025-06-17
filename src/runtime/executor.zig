@@ -134,24 +134,25 @@ fn processNextInstruction(
 
     // Lookup the program id
     // [agave] https://github.com/anza-xyz/agave/blob/1ceeab0548d5db0bbcf7dab7726c2ffb4180fa76/program-runtime/src/invoke_context.rs#L509-L533
-    const program_id = blk: {
+    const native_program_id, const program_id = blk: {
         const program_account = ic.borrowProgramAccount() catch
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
         if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
-            break :blk program_account.pubkey;
+            break :blk .{ program_account.pubkey, program_account.pubkey };
 
         const owner_id = program_account.account.owner;
         if (ic.tc.feature_set.active.contains(features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS)) {
             if (bpf_loader_program.v1.ID.equals(&owner_id) or
                 bpf_loader_program.v2.ID.equals(&owner_id) or
                 bpf_loader_program.v3.ID.equals(&owner_id) or
-                bpf_loader_program.v4.ID.equals(&owner_id)) break :blk owner_id;
+                bpf_loader_program.v4.ID.equals(&owner_id))
+                break :blk .{ owner_id, program_account.pubkey };
             return InstructionError.UnsupportedProgramId;
-        } else {
-            break :blk owner_id;
         }
+
+        break :blk .{ owner_id, program_account.pubkey };
     };
 
     // Lookup native program function
@@ -162,11 +163,11 @@ fn processNextInstruction(
     // - precompile entrypoints
 
     const maybe_precompile_fn =
-        program.PRECOMPILE_ENTRYPOINTS.get(program_id.base58String().slice());
+        program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
-            program_id.base58String().slice(),
+            native_program_id.base58String().slice(),
         );
         ic.tc.return_data.data.len = 0;
         break :blk native_program_fn;
