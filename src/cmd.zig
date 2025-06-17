@@ -1097,9 +1097,7 @@ fn validator(
         allocator,
         app_base.logger.unscoped(),
         blockstore_db,
-        try app_base.metrics_registry.initStruct(
-            sig.ledger.result_writer.ScanAndFixRootsMetrics,
-        ),
+        app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
     );

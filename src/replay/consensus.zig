@@ -111,14 +111,13 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 
         try handleVotableBank(
             deps.allocator,
-            deps.blockstore_reader,
+            deps.ledger_result_writer,
             voted.slot,
             voted_hash,
             deps.slot_tracker,
             deps.replay_tower,
             deps.progress_map,
             deps.fork_choice,
-            deps.ledger_result_writer,
         );
     }
 
@@ -413,12 +412,12 @@ fn checkAndHandleNewRoot(
 }
 
 /// Analogous to https://github.com/anza-xyz/agave/blob/234afe489aa20a04a51b810213b945e297ef38c7/core/src/replay_stage.rs#L1029-L1118
-/// 
+///
 /// Handle fork resets in specific circumstances:
 /// - When a validator needs to switch to a different fork after voting on a fork that becomes invalid
 /// - When a block producer needs to reset their fork choice after detecting a better fork
 /// - When handling cases where the validator's current fork becomes less optimal than an alternative fork
-/// 
+///
 /// TODO: Currently a placeholder function. Would be implemened when voting and producing blocks is supported.
 fn resetFork(
     progress: *const ProgressMap,
