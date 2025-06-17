@@ -656,10 +656,10 @@ fn translateAccounts(
         defer callee_account.release();
 
         const account_key = blk: {
-            const account_meta = ic.ixn_info.getAccountMetaAtIndex(
-                meta.index_in_transaction,
-            ) orelse return InstructionError.NotEnoughAccountKeys;
-            break :blk account_meta.pubkey;
+            const account = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse {
+                return InstructionError.NotEnoughAccountKeys;
+            };
+            break :blk account.pubkey;
         };
 
         if (callee_account.account.executable) {
