@@ -26,6 +26,7 @@ pub const Vm = struct {
     call_frames: std.ArrayListUnmanaged(CallFrame),
     depth: u64,
     instruction_count: u64,
+    prev_instruction_meter: u64 = 0,
     transaction_context: *TransactionContext,
     result: Result,
 
@@ -76,6 +77,7 @@ pub const Vm = struct {
 
     pub fn run(self: *Vm) struct { Result, u64 } {
         const initial_instruction_count = self.transaction_context.compute_meter;
+        self.prev_instruction_meter = initial_instruction_count;
         while (true) {
             const cont = self.step() catch |err| {
                 self.result = .{ .err = err };
@@ -91,10 +93,31 @@ pub const Vm = struct {
         return .{ self.result, instruction_count };
     }
 
+    fn dispatchSyscall(self: *Vm, entry: anytype) !void {
+        self.instruction_count = self.prev_instruction_meter - self.instruction_count;
+        if (self.executable.config.enable_instruction_meter) {
+            self.transaction_context.consumeUnchecked(self.prev_instruction_meter - self.instruction_count);
+        }
+
+        defer {
+            if (self.executable.config.enable_instruction_meter) {
+                self.prev_instruction_meter = self.transaction_context.compute_meter;
+            }
+            self.instruction_count = 0;
+        }
+
+        self.registers.set(.r0, 0);
+        try entry.value(
+            self.transaction_context,
+            &self.memory_map,
+            &self.registers,
+        );
+    }
+
     fn step(self: *Vm) ExecutionError!bool {
         const config = self.executable.config;
         if (config.enable_instruction_meter and
-            self.instruction_count >= self.transaction_context.compute_meter)
+            self.instruction_count >= self.prev_instruction_meter)
         {
             return error.ExceededMaxInstructions;
         }
@@ -588,12 +611,7 @@ pub const Vm = struct {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
                     if (self.loader.lookupKey(inst.imm)) |entry| {
-                        registers.set(.r0, 0);
-                        try entry.value(
-                            self.transaction_context,
-                            &self.memory_map,
-                            &self.registers,
-                        );
+                        try self.dispatchSyscall(entry);
                     } else {
                         @panic("TODO: detect invalid syscall in verifier");
                     }
@@ -604,7 +622,7 @@ pub const Vm = struct {
 
                     if (self.depth == 0) {
                         if (config.enable_instruction_meter and
-                            self.instruction_count > self.transaction_context.compute_meter)
+                            self.instruction_count > self.prev_instruction_meter)
                         {
                             return error.ExceededMaxInstructions;
                         }
@@ -628,12 +646,7 @@ pub const Vm = struct {
                 if (external) {
                     if (self.loader.lookupKey(inst.imm)) |entry| {
                         resolved = true;
-                        registers.set(.r0, 0);
-                        try entry.value(
-                            self.transaction_context,
-                            &self.memory_map,
-                            &self.registers,
-                        );
+                        try self.dispatchSyscall(entry);
                     }
                 }
 
