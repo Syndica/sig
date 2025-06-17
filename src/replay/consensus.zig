@@ -96,7 +96,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     if (deps.replay_tower.tower.isRecent(heaviest_slot) and
         heaviest_fork_failures.items.len != 0)
     {
-        // Implemented the log
+        // TODO Implemented the Self::log_heaviest_fork_failures
     }
 
     // Vote on the fork
