@@ -402,28 +402,24 @@ fn checkAndHandleNewRoot(
     //   - extend banks banks.extend(parents.iter());
     //   - operations around snapshot_controller
     //   - After setting a new root, prune the banks that are no longer on rooted paths self.prune_non_rooted(root, highest_super_majority_root);
-    //   -
 
     // Update the progress map.
-    // TODO Move to its own function?
-    {
-        var to_remove = try std.ArrayListUnmanaged(Slot).initCapacity(
-            allocator,
-            progress.map.count(),
-        );
-        defer to_remove.deinit(allocator);
+    var to_remove = try std.ArrayListUnmanaged(Slot).initCapacity(
+        allocator,
+        progress.map.count(),
+    );
+    defer to_remove.deinit(allocator);
 
-        var it = progress.map.iterator();
-        while (it.next()) |entry| {
-            // TODO should frozen state be taking into consideration.
-            if (slot_tracker.slots.get(entry.key_ptr.*) == null) {
-                to_remove.appendAssumeCapacity(entry.key_ptr.*);
-            }
+    var it = progress.map.iterator();
+    while (it.next()) |entry| {
+        // TODO should frozen state be taking into consideration.
+        if (slot_tracker.slots.get(entry.key_ptr.*) == null) {
+            to_remove.appendAssumeCapacity(entry.key_ptr.*);
         }
+    }
 
-        for (to_remove.items) |key| {
-            _ = progress.map.swapRemove(key);
-        }
+    for (to_remove.items) |key| {
+        _ = progress.map.swapRemove(key);
     }
 
     // Update forkchoice
