@@ -12,7 +12,6 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountLocks = replay.account_locks.AccountLocks;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
-const LockableAccount = sig.replay.account_locks.LockableAccount;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 
