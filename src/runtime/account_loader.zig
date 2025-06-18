@@ -214,9 +214,7 @@ pub const BatchAccountCache = struct {
             var tx_loaded_account_data_len: u32 = 0;
 
             for (tx.instruction_infos) |instr| {
-                const program_key = tx.accounts.items(
-                    .pubkey,
-                )[instr.program_meta.index_in_transaction];
+                const program_key = instr.program_meta.pubkey;
                 if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
@@ -260,32 +258,32 @@ pub const BatchAccountCache = struct {
                     .pubkey,
                 )[instr.program_meta.index_in_transaction];
 
-                const instr_account = map.get(program_key) orelse
+                const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
 
-                if (!instr_account.owner.equals(&runtime.program.bpf_loader.v3.ID)) continue;
+                if (!program_account.owner.equals(&runtime.program.bpf_loader.v3.ID)) continue;
 
                 const program_state = sig.bincode.readFromSlice(
                     allocator,
                     runtime.program.bpf_loader.v3.State,
-                    instr_account.data,
+                    program_account.data,
                     .{},
                 ) catch continue;
                 defer sig.bincode.free(allocator, program_state);
 
                 if (program_state != .program) continue;
-                const programdata_address = program_state.program.programdata_address;
+                const program_data_address = program_state.program.programdata_address;
 
-                const account = try accounts_db.getAccountSharedData(
+                const program_data_account = try accounts_db.getAccountSharedData(
                     allocator,
-                    &programdata_address,
+                    &program_data_address,
                 ) orelse continue;
 
-                const entry = map.getOrPutAssumeCapacity(programdata_address);
+                const entry = map.getOrPutAssumeCapacity(program_data_address);
                 if (!entry.found_existing) {
-                    entry.value_ptr.* = account;
+                    entry.value_ptr.* = program_data_account;
                 } else {
-                    accounts_db.allocator().free(account.data);
+                    accounts_db.allocator().free(program_data_account.data);
                 }
             }
         }
