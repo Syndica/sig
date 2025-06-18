@@ -89,6 +89,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         while (status == .confirm and try status.confirm.poll() == .pending) {
             std.time.sleep(std.time.ns_per_ms); // TODO: consider futex-based wait like ResetEvent
         }
+        status.deinit(state.allocator);
     }
 
     // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
@@ -183,7 +184,10 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             confirmation_progress.num_shreds,
             false,
         );
-    defer state.allocator.free(entries);
+    errdefer {
+        for (entries) |entry| entry.deinit(state.allocator);
+        state.allocator.free(entries);
+    }
 
     confirmation_progress.num_shreds += num_shreds;
     confirmation_progress.num_entries += entries.len;

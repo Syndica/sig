@@ -27,6 +27,9 @@ const ScopedLogger = sig.trace.ScopedLogger("replay-confirm-slot");
 ///
 /// Return: ConfirmSlotFuture which you can poll periodically to await a result.
 ///
+/// Takes ownership of the entries. Pass the same allocator that was used for
+/// the entry allocation.
+///
 /// Analogous to:
 /// - agave: confirm_slot_entries
 /// - fd: runtime_process_txns_in_microblock_stream
@@ -39,7 +42,7 @@ pub fn confirmSlot(
     last_entry: Hash,
     verify_ticks_params: VerifyTicksParams,
 ) !*ConfirmSlotFuture {
-    const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries.len);
+    const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries);
     errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
@@ -110,6 +113,7 @@ pub const ConfirmSlotStatus = union(enum) {
 pub const ConfirmSlotFuture = struct {
     scheduler: TransactionScheduler,
     poh_verifier: HomogeneousThreadPool(PohTask),
+    entries: []const Entry,
 
     /// The current status to return on poll, unless something has changed.
     status: ConfirmSlotStatus,
@@ -120,9 +124,9 @@ pub const ConfirmSlotFuture = struct {
     fn create(
         allocator: Allocator,
         thread_pool: *ThreadPool,
-        num_entries: usize,
+        entries: []const Entry,
     ) !*ConfirmSlotFuture {
-        var scheduler = try TransactionScheduler.initCapacity(allocator, num_entries, thread_pool);
+        var scheduler = try TransactionScheduler.initCapacity(allocator, entries.len, thread_pool);
         errdefer scheduler.deinit();
 
         const poh_verifier = try HomogeneousThreadPool(PohTask)
@@ -135,6 +139,7 @@ pub const ConfirmSlotFuture = struct {
         future.* = ConfirmSlotFuture{
             .poh_verifier = poh_verifier,
             .scheduler = scheduler,
+            .entries = entries,
             .status = .pending,
         };
 
@@ -144,6 +149,8 @@ pub const ConfirmSlotFuture = struct {
     pub fn destroy(self: *ConfirmSlotFuture, allocator: Allocator) void {
         self.scheduler.deinit();
         self.poh_verifier.deinit(allocator);
+        for (self.entries) |entry| entry.deinit(allocator);
+        allocator.free(self.entries);
         allocator.destroy(self);
     }
 
