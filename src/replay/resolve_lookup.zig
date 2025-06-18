@@ -27,7 +27,7 @@ pub const ResolvedBatch = struct {
     accounts: []const LockableAccount,
 
     pub fn deinit(self: ResolvedBatch, allocator: Allocator) void {
-        for (self.transactions) |tx| _ = tx.deinit(allocator);
+        for (self.transactions) |tx| tx.deinit(allocator);
         allocator.free(self.transactions);
         allocator.free(self.accounts);
     }
@@ -43,15 +43,11 @@ pub const ResolvedTransaction = struct {
     accounts: std.MultiArrayList(InstructionAccount),
     instructions: []const InstructionInfo,
 
-    /// The pointers in the transaction are not freed because it is assumed to
-    /// be borrowed. The transaction is returned here to clarify that to the
-    /// caller, and to give them the option to free the transaction if it's no
-    /// longer needed.
-    pub fn deinit(self: ResolvedTransaction, allocator: Allocator) Transaction {
+    /// The transaction is not deinitialized since it is borrowed.
+    pub fn deinit(self: ResolvedTransaction, allocator: Allocator) void {
         var acc = self.accounts;
         acc.deinit(allocator);
         allocator.free(self.instructions);
-        return self.transaction;
     }
 };
 
