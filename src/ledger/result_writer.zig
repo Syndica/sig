@@ -431,6 +431,146 @@ test "setRoots" {
     }
 }
 
+test "markSlotsAsIfRootedNormallyAtStartup with hash" {
+    const allocator = std.testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(31431);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot: RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(Slot) = .init(0);
+    var writer: LedgerResultWriter = .{
+        .allocator = allocator,
+        .db = db,
+        .logger = .noop,
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
+    };
+
+    const slot_maybe_hashes = [_]struct { Slot, ?Hash }{
+        .{ prng.intRangeAtMost(Slot, 100, 200), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 300, 400), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 500, 600), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 700, 800), .initRandom(prng) },
+    };
+    try writer.markSlotsAsIfRootedNormallyAtStartup(&slot_maybe_hashes, true);
+
+    for (slot_maybe_hashes) |slot_maybe_hash| {
+        const slot, const maybe_hash = slot_maybe_hash;
+        try std.testing.expectEqual(true, writer.isRoot(slot));
+        const expected_value: ledger.meta.FrozenHashVersioned = .{ .current = .{
+            .frozen_hash = maybe_hash.?,
+            .is_duplicate_confirmed = true,
+        } };
+        try std.testing.expectEqual(expected_value, db.get(allocator, schema.bank_hash, slot));
+    }
+
+    try std.testing.expectError(
+        error.MissingHash,
+        writer.markSlotsAsIfRootedNormallyAtStartup(
+            &.{.{ prng.uintAtMost(Slot, 1000), null }},
+            true,
+        ),
+    );
+}
+
+test "markSlotsAsIfRootedNormallyAtStartup without hash" {
+    const allocator = std.testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(6416);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot: RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(Slot) = .init(0);
+    var writer: LedgerResultWriter = .{
+        .allocator = allocator,
+        .db = db,
+        .logger = .noop,
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
+    };
+
+    const slot_maybe_hashes = [_]struct { Slot, ?Hash }{
+        .{ prng.intRangeAtMost(Slot, 100, 200), null },
+        .{ prng.intRangeAtMost(Slot, 300, 400), null },
+        .{ prng.intRangeAtMost(Slot, 500, 600), null },
+        .{ prng.intRangeAtMost(Slot, 700, 800), null },
+    };
+    try writer.markSlotsAsIfRootedNormallyAtStartup(&slot_maybe_hashes, false);
+
+    for (slot_maybe_hashes) |slot_maybe_hash| {
+        const slot, const maybe_hash = slot_maybe_hash;
+        std.debug.assert(maybe_hash == null);
+
+        try std.testing.expectEqual(true, writer.isRoot(slot));
+        try std.testing.expectEqual(null, db.get(allocator, schema.bank_hash, slot));
+    }
+
+    try std.testing.expectEqual(
+        {},
+        writer.markSlotsAsIfRootedNormallyAtStartup(
+            &.{.{ prng.uintAtMost(Slot, 1000), null }},
+            false,
+        ),
+    );
+}
+
+test "setDuplicateConfirmedSlotsAndHashes" {
+    const allocator = std.testing.allocator;
+    var prng_state: std.Random.DefaultPrng = .init(27911);
+    const prng = prng_state.random();
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var db = try TestDB.init(@src());
+    defer db.deinit();
+
+    var lowest_cleanup_slot: RwMux(Slot) = .init(0);
+    var max_root: std.atomic.Value(Slot) = .init(0);
+    var writer: LedgerResultWriter = .{
+        .allocator = allocator,
+        .db = db,
+        .logger = .noop,
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
+        .scan_and_fix_roots_metrics = try registry.initStruct(ScanAndFixRootsMetrics),
+    };
+
+    const duplicate_confirmed_slot_hashes = [_]struct { Slot, Hash }{
+        .{ prng.intRangeAtMost(Slot, 100, 200), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 300, 400), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 500, 600), .initRandom(prng) },
+        .{ prng.intRangeAtMost(Slot, 700, 800), .initRandom(prng) },
+    };
+    try writer.setDuplicateConfirmedSlotsAndHashes(&duplicate_confirmed_slot_hashes);
+
+    for (duplicate_confirmed_slot_hashes) |pair| {
+        const slot, const expected_hash = pair;
+        errdefer std.log.err("error occured for {}:{}", .{ slot, expected_hash });
+
+        const actual_fhv_opt: ?ledger.meta.FrozenHashVersioned =
+            try db.get(allocator, ledger.schema.schema.bank_hash, slot);
+        const expected_fhv: ledger.meta.FrozenHashVersioned = .{ .current = .{
+            .frozen_hash = expected_hash,
+            .is_duplicate_confirmed = true,
+        } };
+        try std.testing.expectEqual(expected_fhv, actual_fhv_opt);
+    }
+}
+
 test "scanAndFixRoots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
