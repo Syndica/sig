@@ -29,7 +29,7 @@ const log: *align(1) const fn (
 ) void = @ptrFromInt(0x207559bd);
 
 // hashed as `sol_panic_`
-const panic: *const fn (
+const panic: *align(1) const fn (
     [*]const u8,
     u64,
     u64,

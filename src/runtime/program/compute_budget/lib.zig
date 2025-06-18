@@ -6,7 +6,9 @@ const features = sig.runtime.features;
 const builtin_costs = sig.runtime.program.builtin_costs;
 
 const Pubkey = sig.core.Pubkey;
+const InstructionError = sig.core.instruction.InstructionError;
 const FeatureSet = sig.runtime.FeatureSet;
+const InstructionContext = sig.runtime.InstructionContext;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
@@ -25,6 +27,46 @@ pub const ID =
     Pubkey.parseBase58String("ComputeBudget111111111111111111111111111111") catch unreachable;
 
 pub const COMPUTE_UNITS = 150;
+
+/// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/compute-budget/src/lib.rs#L5
+pub fn entrypoint(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+) (error{OutOfMemory} || InstructionError)!void {
+    _ = allocator;
+    try ic.tc.consumeCompute(COMPUTE_UNITS);
+}
+
+test "compute_budget Instruction" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    var tx = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = ID,
+                    .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+                },
+            },
+            .compute_meter = COMPUTE_UNITS,
+        },
+    );
+    const tc = &tx[1];
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc.*);
+        tx[0].deinit(allocator);
+    }
+
+    try sig.runtime.executor.executeInstruction(allocator, tc, .{
+        .account_metas = .{},
+        .instruction_data = &.{},
+        .program_meta = .{ .index_in_transaction = 0, .pubkey = ID },
+    });
+
+    try std.testing.expectEqual(tc.compute_meter, 0);
+}
 
 // [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L28
 pub const ComputeBudgetLimits = struct {

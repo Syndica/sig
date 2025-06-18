@@ -25,8 +25,8 @@ SECTIONS
     *(.dynsym)
     . = ALIGN(8);
   } :dynsym
-   .strtab : { *(.strtab) } :other
-   .dynstr : { *(.dynstr) } :other
+  .dynstr : { *(.dynstr) } :other
+  .strtab : { *(.strtab) } :other
   /DISCARD/ : {
       *(.comment*)
       *(.eh_frame*)

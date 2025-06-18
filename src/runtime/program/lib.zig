@@ -37,6 +37,7 @@ fn initProgramEntrypoints() std.StaticStringMap(EntrypointFn) {
         .{ vote.ID.base58String().slice(), vote.execute },
         .{ address_lookup_table.ID.base58String().slice(), address_lookup_table.execute },
         .{ zk_elgamal.ID.base58String().slice(), zk_elgamal.execute },
+        .{ compute_budget.ID.base58String().slice(), compute_budget.entrypoint },
     });
 }
 

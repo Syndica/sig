@@ -41,6 +41,8 @@ const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
 const epochStakeMapRandom = core.stake.epochStakeMapRandom;
 
+const Ancestors = sig.core.status_cache.Ancestors;
+
 /// Information about a slot that is determined when the slot is initialized and
 /// then never changes.
 ///
@@ -383,15 +385,12 @@ pub const BankFields = struct {
     }
 };
 
-/// Analogous to [AncestorsForSerialization](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/accounts-db/src/ancestors.rs#L8)
-pub const Ancestors = std.AutoArrayHashMapUnmanaged(Slot, usize);
-
 pub fn ancestorsRandom(
     random: std.Random,
     allocator: std.mem.Allocator,
     max_list_entries: usize,
 ) std.mem.Allocator.Error!Ancestors {
-    var ancestors = Ancestors.Managed.init(allocator);
+    var ancestors = Ancestors.Map.Managed.init(allocator);
     errdefer ancestors.deinit();
 
     try sig.rand.fillHashmapWithRng(
@@ -402,13 +401,14 @@ pub fn ancestorsRandom(
             pub fn randomKey(rand: std.Random) !Slot {
                 return rand.int(Slot);
             }
-            pub fn randomValue(rand: std.Random) !usize {
-                return rand.int(usize);
+            pub fn randomValue(rand: std.Random) !void {
+                _ = rand;
+                return {};
             }
         },
     );
 
-    return ancestors.unmanaged;
+    return .{ .ancestors = ancestors.unmanaged };
 }
 
 /// Analogous to [BlockhashQueue](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L32)
@@ -441,6 +441,16 @@ pub const BlockhashQueue = struct {
         };
     }
 
+    pub fn getHashInfoIfValid(self: BlockhashQueue, hash: *const Hash, max_age: usize) ?HashAge {
+        const age = self.ages.get(hash.*) orelse return null;
+        if (!isHashIndexValid(self.last_hash_index, max_age, age.hash_index)) return null;
+        return age;
+    }
+
+    fn isHashIndexValid(last_hash_index: u64, max_age: usize, hash_index: u64) bool {
+        return last_hash_index - hash_index <= @as(u64, max_age);
+    }
+
     pub fn initRandom(
         random: std.Random,
         allocator: std.mem.Allocator,
@@ -454,6 +464,27 @@ pub const BlockhashQueue = struct {
             .last_hash = if (random.boolean()) Hash.initRandom(random) else null,
             .ages = ages,
             .max_age = random.int(usize),
+        };
+    }
+
+    pub fn initWithSingleEntry(
+        allocator: std.mem.Allocator,
+        entry_hash: Hash,
+        entry_lamports_per_signature: u64,
+    ) !BlockhashQueue {
+        return .{
+            .last_hash = entry_hash,
+            .max_age = 0,
+            .ages = try .init(
+                allocator,
+                &.{entry_hash},
+                &.{.{
+                    .fee_calculator = .{ .lamports_per_signature = entry_lamports_per_signature },
+                    .hash_index = 0,
+                    .timestamp = 0,
+                }},
+            ),
+            .last_hash_index = 0,
         };
     }
 };

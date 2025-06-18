@@ -510,7 +510,7 @@ test "edwards curve group operations" {
     );
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -521,7 +521,10 @@ test "edwards curve group operations" {
             .compute_meter = total_compute,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
@@ -641,7 +644,7 @@ test "ristretto curve group operations" {
     );
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -652,7 +655,10 @@ test "ristretto curve group operations" {
             .compute_meter = 10_000,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(allocator, regions, .v3, .{});
@@ -775,7 +781,7 @@ test "multiscalar multiplication" {
         compute_budget.curve25519_ristretto_msm_incremental_cost;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -786,7 +792,10 @@ test "multiscalar multiplication" {
             .compute_meter = total_compute,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     {
         registers.set(.r1, 0); // CURVE25519_EDWARDS
@@ -867,7 +876,7 @@ test "multiscalar multiplication large" {
     defer memory_map.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -878,7 +887,10 @@ test "multiscalar multiplication large" {
             .compute_meter = 500_000,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     {
         tc.compute_meter = 500_000;

@@ -9,7 +9,7 @@ const SolBytes = extern struct {
 const log: *align(1) const fn (msg: [*]const u8, len: u64) void = @ptrFromInt(0x6bf5c3fe);
 
 // hashed as `sol_poseidon`
-const sol_poseidon: *const fn (
+const sol_poseidon: *align(1) const fn (
     parameters: u64,
     endianness: u64,
     bytes: [*]const SolBytes,
@@ -18,7 +18,7 @@ const sol_poseidon: *const fn (
 ) void = @ptrFromInt(0xc4947c21);
 
 // hashed as `sol_panic_`
-const panic: *const fn ([*]const u8, u64, u64, u64) void = @ptrFromInt(0x686093bb);
+const panic: *align(1) const fn ([*]const u8, u64, u64, u64) void = @ptrFromInt(0x686093bb);
 
 const POSEIDON_PARAMETERS_BN254_X5 = 0;
 const POSEIDON_ENDIANNESS_BIG_ENDIAN = 0;

@@ -726,7 +726,7 @@ fn deserializeParametersAligned(
 
 // [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L778
 test "serializeParameters" {
-    const TransactionContextAccount = sig.runtime.TransactionContextAccount;
+    const AccountSharedData = sig.runtime.AccountSharedData;
     const createTransactionContext = sig.runtime.testing.createTransactionContext;
     const deinitTransactionContext = sig.runtime.testing.deinitTransactionContext;
     const createInstructionInfo = sig.runtime.testing.createInstructionInfo;
@@ -746,7 +746,7 @@ test "serializeParameters" {
         }) |copy_account_data| {
             const program_id = Pubkey.initRandom(prng.random());
 
-            var tc = try createTransactionContext(
+            var cache, var tc = try createTransactionContext(
                 allocator,
                 prng.random(),
                 .{
@@ -809,7 +809,10 @@ test "serializeParameters" {
                     },
                 },
             );
-            defer deinitTransactionContext(allocator, tc);
+            defer {
+                deinitTransactionContext(allocator, tc);
+                cache.deinit(allocator);
+            }
 
             const instruction_info = try createInstructionInfo(
                 &tc,
@@ -883,24 +886,30 @@ test "serializeParameters" {
             };
 
             const pre_accounts = blk: {
-                var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
+                var accounts = try std.ArrayListUnmanaged(struct {
+                    pubkey: Pubkey,
+                    account: AccountSharedData,
+                }).initCapacity(allocator, tc.accounts.len);
                 errdefer {
-                    for (accounts.items) |account| account.deinit(allocator);
-                    accounts.deinit();
+                    for (accounts.items) |account| allocator.free(account.account.data);
+                    accounts.deinit(allocator);
                 }
                 for (tc.accounts) |account| {
-                    try accounts.append(TransactionContextAccount.init(account.pubkey, .{
-                        .lamports = account.account.lamports,
-                        .owner = account.account.owner,
-                        .data = try allocator.dupe(u8, account.account.data),
-                        .executable = account.account.executable,
-                        .rent_epoch = account.account.rent_epoch,
-                    }));
+                    accounts.appendAssumeCapacity(.{
+                        .pubkey = account.pubkey,
+                        .account = .{
+                            .lamports = account.account.lamports,
+                            .owner = account.account.owner,
+                            .data = try allocator.dupe(u8, account.account.data),
+                            .executable = account.account.executable,
+                            .rent_epoch = account.account.rent_epoch,
+                        },
+                    });
                 }
-                break :blk try accounts.toOwnedSlice();
+                break :blk try accounts.toOwnedSlice(allocator);
             };
             defer {
-                for (pre_accounts) |account| account.deinit(allocator);
+                for (pre_accounts) |account| allocator.free(account.account.data);
                 allocator.free(pre_accounts);
             }
 
@@ -935,11 +944,11 @@ test "serializeParameters" {
             for (pre_accounts, 0..) |pre_account, index_in_transaction| {
                 const post_account = tc.accounts[index_in_transaction];
                 try std.testing.expectEqual(
-                    pre_account.read_refs,
+                    0,
                     post_account.read_refs,
                 );
                 try std.testing.expectEqual(
-                    pre_account.write_ref,
+                    false,
                     post_account.write_ref,
                 );
                 try std.testing.expect(

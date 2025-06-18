@@ -37,7 +37,7 @@ pub fn execute(
     try ic.tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
     var vote_account = try ic.borrowInstructionAccount(
-        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.account),
+        @intFromEnum(vote_instruction.InitializeAccount.AccountIndex.account),
     );
     defer vote_account.release();
 
@@ -175,7 +175,7 @@ fn executeIntializeAccount(
 ) (error{OutOfMemory} || InstructionError)!void {
     const rent = try ic.getSysvarWithAccountCheck(
         Rent,
-        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.rent_sysvar),
+        @intFromEnum(vote_instruction.InitializeAccount.AccountIndex.rent_sysvar),
     );
 
     const min_balance = rent.minimumBalance(vote_account.constAccountData().len);
@@ -185,7 +185,7 @@ fn executeIntializeAccount(
 
     const clock = try ic.getSysvarWithAccountCheck(
         Clock,
-        @intFromEnum(vote_instruction.IntializeAccount.AccountIndex.clock_sysvar),
+        @intFromEnum(vote_instruction.InitializeAccount.AccountIndex.clock_sysvar),
     );
 
     try intializeAccount(
@@ -266,7 +266,7 @@ fn executeAuthorize(
         @intFromEnum(vote_instruction.Authorize.AccountIndex.clock_sysvar),
     );
 
-    const signers = try ic.ixn_info.getSigners();
+    const signers = ic.ixn_info.getSigners();
 
     try authorize(
         allocator,
@@ -488,7 +488,7 @@ fn executeAuthorizeChecked(
         .withdrawer => VoteAuthorize.withdrawer,
     };
 
-    const signers = try ic.ixn_info.getSigners();
+    const signers = ic.ixn_info.getSigners();
 
     try authorize(
         allocator,

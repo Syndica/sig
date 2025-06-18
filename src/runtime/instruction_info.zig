@@ -95,7 +95,7 @@ pub const InstructionInfo = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/9eee2f66775291a1ec4c4b1be32efc1d314002f7/transaction-context/src/lib.rs#L736
     pub fn getSigners(
         self: *const InstructionInfo,
-    ) !std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
+    ) std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS) {
         var signers = std.BoundedArray(Pubkey, MAX_ACCOUNT_METAS){};
         for (self.account_metas.constSlice()) |account_meta| {
             if (account_meta.is_signer) {
@@ -119,6 +119,24 @@ pub const InstructionInfo = struct {
             return InstructionError.InvalidInstructionData;
         };
         return data;
+    }
+
+    /// Identical to deserializeInstruction but using `alloc_buf` to avoid heap allocation.
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/1276772ee61fbd1f8a60cfec7cd553aa4f6a55f3/bincode/src/lib.rs#L9
+    pub fn limitedDeserializeInstruction(
+        self: *const InstructionInfo,
+        comptime T: type,
+        alloc_buf: []u8,
+    ) InstructionError!T {
+        var fbs = std.io.fixedBufferStream(self.instruction_data[0..@min(
+            self.instruction_data.len,
+            Transaction.MAX_BYTES,
+        )]);
+
+        var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
+        return bincode.read(fba.allocator(), T, fbs.reader(), .{}) catch {
+            return InstructionError.InvalidInstructionData;
+        };
     }
 
     /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
