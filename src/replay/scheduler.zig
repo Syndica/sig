@@ -12,6 +12,7 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountLocks = replay.account_locks.AccountLocks;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
+const LockableAccount = sig.replay.account_locks.LockableAccount;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 
@@ -53,7 +54,7 @@ pub const TransactionScheduler = struct {
     allocator: Allocator,
     batches: std.ArrayListUnmanaged(ResolvedBatch),
     thread_pool: HomogeneousThreadPool(ProcessBatchTask),
-    results: Channel(?TransactionError),
+    results: Channel(BatchResult),
     locks: AccountLocks,
     /// The number of batches that have been scheduled with thread_pool.trySchedule.
     batches_started: usize,
@@ -63,6 +64,8 @@ pub const TransactionScheduler = struct {
     exit: std.atomic.Value(bool),
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.confirm_slot.ConfirmSlotError,
+
+    const BatchResult = struct { batch_index: usize, maybe_err: ?TransactionError };
 
     pub fn initCapacity(
         allocator: Allocator,
@@ -77,7 +80,7 @@ pub const TransactionScheduler = struct {
             .initBorrowed(allocator, thread_pool, null);
         errdefer pool.deinit(allocator);
 
-        var channel = try Channel(?TransactionError).init(allocator);
+        var channel = try Channel(BatchResult).init(allocator);
         errdefer channel.deinit();
 
         return .{
@@ -115,9 +118,10 @@ pub const TransactionScheduler = struct {
 
     pub fn poll(self: *TransactionScheduler) !ConfirmSlotStatus {
         // collect results
-        while (self.results.tryReceive()) |maybe_err| {
+        while (self.results.tryReceive()) |result| {
+            assert(0 == self.locks.unlock(self.batches.items[result.batch_index].accounts));
             self.batches_finished += 1;
-            if (maybe_err) |err| {
+            if (result.maybe_err) |err| {
                 self.exit.store(true, .monotonic);
                 self.failure = .{ .invalid_transaction = err };
             }
@@ -161,6 +165,7 @@ pub const TransactionScheduler = struct {
             // maximum number of tasks. See the `null` value passed into
             // HomogeneousThreadPool.initBorrowed
             assert(try self.thread_pool.trySchedule(self.allocator, .{
+                .batch_index = self.batches_started,
                 .transactions = batch.transactions,
                 .results = &self.results,
                 .exit = &self.exit,
@@ -172,14 +177,15 @@ pub const TransactionScheduler = struct {
 };
 
 const ProcessBatchTask = struct {
+    batch_index: usize,
     transactions: []const ResolvedTransaction,
-    results: *Channel(?TransactionError),
+    results: *Channel(TransactionScheduler.BatchResult),
     exit: *std.atomic.Value(bool),
 
     pub fn run(self: *ProcessBatchTask) !void {
         const result = processBatch(self.transactions, self.exit);
         if (result != null) self.exit.store(true, .monotonic);
-        try self.results.send(result);
+        try self.results.send(.{ .batch_index = self.batch_index, .maybe_err = result });
     }
 };
 
@@ -209,17 +215,18 @@ test "TransactionScheduler: happy path" {
         const batch1 = try resolveBatchGeneric(allocator, .noop, {}, transactions[0..3]);
         errdefer batch1.deinit(allocator);
 
+        const batch1_dupe = try resolveBatchGeneric(allocator, .noop, {}, transactions[0..3]);
+        errdefer batch1_dupe.deinit(allocator);
+
         const batch2 = try resolveBatchGeneric(allocator, .noop, {}, transactions[3..6]);
         errdefer batch2.deinit(allocator);
 
         scheduler.addBatchAssumeCapacity(batch1);
         scheduler.addBatchAssumeCapacity(batch2);
 
-        // should be no failures on account collision with the first time this batch was scheduled
+        // should be no failures on account collision with the first time this batch was scheduled.
         // scheduler should just know to run it separately
-        // scheduler.addBatchAssumeCapacity(batch1);
-        // scheduler.addBatchAssumeCapacity(batch1);
-        // TODO: add this
+        scheduler.addBatchAssumeCapacity(batch1_dupe);
     }
 
     try std.testing.expectEqual(.done, try replay.confirm_slot.testAwait(&scheduler));
