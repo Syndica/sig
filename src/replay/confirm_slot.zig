@@ -339,14 +339,14 @@ test "happy path: partial slot" {
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
-    defer for (entries) |entry| entry.deinit(allocator);
+    errdefer for (entries) |entry| entry.deinit(allocator);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
         undefined,
         &thread_pool,
-        entries[0 .. entries.len - 1],
+        try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
         .ZEROES,
         .{
             .hashes_per_tick = poh.hashes_per_tick,
@@ -372,14 +372,14 @@ test "happy path: full slot" {
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
-    defer for (entries) |entry| entry.deinit(allocator);
+    errdefer for (entries) |entry| entry.deinit(allocator);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
         undefined,
         &thread_pool,
-        entries,
+        try allocator.dupe(Entry, entries),
         .ZEROES,
         .{
             .hashes_per_tick = poh.hashes_per_tick,
@@ -405,14 +405,14 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
-    defer for (entries) |entry| entry.deinit(allocator);
+    errdefer for (entries) |entry| entry.deinit(allocator);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .noop,
         undefined,
         &thread_pool,
-        entries,
+        try allocator.dupe(Entry, entries),
         .ZEROES,
         .{
             .hashes_per_tick = poh.hashes_per_tick,
@@ -441,14 +441,14 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
 
     const poh, const entry_array = try sig.core.poh.testPoh(true);
     const entries: []const sig.core.Entry = entry_array.slice();
-    defer for (entries) |entry| entry.deinit(allocator);
+    errdefer for (entries) |entry| entry.deinit(allocator);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .noop,
         undefined,
         &thread_pool,
-        entries[0 .. entries.len - 1],
+        try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
         .ZEROES,
         .{
             .hashes_per_tick = poh.hashes_per_tick,
@@ -469,8 +469,6 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
     );
 }
 
-// TODO: finish tests
-
 test "fail: invalid poh chain" {
     const allocator = std.testing.allocator;
 
@@ -479,7 +477,7 @@ test "fail: invalid poh chain" {
 
     const poh, var entry_array = try sig.core.poh.testPoh(true);
     const entries: []sig.core.Entry = entry_array.slice();
-    defer for (entries) |entry| entry.deinit(allocator);
+    errdefer for (entries) |entry| entry.deinit(allocator);
 
     // break the hash chain
     entries[0].hash.data[0] +%= 1;
@@ -489,7 +487,7 @@ test "fail: invalid poh chain" {
         .FOR_TESTS,
         undefined,
         &thread_pool,
-        entries,
+        try allocator.dupe(Entry, entries),
         .ZEROES,
         .{
             .hashes_per_tick = poh.hashes_per_tick,
@@ -518,14 +516,14 @@ test "fail: sigverify" {
 
     const poh, var entry_array = try sig.core.poh.testPoh(false);
     const entries: []sig.core.Entry = entry_array.slice();
-    defer for (entries) |entry| entry.deinit(allocator);
+    errdefer for (entries) |entry| entry.deinit(allocator);
 
     const future = try confirmSlot(
         std.testing.allocator,
         .FOR_TESTS,
         undefined,
         &thread_pool,
-        entries,
+        try allocator.dupe(Entry, entries),
         .ZEROES,
         .{
             .hashes_per_tick = poh.hashes_per_tick,
