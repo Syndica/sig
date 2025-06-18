@@ -912,7 +912,7 @@ const check_slot_agrees_with_cluster = struct {
         // Handle cases where the bank is frozen, but not duplicate confirmed yet.
         var not_duplicate_confirmed_frozen_hash: NotDuplicateConfirmedFrozenHash = null;
 
-        resulting_change.bankFrozen(
+        state_change.bankFrozen(
             slot,
             fork_choice,
             &not_duplicate_confirmed_frozen_hash,
@@ -929,7 +929,7 @@ const check_slot_agrees_with_cluster = struct {
                         // If the versions match, then add the slot to the candidate
                         // set to account for the case where it was removed earlier
                         // by the `on_duplicate_slot()` handler
-                        try resulting_change.duplicateConfirmedSlotMatchesCluster(
+                        try state_change.duplicateConfirmedSlotMatchesCluster(
                             slot,
                             fork_choice,
                             duplicate_slots_to_repair,
@@ -947,8 +947,8 @@ const check_slot_agrees_with_cluster = struct {
                                 "but our version has hash {}",
                             .{ slot, duplicate_confirmed_hash, frozen_hash },
                         );
-                        try resulting_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
-                        try resulting_change.repairDuplicateConfirmedVersion(
+                        try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
+                        try state_change.repairDuplicateConfirmedVersion(
                             allocator,
                             slot,
                             duplicate_slots_to_repair,
@@ -972,9 +972,9 @@ const check_slot_agrees_with_cluster = struct {
                             .{ slot, epoch_slots_frozen_hash, frozen_hash },
                         );
                         // If the slot is not already pruned notify fork choice to mark as invalid
-                        try resulting_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
+                        try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
                     }
-                    try resulting_change.repairDuplicateConfirmedVersion(
+                    try state_change.repairDuplicateConfirmedVersion(
                         allocator,
                         slot,
                         duplicate_slots_to_repair,
@@ -985,7 +985,7 @@ const check_slot_agrees_with_cluster = struct {
         } else if (is_slot_duplicate) {
             // If `cluster_confirmed_hash` is Some above we should have already pushed a
             // `MarkSlotDuplicate` state change
-            try resulting_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
+            try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
         }
 
         if (not_duplicate_confirmed_frozen_hash) |ndcf_hash| {
@@ -1054,7 +1054,7 @@ const check_slot_agrees_with_cluster = struct {
             .unprocessed => {},
 
             .dead => {
-                resulting_change.sendAncestorHashesReplayUpdate(
+                state_change.sendAncestorHashesReplayUpdate(
                     ancestor_hashes_replay_update_sender,
                     .{ .kind = .dead_duplicate_confirmed, .slot = slot },
                 );
@@ -1065,7 +1065,7 @@ const check_slot_agrees_with_cluster = struct {
                     "Cluster duplicate confirmed slot {} with hash {}, but we marked slot dead",
                     .{ slot, duplicate_confirmed_hash },
                 );
-                try resulting_change.repairDuplicateConfirmedVersion(
+                try state_change.repairDuplicateConfirmedVersion(
                     allocator,
                     slot,
                     duplicate_slots_to_repair,
@@ -1078,7 +1078,7 @@ const check_slot_agrees_with_cluster = struct {
                     // If the versions match, then add the slot to the candidate
                     // set to account for the case where it was removed earlier
                     // by the `on_duplicate_slot()` handler
-                    try resulting_change.duplicateConfirmedSlotMatchesCluster(
+                    try state_change.duplicateConfirmedSlotMatchesCluster(
                         slot,
                         fork_choice,
                         duplicate_slots_to_repair,
@@ -1096,8 +1096,8 @@ const check_slot_agrees_with_cluster = struct {
                             " but our version has hash {}",
                         .{ slot, duplicate_confirmed_hash, frozen_hash },
                     );
-                    try resulting_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
-                    try resulting_change.repairDuplicateConfirmedVersion(
+                    try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
+                    try state_change.repairDuplicateConfirmedVersion(
                         allocator,
                         slot,
                         duplicate_slots_to_repair,
@@ -1135,7 +1135,7 @@ const check_slot_agrees_with_cluster = struct {
                 .duplicate_confirmed => |duplicate_confirmed_hash| {
                     // If the cluster duplicate_confirmed some version of this slot, then
                     // check if our version agrees with the cluster,
-                    resulting_change.sendAncestorHashesReplayUpdate(
+                    state_change.sendAncestorHashesReplayUpdate(
                         ancestor_hashes_replay_update_sender,
                         .{ .kind = .dead_duplicate_confirmed, .slot = slot },
                     );
@@ -1147,7 +1147,7 @@ const check_slot_agrees_with_cluster = struct {
                             "but we marked slot dead",
                         .{ slot, duplicate_confirmed_hash },
                     );
-                    try resulting_change.repairDuplicateConfirmedVersion(
+                    try state_change.repairDuplicateConfirmedVersion(
                         allocator,
                         slot,
                         duplicate_slots_to_repair,
@@ -1163,7 +1163,7 @@ const check_slot_agrees_with_cluster = struct {
                             "but we marked slot dead",
                         .{ slot, epoch_slots_frozen_hash },
                     );
-                    try resulting_change.repairDuplicateConfirmedVersion(
+                    try state_change.repairDuplicateConfirmedVersion(
                         slot,
                         duplicate_slots_to_repair,
                         epoch_slots_frozen_hash,
@@ -1171,7 +1171,7 @@ const check_slot_agrees_with_cluster = struct {
                 },
             }
         } else {
-            resulting_change.sendAncestorHashesReplayUpdate(
+            state_change.sendAncestorHashesReplayUpdate(
                 ancestor_hashes_replay_update_sender,
                 .{ .kind = .dead, .slot = slot },
             );
@@ -1242,7 +1242,7 @@ const check_slot_agrees_with_cluster = struct {
             // If we have not yet seen any version of the slot duplicate confirmed, then mark
             // the slot as duplicate
             if (bank_status.bankHash()) |bank_hash| {
-                try resulting_change.markSlotDuplicate(slot, fork_choice, bank_hash);
+                try state_change.markSlotDuplicate(slot, fork_choice, bank_hash);
             }
         }
     }
@@ -1336,7 +1336,7 @@ const check_slot_agrees_with_cluster = struct {
                     );
                     if (!is_popular_pruned) {
                         // If the slot is not already pruned notify fork choice to mark as invalid
-                        try resulting_change.markSlotDuplicate(slot, fork_choice, bank_frozen_hash);
+                        try state_change.markSlotDuplicate(slot, fork_choice, bank_frozen_hash);
                     }
                 }
             },
@@ -1361,7 +1361,7 @@ const check_slot_agrees_with_cluster = struct {
             },
         }
 
-        try resulting_change.repairDuplicateConfirmedVersion(
+        try state_change.repairDuplicateConfirmedVersion(
             allocator,
             slot,
             duplicate_slots_to_repair,
@@ -1391,14 +1391,14 @@ const check_slot_agrees_with_cluster = struct {
                 "Notifying ancestor_hashes_service",
             .{slot},
         );
-        resulting_change.sendAncestorHashesReplayUpdate(
+        state_change.sendAncestorHashesReplayUpdate(
             ancestor_hashes_replay_update_sender,
             .{ .kind = .popular_pruned_fork, .slot = slot },
         );
     }
 };
 
-const resulting_change = struct {
+const state_change = struct {
     fn bankFrozen(
         slot: u64,
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
