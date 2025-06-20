@@ -19,10 +19,33 @@ pub const FeatureSet = struct {
         active_.deinit(allocator);
     }
 
+    pub fn isActive(
+        self: *const FeatureSet,
+        feature: Pubkey,
+        slot: Slot,
+    ) bool {
+        if (self.active.get(feature)) |activated_slot|
+            return slot >= activated_slot;
+        return false;
+    }
+
+    pub fn activatedSlot(self: *const FeatureSet, feature: Pubkey) ?Slot {
+        return self.active.get(feature);
+    }
+
     pub fn allEnabled(allocator: std.mem.Allocator) !FeatureSet {
         var feature_set = FeatureSet.EMPTY;
         for (FEATURES) |feature| try feature_set.active.put(allocator, feature, 0);
         return feature_set;
+    }
+
+    pub fn newWarmupCooldownRateEpoch(
+        self: *const FeatureSet,
+        epoch_schedule: *const sig.runtime.sysvar.EpochSchedule,
+    ) ?u64 {
+        const activated_slot = self.activatedSlot(REDUCE_STAKE_WARMUP_COOLDOWN) orelse
+            return null;
+        return epoch_schedule.getEpoch(activated_slot);
     }
 };
 
