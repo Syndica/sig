@@ -1,11 +1,15 @@
+const sig = @import("../sig.zig");
 const std = @import("std");
 const builtin = @import("builtin");
+
 const Mutex = std.Thread.Mutex;
 const RwLock = std.Thread.RwLock;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
 const assert = std.debug.assert;
 const testing = std.testing;
+
+const containsPointer = sig.utils.types.containsPointer;
 
 /// Mux is a `Mutex` wrapper which enforces proper access to a protected value.
 pub fn Mux(comptime T: type) type {
@@ -287,6 +291,9 @@ pub fn RwMux(comptime T: type) type {
         /// Acquires the lock just long enough to shallow copy the item, and
         /// returns the copy.
         pub fn readCopy(self: *Self) T {
+            comptime if (containsPointer(.mut, T) orelse true) {
+                @compileError("reading a mutable pointer after unlocking would bypass the lock");
+            };
             self.private.r.lockShared();
             defer self.private.r.unlockShared();
             return self.private.v;
