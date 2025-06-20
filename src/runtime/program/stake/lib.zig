@@ -132,8 +132,18 @@ pub fn execute(
             );
         },
         .split => |lamports| {
-            _ = lamports;
-            @panic("TODO");
+            // NOTE agave gets this borrwed account and drops it, not doing anything with it?
+            var me = try getStakeAccount(ic);
+            defer me.release();
+            try split(
+                allocator,
+                ic,
+                0,
+                lamports,
+                1,
+                ic.ixn_info.getSigners().slice(),
+                ic.tc.feature_set,
+            );
         },
         .merge => @panic("TODO"),
         .withdraw => |lamports| {
@@ -497,4 +507,209 @@ fn delegate(
         },
         else => error.InvalidAccountData,
     };
+}
+
+fn getStakeStatus(
+    ic: *InstructionContext,
+    stake: *const StakeStateV2.Stake,
+    clock: *const sysvar.Clock,
+) InstructionError!sysvar.StakeHistory.EntryNoEpoch {
+    const stake_history = try ic.tc.sysvar_cache.get(sysvar.StakeHistory);
+    return stake.delegation.stakeActivatingAndDeactivating(
+        clock.epoch,
+        &stake_history,
+        newWarmupCooldownRateEpoch(ic),
+    );
+}
+
+const ValidatedSplitInfo = struct {
+    source_remaining_balance: u64,
+    destination_rent_exempt_reserve: u64,
+};
+
+fn validateSplitAmount(
+    ic: *InstructionContext,
+    source_account_index: u16,
+    destination_account_index: u16,
+    lamports: u64,
+    source_meta: *const StakeStateV2.Meta,
+    additional_required_lamports: u64,
+    source_is_active: bool,
+) InstructionError!ValidatedSplitInfo {
+    const source_lamports = blk: {
+        const source_account = try ic.borrowInstructionAccount(source_account_index);
+        defer source_account.release();
+        break :blk source_account.account.lamports;
+    };
+
+    const destination_data_len, const destination_lamports = blk: {
+        const destination_account = try ic.borrowInstructionAccount(destination_account_index);
+        defer destination_account.release();
+        break :blk .{
+            destination_account.account.data.len,
+            destination_account.account.lamports,
+        };
+    };
+
+    if (lamports > source_lamports) return error.InsufficientFunds;
+
+    const source_minimum_balance = source_meta.rent_exempt_reserve +| additional_required_lamports;
+    const source_remaining_balance = source_lamports -| lamports;
+    if (source_remaining_balance < source_minimum_balance) return error.InsufficientFunds;
+
+    const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
+    const destination_rent_exempt_reserve = rent.minimumBalance(destination_data_len);
+
+    if (source_is_active and
+        source_remaining_balance != 0 and
+        destination_lamports < destination_rent_exempt_reserve)
+        return error.InsufficientFunds;
+
+    const destination_minimum_balance = destination_rent_exempt_reserve +|
+        additional_required_lamports;
+    const destination_balance_deficit = destination_minimum_balance -|
+        destination_lamports;
+    if (lamports < destination_balance_deficit) return error.InsufficientFunds;
+
+    return .{
+        .source_remaining_balance = source_remaining_balance,
+        .destination_rent_exempt_reserve = destination_rent_exempt_reserve,
+    };
+}
+
+fn split(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    stake_account_index: u16,
+    lamports: u64,
+    split_account_index: u16,
+    signers: []const Pubkey,
+    feature_set: *const runtime.FeatureSet,
+) (error{OutOfMemory} || InstructionError)!void {
+    const split_lamport_balance = balance: {
+        const split_account = try ic.borrowInstructionAccount(split_account_index);
+        defer split_account.release();
+
+        if (!split_account.account.owner.equals(&ID)) return error.IncorrectProgramId;
+        if (split_account.account.data.len != StakeStateV2.SIZE) return error.InvalidAccountData;
+
+        const split_state = try split_account.deserializeFromAccountData(allocator, StakeStateV2);
+        if (split_state != .uninitialized) return error.InvalidAccountData;
+
+        break :balance split_account.account.lamports;
+    };
+
+    var stake_state = state: {
+        const stake_account = try ic.borrowInstructionAccount(stake_account_index);
+        defer stake_account.release();
+
+        const stake_state = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
+
+        if (lamports > stake_account.account.lamports) return error.InsufficientFunds;
+        break :state stake_state;
+    };
+
+    switch (stake_state) {
+        .stake => |*args| {
+            const minimum_delegation = getMinimumDelegation(feature_set);
+            const is_active = blk: {
+                const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+                const status = try getStakeStatus(ic, &args.stake, &clock);
+                break :blk status.effective > 0;
+            };
+
+            const validated_split_info = try validateSplitAmount(
+                ic,
+                stake_account_index,
+                split_account_index,
+                lamports,
+                &args.meta,
+                minimum_delegation,
+                is_active,
+            );
+
+            const remaining_stake_delta, const split_stake_amount = blk: {
+                if (validated_split_info.source_remaining_balance == 0) {
+                    const remaining_stake_delta = lamports -| args.meta.rent_exempt_reserve;
+                    break :blk .{ remaining_stake_delta, remaining_stake_delta };
+                }
+
+                if (args.stake.delegation.stake -| lamports < minimum_delegation) {
+                    ic.tc.custom_error = @intFromEnum(StakeError.insufficient_delegation);
+                    return error.Custom;
+                }
+
+                break :blk .{
+                    lamports,
+                    lamports -|
+                        (validated_split_info.destination_rent_exempt_reserve -|
+                            split_lamport_balance),
+                };
+            };
+
+            if (split_stake_amount < minimum_delegation) {
+                ic.tc.custom_error = @intFromEnum(StakeError.insufficient_delegation);
+                return error.Custom;
+            }
+
+            const split_stake = try args.stake.split(ic, remaining_stake_delta, split_stake_amount);
+            var split_meta = args.meta;
+            split_meta.rent_exempt_reserve = validated_split_info.destination_rent_exempt_reserve;
+
+            {
+                var stake_account = try ic.borrowInstructionAccount(stake_account_index);
+                defer stake_account.release();
+
+                try stake_account.serializeIntoAccountData(StakeStateV2{
+                    .stake = .{ .meta = args.meta, .stake = args.stake, .flags = args.flags },
+                });
+            }
+
+            {
+                var split_account = try ic.borrowInstructionAccount(split_account_index);
+                defer split_account.release();
+
+                try split_account.serializeIntoAccountData(StakeStateV2{
+                    .stake = .{ .meta = split_meta, .stake = split_stake, .flags = args.flags },
+                });
+            }
+        },
+        .initialized => |*meta| {
+            try meta.authorized.check(signers, .staker);
+            const validated_split_info = try validateSplitAmount(
+                ic,
+                stake_account_index,
+                split_account_index,
+                lamports,
+                meta,
+                0,
+                false,
+            );
+
+            var split_meta = meta;
+            split_meta.rent_exempt_reserve = validated_split_info.destination_rent_exempt_reserve;
+
+            {
+                var split_account = try ic.borrowInstructionAccount(stake_account_index);
+                defer split_account.release();
+
+                try split_account.serializeIntoAccountData(StakeStateV2{
+                    .initialized = split_meta.*,
+                });
+            }
+        },
+        .uninitialized => {
+            const account_metas = ic.ixn_info.account_metas.slice();
+            if (stake_account_index <= account_metas.len) return error.NotEnoughAccountKeys;
+
+            const stake_pubkey = &ic.ixn_info.account_metas.slice()[stake_account_index].pubkey;
+
+            const has_signer = for (signers) |signer| {
+                if (signer.equals(stake_pubkey)) break true;
+            } else false;
+
+            if (!has_signer) return error.MissingRequiredSignature;
+        },
+        else => return error.InvalidAccountData,
+    }
 }
