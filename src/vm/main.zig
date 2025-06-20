@@ -111,7 +111,7 @@ pub fn main() !void {
         config,
     );
 
-    var vm = try Vm.init(
+    var ebpf_vm = try Vm.init(
         gpa,
         &executable,
         m,
@@ -119,8 +119,8 @@ pub fn main() !void {
         stack_memory.len,
         &tc,
     );
-    defer vm.deinit();
-    const result, const instruction_count = vm.run();
+    defer ebpf_vm.deinit();
+    const result, const instruction_count = ebpf_vm.run();
 
     std.debug.print("result: {}, count: {}\n", .{ result, instruction_count });
 }
