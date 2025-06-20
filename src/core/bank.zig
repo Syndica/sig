@@ -56,9 +56,6 @@ const Ancestors = sig.core.status_cache.Ancestors;
 /// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
 /// [fd_slot_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L2270)
 pub const SlotConstants = struct {
-    /// The number of the slot this represents.
-    slot: Slot,
-
     /// The slot that this one builds off of. `parent_slot == slot - 1`, unless
     /// there is forking or skipped slots.
     parent_slot: Slot,
@@ -83,7 +80,6 @@ pub const SlotConstants = struct {
 
     pub fn fromBankFields(bank_fields: *const BankFields) SlotConstants {
         return .{
-            .slot = bank_fields.slot,
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,
             .block_height = bank_fields.block_height,
@@ -96,7 +92,6 @@ pub const SlotConstants = struct {
 
     pub fn genesis(fee_rate_governor: sig.core.genesis_config.FeeRateGovernor) SlotConstants {
         return .{
-            .slot = 0,
             .parent_slot = 0,
             .parent_hash = sig.core.Hash.ZEROES,
             .block_height = 0,

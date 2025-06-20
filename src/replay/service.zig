@@ -187,7 +187,6 @@ fn trackNewSlots(
                 allocator,
                 child_slot,
                 .{
-                    .slot = child_slot,
                     .parent_slot = parent_slot,
                     .parent_hash = parent_info.state.hash.readCopy().?,
                     .block_height = parent_info.constants.block_height + 1,
