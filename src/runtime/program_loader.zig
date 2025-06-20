@@ -40,14 +40,21 @@ pub fn loadPrograms(
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |pubkey, account| {
-        if (!account.executable) continue;
-        try programs.put(allocator, pubkey, try loadProgram(
+        if (!account.owner.equals(&bpf_loader.v1.ID) and
+            !account.owner.equals(&bpf_loader.v2.ID) and
+            !account.owner.equals(&bpf_loader.v3.ID) and
+            !account.owner.equals(&bpf_loader.v4.ID)) continue;
+
+        const loaded_program = try loadProgram(
             allocator,
             &account,
             accounts,
             enviroment,
             slot,
-        ));
+        );
+        errdefer loaded_program.deinit(allocator);
+
+        try programs.put(allocator, pubkey, loaded_program);
     }
 
     return programs;
@@ -60,8 +67,8 @@ pub fn loadProgram(
     environment: *const VmEnvironment,
     slot: u64,
 ) !LoadedProgram {
+    // executable bytes are owned by the entry in the accounts map and should not be freed
     const deployment_slot, const executable_bytes = loadDeploymentSlotAndExecutableBytes(
-        allocator,
         account,
         accounts,
     ) orelse return .failed;
@@ -69,7 +76,7 @@ pub fn loadProgram(
     if (deployment_slot >= slot) return .failed;
 
     const source = try allocator.dupe(u8, executable_bytes);
-    const executable = Executable.fromBytes(
+    var executable = Executable.fromBytes(
         allocator,
         source,
         &environment.loader,
@@ -78,9 +85,11 @@ pub fn loadProgram(
         allocator.free(source);
         return .failed;
     };
-    errdefer executable.deinit(allocator);
 
-    executable.verify(&environment.loader) catch return .failed;
+    executable.verify(&environment.loader) catch {
+        executable.deinit(allocator);
+        return .failed;
+    };
 
     return .{
         .loaded = .{
@@ -91,19 +100,14 @@ pub fn loadProgram(
 }
 
 pub fn loadDeploymentSlotAndExecutableBytes(
-    allocator: std.mem.Allocator,
     account: *const AccountSharedData,
     accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
 ) ?struct { u64, []const u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
         return .{ 0, account.data };
     } else if (account.owner.equals(&bpf_loader.v3.ID)) {
-        const program_state = sig.bincode.readFromSlice(
-            allocator,
-            bpf_loader.v3.State,
-            account.data,
-            .{},
-        ) catch return null;
+        const program_state = bpf_loader.v3.State.deserialize(account.data) catch
+            return null;
 
         const program_data_key = switch (program_state) {
             .program => |program_data_key| program_data_key.programdata_address,
@@ -122,12 +126,8 @@ pub fn loadDeploymentSlotAndExecutableBytes(
         const program_elf_bytes =
             program_data_account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE..];
 
-        const program_metadata = sig.bincode.readFromSlice(
-            allocator,
-            bpf_loader.v3.State,
-            program_metadata_bytes,
-            .{},
-        ) catch return null;
+        const program_metadata = bpf_loader.v3.State.deserialize(program_metadata_bytes) catch
+            return null;
 
         const slot = switch (program_metadata) {
             .program_data => |data| data.slot,
