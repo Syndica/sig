@@ -45,6 +45,25 @@ pub const StakeStateV2 = union(enum) {
         ) void {
             return self.delegation.effectiveStake(epoch, history, new_rate_activation_epoch);
         }
+
+        pub fn split(
+            self: *Stake,
+            ic: *sig.runtime.InstructionContext,
+            remaining_stake_delta: u64,
+            split_stake_amount: u64,
+        ) InstructionError!Stake {
+            if (remaining_stake_delta > self.delegation.stake) return {
+                ic.tc.custom_error = @intFromEnum(program.StakeError.insufficient_stake);
+                return error.Custom;
+            };
+
+            self.delegation.stake -= remaining_stake_delta;
+
+            var new: Stake = self.*;
+            new.delegation.stake = split_stake_amount;
+
+            return new;
+        }
     };
 
     pub const StakeFlags = struct {
@@ -156,7 +175,7 @@ pub const StakeStateV2 = union(enum) {
             ).effective;
         }
 
-        fn stakeActivatingAndDeactivating(
+        pub fn stakeActivatingAndDeactivating(
             self: *const Delegation,
             target_epoch: Epoch,
             history: *const sysvar.StakeHistory,
