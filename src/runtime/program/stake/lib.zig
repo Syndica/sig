@@ -4,16 +4,30 @@ const sig = @import("../../../sig.zig");
 const state = @import("state.zig");
 const instruction = @import("instruction.zig");
 const program = @import("lib.zig");
+
 const runtime = sig.runtime;
+const sysvar = runtime.sysvar;
+
+const Pubkey = sig.core.Pubkey;
+const Epoch = sig.core.Epoch;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
+const VoteStateVersions = runtime.program.vote.state.VoteStateVersions;
+const VoteState = runtime.program.vote.state.VoteState;
 
 const Instruction = instruction.Instruction;
 
 const InstructionContext = runtime.InstructionContext;
-const EpochRewards = runtime.sysvar.EpochRewards;
 const BorrowedAccount = runtime.BorrowedAccount;
+const TransactionContext = runtime.TransactionContext;
+
+const StakeStateV2 = state.StakeStateV2;
+const Authorized = StakeStateV2.Authorized;
+const Lockup = StakeStateV2.Lockup;
+const StakeAuthorize = StakeStateV2.StakeAuthorize;
+
+const MAX_ACCOUNT_METAS = runtime.InstructionInfo.MAX_ACCOUNT_METAS;
 
 pub const ID: Pubkey = .parse("Stake11111111111111111111111111111111111111");
 pub const SOURCE_ID: Pubkey = .parse("8t3vv6v99tQA6Gp7fVdsBH66hQMaswH5qsJVqJqo8xvG");
@@ -28,7 +42,7 @@ pub fn execute(
     // agave: consumed in declare_process_instruction
     try ic.tc.consumeCompute(program.COMPUTE_UNITS);
 
-    const epoch_rewards_active = (try ic.tc.sysvar_cache.get(EpochRewards)).active;
+    const epoch_rewards_active = (try ic.tc.sysvar_cache.get(sysvar.EpochRewards)).active;
 
     const stake_instruction = try ic.ixn_info.deserializeInstruction(
         allocator,
@@ -43,17 +57,80 @@ pub fn execute(
 
     return switch (stake_instruction) {
         .initialize => |args| {
-            const me = try getStakeAccount(ic);
-            _ = args;
-            _ = me;
+            const authorized, const lockup = args;
+            var me = try getStakeAccount(ic);
+            defer me.release();
+
+            const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, 1);
+            try initialize(allocator, &me, &authorized, &lockup, &rent);
         },
         .authorize => |args| {
-            _ = args;
+            const authorized_pubkey, const stake_authorize = args;
+
+            var me = try getStakeAccount(ic);
+            defer me.release();
+
+            const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 1);
+            try ic.ixn_info.checkNumberOfAccounts(3);
+            const custodian_pubkey = try getOptionalPubkey(ic, 3, false);
+
+            try authorize(
+                allocator,
+                ic,
+                &me,
+                ic.ixn_info.getSigners().slice(),
+                &authorized_pubkey,
+                stake_authorize,
+                &clock,
+                custodian_pubkey,
+            );
         },
         .authorize_with_seed => |args| {
-            _ = args;
+            var me = try getStakeAccount(ic);
+            defer me.release();
+
+            try ic.ixn_info.checkNumberOfAccounts(2);
+            const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 2);
+            const custodian_pubkey = try getOptionalPubkey(ic, 3, false);
+
+            try authorizeWithSeed(
+                allocator,
+                ic,
+                &me,
+                1,
+                args.authority_seed,
+                &args.authority_owner,
+                &args.new_authorized_pubkey,
+                args.stake_authorize,
+                &clock,
+                custodian_pubkey,
+            );
         },
-        .delegate_stake => @panic("TODO"),
+        .delegate_stake => {
+            const clock, const stake_history = blk: {
+                // NOTE agave gets this borrwed account and drops it, not doing anything with it?
+                var me = try getStakeAccount(ic);
+                defer me.release();
+
+                try ic.ixn_info.checkNumberOfAccounts(2);
+                const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 2);
+                const stake_history = try ic.getSysvarWithAccountCheck(sysvar.StakeHistory, 3);
+                try ic.ixn_info.checkNumberOfAccounts(5);
+
+                break :blk .{ clock, stake_history };
+            };
+
+            try delegate(
+                allocator,
+                ic,
+                0,
+                1,
+                &clock,
+                &stake_history,
+                ic.ixn_info.getSigners().slice(),
+                ic.tc.feature_set,
+            );
+        },
         .split => |lamports| {
             _ = lamports;
             @panic("TODO");
@@ -133,3 +210,291 @@ pub const StakeError = enum(u32) {
     /// Stake action is not permitted while the epoch rewards period is active.
     epoch_rewards_active,
 };
+
+fn getOptionalPubkey(
+    ic: *const InstructionContext,
+    instruction_account_index: u16,
+    should_be_signer: bool,
+) InstructionError!?*const Pubkey {
+    const meta = ic.ixn_info.getAccountMetaAtIndex(instruction_account_index) orelse
+        return null;
+
+    if (should_be_signer and !meta.is_signer)
+        return error.MissingRequiredSignature;
+
+    return &meta.pubkey;
+}
+
+fn initialize(
+    allocator: std.mem.Allocator,
+    stake_account: *BorrowedAccount,
+    authorized: *const Authorized,
+    lockup: *const Lockup,
+    rent: *const sysvar.Rent,
+) (error{OutOfMemory} || InstructionError)!void {
+    if (stake_account.account.data.len != StakeStateV2.SIZE) {
+        return error.InvalidAccountData;
+    }
+
+    const stake_state = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
+    switch (stake_state) {
+        .uninitialized => {
+            const rent_exempt_reserve = rent.minimumBalance(stake_account.account.data.len);
+            if (stake_account.account.lamports < rent_exempt_reserve)
+                return error.InsufficientFunds;
+
+            try stake_account.serializeIntoAccountData(StakeStateV2{
+                .initialized = .{
+                    .rent_exempt_reserve = rent_exempt_reserve,
+                    .authorized = authorized.*,
+                    .lockup = lockup.*,
+                },
+            });
+        },
+        else => return error.InvalidAccountData,
+    }
+}
+
+/// Authorize the given pubkey to manage stake (deactivate, withdraw). This may be called
+/// multiple times, but will implicitly withdraw authorization from the previously authorized
+/// staker. The default staker is the owner of the stake account's pubkey.
+fn authorize(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    stake_account: *BorrowedAccount,
+    signers: []const Pubkey,
+    new_authority: *const Pubkey,
+    stake_authorize: StakeAuthorize,
+    clock: *const sysvar.Clock,
+    custodian: ?*const Pubkey,
+) InstructionError!void {
+    var stake_state = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
+
+    return switch (stake_state) {
+        .stake => |*stake_args| {
+            if (stake_args.meta.authorized.authorize(
+                signers,
+                new_authority,
+                stake_authorize,
+                .{ &stake_args.meta.lockup, clock, custodian },
+            )) |err| {
+                const maybe_custom_err, const instruction_err = err;
+                if (maybe_custom_err) |custom_err| ic.tc.custom_error = @intFromEnum(custom_err);
+                return instruction_err;
+            }
+
+            try stake_account.serializeIntoAccountData(StakeStateV2{ .stake = .{
+                .meta = stake_args.meta,
+                .stake = stake_args.stake,
+                .flags = stake_args.flags,
+            } });
+        },
+        .initialized => |*meta| {
+            if (meta.authorized.authorize(
+                signers,
+                new_authority,
+                stake_authorize,
+                .{ &meta.lockup, clock, custodian },
+            )) |err| {
+                const maybe_custom_err, const instruction_err = err;
+                if (maybe_custom_err) |custom_err| ic.tc.custom_error = @intFromEnum(custom_err);
+                return instruction_err;
+            }
+
+            try stake_account.serializeIntoAccountData(StakeStateV2{ .initialized = meta.* });
+        },
+        else => error.InvalidAccountData,
+    };
+}
+
+fn authorizeWithSeed(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    stake_account: *BorrowedAccount,
+    authority_base_index: u16,
+    authority_seed: []const u8,
+    authority_owner: *const Pubkey,
+    new_authority: *const Pubkey,
+    stake_authorize: StakeAuthorize,
+    clock: *const sysvar.Clock,
+    custodian: ?*const Pubkey,
+) InstructionError!void {
+    const meta = ic.ixn_info.getAccountMetaAtIndex(authority_base_index) orelse
+        return error.MissingAccount;
+
+    const signers = if (meta.is_signer)
+        &.{
+            sig.runtime.pubkey_utils.createWithSeed(
+                meta.pubkey,
+                authority_seed,
+                authority_owner.*,
+            ) catch |err| {
+                ic.tc.custom_error = @intFromError(err);
+                return error.Custom;
+            },
+        }
+    else
+        &.{};
+
+    return try authorize(
+        allocator,
+        ic,
+        stake_account,
+        signers,
+        new_authority,
+        stake_authorize,
+        clock,
+        custodian,
+    );
+}
+
+fn getMinimumDelegation(feature_set: *const runtime.FeatureSet) u64 {
+    return if (feature_set.active.contains(runtime.features.STAKE_RAISE_MINIMUM_DELEGATION_TO_1_SOL))
+        1_000_000_000
+    else
+        1;
+}
+
+const ValidatedDelegatedInfo = struct { stake_amount: u64 };
+
+fn validateDelegatedAmount(
+    ic: *InstructionContext,
+    account: *const BorrowedAccount,
+    meta: *const StakeStateV2.Meta,
+    feature_set: *const runtime.FeatureSet,
+) InstructionError!ValidatedDelegatedInfo {
+    const stake_amount = account.account.lamports -| meta.rent_exempt_reserve;
+    if (stake_amount < getMinimumDelegation(feature_set)) {
+        ic.tc.custom_error = @intFromEnum(StakeError.insufficient_delegation);
+        return error.Custom;
+    }
+    return .{ .stake_amount = stake_amount };
+}
+
+fn newStake(
+    stake: u64,
+    voter_pubkey: *const Pubkey,
+    vote_state: *const VoteState,
+    activation_epoch: Epoch,
+) StakeStateV2.Stake {
+    return .{
+        .delegation = .{
+            .voter_pubkey = voter_pubkey.*,
+            .stake = stake,
+            .activation_epoch = activation_epoch,
+        },
+        .credits_observed = vote_state.getCredits(),
+    };
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/dd15884337be94f39b7bf7c3c4ae3c92d4fad760/programs/stake/src/stake_state.rs#L60
+fn newWarmupCooldownRateEpoch(
+    ic: *InstructionContext,
+) ?Epoch {
+    const epoch_schedule = ic.tc.sysvar_cache.get(sysvar.EpochSchedule) catch
+        @panic("failed to get epoch schedule"); // agave calls .unwrap here (!!).
+    return ic.tc.feature_set.newWarmupCooldownRateEpoch(&epoch_schedule);
+}
+
+fn redelegateStake(
+    ic: *InstructionContext,
+    stake: *StakeStateV2.Stake,
+    stake_lamports: u64,
+    voter_pubkey: *const Pubkey,
+    vote_state: *const VoteState,
+    clock: *const sysvar.Clock,
+    stake_history: *const sysvar.StakeHistory,
+) ?StakeError {
+    const new_rate_activation_epoch = newWarmupCooldownRateEpoch(ic);
+
+    if (stake.delegation.effectiveStake(clock.epoch, stake_history, new_rate_activation_epoch) != 0) {
+        if (stake.delegation.voter_pubkey.equals(voter_pubkey) and
+            clock.epoch == stake.delegation.deactivation_epoch)
+        {
+            stake.delegation.deactivation_epoch = std.math.maxInt(u64);
+            return null;
+        } else {
+            return .too_soon_to_redelegate;
+        }
+    }
+
+    stake.delegation.stake = stake_lamports;
+    stake.delegation.activation_epoch = clock.epoch;
+    stake.delegation.deactivation_epoch = std.math.maxInt(u64);
+    stake.delegation.voter_pubkey = voter_pubkey.*;
+    stake.credits_observed = vote_state.getCredits();
+    return null;
+}
+
+fn delegate(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    stake_account_index: u16,
+    vote_account_index: u16,
+    clock: *const sysvar.Clock,
+    stake_history: *const sysvar.StakeHistory,
+    signers: []const Pubkey,
+    feature_set: *const runtime.FeatureSet,
+) (error{OutOfMemory} || InstructionError)!void {
+    const vote_pubkey, const vote_state = blk: {
+        const vote_account = try ic.borrowInstructionAccount(vote_account_index);
+        defer vote_account.release();
+        break :blk .{
+            vote_account.pubkey,
+            // weirdness: error handling for this is done later
+            vote_account.deserializeFromAccountData(allocator, VoteStateVersions),
+        };
+    };
+
+    var stake_account = try ic.borrowInstructionAccount(stake_account_index);
+    defer stake_account.release();
+
+    var stake = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
+
+    return switch (stake) {
+        .initialized => |*meta| {
+            try meta.authorized.check(signers, .staker);
+
+            const validated = try validateDelegatedAmount(ic, &stake_account, meta, feature_set);
+            const stake_amount = validated.stake_amount;
+
+            const current_vote_state = try (try vote_state).convertToCurrent(allocator);
+            defer current_vote_state.deinit();
+
+            const new_stake = newStake(
+                stake_amount,
+                &vote_pubkey,
+                &current_vote_state,
+                clock.epoch,
+            );
+
+            try stake_account.serializeIntoAccountData(StakeStateV2{
+                .stake = .{ .flags = .EMPTY, .stake = new_stake, .meta = meta.* },
+            });
+        },
+        .stake => |*args| {
+            try args.meta.authorized.check(signers, .staker);
+            const validated = try validateDelegatedAmount(ic, &stake_account, &args.meta, feature_set);
+            const stake_amount = validated.stake_amount;
+
+            const current_vote_state = try (try vote_state).convertToCurrent(allocator);
+            defer current_vote_state.deinit();
+            if (redelegateStake(
+                ic,
+                &args.stake,
+                stake_amount,
+                &vote_pubkey,
+                &current_vote_state,
+                clock,
+                stake_history,
+            )) |stake_err| {
+                ic.tc.custom_error = @intFromEnum(stake_err);
+                return error.Custom;
+            }
+            try stake_account.serializeIntoAccountData(StakeStateV2{
+                .stake = .{ .flags = args.flags, .stake = args.stake, .meta = args.meta },
+            });
+        },
+        else => error.InvalidAccountData,
+    };
+}
