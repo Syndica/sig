@@ -5,6 +5,7 @@ const account_loader = sig.runtime.account_loader;
 const program_loader = sig.runtime.program_loader;
 const executor = sig.runtime.executor;
 const compute_budget_program = sig.runtime.program.compute_budget;
+const vm = sig.vm;
 
 const Ancestors = sig.core.status_cache.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
@@ -29,7 +30,6 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const AccountMeta = sig.core.instruction.InstructionAccount;
-const VmEnvironment = sig.vm.Environment;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
@@ -70,8 +70,8 @@ pub const TransactionExecutionEnvironment = struct {
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
     epoch_stakes: *const EpochStakes,
-    vm_environment: *const VmEnvironment,
-    next_vm_environment: ?*const VmEnvironment,
+    vm_environment: *const vm.Environment,
+    next_vm_environment: ?*const vm.Environment,
 
     slot: u64,
     max_age: u64,
@@ -424,7 +424,7 @@ test "loadAndExecuteTransactions: no transactions" {
     defer blockhash_queue.deinit(allocator);
     const epoch_stakes: EpochStakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
-    const vm_environment = VmEnvironment{};
+    const vm_environment = vm.Environment{};
     defer vm_environment.deinit(allocator);
 
     const environment: TransactionExecutionEnvironment = .{
@@ -510,7 +510,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
             .status_cache = &StatusCache.default(),
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
-            .vm_environment = &VmEnvironment{},
+            .vm_environment = &vm.Environment{},
             .next_vm_environment = null,
             .blockhash_queue = &blockhash_queue,
             .epoch_stakes = &epoch_stakes,
@@ -681,7 +681,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
-        .vm_environment = &VmEnvironment{},
+        .vm_environment = &vm.Environment{},
         .next_vm_environment = null,
         .slot = 0,
         .max_age = 0,

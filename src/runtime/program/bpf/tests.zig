@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../../../sig.zig");
 
 const program_loader = sig.runtime.program_loader;
+const vm = sig.vm;
 
 const program = sig.runtime.program;
 const features = sig.runtime.features;
@@ -9,7 +10,6 @@ const Pubkey = sig.core.Pubkey;
 const ExecuteContextParams = sig.runtime.testing.ExecuteContextsParams;
 const AccountParams = ExecuteContextParams.AccountParams;
 const AccountSharedData = sig.runtime.AccountSharedData;
-const VmEnvironment = sig.vm.Environment;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const FeatureParams = sig.runtime.testing.ExecuteContextsParams.FeatureParams;
@@ -24,7 +24,7 @@ pub fn prepareBpfV3Test(
     random: std.Random,
     elf_bytes: []const u8,
     feature_params: []const FeatureParams,
-) !struct { AccountParams, VmEnvironment, ProgramMap } {
+) !struct { AccountParams, vm.Environment, ProgramMap } {
     const program_key = Pubkey.initRandom(random);
     const program_data_key = Pubkey.initRandom(random);
     const program_deployment_slot = random.int(u64) -| 1;

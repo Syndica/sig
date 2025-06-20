@@ -2,12 +2,12 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const bpf_loader = sig.runtime.program.bpf_loader;
+const vm = sig.vm;
 
 const Pubkey = sig.core.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 const Executable = sig.vm.Executable;
-const VmEnvironment = sig.vm.Environment;
 
 pub const ProgramMap = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram);
 
@@ -33,7 +33,7 @@ pub const LoadedProgram = union(enum(u8)) {
 pub fn loadPrograms(
     allocator: std.mem.Allocator,
     accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
-    enviroment: *const VmEnvironment,
+    enviroment: *const vm.Environment,
     slot: u64,
 ) error{OutOfMemory}!ProgramMap {
     var programs = ProgramMap{};
@@ -64,7 +64,7 @@ pub fn loadProgram(
     allocator: std.mem.Allocator,
     account: *const AccountSharedData,
     accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
-    environment: *const VmEnvironment,
+    environment: *const vm.Environment,
     slot: u64,
 ) !LoadedProgram {
     // executable bytes are owned by the entry in the accounts map and should not be freed
@@ -196,7 +196,7 @@ test "loadPrograms: load valid v3 program" {
         },
     );
 
-    const environment = VmEnvironment{
+    const environment = vm.Environment{
         .loader = .{},
         .config = .{},
     };

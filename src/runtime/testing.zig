@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 const sysvar = sig.runtime.sysvar;
+const vm = sig.vm;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
@@ -21,7 +22,6 @@ const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const AccountCache = sig.runtime.account_loader.BatchAccountCache;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
-const VmEnvironment = sig.vm.Environment;
 
 pub const ExecuteContextsParams = struct {
     // If a user requires a mutable reference to the created feature set, they should
@@ -35,8 +35,8 @@ pub const ExecuteContextsParams = struct {
     program_map: *const ProgramMap = &.{},
 
     // Environment used to load and verify programs.
-    vm_environment: *const VmEnvironment = &.{},
-    next_vm_environment: ?*const VmEnvironment = null,
+    vm_environment: *const vm.Environment = &.{},
+    next_vm_environment: ?*const vm.Environment = null,
 
     // Slot Context
     sysvar_cache: SysvarCacheParams = .{},

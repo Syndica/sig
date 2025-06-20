@@ -3,6 +3,8 @@ const sig = @import("sig");
 const builtin = @import("builtin");
 const cli = @import("cli");
 
+const vm = sig.vm;
+
 const Elf = sig.vm.Elf;
 const memory = sig.vm.memory;
 const Executable = sig.vm.Executable;
@@ -17,7 +19,6 @@ const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const EpochStakes = sig.core.stake.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
-const VmEnvironment = sig.vm.Environment;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub fn main() !void {
@@ -53,7 +54,7 @@ pub fn main() !void {
         .feature_set = &FeatureSet.EMPTY,
         .epoch_stakes = &epoch_stakes,
         .sysvar_cache = &SysvarCache{},
-        .vm_environment = &VmEnvironment{},
+        .vm_environment = &vm.Environment{},
         .program_map = &ProgramMap{},
         .next_vm_environment = null,
         .accounts = &.{},
