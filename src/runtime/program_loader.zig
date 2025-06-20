@@ -40,10 +40,7 @@ pub fn loadPrograms(
     errdefer programs.deinit(allocator);
 
     for (accounts.keys(), accounts.values()) |pubkey, account| {
-        if (!account.owner.equals(&bpf_loader.v1.ID) and
-            !account.owner.equals(&bpf_loader.v2.ID) and
-            !account.owner.equals(&bpf_loader.v3.ID) and
-            !account.owner.equals(&bpf_loader.v4.ID)) continue;
+        if (!account.executable) continue;
 
         const loaded_program = try loadProgram(
             allocator,
@@ -60,6 +57,7 @@ pub fn loadPrograms(
     return programs;
 }
 
+/// Load program requires that the account is executable
 pub fn loadProgram(
     allocator: std.mem.Allocator,
     account: *const AccountSharedData,
