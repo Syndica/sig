@@ -21,17 +21,29 @@ pub const StakeHistory = struct {
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/ac11e3e568952977e63bce6bb20e37f26a61e151/sysvar/src/stake_history.rs#L66
     pub const SIZE_OF = 16_392;
 
+    pub const EntryNoEpoch = struct {
+        /// Effective stake at this epoch
+        effective: u64 = 0,
+        /// Sum of portion of stakes not fully warmed up
+        activating: u64 = 0,
+        /// Requested to be cooled down, not fully deactivated yet
+        deactivating: u64 = 0,
+    };
+
     pub const Entry = struct {
         Epoch,
-        struct {
-            /// Effective stake at this epoch
-            effective: u64,
-            /// Sum of portion of stakes not fully warmed up
-            activating: u64,
-            /// Requested to be cooled down, not fully deactivated yet
-            deactivating: u64,
-        },
+        EntryNoEpoch,
     };
+
+    fn compareFn(key: Epoch, mid_item: Entry) std.math.Order {
+        return std.math.order(key, mid_item[0]);
+    }
+
+    pub fn getEntry(self: *const StakeHistory, epoch: Epoch) ?EntryNoEpoch {
+        const entry_idx = std.sort.binarySearch(Entry, self.entries, epoch, compareFn) orelse
+            return null;
+        return self.entries[entry_idx].@"1";
+    }
 
     pub fn deinit(self: StakeHistory, allocator: std.mem.Allocator) void {
         allocator.free(self.entries);
