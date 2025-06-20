@@ -3,12 +3,29 @@ const sig = @import("../../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
+const sysvar = sig.runtime.sysvar;
+const InstructionError = sig.core.instruction.InstructionError;
+
+const program = @import("lib.zig");
+
+const DEFAULT_WARMUP_COOLDOWN_RATE: f64 = 0.25;
+const NEW_WARMUP_COOLDOWN_RATE: f64 = 0.09;
+
+fn warmupCooldownRate(current_epoch: Epoch, new_rate_activation_epoch: ?Epoch) f64 {
+    return if (current_epoch < new_rate_activation_epoch orelse std.math.maxInt(u64))
+        DEFAULT_WARMUP_COOLDOWN_RATE
+    else
+        NEW_WARMUP_COOLDOWN_RATE;
+}
 
 pub const StakeStateV2 = union(enum) {
     uninitialized,
     initialized: Meta,
     stake: struct { meta: Meta, stake: Stake, flags: StakeFlags },
     rewards_pool,
+
+    /// [agave] https://github.com/solana-program/stake/blob/69620421bf76ecddb62357e1e1cd5c0961f7794d/interface/src/state.rs#L214
+    pub const SIZE = 200;
 
     pub const Meta = struct {
         rent_exempt_reserve: u64,
@@ -19,31 +36,251 @@ pub const StakeStateV2 = union(enum) {
     pub const Stake = struct {
         delegation: Delegation,
         credits_observed: u64,
+
+        fn stake(
+            self: *const Stake,
+            epoch: Epoch,
+            history: *const sig.runtime.sysvar.StakeHistory,
+            new_rate_activation_epoch: ?Epoch,
+        ) void {
+            return self.delegation.effectiveStake(epoch, history, new_rate_activation_epoch);
+        }
     };
 
     pub const StakeFlags = struct {
         bits: u8,
+        pub const EMPTY: StakeFlags = .{ .bits = 0 };
     };
 
     pub const Authorized = struct {
         staker: Pubkey,
         withdrawer: Pubkey,
+
+        pub fn check(
+            self: *Authorized,
+            signers: []const Pubkey,
+            stake_authorize: StakeAuthorize,
+        ) error{MissingRequiredSignature}!void {
+            const authorized_signer = switch (stake_authorize) {
+                .staker => &self.staker,
+                .withdrawer => &self.withdrawer,
+            };
+
+            const has_signature = for (signers) |signer| {
+                if (signer.equals(authorized_signer)) break true;
+            } else false;
+
+            if (!has_signature) return error.MissingRequiredSignature;
+        }
+
+        // [agave] https://github.com/solana-program/stake/blob/69620421bf76ecddb62357e1e1cd5c0961f7794d/interface/src/state.rs#L410
+        pub fn authorize(
+            self: *Authorized,
+            signers: []const Pubkey,
+            new_authorized: *const Pubkey,
+            stake_authorize: StakeAuthorize,
+            lockup_custodian_args: ?struct { *const Lockup, *const sysvar.Clock, ?*const Pubkey },
+        ) ?struct { ?program.StakeError, InstructionError } {
+            switch (stake_authorize) {
+                .staker => {
+                    const has_required_signer = for (signers) |signer| {
+                        if (signer.equals(&self.staker) or signer.equals(&self.withdrawer))
+                            break true;
+                    } else false;
+
+                    if (!has_required_signer) return .{ null, error.MissingRequiredSignature };
+                    self.staker = new_authorized.*;
+                },
+                .withdrawer => {
+                    if (lockup_custodian_args) |args| {
+                        const lockup, const clock, const maybe_custodian = args;
+
+                        if (lockup.isInForce(clock, null)) {
+                            const custodian = maybe_custodian orelse
+                                return .{ .custodian_missing, error.Custom };
+
+                            const has_custodian_signer = for (signers) |signer| {
+                                if (signer.equals(custodian)) break true;
+                            } else false;
+
+                            if (!has_custodian_signer)
+                                return .{ .custodian_signature_missing, error.Custom };
+                            if (lockup.isInForce(clock, custodian))
+                                return .{ .lockup_in_force, error.Custom };
+                        }
+                    }
+                    self.check(signers, stake_authorize) catch |err| return .{ null, err };
+                    self.withdrawer = new_authorized.*;
+                },
+            }
+            return null;
+        }
     };
 
     pub const Lockup = struct {
         unix_timestamp: i64,
         epoch: Epoch,
         custodian: Pubkey,
+
+        pub fn isInForce(
+            self: *const Lockup,
+            clock: *const sysvar.Clock,
+            maybe_custodian: ?*const Pubkey,
+        ) bool {
+            if (maybe_custodian) |custodian| {
+                if (custodian.equals(&self.custodian)) return false;
+            }
+            return self.unix_timestamp > clock.unix_timestamp or self.epoch > clock.epoch;
+        }
     };
 
     pub const Delegation = struct {
         voter_pubkey: Pubkey,
         stake: u64,
         activation_epoch: Epoch,
-        deactivation_epoch: Epoch,
+        deactivation_epoch: Epoch = std.math.maxInt(u64),
         /// deprecated
-        _warmup_cooldown_rate: f64,
+        _warmup_cooldown_rate: f64 = DEFAULT_WARMUP_COOLDOWN_RATE,
+
+        /// [agave] https://github.com/solana-program/stake/blob/69620421bf76ecddb62357e1e1cd5c0961f7794d/interface/src/state.rs#L677
+        pub fn effectiveStake(
+            self: *const Delegation,
+            epoch: Epoch,
+            history: *const sysvar.StakeHistory,
+            new_rate_activation_epoch: ?Epoch,
+        ) u64 {
+            return self.stakeActivatingAndDeactivating(
+                epoch,
+                history,
+                new_rate_activation_epoch,
+            ).effective;
+        }
+
+        fn stakeActivatingAndDeactivating(
+            self: *const Delegation,
+            target_epoch: Epoch,
+            history: *const sysvar.StakeHistory,
+            new_rate_activation_epoch: ?Epoch,
+        ) sysvar.StakeHistory.EntryNoEpoch {
+            const effective_stake, const activating_stake = self.stakeAndActivating(
+                target_epoch,
+                history,
+                new_rate_activation_epoch,
+            );
+
+            if (target_epoch < self.deactivation_epoch) return .{
+                .effective = effective_stake,
+                .activating = activating_stake,
+            };
+
+            if (target_epoch == self.deactivation_epoch) return .{
+                .deactivating = effective_stake,
+            };
+
+            const entry = history.getEntry(self.deactivation_epoch) orelse
+                return .{};
+
+            var prev_epoch = self.deactivation_epoch;
+            var prev_cluster_stake = entry;
+
+            var current_epoch = prev_epoch + 1;
+            var current_effective_stake = effective_stake;
+
+            while (true) {
+                current_epoch = prev_epoch + 1;
+                if (prev_cluster_stake.deactivating == 0) break;
+
+                const weight = @as(f64, @floatFromInt(current_effective_stake)) /
+                    @as(f64, @floatFromInt(prev_cluster_stake.deactivating));
+
+                const warmup_cooldown_rate = warmupCooldownRate(
+                    current_epoch,
+                    new_rate_activation_epoch,
+                );
+
+                const newly_not_effective_cluster_take = @as(
+                    f64,
+                    @floatFromInt(prev_cluster_stake.effective),
+                ) * warmup_cooldown_rate;
+
+                const newly_not_effective_stake: u64 = @intFromFloat(@max(1, weight * newly_not_effective_cluster_take));
+
+                current_effective_stake = current_effective_stake -| newly_not_effective_stake;
+                if (current_effective_stake == 0) break;
+                if (current_epoch >= target_epoch) break;
+
+                const current_cluster_stake = history.getEntry(current_epoch) orelse break;
+                prev_epoch = current_epoch;
+                prev_cluster_stake = current_cluster_stake;
+            }
+
+            return .{ .deactivating = current_effective_stake };
+        }
+
+        /// returned tuple is (effective, activating) stake
+        fn stakeAndActivating(
+            self: *const Delegation,
+            target_epoch: Epoch,
+            history: *const sysvar.StakeHistory,
+            new_rate_activation_epoch: ?Epoch,
+        ) struct { u64, u64 } {
+            const delegated_stake = self.stake;
+
+            if (self.isBootstrap()) return .{ delegated_stake, 0 };
+            if (self.activation_epoch == self.deactivation_epoch) return .{ 0, 0 };
+            if (self.activation_epoch == target_epoch) return .{ 0, delegated_stake };
+            if (self.activation_epoch > target_epoch) return .{ 0, 0 };
+
+            const entry = history.getEntry(self.activation_epoch) orelse
+                return .{ delegated_stake, 0 };
+
+            var prev_epoch = self.activation_epoch;
+            var prev_cluster_stake = entry;
+
+            var current_epoch: Epoch = prev_epoch - 1;
+            var current_effective_stake: u64 = 0;
+            while (true) {
+                current_epoch = prev_epoch - 1;
+                if (prev_cluster_stake.activating == 0) break;
+
+                const remaining_activating_stake = delegated_stake - current_effective_stake;
+                const weight = @as(f64, @floatFromInt(remaining_activating_stake)) /
+                    @as(f64, @floatFromInt(prev_cluster_stake.activating));
+
+                const warmup_cooldown_rate = warmupCooldownRate(
+                    current_epoch,
+                    new_rate_activation_epoch,
+                );
+
+                const newly_effective_cluster_take = @as(
+                    f64,
+                    @floatFromInt(prev_cluster_stake.effective),
+                ) * warmup_cooldown_rate;
+
+                const newly_effective_stake: u64 = @intFromFloat(@max(1, weight * newly_effective_cluster_take));
+
+                current_effective_stake += newly_effective_stake;
+                if (current_effective_stake >= delegated_stake) {
+                    current_effective_stake = delegated_stake;
+                    break;
+                }
+
+                if (current_epoch >= target_epoch or current_epoch >= self.deactivation_epoch) {
+                    break;
+                }
+
+                const current_cluster_stake = history.getEntry(current_epoch) orelse break;
+                prev_epoch = current_epoch;
+                prev_cluster_stake = current_cluster_stake;
+            }
+
+            return .{ current_effective_stake, delegated_stake - current_effective_stake };
+        }
+
+        fn isBootstrap(self: *const Delegation) bool {
+            return self.activation_epoch == std.math.maxInt(u64);
+        }
     };
 
-    pub const StakeAuthorize = enum { Staker, Withdrawer };
+    pub const StakeAuthorize = enum { staker, withdrawer };
 };
