@@ -64,6 +64,13 @@ pub const StakeStateV2 = union(enum) {
 
             return new;
         }
+
+        pub fn deactivate(self: *Stake, epoch: Epoch) ?program.StakeError {
+            if (self.delegation.deactivation_epoch != std.math.maxInt(u64))
+                return .already_deactivated;
+            self.delegation.deactivation_epoch = epoch;
+            return null;
+        }
     };
 
     pub const StakeFlags = struct {
