@@ -411,10 +411,12 @@ const ssh = struct {
             },
         };
 
+        const stdoutz = try b.allocator.dupeZ(u8, run_result.stdout);
+        defer b.allocator.free(stdoutz);
         const targets = try std.zon.parse.fromSlice(
             Targets,
             b.allocator,
-            try b.allocator.dupeZ(u8, run_result.stdout),
+            stdoutz,
             null,
             .{ .ignore_unknown_fields = true },
         );
