@@ -171,8 +171,33 @@ pub fn execute(
             );
         },
         .withdraw => |lamports| {
-            _ = lamports;
-            @panic("TODO");
+            // NOTE agave gets this borrwed account and drops it, not doing anything with it?
+            const clock, const stake_history = blk: {
+                var me = try getStakeAccount(ic);
+                defer me.release();
+
+                try ic.ixn_info.checkNumberOfAccounts(2);
+
+                const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 2);
+                const stake_history = try ic.getSysvarWithAccountCheck(sysvar.StakeHistory, 3);
+
+                try ic.ixn_info.checkNumberOfAccounts(5);
+
+                break :blk .{ clock, stake_history };
+            };
+
+            try withdraw(
+                allocator,
+                ic,
+                0,
+                lamports,
+                1,
+                &clock,
+                &stake_history,
+                4,
+                if (ic.ixn_info.account_metas.len >= 6) 5 else null,
+                newWarmupCooldownRateEpoch(ic),
+            );
         },
         .deactivate => @panic("TODO"),
         .set_lockup => |args| {
@@ -1046,4 +1071,96 @@ fn merge(
     const lamports = source_account.account.lamports;
     try source_account.subtractLamports(lamports);
     try stake_account.addLamports(lamports);
+}
+
+fn withdraw(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    stake_account_index: u16,
+    lamports: u64,
+    to_index: u16,
+    clock: *const sysvar.Clock,
+    stake_history: *const sysvar.StakeHistory,
+    withdraw_authority_index: u16,
+    custodian_index: ?u16,
+    new_rate_activation_epoch: ?Epoch,
+) (error{OutOfMemory} || InstructionError)!void {
+    const withdraw_authority = ic.ixn_info.getAccountMetaAtIndex(withdraw_authority_index) orelse
+        return error.NotEnoughAccountKeys;
+
+    if (!withdraw_authority.is_signer) return error.MissingRequiredSignature;
+
+    const signers: []const Pubkey = &.{withdraw_authority.pubkey};
+    {
+        var stake_account = try ic.borrowInstructionAccount(stake_account_index);
+        defer stake_account.release();
+
+        const stake_state = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
+
+        const lockup: Lockup, const reserve, const is_staked = switch (stake_state) {
+            .stake => |args| blk: {
+                try args.meta.authorized.check(signers, .withdrawer);
+
+                const staked = if (clock.epoch >= args.stake.delegation.deactivation_epoch)
+                    args.stake.delegation.effectiveStake(
+                        clock.epoch,
+                        stake_history,
+                        new_rate_activation_epoch,
+                    )
+                else
+                    args.stake.delegation.stake;
+
+                const staked_and_reserve = add(staked, args.meta.rent_exempt_reserve) orelse
+                    return error.InsufficientFunds;
+
+                break :blk .{ args.meta.lockup, staked_and_reserve, staked != 0 };
+            },
+            .initialized => |meta| blk: {
+                try meta.authorized.check(signers, .withdrawer);
+                break :blk .{ meta.lockup, meta.rent_exempt_reserve, false };
+            },
+            .uninitialized => blk: {
+                if (!signers[0].equals(&stake_account.pubkey))
+                    return error.MissingRequiredSignature;
+                break :blk .{ Lockup.DEFAULT, 0, false };
+            },
+            else => return error.InvalidAccountData,
+        };
+
+        const custodian_pubkey = if (custodian_index) |idx| key: {
+            const meta = ic.ixn_info.getAccountMetaAtIndex(idx) orelse
+                return error.NotEnoughAccountKeys;
+            if (!meta.is_signer) break :key null;
+
+            break :key &meta.pubkey;
+        } else null;
+
+        if (lockup.isInForce(clock, custodian_pubkey)) {
+            ic.tc.custom_error = @intFromEnum(StakeError.lockup_in_force);
+            return error.Custom;
+        }
+
+        const lamports_and_reserve: u64 = add(lamports, reserve) orelse
+            return error.InsufficientFunds;
+
+        if (is_staked and lamports_and_reserve > stake_account.account.lamports)
+            return error.InsufficientFunds;
+
+        if (lamports != stake_account.account.lamports and
+            lamports_and_reserve > stake_account.account.lamports)
+        {
+            std.debug.assert(!is_staked);
+            return error.InsufficientFunds;
+        }
+
+        if (lamports == stake_account.account.lamports) {
+            try stake_account.serializeIntoAccountData(StakeStateV2.uninitialized);
+        }
+
+        try stake_account.subtractLamports(lamports);
+    }
+
+    var to = try ic.borrowInstructionAccount(to_index);
+    defer to.release();
+    try to.addLamports(lamports);
 }
