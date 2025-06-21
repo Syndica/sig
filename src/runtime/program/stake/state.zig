@@ -7,6 +7,7 @@ const sysvar = sig.runtime.sysvar;
 const InstructionError = sig.core.instruction.InstructionError;
 
 const program = @import("lib.zig");
+const instruction = @import("instruction.zig");
 
 const DEFAULT_WARMUP_COOLDOWN_RATE: f64 = 0.25;
 const NEW_WARMUP_COOLDOWN_RATE: f64 = 0.09;
@@ -31,6 +32,31 @@ pub const StakeStateV2 = union(enum) {
         rent_exempt_reserve: u64,
         authorized: Authorized,
         lockup: Lockup,
+
+        pub fn setLockup(
+            self: *Meta,
+            lockup: *const instruction.LockupArgs,
+            signers: []const Pubkey,
+            clock: *const sysvar.Clock,
+        ) InstructionError!void {
+            if (self.lockup.isInForce(clock, null)) {
+                const custodian_signed = for (signers) |signer| {
+                    if (signer.equals(&self.lockup.custodian)) break true;
+                } else false;
+
+                if (!custodian_signed) return error.MissingRequiredSignature;
+            } else {
+                const withdrawer_signed = for (signers) |signer| {
+                    if (signer.equals(&self.authorized.withdrawer)) break true;
+                } else false;
+
+                if (!withdrawer_signed) return error.MissingRequiredSignature;
+            }
+
+            if (lockup.unix_timestamp) |unix_timestamp| self.lockup.unix_timestamp = unix_timestamp;
+            if (lockup.epoch) |epoch| self.lockup.epoch = epoch;
+            if (lockup.custodian) |custodian| self.lockup.custodian = custodian;
+        }
     };
 
     pub const Stake = struct {
