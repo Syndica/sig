@@ -9,6 +9,8 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 
 const Executable = sig.vm.Executable;
 
+const failing_allocator = sig.utils.allocators.failing.allocator(.{});
+
 pub const ProgramMap = std.AutoArrayHashMapUnmanaged(Pubkey, LoadedProgram);
 
 pub const LoadedProgram = union(enum(u8)) {
@@ -104,8 +106,12 @@ pub fn loadDeploymentSlotAndExecutableBytes(
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
         return .{ 0, account.data };
     } else if (account.owner.equals(&bpf_loader.v3.ID)) {
-        const program_state = bpf_loader.v3.State.deserialize(account.data) catch
-            return null;
+        const program_state = sig.bincode.readFromSlice(
+            failing_allocator,
+            bpf_loader.v3.State,
+            account.data,
+            .{},
+        ) catch return null;
 
         const program_data_key = switch (program_state) {
             .program => |program_data_key| program_data_key.programdata_address,
@@ -124,8 +130,12 @@ pub fn loadDeploymentSlotAndExecutableBytes(
         const program_elf_bytes =
             program_data_account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE..];
 
-        const program_metadata = bpf_loader.v3.State.deserialize(program_metadata_bytes) catch
-            return null;
+        const program_metadata = sig.bincode.readFromSlice(
+            failing_allocator,
+            bpf_loader.v3.State,
+            program_metadata_bytes,
+            .{},
+        ) catch return null;
 
         const slot = switch (program_metadata) {
             .program_data => |data| data.slot,
