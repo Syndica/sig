@@ -151,6 +151,12 @@ pub const StakeStateV2 = union(enum) {
         epoch: Epoch,
         custodian: Pubkey,
 
+        pub const DEFAULT: Lockup = .{
+            .unix_timestamp = 0,
+            .epoch = 0,
+            .custodian = Pubkey.ZEROES,
+        };
+
         pub fn isInForce(
             self: *const Lockup,
             clock: *const sysvar.Clock,
