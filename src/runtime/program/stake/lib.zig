@@ -206,9 +206,12 @@ pub fn execute(
 
             try deactivate(allocator, ic, &me, &clock, ic.ixn_info.getSigners().slice());
         },
-        .set_lockup => |args| {
-            _ = args;
-            @panic("TODO");
+        .set_lockup => |lockup| {
+            var me = try getStakeAccount(ic);
+            defer me.release();
+            const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+
+            try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
         },
         .initialize_checked => @panic("TODO"),
         .authorize_checked => @panic("TODO"),
@@ -1195,4 +1198,34 @@ fn deactivate(
             .flags = stake_state.flags,
         },
     });
+}
+
+fn setLockup(
+    allocator: std.mem.Allocator,
+    stake_account: *BorrowedAccount,
+    lockup: *const instruction.LockupArgs,
+    signers: []const Pubkey,
+    clock: *const sysvar.Clock,
+) InstructionError!void {
+    const stake_state = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
+
+    switch (stake_state) {
+        .initialized => |arg| {
+            var meta = arg;
+            try meta.setLockup(lockup, signers, clock);
+            try stake_account.serializeIntoAccountData(StakeStateV2{ .initialized = meta });
+        },
+        .stake => |args| {
+            var meta = args.meta;
+            try meta.setLockup(lockup, signers, clock);
+            try stake_account.serializeIntoAccountData(StakeStateV2{
+                .stake = .{
+                    .meta = meta,
+                    .stake = args.stake,
+                    .flags = args.flags,
+                },
+            });
+        },
+        else => return error.InvalidAccountData,
+    }
 }
