@@ -199,7 +199,13 @@ pub fn execute(
                 newWarmupCooldownRateEpoch(ic),
             );
         },
-        .deactivate => @panic("TODO"),
+        .deactivate => {
+            var me = try getStakeAccount(ic);
+            defer me.release();
+            const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 1);
+
+            try deactivate(allocator, ic, &me, &clock, ic.ixn_info.getSigners().slice());
+        },
         .set_lockup => |args| {
             _ = args;
             @panic("TODO");
@@ -1163,4 +1169,30 @@ fn withdraw(
     var to = try ic.borrowInstructionAccount(to_index);
     defer to.release();
     try to.addLamports(lamports);
+}
+
+fn deactivate(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    stake_account: *BorrowedAccount,
+    clock: *const sysvar.Clock,
+    signers: []const Pubkey,
+) InstructionError!void {
+    const data = try stake_account.deserializeFromAccountData(allocator, StakeStateV2);
+    const stake_state = if (data == .stake) data.stake else return error.InvalidAccountData;
+
+    try stake_state.meta.authorized.check(signers, .staker);
+
+    var stake = stake_state.stake;
+    if (stake.deactivate(clock.epoch)) |stake_err| {
+        ic.tc.custom_error = @intFromEnum(stake_err);
+        return error.Custom;
+    }
+    try stake_account.serializeIntoAccountData(StakeStateV2{
+        .stake = .{
+            .meta = stake_state.meta,
+            .stake = stake,
+            .flags = stake_state.flags,
+        },
+    });
 }
