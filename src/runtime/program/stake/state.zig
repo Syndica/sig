@@ -69,6 +69,11 @@ pub const StakeStateV2 = union(enum) {
     pub const StakeFlags = struct {
         bits: u8,
         pub const EMPTY: StakeFlags = .{ .bits = 0 };
+
+        // I couldn't call it "union"
+        pub fn combine(self: StakeFlags, other: StakeFlags) StakeFlags {
+            return .{ .bits = self.bits | other.bits };
+        }
     };
 
     pub const Authorized = struct {
@@ -76,7 +81,7 @@ pub const StakeStateV2 = union(enum) {
         withdrawer: Pubkey,
 
         pub fn check(
-            self: *Authorized,
+            self: *const Authorized,
             signers: []const Pubkey,
             stake_authorize: StakeAuthorize,
         ) error{MissingRequiredSignature}!void {
@@ -134,6 +139,11 @@ pub const StakeStateV2 = union(enum) {
             }
             return null;
         }
+
+        pub fn equals(self: *const Authorized, other: *const Authorized) bool {
+            if (!self.staker.equals(&other.staker)) return false;
+            return self.withdrawer.equals(&other.withdrawer);
+        }
     };
 
     pub const Lockup = struct {
@@ -150,6 +160,12 @@ pub const StakeStateV2 = union(enum) {
                 if (custodian.equals(&self.custodian)) return false;
             }
             return self.unix_timestamp > clock.unix_timestamp or self.epoch > clock.epoch;
+        }
+
+        pub fn equals(self: *const Lockup, other: *const Lockup) bool {
+            if (self.unix_timestamp != other.unix_timestamp) return false;
+            if (self.epoch != other.epoch) return false;
+            return self.custodian.equals(&other.custodian);
         }
     };
 
