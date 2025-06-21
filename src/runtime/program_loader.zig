@@ -151,7 +151,7 @@ pub fn loadDeploymentSlotAndExecutableBytes(
     }
 }
 
-test "loadPrograms: load valid v3 program" {
+test "loadPrograms: load v3 program" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
@@ -208,22 +208,64 @@ test "loadPrograms: load valid v3 program" {
         .loader = .{},
         .config = .{},
     };
-    const slot = program_deployment_slot + 1;
 
-    var loaded_programs = try loadPrograms(
-        allocator,
-        &accounts,
-        &environment,
-        slot,
-    );
-    defer {
-        for (loaded_programs.values()) |loaded_program| loaded_program.deinit(allocator);
-        loaded_programs.deinit(allocator);
+    { // Success
+        var loaded_programs = try loadPrograms(
+            allocator,
+            &accounts,
+            &environment,
+            program_deployment_slot + 1,
+        );
+        defer {
+            for (loaded_programs.values()) |loaded_program| loaded_program.deinit(allocator);
+            loaded_programs.deinit(allocator);
+        }
+
+        switch (loaded_programs.get(program_key).?) {
+            .failed => std.debug.panic("Program failed to load!", .{}),
+            .loaded => {},
+        }
     }
 
-    switch (loaded_programs.get(program_key).?) {
-        .failed => std.debug.panic("Program failed to load!", .{}),
-        .loaded => {},
+    { // Delay visibility failure
+        var loaded_programs = try loadPrograms(
+            allocator,
+            &accounts,
+            &environment,
+            program_deployment_slot,
+        );
+        defer {
+            for (loaded_programs.values()) |loaded_program| loaded_program.deinit(allocator);
+            loaded_programs.deinit(allocator);
+        }
+
+        switch (loaded_programs.get(program_key).?) {
+            .failed => {},
+            .loaded => std.debug.panic("Program should not load!", .{}),
+        }
+    }
+
+    { // Bad program data meta
+        const account = accounts.getPtr(program_data_key).?;
+        const tmp_byte = account.data[0];
+        account.data[0] = 0xFF; // Corrupt the first byte of the metadata
+        defer account.data[0] = tmp_byte;
+
+        var loaded_programs = try loadPrograms(
+            allocator,
+            &accounts,
+            &environment,
+            program_deployment_slot + 1,
+        );
+        defer {
+            for (loaded_programs.values()) |loaded_program| loaded_program.deinit(allocator);
+            loaded_programs.deinit(allocator);
+        }
+
+        switch (loaded_programs.get(program_key).?) {
+            .failed => {},
+            .loaded => std.debug.panic("Program should not load!", .{}),
+        }
     }
 }
 
