@@ -16,7 +16,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
             reader: anytype,
             params: bincode.Params,
         ) !List {
-            const len = (try bincode.readIntAsLength(usize, reader, params)) orelse
+            const len = (try bincode.deserializeIntAsLength(usize, reader, params)) orelse
                 return error.BoundedArrayTooBig;
             if (len > list_info.capacity) return error.DataTooLarge;
 
@@ -32,7 +32,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
                 errdefer for (data.constSlice()) |elem| bincode.free(allocator, elem);
 
                 for (0..len) |_| {
-                    const elem = try bincode.read(allocator, list_info.Elem, reader, params);
+                    const elem = try bincode.deserializeAlloc(allocator, list_info.Elem, reader, params);
                     data.appendAssumeCapacity(elem);
                 }
 

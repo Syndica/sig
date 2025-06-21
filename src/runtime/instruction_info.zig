@@ -115,7 +115,7 @@ pub const InstructionInfo = struct {
             self.instruction_data.len,
             Transaction.MAX_BYTES,
         )]);
-        const data = bincode.read(allocator, T, fbs.reader(), .{}) catch {
+        const data = bincode.deserializeAlloc(allocator, T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
         return data;
@@ -134,7 +134,7 @@ pub const InstructionInfo = struct {
         )]);
 
         var fba = std.heap.FixedBufferAllocator.init(alloc_buf);
-        return bincode.read(fba.allocator(), T, fbs.reader(), .{}) catch {
+        return bincode.deserializeAlloc(fba.allocator(), T, fbs.reader(), .{}) catch {
             return InstructionError.InvalidInstructionData;
         };
     }

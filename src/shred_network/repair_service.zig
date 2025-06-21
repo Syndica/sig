@@ -644,7 +644,7 @@ test "RepairService sends repair request to gossip peer" {
 
     // assertions
     try std.testing.expect(160 == size);
-    const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
+    const msg = try bincode.deserializeSlice(allocator, RepairMessage, buf[0..160], .{});
     try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
     try std.testing.expect(msg.HighestWindowIndex.slot == 13579);
     try std.testing.expect(msg.HighestWindowIndex.shred_index == 0);

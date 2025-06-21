@@ -408,7 +408,7 @@ pub const AccountIndex = struct {
 
         // load the []AccountRef
         self.logger.info().log("loading account references");
-        const references = try sig.bincode.readFromSlice(
+        const references = try sig.bincode.deserializeSlice(
             // NOTE: this still ensure reference memory is either on disk or ram
             // even though the state we are loading from is on disk.
             // with bincode this will only be one alloc!
@@ -433,7 +433,7 @@ pub const AccountIndex = struct {
 
         // load the records
         self.logger.info().log("loading manager records");
-        const records = try sig.bincode.readFromSlice(
+        const records = try sig.bincode.deserializeSlice(
             self.reference_manager.records_allocator,
             @TypeOf(self.reference_manager.records),
             records_memory,

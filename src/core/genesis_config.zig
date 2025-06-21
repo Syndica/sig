@@ -149,7 +149,7 @@ pub const GenesisConfig = struct {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
 
-        return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
+        return try bincode.deserializeAlloc(allocator, GenesisConfig, file.reader(), .{});
     }
 
     pub fn deinit(self: GenesisConfig, allocator: std.mem.Allocator) void {

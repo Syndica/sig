@@ -1737,7 +1737,7 @@ pub const AccountsDB = struct {
         };
 
         var iter = file_data.iterator();
-        const t = sig.bincode.read(allocator, T, iter.reader(), .{}) catch {
+        const t = sig.bincode.deserializeAlloc(allocator, T, iter.reader(), .{}) catch {
             return error.DeserializationError;
         };
         return t;

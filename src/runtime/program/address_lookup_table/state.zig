@@ -104,7 +104,7 @@ pub const AddressLookupTable = struct {
         allocator: std.mem.Allocator,
         data: []const u8,
     ) (error{OutOfMemory} || InstructionError)!AddressLookupTable {
-        const state = sig.bincode.readFromSlice(allocator, ProgramState, data, .{}) catch
+        const state = sig.bincode.deserializeSlice(allocator, ProgramState, data, .{}) catch
             return error.InvalidAccountData;
         errdefer sig.bincode.free(allocator, state);
 

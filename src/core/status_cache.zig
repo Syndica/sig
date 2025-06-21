@@ -203,7 +203,7 @@ pub const Ancestors = struct {
     );
 
     fn voidDeserialize(alloc: std.mem.Allocator, reader: anytype, params: bincode.Params) !void {
-        _ = try bincode.read(alloc, usize, reader, params);
+        _ = try bincode.deserializeAlloc(alloc, usize, reader, params);
     }
 
     fn voidSerialize(writer: anytype, data: anytype, params: bincode.Params) !void {
@@ -232,7 +232,7 @@ test "status cache (de)serialize Ancestors" {
 
     defer allocator.free(serialized);
 
-    const deserialized = try bincode.readFromSlice(
+    const deserialized = try bincode.deserializeSlice(
         allocator,
         HashMap(Slot, usize),
         serialized,

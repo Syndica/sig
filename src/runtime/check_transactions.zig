@@ -377,7 +377,7 @@ fn verifyNonceAccount(account: AccountSharedData, recent_blockhash: *const Hash)
     var deserialize_buf: [@sizeOf(NonceData) * 2]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&deserialize_buf);
 
-    const nonce = sig.bincode.readFromSlice(fba.allocator(), NonceVersions, account.data, .{}) catch
+    const nonce = sig.bincode.deserializeSlice(fba.allocator(), NonceVersions, account.data, .{}) catch
         return null;
 
     const nonce_data = nonce.verify(recent_blockhash.*) orelse
@@ -618,7 +618,7 @@ test "checkAge: nonce account" {
                 &nonce_key.data,
                 &ca.?.pubkey.data,
             );
-            const nv = try sig.bincode.readFromSlice(
+            const nv = try sig.bincode.deserializeSlice(
                 allocator,
                 sig.runtime.nonce.Versions,
                 ca.?.account.data,

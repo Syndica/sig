@@ -266,7 +266,7 @@ pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entr
     }
     while (try readChunk(allocator, reader)) |chunk| {
         defer allocator.free(chunk);
-        try entries.append(try sig.bincode.readFromSlice(allocator, Entry, chunk, .{}));
+        try entries.append(try sig.bincode.deserializeSlice(allocator, Entry, chunk, .{}));
     }
     return entries.toOwnedSlice();
 }

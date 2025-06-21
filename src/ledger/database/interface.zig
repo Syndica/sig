@@ -272,7 +272,7 @@ fn serializer(endian: std.builtin.Endian) type {
                 // returns references.
                 @compileError("not supported");
             };
-            return try sig.bincode.readFromSlice(allocator, T, bytes, .{ .endian = endian });
+            return try sig.bincode.deserializeSlice(allocator, T, bytes, .{ .endian = endian });
         }
     };
 }

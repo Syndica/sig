@@ -228,10 +228,10 @@ test "signed/serialized RepairRequest is valid" {
         // TODO: `serializeRepairRequest` is currently non-deterministic because keypair.signer uses csprng.
         // figure out a way to make it deterministic!
 
-        var deserialized = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
+        var deserialized = try bincode.deserializeSlice(allocator, RepairMessage, serialized, .{});
         try deserialized.verify(serialized, recipient, timestamp);
         random.bytes(serialized[10..15]); // >99.99% chance that this invalidates the signature
-        var bad = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
+        var bad = try bincode.deserializeSlice(allocator, RepairMessage, serialized, .{});
         if (bad.verify(serialized, recipient, timestamp)) |_| @panic("should err") else |_| {}
     }
 }
@@ -266,7 +266,7 @@ test "RepairRequestHeader serialization round trip" {
 
     try std.testing.expect(std.mem.eql(u8, &expected, serialized));
 
-    const roundtripped = try bincode.readFromSlice(
+    const roundtripped = try bincode.deserializeSlice(
         std.testing.allocator,
         RepairRequestHeader,
         serialized,
@@ -380,7 +380,7 @@ const testHelpers = struct {
             },
         }
 
-        const roundtripped = try bincode.readFromSlice(
+        const roundtripped = try bincode.deserializeSlice(
             std.testing.allocator,
             RepairMessage,
             serialized,

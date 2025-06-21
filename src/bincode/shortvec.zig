@@ -20,7 +20,7 @@ pub fn sliceConfig(comptime Slice: type) bincode.FieldConfig(Slice) {
             errdefer allocator.free(elems);
             for (elems, 0..) |*elem, i| {
                 errdefer for (elems[0..i]) |prev| bincode.free(allocator, prev);
-                elem.* = try bincode.read(allocator, Child, reader, params);
+                elem.* = try bincode.deserializeAlloc(allocator, Child, reader, params);
             }
             return elems;
         }
@@ -53,7 +53,7 @@ pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
             const len = try std.leb.readUleb128(u16, reader);
             var list = try std.ArrayList(Child).initCapacity(allocator, @as(usize, len));
             for (0..len) |_| {
-                const item = try bincode.read(allocator, Child, reader, params);
+                const item = try bincode.deserializeAlloc(allocator, Child, reader, params);
                 try list.append(item);
             }
             return list;

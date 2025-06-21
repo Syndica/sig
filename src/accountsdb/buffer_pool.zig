@@ -1127,7 +1127,7 @@ pub const AccountDataHandle = union(enum) {
         reader: anytype,
         params: bincode.Params,
     ) anyerror!AccountDataHandle {
-        const data = try bincode.read(alloc, []u8, reader, params);
+        const data = try bincode.deserializeAlloc(alloc, []u8, reader, params);
         return AccountDataHandle.initAllocatedOwned(data);
     }
 
@@ -1473,7 +1473,7 @@ test "AccountDataHandle bincode" {
 
         try bincode.write(serialised_from_slice.writer(), read_data, .{});
 
-        const deserialised_from_slice = try bincode.readFromSlice(
+        const deserialised_from_slice = try bincode.deserializeSlice(
             allocator,
             AccountDataHandle,
             serialised_from_slice.items,
@@ -1494,7 +1494,7 @@ test "AccountDataHandle bincode" {
 
         try bincode.write(serialised_from_handle.writer(), read, .{});
 
-        const deserialised_from_handle = try bincode.readFromSlice(
+        const deserialised_from_handle = try bincode.deserializeSlice(
             allocator,
             AccountDataHandle,
             serialised_from_handle.items,

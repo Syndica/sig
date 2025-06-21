@@ -6,7 +6,7 @@ const arrayListInfo = sig.utils.types.arrayListInfo;
 
 const Params = bincode.Params;
 
-const readIntAsLength = bincode.readIntAsLength;
+const readIntAsLength = bincode.deserializeIntAsLength;
 
 /// The standard bincode serialization for an ArrayList
 pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
@@ -28,7 +28,7 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
             var data: List = try List.initCapacity(allocator, len);
             errdefer free(allocator, data);
 
-            for (0..len) |_| data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
+            for (0..len) |_| data.appendAssumeCapacity(try bincode.deserializeAlloc(allocator, list_info.Elem, reader, params));
             return data;
         }
 
@@ -54,7 +54,7 @@ pub fn defaultOnEofConfig(comptime List: type) bincode.FieldConfig(List) {
     const al_info = arrayListInfo(List) orelse @compileError("Expected std.ArrayList[Unmanaged]Aligned(T), got " ++ @typeName(List));
     const S = struct {
         fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!List {
-            const len = if (bincode.readIntAsLength(usize, reader, params)) |maybe_len|
+            const len = if (bincode.deserializeIntAsLength(usize, reader, params)) |maybe_len|
                 (maybe_len orelse return error.ArrayListTooBig)
             else |err| switch (err) {
                 error.EndOfStream,

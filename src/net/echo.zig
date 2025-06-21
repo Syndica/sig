@@ -62,7 +62,7 @@ pub fn requestIpEcho(
         .resize = .assert,
         .free = .assert,
     });
-    return try sig.bincode.read(assert_allocator, IpEchoResponse, fbs.reader(), .{});
+    return try sig.bincode.deserializeAlloc(assert_allocator, IpEchoResponse, fbs.reader(), .{});
 }
 
 const IpEchoRequest = struct {

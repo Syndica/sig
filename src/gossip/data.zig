@@ -1210,15 +1210,15 @@ pub const SnapshotHashes = struct {
         fn bincodeDeserializeFn(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !IncrementalSnapshotsList {
             const faililng_allocator = sig.utils.allocators.failing.allocator(.{});
 
-            const maybe_len = try bincode.readIntAsLength(usize, reader, params);
+            const maybe_len = try bincode.deserializeIntAsLength(usize, reader, params);
             const len = maybe_len orelse return error.IncrementalListTooBig;
             switch (len) {
                 0 => return EMPTY,
-                1 => return initSingle(try bincode.read(faililng_allocator, SlotAndHash, reader, params)),
+                1 => return initSingle(try bincode.deserializeAlloc(faililng_allocator, SlotAndHash, reader, params)),
                 else => {
                     const list = try allocator.alloc(SlotAndHash, len);
                     errdefer allocator.free(list);
-                    for (list) |*sah| sah.* = try bincode.read(faililng_allocator, SlotAndHash, reader, params);
+                    for (list) |*sah| sah.* = try bincode.deserializeAlloc(faililng_allocator, SlotAndHash, reader, params);
                     return initList(list);
                 },
             }
@@ -1808,7 +1808,7 @@ test "contact info bincode serialize matches rust bincode" {
 
     // Check that the deserialized contact info matches the original
     var stream = std.io.fixedBufferStream(buf.items);
-    var sig_contact_info_deserialised = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
+    var sig_contact_info_deserialised = try bincode.deserializeAlloc(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
     defer sig_contact_info_deserialised.deinit();
     try testing.expect(sig_contact_info_deserialised.addrs.items.len == 1);
     try testing.expect(sig_contact_info_deserialised.sockets.items.len == 12);
@@ -1831,7 +1831,7 @@ test "ContactInfo bincode roundtrip maintains data integrity" {
     };
 
     var stream = std.io.fixedBufferStream(&contact_info_bytes_from_mainnet);
-    const ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
+    const ci2 = try bincode.deserializeAlloc(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
     defer ci2.deinit();
 
     var buf = std.ArrayList(u8).init(testing.allocator);
@@ -1852,7 +1852,7 @@ test "SocketEntry serializer works" {
     try bincode.write(buf.writer(), se, bincode.Params.standard);
 
     var stream = std.io.fixedBufferStream(buf.items);
-    const other_se = try bincode.read(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
+    const other_se = try bincode.deserializeAlloc(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
 
     try testing.expect(other_se.index == se.index);
     try testing.expect(other_se.key == se.key);
@@ -1911,7 +1911,7 @@ test "pubkey matches rust" {
     var bytes = try bincode.writeToSlice(buf[0..], id, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes[0..bytes.len]);
 
-    const out = try bincode.readFromSlice(std.testing.allocator, Pubkey, buf[0..], bincode.Params.standard);
+    const out = try bincode.deserializeSlice(std.testing.allocator, Pubkey, buf[0..], bincode.Params.standard);
     try std.testing.expectEqual(id, out);
 }
 

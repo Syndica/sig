@@ -407,12 +407,12 @@ pub const Message = struct {
 
         const instructions = try allocator.alloc(Instruction, try leb.readULEB128(u16, reader));
         errdefer sig.bincode.free(allocator, instructions);
-        for (instructions) |*instr| instr.* = try sig.bincode.read(allocator, Instruction, reader, .{});
+        for (instructions) |*instr| instr.* = try sig.bincode.deserializeAlloc(allocator, Instruction, reader, .{});
 
         const address_lookups_len = if (version == .legacy) 0 else try leb.readULEB128(u16, reader);
         const address_lookups = try allocator.alloc(AddressLookup, address_lookups_len);
         errdefer sig.bincode.free(allocator, address_lookups);
-        for (address_lookups) |*alt| alt.* = try sig.bincode.read(allocator, AddressLookup, reader, .{});
+        for (address_lookups) |*alt| alt.* = try sig.bincode.deserializeAlloc(allocator, AddressLookup, reader, .{});
 
         return .{
             .signature_count = signature_count,

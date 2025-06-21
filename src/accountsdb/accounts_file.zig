@@ -71,7 +71,7 @@ pub const FileId = enum(Int) {
         reader: anytype,
         params: sig.bincode.Params,
     ) anyerror!FileId {
-        const int = try sig.bincode.readInt(u64, reader, params);
+        const int = try sig.bincode.deserializeInt(u64, reader, params);
         if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
         return FileId.fromInt(@intCast(int));
     }

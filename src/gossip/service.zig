@@ -471,7 +471,7 @@ pub const GossipService = struct {
 
         pub fn run(self: *VerifyMessageTask) !void {
             const packet = self.packet;
-            var message = bincode.readFromSlice(
+            var message = bincode.deserializeSlice(
                 self.gossip_data_allocator,
                 GossipMessage,
                 packet.data(),
@@ -2770,7 +2770,7 @@ test "handle pull request" {
         const outgoing_packets = gossip_service.packet_outgoing_channel;
 
         while (outgoing_packets.tryReceive()) |response_packet| {
-            const message = try bincode.readFromSlice(
+            const message = try bincode.deserializeSlice(
                 allocator,
                 GossipMessage,
                 response_packet.data(),
@@ -2849,7 +2849,7 @@ test "test build prune messages and handle push messages" {
 
     try gossip_service.handleBatchPushMessages(&msgs);
     var packet = gossip_service.packet_outgoing_channel.tryReceive() orelse return error.ChannelEmpty;
-    const message = try bincode.readFromSlice(
+    const message = try bincode.deserializeSlice(
         allocator,
         GossipMessage,
         packet.data(),
@@ -3281,7 +3281,7 @@ test "process contact info push packet" {
     // the ping message we sent, processed into a pong
     try std.testing.expectEqual(1, responder_channel.len());
     const out_packet = responder_channel.tryReceive().?;
-    const out_msg = try bincode.readFromSlice(std.testing.allocator, GossipMessage, out_packet.data(), .{});
+    const out_msg = try bincode.deserializeSlice(std.testing.allocator, GossipMessage, out_packet.data(), .{});
     defer bincode.free(std.testing.allocator, out_msg);
     try std.testing.expect(out_msg == .PongMessage);
 

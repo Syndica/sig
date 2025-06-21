@@ -131,7 +131,7 @@ test "ping message serializes and deserializes correctly" {
 
     const serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
+    var deserialized = try bincode.deserializeSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
 
     try testing.expect(original.PingMessage.from.equals(&deserialized.PingMessage.from));
     try testing.expect(original.PingMessage.signature.eql(&deserialized.PingMessage.signature));
@@ -191,7 +191,7 @@ test "pull request serializes and deserializes" {
     const serialized = try bincode.writeToSlice(buf[0..], pull, bincode.Params.standard);
     try testing.expectEqualSlices(u8, rust_bytes[0..], serialized);
 
-    const deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
+    const deserialized = try bincode.deserializeSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
     try std.testing.expectEqualDeep(pull, deserialized);
 }
 
@@ -267,7 +267,7 @@ test "Protocol.PullRequest.ContactInfo signature is valid" {
         6,   3,   0,   1,   0,
     };
 
-    var message = try bincode.readFromSlice(
+    var message = try bincode.deserializeSlice(
         std.testing.allocator,
         GossipMessage,
         &contact_info_pull_response_packet_from_mainnet,

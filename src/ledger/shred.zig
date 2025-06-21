@@ -462,8 +462,8 @@ fn GenericShred(shred_type: ShredType) type {
             var buf = std.io.fixedBufferStream(payload[0..constants.payload_size]);
             const self = Self{
                 .allocator = allocator,
-                .common = try bincode.read(allocator, CommonHeader, buf.reader(), .{}),
-                .custom = try bincode.read(allocator, CustomHeader, buf.reader(), .{}),
+                .common = try bincode.deserializeAlloc(allocator, CommonHeader, buf.reader(), .{}),
+                .custom = try bincode.deserializeAlloc(allocator, CustomHeader, buf.reader(), .{}),
                 .payload = payload,
             };
 

@@ -152,7 +152,7 @@ pub const ShredReceiver = struct {
         metrics: ShredReceiverMetrics,
         keypair: *const KeyPair,
     ) !?Packet {
-        const repair_ping = bincode.readFromSlice(
+        const repair_ping = bincode.deserializeSlice(
             allocator,
             RepairPing,
             packet.data(),

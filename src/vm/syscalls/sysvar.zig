@@ -219,7 +219,7 @@ test getSysvar {
             @sizeOf(sysvar.Clock),
         });
 
-        const obj_parsed = try bincode.readFromSlice(
+        const obj_parsed = try bincode.deserializeSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
             sysvar.Clock,
             &buffer,
@@ -271,7 +271,7 @@ test getSysvar {
             0,
             @sizeOf(sysvar.EpochSchedule),
         });
-        const obj_parsed = try bincode.readFromSlice(
+        const obj_parsed = try bincode.deserializeSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
             sysvar.EpochSchedule,
             &buffer,
@@ -344,7 +344,7 @@ test getSysvar {
             0,
             @sizeOf(sysvar.Rent),
         });
-        const obj_parsed = try bincode.readFromSlice(
+        const obj_parsed = try bincode.deserializeSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
             sysvar.Rent,
             &buffer,
@@ -399,7 +399,7 @@ test getSysvar {
             0,
             @sizeOf(sysvar.EpochRewards),
         });
-        const obj_parsed = try bincode.readFromSlice(
+        const obj_parsed = try bincode.deserializeSlice(
             std.testing.failing_allocator, // this shouldnt need to allocate
             sysvar.EpochRewards,
             &buffer,
@@ -447,7 +447,7 @@ test getSysvar {
             0,
             @sizeOf(sysvar.LastRestartSlot),
         });
-        const obj_parsed = try bincode.readFromSlice(
+        const obj_parsed = try bincode.deserializeSlice(
             std.testing.allocator, // this shouldnt need to allocate
             sysvar.LastRestartSlot,
             &buffer,
@@ -536,7 +536,7 @@ fn testGetStakeHistory(filled: bool) !void {
         sysvar.StakeHistory.SIZE_OF,
     });
 
-    const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
+    const obj_parsed = try bincode.deserializeSlice(allocator, sysvar.StakeHistory, &buffer, .{});
     defer allocator.free(obj_parsed.entries);
 
     try std.testing.expectEqualSlices(
@@ -612,7 +612,7 @@ fn testGetSlotHashes(filled: bool) !void {
         sysvar.SlotHashes.SIZE_OF,
     });
 
-    const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
+    const obj_parsed = try bincode.deserializeSlice(allocator, sysvar.SlotHashes, &buffer, .{});
     defer allocator.free(obj_parsed.entries);
 
     try std.testing.expectEqualSlices(

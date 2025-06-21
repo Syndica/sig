@@ -56,7 +56,7 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
             reader: anytype,
             params: bincode.Params,
         ) !DynamicArrayBitSet(T) {
-            var bitvec = try bincode.read(allocator, BitVec(T), reader, params);
+            var bitvec = try bincode.deserializeAlloc(allocator, BitVec(T), reader, params);
             defer bincode.free(allocator, bitvec);
 
             const dynamic_bitset = try bitvec.toBitSet(allocator);
@@ -91,7 +91,7 @@ test "bloom.bit_vec: serializes/deserializes matches Rust's BitVec u64" {
     const original = BitVec(u64).initFromBitSet(&bitset);
     var out = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
 
-    var deserialied = try bincode.readFromSlice(testing.allocator, BitVec(u64), out, bincode.Params.standard);
+    var deserialied = try bincode.deserializeSlice(testing.allocator, BitVec(u64), out, bincode.Params.standard);
     defer bincode.free(testing.allocator, deserialied);
 
     try testing.expect(std.mem.eql(u64, original.bits.?[0..], deserialied.bits.?[0..]));
@@ -111,7 +111,7 @@ test "bloom.bit_vec: serializes/deserializes matches Rust's BitVec u8" {
     const original = BitVec(u8).initFromBitSet(&bitset);
     var out = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
 
-    var deserialied = try bincode.readFromSlice(testing.allocator, BitVec(u8), out, bincode.Params.standard);
+    var deserialied = try bincode.deserializeSlice(testing.allocator, BitVec(u8), out, bincode.Params.standard);
     defer bincode.free(testing.allocator, deserialied);
 
     try testing.expect(std.mem.eql(u8, original.bits.?[0..], deserialied.bits.?[0..]));

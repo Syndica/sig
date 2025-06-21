@@ -139,7 +139,7 @@ test "serializes/deserializes correctly" {
     var buf: [10000]u8 = undefined;
     const out = try bincode.writeToSlice(buf[0..], bloom, .{});
 
-    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
+    var deserialized: Bloom = try bincode.deserializeSlice(testing.allocator, Bloom, out, .{});
     defer bincode.free(testing.allocator, deserialized);
 
     // allocate some memory to make sure were cleaning up too
@@ -156,7 +156,7 @@ test "serializes/deserializes correctly with set bits" {
     var buf: [10000]u8 = undefined;
     const out = try bincode.writeToSlice(buf[0..], bloom, .{});
 
-    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
+    var deserialized: Bloom = try bincode.deserializeSlice(testing.allocator, Bloom, out, .{});
     defer deserialized.deinit();
 
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);

@@ -244,15 +244,15 @@ pub const ExtraFields = struct {
                 const field_ptr = &@field(extra_fields, field.name);
                 field_ptr.* = switch (@field(FieldTag, field.name)) {
                     .lamports_per_signature,
-                    => bincode.readInt(u64, reader, params),
+                    => bincode.deserializeInt(u64, reader, params),
 
                     .snapshot_persistence,
                     .epoch_accounts_hash,
                     .accounts_lt_hash,
-                    => bincode.read(assert_allocator, field.type, reader, params),
+                    => bincode.deserializeAlloc(assert_allocator, field.type, reader, params),
 
                     .versioned_epoch_stakes,
-                    => bincode.read(allocator, field.type, reader, params),
+                    => bincode.deserializeAlloc(allocator, field.type, reader, params),
                 } catch |err| switch (err) {
                     error.EndOfStream => break :until_eof,
                     else => |e| return e,
@@ -450,28 +450,28 @@ pub const AccountsDbFields = struct {
                 _reader: anytype,
                 _params: bincode.Params,
             ) !AccountFileInfo {
-                if (try bincode.readIntAsLength(usize, _reader, _params) != 1) {
+                if (try bincode.deserializeIntAsLength(usize, _reader, _params) != 1) {
                     return error.TooManyAccountFileInfos;
                 }
-                return bincode.read(assert_allocator, AccountFileInfo, _reader, _params);
+                return bincode.deserializeAlloc(assert_allocator, AccountFileInfo, _reader, _params);
             }
             pub const freeValue = {};
         });
         errdefer file_map.deinit(allocator);
 
-        const stored_meta_write_version = try bincode.readInt(u64, reader, params);
-        const slot = try bincode.readInt(Slot, reader, params);
-        const bank_hash_info = try bincode.read(assert_allocator, BankHashInfo, reader, params);
+        const stored_meta_write_version = try bincode.deserializeInt(u64, reader, params);
+        const slot = try bincode.deserializeInt(Slot, reader, params);
+        const bank_hash_info = try bincode.deserializeAlloc(assert_allocator, BankHashInfo, reader, params);
 
         const rooted_slots: []const Slot =
-            bincode.read(allocator, []const Slot, reader, params) catch |err| switch (err) {
+            bincode.deserializeAlloc(allocator, []const Slot, reader, params) catch |err| switch (err) {
                 error.EndOfStream => &.{},
                 else => |e| return e,
             };
         errdefer allocator.free(rooted_slots);
 
         const rooted_slot_hashes: []const SlotAndHash =
-            bincode.read(allocator, []const SlotAndHash, reader, params) catch |err| switch (err) {
+            bincode.deserializeAlloc(allocator, []const SlotAndHash, reader, params) catch |err| switch (err) {
                 error.EndOfStream => &.{},
                 else => |e| return e,
             };
@@ -581,7 +581,7 @@ pub const Manifest = struct {
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
     ) !Manifest {
-        return try bincode.read(allocator, Manifest, reader, .{});
+        return try bincode.deserializeAlloc(allocator, Manifest, reader, .{});
     }
 };
 
@@ -754,7 +754,7 @@ pub const StatusCache = struct {
         /// `std.io.GenericReader(...)` | `std.io.AnyReader`
         reader: anytype,
     ) !StatusCache {
-        return try bincode.read(allocator, StatusCache, reader, .{});
+        return try bincode.deserializeAlloc(allocator, StatusCache, reader, .{});
     }
 
     pub fn deinit(self: StatusCache, allocator: std.mem.Allocator) void {

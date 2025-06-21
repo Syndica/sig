@@ -1112,7 +1112,7 @@ const vote_parser = struct {
         allocator: std.mem.Allocator,
         vote_instruction_data: []const u8,
     ) std.mem.Allocator.Error!?struct { VoteTransaction, ?Hash } {
-        const vote_inst = sig.bincode.readFromSlice(
+        const vote_inst = sig.bincode.deserializeSlice(
             allocator,
             vote_program.Instruction,
             vote_instruction_data,

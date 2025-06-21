@@ -60,7 +60,7 @@ pub const Versions = union(enum) {
         var buf: [SERIALIZED_SIZE]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);
 
-        return sig.bincode.readFromSlice(
+        return sig.bincode.deserializeSlice(
             fba.allocator(),
             Versions,
             account_data,

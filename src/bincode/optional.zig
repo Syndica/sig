@@ -19,7 +19,7 @@ pub fn defaultToNullOnEof(
             params: bincode.Params,
         ) anyerror!?T {
             const EncodedType = if (options.encode_optional) ?T else T;
-            return bincode.read(allocator, EncodedType, reader, params) catch |err| switch (err) {
+            return bincode.deserializeAlloc(allocator, EncodedType, reader, params) catch |err| switch (err) {
                 error.EndOfStream => null,
                 else => |e| e,
             };

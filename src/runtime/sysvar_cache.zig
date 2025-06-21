@@ -116,7 +116,7 @@ pub const SysvarCache = struct {
             else => @compileError("Invalid Sysvar"),
         };
         if (maybe_bytes) |bytes| {
-            return bincode.readFromSlice(
+            return bincode.deserializeSlice(
                 allocator,
                 T,
                 bytes,

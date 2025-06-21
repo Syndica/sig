@@ -187,7 +187,7 @@ pub const BorrowedAccount = struct {
         allocator: std.mem.Allocator,
         comptime T: type,
     ) InstructionError!T {
-        return bincode.readFromSlice(allocator, T, self.account.data, .{}) catch
+        return bincode.deserializeSlice(allocator, T, self.account.data, .{}) catch
             return InstructionError.InvalidAccountData;
     }
 

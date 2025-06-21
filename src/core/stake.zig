@@ -768,7 +768,7 @@ pub const VoteAccount = struct {
         });
 
         var data_iter = self.account.data.iterator();
-        const vote_state = bincode.read(
+        const vote_state = bincode.deserializeAlloc(
             assert_alloc,
             VoteState,
             data_iter.reader(),
@@ -821,7 +821,7 @@ test "deserialize VoteState.node_pubkey" {
         2,  0,   0,   0, 60,  155, 13,  144, 187, 252, 153, 72,  190, 35,  87,  94,  7,  178,
         90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
     } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
-    const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
+    const vote_state = try bincode.deserializeSlice(undefined, VoteState, &bytes, .{});
     const expected_pubkey =
         try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));

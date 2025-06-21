@@ -448,7 +448,7 @@ fn stateFromAccount(
     const buf = try allocator.alloc(u8, vote_account.data.len());
     // TODO Not sure if this is the way to get the data from the vote account. Review.
     _ = vote_account.writeToBuf(vote_account_pubkey, buf);
-    const versioned_state = try sig.bincode.readFromSlice(
+    const versioned_state = try sig.bincode.deserializeSlice(
         allocator,
         VoteStateVersions,
         buf,

@@ -1187,7 +1187,7 @@ pub const BlockstoreReader = struct {
                 return e;
             };
             defer bytes.deinit();
-            const these_entries = bincode.readFromSlice(
+            const these_entries = bincode.deserializeSlice(
                 allocator,
                 []Entry,
                 bytes.items,

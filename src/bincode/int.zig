@@ -10,7 +10,7 @@ pub fn defaultOnEof(comptime T: type, comptime eof_value: T) bincode.FieldConfig
             params: bincode.Params,
         ) anyerror!T {
             var fba = comptime std.heap.FixedBufferAllocator.init(&.{});
-            return bincode.read(fba.allocator(), T, reader, params) catch |err|
+            return bincode.deserializeAlloc(fba.allocator(), T, reader, params) catch |err|
                 if (err == error.EndOfStream) eof_value else err;
         }
 
@@ -38,7 +38,7 @@ pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
         }
 
         pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, _: bincode.Params) ![]u8 {
-            const len = try bincode.read(allocator, u64, reader, .{});
+            const len = try bincode.deserializeAlloc(allocator, u64, reader, .{});
 
             const data = try allocator.alloc(u8, len);
             errdefer allocator.free(data);
@@ -110,7 +110,7 @@ pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
 
         pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![size]u8 {
             if (params.include_fixed_array_length) {
-                _ = try bincode.read(allocator, u64, reader, .{});
+                _ = try bincode.deserializeAlloc(allocator, u64, reader, .{});
             }
             const data = try reader.readBytesNoEof(size);
             return data;
@@ -133,7 +133,7 @@ pub fn U8ArraySentinelConfig(comptime size: u64) bincode.FieldConfig([size:0]u8)
     const S = struct {
         pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![size:0]u8 {
             if (params.include_fixed_array_length) {
-                _ = try bincode.read(allocator, u64, reader, .{});
+                _ = try bincode.deserializeAlloc(allocator, u64, reader, .{});
             }
             var buf: [size:0]u8 = undefined;
             @memcpy(&buf, &try reader.readBytesNoEof(size));

@@ -406,7 +406,7 @@ pub const GeyserReader = struct {
         self.metrics.total_bytes.add(expected_n_bytes);
 
         while (true) {
-            const data = bincode.readFromSlice(
+            const data = bincode.deserializeSlice(
                 self.bincode_allocator.allocator(),
                 T,
                 self.io_buf[0..expected_n_bytes],

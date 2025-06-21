@@ -751,7 +751,7 @@ fn executeRoundTrip(
     const serialized = try sig.bincode.writeAlloc(allocator, instruction, .{});
     defer allocator.free(serialized);
 
-    const deserialized = try sig.bincode.readFromSlice(
+    const deserialized = try sig.bincode.deserializeSlice(
         allocator,
         Instruction,
         serialized,
@@ -973,7 +973,7 @@ test "CompactVoteStateUpdate.serialize" {
         0,   0,   0,   0,
     };
 
-    const instruction = try sig.bincode.readFromSlice(
+    const instruction = try sig.bincode.deserializeSlice(
         allocator,
         Instruction,
         agave_bytes,
@@ -1004,7 +1004,7 @@ test "CompactVoteStateUpdateSwitch.serialize" {
         233, 13,  128,
     };
 
-    const instruction = try sig.bincode.readFromSlice(
+    const instruction = try sig.bincode.deserializeSlice(
         allocator,
         Instruction,
         agave_bytes,
@@ -1034,7 +1034,7 @@ test "TowerSync.serialize" {
         16,  150, 218, 58,  71,  143,
     };
 
-    const instruction = try sig.bincode.readFromSlice(
+    const instruction = try sig.bincode.deserializeSlice(
         allocator,
         Instruction,
         agave_bytes,
@@ -1068,7 +1068,7 @@ test "TowerSyncSwitch.serialize" {
         238, 103, 192, 0,   0,   0,
     };
 
-    const instruction = try sig.bincode.readFromSlice(
+    const instruction = try sig.bincode.deserializeSlice(
         allocator,
         Instruction,
         agave_bytes,

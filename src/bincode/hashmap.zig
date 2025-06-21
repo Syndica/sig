@@ -46,7 +46,7 @@ pub fn readCtx(
             if (@TypeOf(ctx_maybe_namespace.readKey) != void) {
                 return try ctx_maybe_namespace.readKey(_allocator, _reader, _params);
             } else {
-                return bincode.read(_allocator, hm_info.Key, _reader, _params);
+                return bincode.deserializeAlloc(_allocator, hm_info.Key, _reader, _params);
             }
         }
 
@@ -66,7 +66,7 @@ pub fn readCtx(
             if (@TypeOf(ctx_maybe_namespace.readValue) != void) {
                 return try ctx_maybe_namespace.readValue(_allocator, _reader, _params);
             } else {
-                return bincode.read(_allocator, hm_info.Value, _reader, _params);
+                return bincode.deserializeAlloc(_allocator, hm_info.Value, _reader, _params);
             }
         }
 
@@ -79,7 +79,7 @@ pub fn readCtx(
         }
     };
 
-    const file_map_len = try bincode.readIntAsLength(
+    const file_map_len = try bincode.deserializeIntAsLength(
         hm_info.Size(),
         reader,
         params,
@@ -162,7 +162,8 @@ pub fn hashMapFieldConfig(
                     _reader: anytype,
                     _params: Params,
                 ) !hm_info.Key {
-                    return bincode.readWithConfig(
+                    return bincode.deserializeCustom(
+                        true,
                         _allocator,
                         hm_info.Key,
                         _reader,
@@ -178,7 +179,8 @@ pub fn hashMapFieldConfig(
                     _reader: anytype,
                     _params: bincode.Params,
                 ) !hm_info.Value {
-                    return bincode.readWithConfig(
+                    return bincode.deserializeCustom(
+                        true,
                         _allocator,
                         hm_info.Value,
                         _reader,

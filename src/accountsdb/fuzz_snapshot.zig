@@ -54,7 +54,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
         try bincode.write(bytes_buffer.writer(), manifest_original, .{});
         const original_bytes_end = bytes_buffer.items.len;
 
-        const snapshot_deserialized = try bincode.readFromSlice(
+        const snapshot_deserialized = try bincode.deserializeSlice(
             allocator,
             SnapshotManifest,
             bytes_buffer.items[original_bytes_start..original_bytes_end],

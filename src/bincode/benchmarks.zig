@@ -21,7 +21,7 @@ pub const BenchmarkEntry = struct {
         const allocator = std.heap.c_allocator;
 
         var timer = try sig.time.Timer.start();
-        const actual_struct = try sig.bincode.readFromSlice(
+        const actual_struct = try sig.bincode.deserializeSlice(
             allocator,
             Entry,
             &test_entry.as_bytes,

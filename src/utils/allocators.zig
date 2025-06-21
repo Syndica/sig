@@ -1094,7 +1094,7 @@ test "recycle buffer: save and load" {
     _ = try sig.bincode.writeToSlice(records_memory, allocator.records.items, .{});
 
     // read from slice to records
-    var records = try sig.bincode.readFromSlice(
+    var records = try sig.bincode.deserializeSlice(
         backing_allocator,
         @TypeOf(allocator.records),
         records_memory,

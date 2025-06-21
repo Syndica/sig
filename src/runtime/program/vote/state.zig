@@ -1917,7 +1917,7 @@ test "AuthorizeVoters.serialize" {
         0, 0, 0, 0, 0, 0, 0, 0,
     };
 
-    const authorized_voters = try sig.bincode.readFromSlice(
+    const authorized_voters = try sig.bincode.deserializeSlice(
         allocator,
         AuthorizedVoters,
         agave_bytes,
