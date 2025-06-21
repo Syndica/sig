@@ -411,17 +411,19 @@ const ssh = struct {
             },
         };
 
-        const targets = try std.json.parseFromSlice(
+        const targets = try std.zon.parse.fromSlice(
             Targets,
             b.allocator,
-            run_result.stdout,
+            try b.allocator.dupeZ(u8, run_result.stdout),
+            null,
             .{ .ignore_unknown_fields = true },
         );
-        defer targets.deinit();
+        defer b.allocator.free(targets.native.triple);
+        defer b.allocator.free(targets.native.cpu.name);
 
         const query = try Build.parseTargetQuery(.{
-            .arch_os_abi = targets.value.native.triple,
-            .cpu_features = targets.value.native.cpu.name,
+            .arch_os_abi = targets.native.triple,
+            .cpu_features = targets.native.cpu.name,
         });
 
         return b.resolveTargetQuery(query);
