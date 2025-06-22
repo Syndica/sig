@@ -445,7 +445,7 @@ const ssh = struct {
         remote_dir: []const u8,
     ) *Build.Step.Run {
         const local_path = b.getInstallPath(install.dest_dir.?, install.dest_sub_path);
-        const remote_path = b.pathJoin(&.{ remote_dir, local_path });
+        const remote_path = b.pathJoin(&.{ remote_dir, install.dest_sub_path });
         const exe = sendFileExe(b);
         const run = b.addRunArtifact(exe);
         run.addArgs(&.{ local_path, host, remote_path });
