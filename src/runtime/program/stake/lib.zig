@@ -301,9 +301,19 @@ pub fn execute(
                 custodian_pubkey,
             );
         },
-        .set_lockup_checked => |args| {
-            _ = args;
-            @panic("TODO");
+        .set_lockup_checked => |lockup_checked| {
+            var me = try getStakeAccount(ic);
+            defer me.release();
+            const custodian_pubkey = try getOptionalPubkey(ic, 2, true);
+
+            const lockup: instruction.LockupArgs = .{
+                .unix_timestamp = lockup_checked.unix_timestamp,
+                .epoch = lockup_checked.epoch,
+                .custodian = if (custodian_pubkey) |key| key.* else null,
+            };
+
+            const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+            try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
         },
         .get_minimum_delegation => @panic("TODO"),
         .deactivate_delinquent => @panic("TODO"),
