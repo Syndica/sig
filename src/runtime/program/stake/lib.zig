@@ -213,7 +213,31 @@ pub fn execute(
 
             try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
         },
-        .initialize_checked => @panic("TODO"),
+        .initialize_checked => {
+            var me = try getStakeAccount(ic);
+            defer me.release();
+
+            try ic.ixn_info.checkNumberOfAccounts(4);
+
+            const staker = ic.ixn_info.getAccountMetaAtIndex(2) orelse
+                return error.NotEnoughAccountKeys;
+            const withdrawer = ic.ixn_info.getAccountMetaAtIndex(3) orelse
+                return error.NotEnoughAccountKeys;
+
+            if (!(ic.ixn_info.getAccountMetaAtIndex(3) orelse
+                return error.MissingAccount).is_signer)
+            {
+                return error.MissingRequiredSignature;
+            }
+
+            const authorized = Authorized{
+                .staker = staker.pubkey,
+                .withdrawer = withdrawer.pubkey,
+            };
+
+            const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, 1);
+            try initialize(allocator, &me, &authorized, &Lockup.DEFAULT, &rent);
+        },
         .authorize_checked => @panic("TODO"),
         .authorize_checked_with_seed => {},
         .set_lockup_checked => |args| {
