@@ -238,8 +238,69 @@ pub fn execute(
             const rent = try ic.getSysvarWithAccountCheck(sysvar.Rent, 1);
             try initialize(allocator, &me, &authorized, &Lockup.DEFAULT, &rent);
         },
-        .authorize_checked => @panic("TODO"),
-        .authorize_checked_with_seed => {},
+        .authorize_checked => |stake_authorize| {
+            var me = try getStakeAccount(ic);
+            defer me.release();
+
+            const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 1);
+            try ic.ixn_info.checkNumberOfAccounts(4);
+
+            const authorized = ic.ixn_info.getAccountMetaAtIndex(3) orelse
+                return error.NotEnoughAccountKeys;
+
+            if (!(ic.ixn_info.getAccountMetaAtIndex(3) orelse
+                return error.MissingAccount).is_signer)
+            {
+                return error.MissingRequiredSignature;
+            }
+
+            const custodian_pubkey = try getOptionalPubkey(ic, 4, false);
+
+            try authorize(
+                allocator,
+                ic,
+                &me,
+                ic.ixn_info.getSigners().slice(),
+                &authorized.pubkey,
+                stake_authorize,
+                &clock,
+                custodian_pubkey,
+            );
+        },
+        .authorize_checked_with_seed => |args| {
+            var me = try getStakeAccount(ic);
+            defer me.release();
+
+            try ic.ixn_info.checkNumberOfAccounts(2);
+
+            const clock = try ic.getSysvarWithAccountCheck(sysvar.Clock, 2);
+
+            try ic.ixn_info.checkNumberOfAccounts(4);
+
+            const authorized = ic.ixn_info.getAccountMetaAtIndex(3) orelse
+                return error.NotEnoughAccountKeys;
+
+            if (!(ic.ixn_info.getAccountMetaAtIndex(3) orelse
+                return error.MissingAccount).is_signer)
+            {
+                return error.MissingRequiredSignature;
+            }
+
+            const custodian_pubkey = try getOptionalPubkey(ic, 4, false);
+
+            try authorizeWithSeed(
+                allocator,
+                ic,
+                &me,
+                1,
+                args.authority_seed,
+                &args.authority_owner,
+                &authorized.pubkey,
+                args.stake_authorize,
+                &clock,
+                custodian_pubkey,
+            );
+        },
         .set_lockup_checked => |args| {
             _ = args;
             @panic("TODO");
