@@ -238,6 +238,8 @@ fn SortedMapStub(comptime K: type, comptime V: type) type {
 
         const SortedMap = std.AutoArrayHashMapUnmanaged(K, V);
 
+        pub const empty: SortedMapStub(K, V) = .{ .sorted_map = .empty };
+
         /// Use before accessing `sorted_map` in a way where it's expected to be sorted.
         pub fn sort(self: *PurgeRepairSlotCounter) void {
             const sort_ctx: SortCtx = .{ .sorted_map = &self.sorted_map };
