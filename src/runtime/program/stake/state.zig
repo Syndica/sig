@@ -277,7 +277,9 @@ pub const StakeStateV2 = union(enum) {
                     @floatFromInt(prev_cluster_stake.effective),
                 ) * warmup_cooldown_rate;
 
-                const newly_not_effective_stake: u64 = @intFromFloat(@max(1, weight * newly_not_effective_cluster_take));
+                const newly_not_effective_stake: u64 = @intFromFloat(
+                    @max(1, weight * newly_not_effective_cluster_take),
+                );
 
                 current_effective_stake = current_effective_stake -| newly_not_effective_stake;
                 if (current_effective_stake == 0) break;
@@ -331,7 +333,9 @@ pub const StakeStateV2 = union(enum) {
                     @floatFromInt(prev_cluster_stake.effective),
                 ) * warmup_cooldown_rate;
 
-                const newly_effective_stake: u64 = @intFromFloat(@max(1, weight * newly_effective_cluster_take));
+                const newly_effective_stake: u64 = @intFromFloat(
+                    @max(1, weight * newly_effective_cluster_take),
+                );
 
                 current_effective_stake += newly_effective_stake;
                 if (current_effective_stake >= delegated_stake) {
