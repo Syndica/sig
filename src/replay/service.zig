@@ -236,7 +236,6 @@ const DuplicateSlotsTracker = SortedMapStub(sig.core.Slot, void);
 const EpochSlotsFrozenSlots = SortedMapStub(sig.core.Slot, sig.core.Hash);
 const DuplicateConfirmedSlots = SortedMapStub(sig.core.Slot, sig.core.Hash);
 
-const NotDuplicateConfirmedFrozenHash = ?sig.core.Hash;
 const PurgeRepairSlotCounter = SortedMapStub(sig.core.Slot, usize);
 
 fn SortedMapStub(comptime K: type, comptime V: type) type {
@@ -917,12 +916,12 @@ const check_slot_agrees_with_cluster = struct {
         const is_slot_duplicate = bank_frozen_state.is_slot_duplicate;
 
         // Handle cases where the bank is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: NotDuplicateConfirmedFrozenHash = null;
+        var not_dupe_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
 
         state_change.bankFrozen(
             slot,
             fork_choice,
-            &not_duplicate_confirmed_frozen_hash,
+            &not_dupe_confirmed_frozen_hash,
             frozen_hash,
         );
 
@@ -942,7 +941,7 @@ const check_slot_agrees_with_cluster = struct {
                             duplicate_slots_to_repair,
                             blockstore,
                             purge_repair_slot_counter,
-                            &not_duplicate_confirmed_frozen_hash,
+                            &not_dupe_confirmed_frozen_hash,
                             frozen_hash,
                         );
                     } else {
@@ -995,9 +994,7 @@ const check_slot_agrees_with_cluster = struct {
             try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
         }
 
-        if (not_duplicate_confirmed_frozen_hash) |ndcf_hash| {
-            try blockstore.insertBankHash(slot, ndcf_hash, false);
-        }
+        try not_dupe_confirmed_frozen_hash.finalize(slot, blockstore);
     }
 
     fn duplicateConfirmed(
@@ -1054,7 +1051,7 @@ const check_slot_agrees_with_cluster = struct {
         // );
 
         // Handle cases where the bank is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: NotDuplicateConfirmedFrozenHash = null;
+        var not_dupe_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
 
         switch (bank_status) {
             // No action to be taken yet
@@ -1091,7 +1088,7 @@ const check_slot_agrees_with_cluster = struct {
                         duplicate_slots_to_repair,
                         blockstore,
                         purge_repair_slot_counter,
-                        &not_duplicate_confirmed_frozen_hash,
+                        &not_dupe_confirmed_frozen_hash,
                         frozen_hash,
                     );
                 } else {
@@ -1114,9 +1111,7 @@ const check_slot_agrees_with_cluster = struct {
             },
         }
 
-        if (not_duplicate_confirmed_frozen_hash) |ndcf_hash| {
-            try blockstore.insertBankHash(slot, ndcf_hash, false);
-        }
+        try not_dupe_confirmed_frozen_hash.finalize(slot, blockstore);
     }
 
     fn dead(
@@ -1406,17 +1401,43 @@ const check_slot_agrees_with_cluster = struct {
 };
 
 const state_change = struct {
+    const NotDupeConfirmedFrozenHash = struct {
+        frozen_hash: ?sig.core.Hash,
+        finalized: bool,
+
+        const init: NotDupeConfirmedFrozenHash = .{ .frozen_hash = null, .finalized = false };
+
+        fn update(
+            self: *NotDupeConfirmedFrozenHash,
+            frozen_hash: ?sig.core.Hash,
+        ) void {
+            self.frozen_hash = frozen_hash;
+        }
+
+        fn finalize(
+            self: *NotDupeConfirmedFrozenHash,
+            slot: sig.core.Slot,
+            blockstore: *sig.ledger.LedgerResultWriter,
+        ) !void {
+            std.debug.assert(!self.finalized);
+            self.finalized = true;
+            if (self.frozen_hash) |frozen_hash| {
+                try blockstore.insertBankHash(slot, frozen_hash, false);
+            }
+        }
+    };
+
     fn bankFrozen(
         slot: u64,
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
-        not_duplicate_confirmed_frozen_hash: *NotDuplicateConfirmedFrozenHash,
+        not_dupe_confirmed_frozen_hash: *NotDupeConfirmedFrozenHash,
         bank_frozen_hash: sig.core.Hash,
     ) void {
         const is_duplicate_confirmed = fork_choice
             .isDuplicateConfirmed(&.{ .slot = slot, .hash = bank_frozen_hash }) orelse
             std.debug.panic("frozen bank must exist in fork choice", .{});
         if (!is_duplicate_confirmed) {
-            not_duplicate_confirmed_frozen_hash.* = bank_frozen_hash;
+            not_dupe_confirmed_frozen_hash.update(bank_frozen_hash);
         }
     }
 
@@ -1443,10 +1464,10 @@ const state_change = struct {
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         blockstore: *sig.ledger.LedgerResultWriter,
         purge_repair_slot_counter: *PurgeRepairSlotCounter,
-        not_duplicate_confirmed_frozen_hash: *NotDuplicateConfirmedFrozenHash,
+        not_dupe_confirmed_frozen_hash: *NotDupeConfirmedFrozenHash,
         bank_frozen_hash: sig.core.Hash,
     ) !void {
-        not_duplicate_confirmed_frozen_hash.* = null;
+        not_dupe_confirmed_frozen_hash.update(null);
         // When we detect that our frozen slot matches the cluster version (note this
         // will catch both bank frozen first -> confirmation, or confirmation first ->
         // bank frozen), mark all the newly duplicate confirmed slots in blockstore
