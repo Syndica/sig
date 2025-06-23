@@ -343,8 +343,12 @@ pub fn execute(
             return error.InvalidInstructionData;
         },
         .move_stake => |lamports| {
-            _ = lamports;
-            @panic("TODO");
+            if (!ic.tc.feature_set.active.contains(
+                runtime.features.MOVE_STAKE_AND_MOVE_LAMPORTS_IXS,
+            )) return error.InvalidInstructionData;
+
+            try ic.ixn_info.checkNumberOfAccounts(3);
+            try moveStake(allocator, ic, 0, lamports, 1, 2);
         },
         .move_lamports => |lamports| {
             _ = lamports;
@@ -912,6 +916,40 @@ fn mul(a: anytype, b: anytype) ?@TypeOf(a, b) {
     return product;
 }
 
+fn stakeWeightedCreditsObserved(
+    stake: *const StakeStateV2.Stake,
+    absorbed_lamports: u64,
+    absorbed_credits_observed: u64,
+) ?u64 {
+    if (stake.credits_observed == absorbed_credits_observed) return stake.credits_observed;
+
+    const total_stake = add(@as(u128, stake.delegation.stake), absorbed_lamports) orelse
+        return null;
+
+    const stake_weighted_credits = add(
+        @as(u128, stake.credits_observed),
+        stake.delegation.stake,
+    ) orelse return null;
+
+    const absorbed_weighted_credits = mul(
+        @as(u128, absorbed_credits_observed),
+        absorbed_lamports,
+    ) orelse return null;
+
+    // porting this checked_{add,sub,mul,div} heavy code is annoying.
+    var total_weighted_credits = stake_weighted_credits;
+    total_weighted_credits = add(total_weighted_credits, absorbed_weighted_credits) orelse
+        return null;
+    total_weighted_credits = add(total_weighted_credits, total_stake) orelse
+        return null;
+    total_weighted_credits = sub(total_weighted_credits, 1) orelse
+        return null;
+
+    if (total_stake == 0) return null;
+
+    return std.math.cast(u64, total_weighted_credits / total_stake) orelse return null;
+}
+
 const MergeKind = union(enum) {
     inactive: struct { StakeStateV2.Meta, u64, StakeStateV2.StakeFlags },
     activation_epoch: struct { StakeStateV2.Meta, StakeStateV2.Stake, StakeStateV2.StakeFlags },
@@ -1008,40 +1046,6 @@ const MergeKind = union(enum) {
             ic.tc.custom_error = @intFromEnum(StakeError.merge_mismatch);
             return error.Custom;
         }
-    }
-
-    fn stakeWeightedCreditsObserved(
-        stake: *const StakeStateV2.Stake,
-        absorbed_lamports: u64,
-        absorbed_credits_observed: u64,
-    ) ?u64 {
-        if (stake.credits_observed == absorbed_credits_observed) return stake.credits_observed;
-
-        const total_stake = add(@as(u128, stake.delegation.stake), absorbed_lamports) orelse
-            return null;
-
-        const stake_weighted_credits = add(
-            @as(u128, stake.credits_observed),
-            stake.delegation.stake,
-        ) orelse return null;
-
-        const absorbed_weighted_credits = mul(
-            @as(u128, absorbed_credits_observed),
-            absorbed_lamports,
-        ) orelse return null;
-
-        // porting this checked_{add,sub,mul,div} heavy code is annoying.
-        var total_weighted_credits = stake_weighted_credits;
-        total_weighted_credits = add(total_weighted_credits, absorbed_weighted_credits) orelse
-            return null;
-        total_weighted_credits = add(total_weighted_credits, total_stake) orelse
-            return null;
-        total_weighted_credits = sub(total_weighted_credits, 1) orelse
-            return null;
-
-        if (total_stake == 0) return null;
-
-        return std.math.cast(u64, total_weighted_credits / total_stake) orelse return null;
     }
 
     fn mergeDelegationStakeAndCreditsObserved(
@@ -1450,4 +1454,203 @@ fn eligibleForAccountDelinquent(
         return false;
 
     return last.epoch <= minimum_epoch;
+}
+
+fn moveStake(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    source_account_index: u16,
+    lamports: u64,
+    destination_account_index: u16,
+    stake_authority_index: u16,
+) (error{OutOfMemory} || InstructionError)!void {
+    var source_account = try ic.borrowInstructionAccount(source_account_index);
+    defer source_account.release();
+
+    var destination_account = try ic.borrowInstructionAccount(destination_account_index);
+    defer destination_account.release();
+
+    const source_merge_kind, const destination_merge_kind = try moveStakeOrLamportsSharedChecks(
+        allocator,
+        ic,
+        &source_account,
+        lamports,
+        &destination_account,
+        stake_authority_index,
+    );
+
+    if (source_account.account.data.len != StakeStateV2.SIZE or
+        destination_account.account.data.len != StakeStateV2.SIZE)
+        return error.InvalidAccountData;
+
+    if (source_merge_kind != .fully_active) return error.InvalidAccountData;
+    var source_stake = source_merge_kind.fully_active.@"1";
+    const source_meta = source_merge_kind.fully_active.@"0";
+
+    const min_delegation = getMinimumDelegation(ic.tc.feature_set);
+    const source_effective_stake = source_stake.delegation.stake;
+
+    const source_final_stake = sub(source_effective_stake, lamports) orelse
+        return error.InvalidArgument;
+
+    if (source_final_stake != 0 and source_final_stake < min_delegation)
+        return error.InvalidArgument;
+
+    const destination_meta = switch (destination_merge_kind) {
+        .fully_active => |args| blk: {
+            const destination_meta = args.@"0";
+            var destination_stake = args.@"1";
+
+            if (!source_stake.delegation.voter_pubkey.equals(
+                &destination_stake.delegation.voter_pubkey,
+            )) {
+                ic.tc.custom_error = @intFromEnum(StakeError.vote_address_mismatch);
+                return error.Custom;
+            }
+
+            const destination_effective_stake = destination_stake.delegation.stake;
+            const destination_final_stake = add(destination_effective_stake, lamports) orelse
+                return error.ProgramArithmeticOverflow;
+
+            if (destination_final_stake < min_delegation) return error.InvalidArgument;
+
+            try mergeDelegationStakeAndCreditsObserbed(
+                &destination_stake,
+                lamports,
+                source_stake.credits_observed,
+            );
+
+            try destination_account.serializeIntoAccountData(StakeStateV2{
+                .stake = .{
+                    .flags = .EMPTY,
+                    .meta = destination_meta,
+                    .stake = destination_stake,
+                },
+            });
+
+            break :blk destination_meta;
+        },
+        .inactive => |args| blk: {
+            const destination_meta = args.@"0";
+            if (lamports < min_delegation) return error.InvalidArgument;
+
+            var destination_stake = source_stake;
+            destination_stake.delegation.stake = lamports;
+
+            try destination_account.serializeIntoAccountData(StakeStateV2{
+                .stake = .{
+                    .flags = .EMPTY,
+                    .meta = destination_meta,
+                    .stake = destination_stake,
+                },
+            });
+
+            break :blk destination_meta;
+        },
+        else => return error.InvalidAccountData,
+    };
+
+    if (source_final_stake == 0) {
+        try source_account.serializeIntoAccountData(StakeStateV2{ .initialized = source_meta });
+    } else {
+        source_stake.delegation.stake = source_final_stake;
+
+        try source_account.serializeIntoAccountData(StakeStateV2{
+            .stake = .{
+                .meta = source_meta,
+                .stake = source_stake,
+                .flags = .EMPTY,
+            },
+        });
+    }
+
+    try source_account.subtractLamports(lamports);
+    try destination_account.addLamports(lamports);
+
+    if (source_account.account.lamports < source_meta.rent_exempt_reserve or
+        destination_account.account.lamports < destination_meta.rent_exempt_reserve)
+    {
+        try ic.tc.log("Delegation calculations violated lamport balance assumptions", .{});
+        return error.InvalidArgument;
+    }
+}
+
+fn mergeDelegationStakeAndCreditsObserbed(
+    stake: *StakeStateV2.Stake,
+    absorbed_lamports: u64,
+    absorbed_credits_observed: u64,
+) InstructionError!void {
+    stake.credits_observed = stakeWeightedCreditsObserved(
+        stake,
+        absorbed_lamports,
+        absorbed_credits_observed,
+    ) orelse return error.ProgramArithmeticOverflow;
+
+    stake.delegation.stake = add(stake.delegation.stake, absorbed_lamports) orelse
+        return error.InsufficientFunds;
+}
+
+fn moveStakeOrLamportsSharedChecks(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    source_account: *const BorrowedAccount,
+    lamports: u64,
+    destination_account: *const BorrowedAccount,
+    stake_authority_index: u16,
+) (error{OutOfMemory} || InstructionError)!struct { MergeKind, MergeKind } {
+    const stake_authority_meta = ic.ixn_info.getAccountMetaAtIndex(stake_authority_index) orelse
+        return error.NotEnoughAccountKeys;
+
+    if (!stake_authority_meta.is_signer) return error.MissingRequiredSignature;
+    const signers: []const Pubkey = &.{stake_authority_meta.pubkey};
+
+    if (!source_account.account.owner.equals(&ID) or !destination_account.account.owner.equals(&ID))
+        return error.IncorrectProgramId;
+
+    if (source_account.pubkey.equals(&destination_account.pubkey))
+        return error.InvalidInstructionData;
+
+    if (!source_account.context.is_writable or !destination_account.context.is_writable)
+        return error.InvalidInstructionData;
+
+    if (lamports == 0) return error.InvalidArgument;
+
+    const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+    const stake_history = try ic.tc.sysvar_cache.get(sysvar.StakeHistory);
+
+    const source_account_state = try source_account.deserializeFromAccountData(
+        allocator,
+        StakeStateV2,
+    );
+
+    const source_merge_kind = try MergeKind.getIfMergeable(
+        ic,
+        &source_account_state,
+        source_account.account.lamports,
+        &clock,
+        &stake_history,
+    );
+    try source_merge_kind.meta().authorized.check(signers, .staker);
+
+    const destination_account_state = try destination_account.deserializeFromAccountData(
+        allocator,
+        StakeStateV2,
+    );
+
+    const destination_merge_kind = try MergeKind.getIfMergeable(
+        ic,
+        &destination_account_state,
+        destination_account.account.lamports,
+        &clock,
+        &stake_history,
+    );
+
+    try MergeKind.metasCanMerge(
+        ic,
+        &source_merge_kind.meta(),
+        &destination_merge_kind.meta(),
+        &clock,
+    );
+
+    return .{ source_merge_kind, destination_merge_kind };
 }
