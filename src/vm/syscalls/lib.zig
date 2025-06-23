@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
@@ -638,7 +639,7 @@ fn callProgramAddressSyscall(
     program_id: Pubkey,
     overlap_outputs: bool,
 ) !struct { Pubkey, u8 } {
-    comptime std.debug.assert(@import("builtin").is_test);
+    comptime std.debug.assert(builtin.is_test);
 
     const seeds_addr = 0x100000000;
     const program_id_addr = 0x200000000;

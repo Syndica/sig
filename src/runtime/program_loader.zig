@@ -20,13 +20,12 @@ pub const LoadedProgram = union(enum(u8)) {
         source: []const u8,
     },
 
-    pub fn deinit(self: LoadedProgram, allocator: std.mem.Allocator) void {
-        switch (self) {
+    pub fn deinit(self: *LoadedProgram, allocator: std.mem.Allocator) void {
+        switch (self.*) {
             .failed => {},
-            .loaded => |loaded| {
-                var data = loaded;
-                allocator.free(data.source);
-                data.executable.deinit(allocator);
+            .loaded => |*loaded| {
+                allocator.free(loaded.source);
+                loaded.executable.deinit(allocator);
             },
         }
     }
@@ -44,7 +43,7 @@ pub fn loadPrograms(
     for (accounts.keys(), accounts.values()) |pubkey, account| {
         if (!account.executable) continue;
 
-        const loaded_program = try loadProgram(
+        var loaded_program = try loadProgram(
             allocator,
             &account,
             accounts,
@@ -217,7 +216,7 @@ test "loadPrograms: load v3 program" {
             program_deployment_slot + 1,
         );
         defer {
-            for (loaded_programs.values()) |loaded_program| loaded_program.deinit(allocator);
+            for (loaded_programs.values()) |*v| v.deinit(allocator);
             loaded_programs.deinit(allocator);
         }
 
@@ -235,7 +234,7 @@ test "loadPrograms: load v3 program" {
             program_deployment_slot,
         );
         defer {
-            for (loaded_programs.values()) |loaded_program| loaded_program.deinit(allocator);
+            for (loaded_programs.values()) |*v| v.deinit(allocator);
             loaded_programs.deinit(allocator);
         }
 
@@ -258,7 +257,7 @@ test "loadPrograms: load v3 program" {
             program_deployment_slot + 1,
         );
         defer {
-            for (loaded_programs.values()) |loaded_program| loaded_program.deinit(allocator);
+            for (loaded_programs.values()) |*v| v.deinit(allocator);
             loaded_programs.deinit(allocator);
         }
 

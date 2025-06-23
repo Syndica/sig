@@ -134,7 +134,7 @@ test "hello_world" {
         allocator.free(program_account.data);
         environment.deinit(allocator);
         var v_program_map = program_map;
-        for (v_program_map.values()) |v| v.deinit(allocator);
+        for (v_program_map.values()) |*v| v.deinit(allocator);
         v_program_map.deinit(allocator);
     }
 
@@ -198,7 +198,7 @@ test "print_account" {
         allocator.free(program_account.data);
         environment.deinit(allocator);
         var v_program_map = program_map;
-        for (v_program_map.values()) |v| v.deinit(allocator);
+        for (v_program_map.values()) |*v| v.deinit(allocator);
         v_program_map.deinit(allocator);
     }
 
@@ -266,7 +266,7 @@ test "fast_copy" {
         allocator.free(program_account.data);
         environment.deinit(allocator);
         var v_program_map = program_map;
-        for (v_program_map.values()) |v| v.deinit(allocator);
+        for (v_program_map.values()) |*v| v.deinit(allocator);
         v_program_map.deinit(allocator);
     }
 
@@ -355,7 +355,7 @@ test "set_return_data" {
         allocator.free(program_account.data);
         environment.deinit(allocator);
         var v_program_map = program_map;
-        for (v_program_map.values()) |v| v.deinit(allocator);
+        for (v_program_map.values()) |*v| v.deinit(allocator);
         v_program_map.deinit(allocator);
     }
 
@@ -492,7 +492,7 @@ test "program_init_vm_not_enough_compute" {
         allocator.free(program_account.data);
         environment.deinit(allocator);
         var v_program_map = program_map;
-        for (v_program_map.values()) |v| v.deinit(allocator);
+        for (v_program_map.values()) |*v| v.deinit(allocator);
         v_program_map.deinit(allocator);
     }
 
@@ -546,7 +546,7 @@ test "basic direct mapping" {
         allocator.free(program_account.data);
         environment.deinit(allocator);
         var v_program_map = program_map;
-        for (v_program_map.values()) |v| v.deinit(allocator);
+        for (v_program_map.values()) |*v| v.deinit(allocator);
         v_program_map.deinit(allocator);
     }
 
