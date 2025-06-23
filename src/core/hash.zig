@@ -129,5 +129,7 @@ pub const Hash = extern struct {
 pub const LtHash = struct {
     data: [NUM_ELEMENTS]u16,
 
+    pub const ZEROES = LtHash{ .data = .{0} ** NUM_ELEMENTS };
+
     pub const NUM_ELEMENTS: usize = 1024;
 };

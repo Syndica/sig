@@ -43,11 +43,11 @@ pub const ResolvedTransaction = struct {
     accounts: std.MultiArrayList(InstructionAccount),
     instructions: []const InstructionInfo,
 
+    /// The transaction is not deinitialized since it is borrowed.
     pub fn deinit(self: ResolvedTransaction, allocator: Allocator) void {
         var acc = self.accounts;
         acc.deinit(allocator);
         allocator.free(self.instructions);
-        // transaction is not freed because it is borrowed.
     }
 };
 
@@ -59,7 +59,7 @@ pub fn resolveBatch(
     return resolveBatchGeneric(allocator, .accounts_db, accounts_db, batch);
 }
 
-fn resolveBatchGeneric(
+pub fn resolveBatchGeneric(
     allocator: Allocator,
     comptime provider_tag: lookup_table_provider.Tag,
     table_provider: provider_tag.T(),
@@ -252,11 +252,13 @@ const lookup_table_provider = struct {
     pub const Tag = enum {
         accounts_db,
         map,
+        noop,
 
         fn T(self: Tag) type {
             return switch (self) {
                 .accounts_db => *AccountsDB,
                 .map => *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable),
+                .noop => void,
             };
         }
     };
@@ -291,6 +293,7 @@ const lookup_table_provider = struct {
                     table_provider;
                 return map.get(table_address.*) orelse return error.PubkeyNotInIndex;
             },
+            .noop => return error.PubkeyNotInIndex,
         }
     }
 };
