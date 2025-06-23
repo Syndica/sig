@@ -41,7 +41,6 @@ pub fn execute(
         var syscalls = vm.syscalls.register(
             allocator,
             ic.tc.feature_set,
-            0,
             false,
         ) catch |err| {
             try ic.tc.log("Failed to register syscalls: {s}", .{@errorName(err)});

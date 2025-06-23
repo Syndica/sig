@@ -43,7 +43,6 @@ pub const Entry = struct {
 pub fn register(
     allocator: std.mem.Allocator,
     feature_set: *const FeatureSet,
-    slot: u64,
     is_deploy: bool,
 ) !BuiltinProgram {
     // Register syscalls
@@ -131,7 +130,7 @@ pub fn register(
     // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", secp256k1Recover,);
 
     // Blake3
-    if (feature_set.isActive(features.BLAKE3_SYSCALL_ENABLED, slot)) {
+    if (feature_set.isActive(features.BLAKE3_SYSCALL_ENABLED)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_blake3",
@@ -140,7 +139,7 @@ pub fn register(
     }
 
     // Elliptic Curve
-    if (feature_set.isActive(features.CURVE25519_SYSCALL_ENABLED, slot)) {
+    if (feature_set.isActive(features.CURVE25519_SYSCALL_ENABLED)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_curve_validate_point",
@@ -169,7 +168,7 @@ pub fn register(
         "sol_get_epoch_schedule_sysvar",
         sysvar.getEpochSchedule,
     );
-    if (!feature_set.isActive(features.DISABLE_FEES_SYSVAR, slot)) {
+    if (!feature_set.isActive(features.DISABLE_FEES_SYSVAR)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_get_fees_sysvar",
@@ -181,7 +180,7 @@ pub fn register(
         "sol_get_rent_sysvar",
         sysvar.getRent,
     );
-    if (feature_set.isActive(features.LAST_RESTART_SLOT_SYSVAR, slot)) {
+    if (feature_set.isActive(features.LAST_RESTART_SLOT_SYSVAR)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_get_last_restart_slot",
@@ -259,7 +258,7 @@ pub fn register(
     );
 
     // Memory Allocator
-    if (!feature_set.isActive(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL, slot)) {
+    if (!feature_set.isActive(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_alloc_free_",
@@ -268,17 +267,17 @@ pub fn register(
     }
 
     // Alt_bn128
-    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN128_SYSCALL, slot)) {
+    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN128_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,);
     // }
 
     // Big_mod_exp
-    // if (feature_set.isActive(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
+    // if (feature_set.isActive(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", bigModExp,);
     // }
 
     // Poseidon
-    if (feature_set.isActive(features.ENABLE_POSEIDON_SYSCALL, slot)) {
+    if (feature_set.isActive(features.ENABLE_POSEIDON_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_poseidon",
@@ -287,7 +286,7 @@ pub fn register(
     }
 
     // Remaining Compute Units
-    if (feature_set.isActive(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED, slot)) {
+    if (feature_set.isActive(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED)) {
         _ = try syscalls.functions.registerHashed(
             allocator,
             "sol_remaining_compute_units",
@@ -296,17 +295,17 @@ pub fn register(
     }
 
     // Alt_bn_128_compression
-    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL, slot)) {
+    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL)) {
     //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", altBn128Compression,);
     // }
 
     // Sysvar Getter
-    if (feature_set.isActive(features.GET_SYSVAR_SYSCALL_ENABLED, slot)) {
+    if (feature_set.isActive(features.GET_SYSVAR_SYSCALL_ENABLED)) {
         _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", sysvar.getSysvar);
     }
 
     // Get Epoch Stake
-    if (feature_set.isActive(features.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
+    if (feature_set.isActive(features.ENABLE_GET_EPOCH_STAKE_SYSCALL)) {
         _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake);
     }
 

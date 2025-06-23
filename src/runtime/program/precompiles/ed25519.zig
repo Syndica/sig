@@ -1,12 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../../sig.zig");
+const features = sig.runtime.features;
+
 const Pubkey = sig.core.Pubkey;
-
-const precompile_programs = sig.runtime.program.precompiles;
-
-const PrecompileProgramError = precompile_programs.PrecompileProgramError;
+const FeatureSet = features.FeatureSet;
+const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
 const Ed25519 = std.crypto.sign.Ed25519;
+const verifyPrecompiles = sig.runtime.program.precompiles.verifyPrecompiles;
 
 pub const ID =
     Pubkey.parseBase58String("Ed25519SigVerify111111111111111111111111111") catch unreachable;
@@ -41,12 +42,12 @@ pub const Ed25519SignatureOffsets = extern struct {
     message_instruction_idx: u16 = 0,
 };
 
-// TODO: support verify_strict feature https://github.com/anza-xyz/agave/pull/1876/
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L88
 // https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L118
 pub fn verify(
     current_instruction_data: []const u8,
     all_instruction_datas: []const []const u8,
+    feature_set: *const FeatureSet,
 ) PrecompileProgramError!void {
     const data = current_instruction_data;
     if (data.len < ED25519_DATA_START) {
@@ -88,7 +89,16 @@ pub fn verify(
             sig_offsets.message_instruction_idx,
             sig_offsets.message_data_offset,
         );
-        signature.verify(msg, pubkey.*) catch return error.InvalidSignature;
+
+        var st = signature.verifier(pubkey.*) catch return error.InvalidSignature;
+        st.update(msg);
+        st.verify() catch return error.InvalidSignature;
+
+        // https://github.com/dalek-cryptography/ed25519-dalek/blob/02001d8c3422fb0314b541fdb09d04760f7ab4ba/src/verifying.rs#L424-L427
+        if (feature_set.isActive(features.ED25519_PRECOMPILE_VERIFY_STRICT)) {
+            st.expected_r.rejectLowOrder() catch return error.InvalidSignature;
+            st.a.rejectLowOrder() catch return error.InvalidSignature;
+        }
     }
 }
 
@@ -127,16 +137,15 @@ fn getInstructionValue(
     ));
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L35
+// https://github.com/anza-xyz/agave/blob/2d834361c096198176dbdc4524d5003bccf6c192/precompiles/src/ed25519.rs#L130
 pub fn newInstruction(
     allocator: std.mem.Allocator,
-    keypair: Ed25519.KeyPair,
+    signature: *const Ed25519.Signature,
+    public_key: *const Ed25519.PublicKey,
     message: []const u8,
 ) !sig.core.Instruction {
     if (!builtin.is_test) @compileError("newInstruction is only for use in tests");
     std.debug.assert(message.len <= std.math.maxInt(u16));
-
-    const signature = try keypair.sign(message, null);
 
     const num_signatures: u8 = 1;
     const pubkey_offset = ED25519_DATA_START;
@@ -163,7 +172,7 @@ pub fn newInstruction(
     instruction_data.appendSliceAssumeCapacity(&.{ num_signatures, 0 });
     instruction_data.appendSliceAssumeCapacity(std.mem.asBytes(&offsets));
     std.debug.assert(instruction_data.items.len == pubkey_offset);
-    instruction_data.appendSliceAssumeCapacity(&keypair.public_key.toBytes());
+    instruction_data.appendSliceAssumeCapacity(&public_key.toBytes());
     std.debug.assert(instruction_data.items.len == signature_offset);
     instruction_data.appendSliceAssumeCapacity(&signature.toBytes());
     std.debug.assert(instruction_data.items.len == message_data_offset);
@@ -187,7 +196,7 @@ fn testCase(
     @memcpy(instruction_data[0..2], std.mem.asBytes(&num_signatures));
     @memcpy(instruction_data[2..], std.mem.asBytes(&offsets));
 
-    return try verify(&instruction_data, &.{&(.{0} ** 100)});
+    return try verify(&instruction_data, &.{&(.{0} ** 100)}, &FeatureSet.EMPTY);
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L279
@@ -207,7 +216,7 @@ test "ed25519 invalid offsets" {
     try instruction_data.resize(instruction_data.items.len - 1);
 
     try std.testing.expectEqual(
-        verify(instruction_data.items, &.{}),
+        verify(instruction_data.items, &.{}, &FeatureSet.EMPTY),
         error.InvalidInstructionDataSize,
     );
 
@@ -328,6 +337,88 @@ test "ed25519 signature offset" {
         try std.testing.expectEqual(
             testCase(1, offsets),
             error.InvalidDataOffsets,
+        );
+    }
+}
+
+// https://github.com/anza-xyz/agave/blob/2d834361c096198176dbdc4524d5003bccf6c192/precompiles/src/ed25519.rs#L446
+test "ed25519_malleability" {
+    const all_feature_set = try FeatureSet.allEnabled(std.testing.allocator);
+    defer all_feature_set.deinit(std.testing.allocator);
+
+    {
+        const message = "hello";
+        const keypair = Ed25519.KeyPair.generate();
+        const signature = try keypair.sign(message, null);
+        const instruction = try newInstruction(
+            std.testing.allocator,
+            &signature,
+            &keypair.public_key,
+            message,
+        );
+        defer std.testing.allocator.free(instruction.data);
+        const tx: sig.core.Transaction = .{
+            .msg = .{
+                .account_keys = &.{ID},
+                .instructions = &.{
+                    .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
+                },
+                .signature_count = 1,
+                .readonly_signed_count = 1,
+                .readonly_unsigned_count = 0,
+                .recent_blockhash = sig.core.Hash.ZEROES,
+            },
+            .version = .legacy,
+            .signatures = &.{},
+        };
+
+        try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.EMPTY);
+        try verifyPrecompiles(std.testing.allocator, &tx, &all_feature_set);
+    }
+
+    {
+        const message = "ed25519vectors 3";
+        const pubkey: Ed25519.PublicKey = try .fromBytes(
+            .{
+                0x10, 0xeb, 0x7c, 0x3a, 0xcf, 0xb2, 0xbe, 0xd3,
+                0xe0, 0xd6, 0xab, 0x89, 0xbf, 0x5a, 0x3d, 0x6a,
+                0xfd, 0xdd, 0x11, 0x76, 0xce, 0x48, 0x12, 0xe3,
+                0x8d, 0x9f, 0xd4, 0x85, 0x05, 0x8f, 0xdb, 0x1f,
+            },
+        );
+        const signature: Ed25519.Signature = .fromBytes(
+            .{
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x94, 0x72, 0xa6, 0x9c, 0xd9, 0xa7, 0x01, 0xa5,
+                0x0d, 0x13, 0x0e, 0xd5, 0x21, 0x89, 0xe2, 0x45,
+                0x5b, 0x23, 0x76, 0x7d, 0xb5, 0x2c, 0xac, 0xb8,
+                0x71, 0x6f, 0xb8, 0x96, 0xff, 0xee, 0xac, 0x09,
+            },
+        );
+        const instruction = try newInstruction(std.testing.allocator, &signature, &pubkey, message);
+        defer std.testing.allocator.free(instruction.data);
+        const tx: sig.core.Transaction = .{
+            .msg = .{
+                .account_keys = &.{ID},
+                .instructions = &.{
+                    .{ .program_index = 0, .account_indexes = &.{0}, .data = instruction.data },
+                },
+                .signature_count = 1,
+                .readonly_signed_count = 1,
+                .readonly_unsigned_count = 0,
+                .recent_blockhash = sig.core.Hash.ZEROES,
+            },
+            .version = .legacy,
+            .signatures = &.{},
+        };
+
+        try verifyPrecompiles(std.testing.allocator, &tx, &FeatureSet.EMPTY);
+        try std.testing.expectError(
+            error.InvalidSignature,
+            verifyPrecompiles(std.testing.allocator, &tx, &all_feature_set),
         );
     }
 }
