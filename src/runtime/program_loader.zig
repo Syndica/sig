@@ -67,12 +67,12 @@ pub fn loadProgram(
     slot: u64,
 ) !LoadedProgram {
     // executable bytes are owned by the entry in the accounts map and should not be freed
-    const deployment_slot, const executable_bytes = loadDeploymentSlotAndExecutableBytes(
+    const maybe_deployment_slot, const executable_bytes = loadDeploymentSlotAndExecutableBytes(
         account,
         accounts,
     ) orelse return .failed;
 
-    if (deployment_slot >= slot) return .failed;
+    if (maybe_deployment_slot) |ds| if (ds >= slot) return .failed;
 
     const source = try allocator.dupe(u8, executable_bytes);
     var executable = Executable.fromBytes(
@@ -101,9 +101,9 @@ pub fn loadProgram(
 pub fn loadDeploymentSlotAndExecutableBytes(
     account: *const AccountSharedData,
     accounts: *const std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData),
-) ?struct { u64, []const u8 } {
+) ?struct { ?u64, []const u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
-        return .{ 0, account.data };
+        return .{ null, account.data };
     } else if (account.owner.equals(&bpf_loader.v3.ID)) {
         const program_state = sig.bincode.readFromSlice(
             failing_allocator,
@@ -147,6 +147,77 @@ pub fn loadDeploymentSlotAndExecutableBytes(
         return null;
     } else {
         return null;
+    }
+}
+
+test "loadPrograms: load v1, v2 program" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    const program_elf = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+        std.math.maxInt(usize),
+    );
+    defer allocator.free(program_elf);
+
+    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    defer accounts.deinit(allocator);
+
+    const program_v1_key = Pubkey.initRandom(prng.random());
+    const program_v2_key = Pubkey.initRandom(prng.random());
+
+    try accounts.put(
+        allocator,
+        program_v1_key,
+        .{
+            .lamports = 1,
+            .owner = bpf_loader.v1.ID,
+            .data = program_elf,
+            .executable = true,
+            .rent_epoch = std.math.maxInt(u64),
+        },
+    );
+
+    try accounts.put(
+        allocator,
+        program_v2_key,
+        .{
+            .lamports = 1,
+            .owner = bpf_loader.v2.ID,
+            .data = program_elf,
+            .executable = true,
+            .rent_epoch = std.math.maxInt(u64),
+        },
+    );
+
+    const environment = vm.Environment{
+        .loader = .{},
+        .config = .{},
+    };
+    defer environment.deinit(allocator);
+
+    { // Success
+        var loaded_programs = try loadPrograms(
+            allocator,
+            &accounts,
+            &environment,
+            0,
+        );
+        defer {
+            for (loaded_programs.values()) |*v| v.deinit(allocator);
+            loaded_programs.deinit(allocator);
+        }
+
+        switch (loaded_programs.get(program_v1_key).?) {
+            .failed => std.debug.panic("Program failed to load!", .{}),
+            .loaded => {},
+        }
+
+        switch (loaded_programs.get(program_v2_key).?) {
+            .failed => std.debug.panic("Program failed to load!", .{}),
+            .loaded => {},
+        }
     }
 }
 
@@ -281,6 +352,53 @@ test "loadPrograms: load v3 program" {
         );
         defer {
             for (loaded_programs.values()) |*loaded_program| loaded_program.deinit(allocator);
+            loaded_programs.deinit(allocator);
+        }
+
+        switch (loaded_programs.get(program_key).?) {
+            .failed => {},
+            .loaded => std.debug.panic("Program should not load!", .{}),
+        }
+    }
+}
+
+test "loadPrograms: bad owner" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    var accounts = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData){};
+    defer {
+        for (accounts.values()) |account| allocator.free(account.data);
+        accounts.deinit(allocator);
+    }
+
+    const program_key = Pubkey.initRandom(prng.random());
+    try accounts.put(
+        allocator,
+        program_key,
+        .{
+            .lamports = 1,
+            .owner = Pubkey.initRandom(prng.random()),
+            .data = try allocator.dupe(u8, &.{ 10, 0, 10, 3 }),
+            .executable = true,
+            .rent_epoch = std.math.maxInt(u64),
+        },
+    );
+
+    const environment = vm.Environment{
+        .loader = .{},
+        .config = .{},
+    };
+
+    { // Failed to load program with bad owner
+        var loaded_programs = try loadPrograms(
+            allocator,
+            &accounts,
+            &environment,
+            prng.random().int(u64),
+        );
+        defer {
+            for (loaded_programs.values()) |*v| v.deinit(allocator);
             loaded_programs.deinit(allocator);
         }
 
