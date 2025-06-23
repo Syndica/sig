@@ -228,7 +228,6 @@ pub const ForkChoice = struct {
         slot_hash_key: SlotAndHash,
         maybe_parent: ?SlotAndHash,
     ) !void {
-        errdefer self.deinit();
         // TODO implement self.print_state();
 
         if (self.fork_infos.contains(slot_hash_key)) {
@@ -755,7 +754,15 @@ pub const ForkChoice = struct {
         return fork_info.children;
     }
 
-    fn isCandidate(
+    pub fn latestInvalidAncestor(
+        self: *const ForkChoice,
+        slot_hash_key: *const SlotAndHash,
+    ) ?Slot {
+        const fork_info = self.fork_infos.getPtr(slot_hash_key.*) orelse return null;
+        return fork_info.latest_duplicate_ancestor;
+    }
+
+    pub fn isCandidate(
         self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
     ) ?bool {
