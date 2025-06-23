@@ -124,7 +124,7 @@ test "hello_world" {
         .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
-    const program_account, const environment, const program_map = try prepareBpfV3Test(
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -133,9 +133,8 @@ test "hello_world" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        var v_program_map = program_map;
-        for (v_program_map.values()) |*v| v.deinit(allocator);
-        v_program_map.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
     }
 
     try expectProgramExecuteResult(
@@ -188,7 +187,7 @@ test "print_account" {
         .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
-    const program_account, const environment, const program_map = try prepareBpfV3Test(
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -197,9 +196,8 @@ test "print_account" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        var v_program_map = program_map;
-        for (v_program_map.values()) |*v| v.deinit(allocator);
-        v_program_map.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
     }
 
     const accounts: []const AccountParams = &.{
@@ -256,7 +254,7 @@ test "fast_copy" {
         .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
-    const program_account, const environment, const program_map = try prepareBpfV3Test(
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -265,9 +263,8 @@ test "fast_copy" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        var v_program_map = program_map;
-        for (v_program_map.values()) |*v| v.deinit(allocator);
-        v_program_map.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
     }
 
     const program_id = program_account.pubkey.?;
@@ -345,7 +342,7 @@ test "set_return_data" {
         .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
-    const program_account, const environment, const program_map = try prepareBpfV3Test(
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -354,9 +351,8 @@ test "set_return_data" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        var v_program_map = program_map;
-        for (v_program_map.values()) |*v| v.deinit(allocator);
-        v_program_map.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
     }
 
     try expectProgramExecuteResult(
@@ -482,7 +478,7 @@ test "program_init_vm_not_enough_compute" {
         .{ .pubkey = sig.runtime.features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION },
     };
 
-    const program_account, const environment, const program_map = try prepareBpfV3Test(
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -491,9 +487,8 @@ test "program_init_vm_not_enough_compute" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        var v_program_map = program_map;
-        for (v_program_map.values()) |*v| v.deinit(allocator);
-        v_program_map.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
     }
 
     var compute_budget = sig.runtime.ComputeBudget.default(1_400_000);
@@ -536,7 +531,7 @@ test "basic direct mapping" {
         .{ .pubkey = features.BPF_ACCOUNT_DATA_DIRECT_MAPPING },
     };
 
-    const program_account, const environment, const program_map = try prepareBpfV3Test(
+    const program_account, const environment, var program_map = try prepareBpfV3Test(
         allocator,
         prng.random(),
         elf_bytes,
@@ -545,9 +540,8 @@ test "basic direct mapping" {
     defer {
         allocator.free(program_account.data);
         environment.deinit(allocator);
-        var v_program_map = program_map;
-        for (v_program_map.values()) |*v| v.deinit(allocator);
-        v_program_map.deinit(allocator);
+        for (program_map.values()) |*v| v.deinit(allocator);
+        program_map.deinit(allocator);
     }
 
     const program_id = program_account.pubkey.?;
