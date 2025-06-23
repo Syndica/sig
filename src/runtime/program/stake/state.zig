@@ -113,6 +113,8 @@ pub const StakeStateV2 = union(enum) {
         staker: Pubkey,
         withdrawer: Pubkey,
 
+        pub const DEFAULT: Authorized = .{ .staker = Pubkey.ZEROES, .withdrawer = Pubkey.ZEROES };
+
         pub fn check(
             self: *const Authorized,
             signers: []const Pubkey,
