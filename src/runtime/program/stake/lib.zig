@@ -351,8 +351,12 @@ pub fn execute(
             try moveStake(allocator, ic, 0, lamports, 1, 2);
         },
         .move_lamports => |lamports| {
-            _ = lamports;
-            @panic("TODO");
+            if (!ic.tc.feature_set.active.contains(
+                runtime.features.MOVE_STAKE_AND_MOVE_LAMPORTS_IXS,
+            )) return error.InvalidInstructionData;
+
+            try ic.ixn_info.checkNumberOfAccounts(3);
+            try moveLamports(allocator, ic, 0, lamports, 1, 2);
         },
     };
 }
@@ -1653,4 +1657,47 @@ fn moveStakeOrLamportsSharedChecks(
     );
 
     return .{ source_merge_kind, destination_merge_kind };
+}
+
+fn moveLamports(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    source_account_index: u16,
+    lamports: u64,
+    destination_account_index: u16,
+    stake_authority_index: u16,
+) (error{OutOfMemory} || InstructionError)!void {
+    var source_account = try ic.borrowInstructionAccount(source_account_index);
+    defer source_account.release();
+
+    var destination_account = try ic.borrowInstructionAccount(destination_account_index);
+    defer destination_account.release();
+
+    const source_merge_kind, _ = try moveStakeOrLamportsSharedChecks(
+        allocator,
+        ic,
+        &source_account,
+        lamports,
+        &destination_account,
+        stake_authority_index,
+    );
+
+    const source_free_lamports = switch (source_merge_kind) {
+        .fully_active => |args| blk: {
+            const source_meta = args.@"0";
+            const source_stake = args.@"1";
+
+            break :blk source_account.account.lamports -|
+                source_stake.delegation.stake -|
+                source_meta.rent_exempt_reserve;
+        },
+        .inactive => |args| args.@"1" -| args.@"0".rent_exempt_reserve,
+
+        else => return error.InvalidAccountData,
+    };
+
+    if (lamports > source_free_lamports) return error.InvalidArgument;
+
+    try source_account.subtractLamports(lamports);
+    try destination_account.addLamports(lamports);
 }
