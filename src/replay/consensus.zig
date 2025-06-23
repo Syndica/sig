@@ -372,7 +372,6 @@ fn checkAndHandleNewRoot(
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
     defer allocator.free(rooted_slots);
 
-    // TODO implement leader_schedule_cache.set_root.
     try ledger_result_writer.setRoots(rooted_slots);
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
@@ -394,7 +393,6 @@ fn checkAndHandleNewRoot(
 
     var it = progress.map.iterator();
     while (it.next()) |entry| {
-        // TODO should frozen state be taking into consideration.
         if (slot_tracker.slots.get(entry.key_ptr.*) == null) {
             to_remove.appendAssumeCapacity(entry.key_ptr.*);
         }
