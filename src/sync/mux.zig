@@ -1,11 +1,15 @@
+const sig = @import("../sig.zig");
 const std = @import("std");
 const builtin = @import("builtin");
+
 const Mutex = std.Thread.Mutex;
 const RwLock = std.Thread.RwLock;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
 const assert = std.debug.assert;
 const testing = std.testing;
+
+const containsPointer = sig.utils.types.containsPointer;
 
 /// Mux is a `Mutex` wrapper which enforces proper access to a protected value.
 pub fn Mux(comptime T: type) type {
@@ -124,6 +128,14 @@ pub fn Mux(comptime T: type) type {
                 .private = &self.private,
                 .valid = true,
             };
+        }
+
+        /// Acquires the lock just long enough to shallow copy the item, and
+        /// returns the copy.
+        pub fn readCopy(self: *Self) T {
+            self.private.m.lock();
+            defer self.private.m.unlock();
+            return self.private.v;
         }
     };
 }
@@ -255,6 +267,12 @@ pub fn RwMux(comptime T: type) type {
             };
         }
 
+        pub fn set(self: *Self, item: T) void {
+            self.private.r.lock();
+            defer self.private.r.unlock();
+            self.private.v = item;
+        }
+
         /// `read` returns a `RLockGuard` after acquiring a `read` lock
         pub fn read(self: *Self) RLockGuard {
             self.private.r.lockShared();
@@ -268,6 +286,17 @@ pub fn RwMux(comptime T: type) type {
             var lock_guard = self.read();
             const t = lock_guard.get();
             return .{ t, lock_guard };
+        }
+
+        /// Acquires the lock just long enough to shallow copy the item, and
+        /// returns the copy.
+        pub fn readCopy(self: *Self) T {
+            comptime if (containsPointer(.mut, T) orelse true) {
+                @compileError("reading a mutable pointer after unlocking would bypass the lock");
+            };
+            self.private.r.lockShared();
+            defer self.private.r.unlockShared();
+            return self.private.v;
         }
 
         pub fn writeWithLock(self: *Self) struct { Mutable(T), WLockGuard } {

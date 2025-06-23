@@ -217,6 +217,16 @@ pub fn Channel(T: type) type {
             }
         }
 
+        // Blocks until an item is received or the exit condition has been set.
+        pub fn receive(self: *Self, exit: ExitCondition) error{Exit}!T {
+            while (true) {
+                try self.waitToReceive(exit);
+                if (self.tryReceive()) |item| {
+                    return item;
+                }
+            }
+        }
+
         /// Waits untli the channel potentially has items, periodically checking for the ExitCondition.
         /// Must be called by only one receiver thread at a time.
         pub fn waitToReceive(channel: *Self, exit: ExitCondition) error{Exit}!void {
