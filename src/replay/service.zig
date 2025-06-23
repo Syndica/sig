@@ -1502,6 +1502,173 @@ const state_change = struct {
     }
 };
 
+const Descendants = std.AutoArrayHashMapUnmanaged(sig.core.Slot, SortedMapStub(sig.core.Slot, void));
+
+fn testSetup(
+    allocator: std.mem.Allocator,
+    logger: sig.trace.Logger,
+    random: std.Random,
+) !struct {
+    sig.replay.trackers.SlotTracker,
+    sig.consensus.HeaviestSubtreeForkChoice,
+    Descendants,
+} {
+    const SlotInfo = struct {
+        parent_slot: ?sig.core.Slot,
+        slot: sig.core.Slot,
+        hash: sig.core.Hash,
+
+        fn initRandom(
+            parent_slot: ?sig.core.Slot,
+            slot: sig.core.Slot,
+            _random: std.Random,
+        ) @This() {
+            return .{
+                .parent_slot = parent_slot,
+                .slot = slot,
+                .hash = .initRandom(_random),
+            };
+        }
+    };
+
+    const slot_infos = [_]SlotInfo{
+        .initRandom(null, 0, random),
+        .initRandom(0, 1, random),
+        .initRandom(1, 2, random),
+        .initRandom(2, 3, random),
+    };
+
+    var bank_forks: sig.replay.trackers.SlotTracker = .{ .root = 0 };
+    errdefer bank_forks.slots.deinit(allocator);
+
+    var fork_choice: sig.consensus.HeaviestSubtreeForkChoice = try .init(allocator, logger, .{
+        .slot = 0,
+        .hash = try .parseBase58String("Ck2ViMTVdaFQAmaSnE3zKzmBsaaWD2jvduRZmev89VXq"),
+    });
+    errdefer fork_choice.deinit();
+
+    try bank_forks.slots.ensureUnusedCapacity(allocator, slot_infos.len);
+    for (slot_infos) |slot_info| {
+        try fork_choice.addNewLeafSlot(
+            .{ .slot = slot_info.slot, .hash = slot_info.hash },
+            if (slot_info.parent_slot) |parent_slot| .{
+                .slot = parent_slot,
+                .hash = slot_infos[parent_slot].hash,
+            } else null,
+        );
+
+        bank_forks.slots.putAssumeCapacity(slot_info.slot, .{
+            .constants = .{
+                .slot = slot_info.slot,
+                .parent_slot = slot_info.parent_slot orelse (slot_info.slot -| 1),
+                .parent_hash = slot_infos[slot_info.parent_slot orelse (slot_info.slot -| 1)].hash,
+                .block_height = 1,
+                .hard_forks = .{ .items = &.{} },
+                .max_tick_height = 1,
+                .fee_rate_governor = .initRandom(random),
+                .epoch_reward_status = .inactive,
+            },
+            .state = .{
+                .hash = .init(slot_info.hash),
+                .capitalization = .init(random.int(u64)),
+                .transaction_count = .init(random.int(u64)),
+                .tick_height = .init(random.int(u64)),
+                .collected_rent = .init(random.int(u64)),
+                .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
+            },
+        });
+    }
+
+    var descendants: Descendants = .empty;
+    errdefer descendants.deinit(allocator);
+    errdefer for (descendants.values()) |*child_set| child_set.sorted_map.deinit(allocator);
+    try descendants.ensureUnusedCapacity(allocator, 4);
+    descendants.putAssumeCapacity(0, .{ .sorted_map = try .init(allocator, &.{ 1, 2, 3 }, &.{}) });
+    descendants.putAssumeCapacity(1, .{ .sorted_map = try .init(allocator, &.{ 3, 2 }, &.{}) });
+    descendants.putAssumeCapacity(2, .{ .sorted_map = try .init(allocator, &.{3}, &.{}) });
+    descendants.putAssumeCapacity(3, .empty);
+
+    return .{ bank_forks, fork_choice, descendants };
+}
+
+test "apply state changes" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(7353);
+    const random = prng.random();
+
+    // Common state
+    var bank_forks, //
+    var heaviest_subtree_fork_choice, //
+    var descendants: Descendants //
+    = try testSetup(allocator, .noop, random);
+    defer bank_forks.slots.deinit(allocator);
+    defer heaviest_subtree_fork_choice.deinit();
+    defer {
+        for (descendants.values()) |*child_set| child_set.sorted_map.deinit(allocator);
+        descendants.deinit(allocator);
+    }
+
+    var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
+    defer duplicate_slots_to_repair.deinit(allocator);
+
+    // MarkSlotDuplicate should mark progress map and remove
+    // the slot from fork choice
+    const duplicate_slot = bank_forks.root + 1;
+    const duplicate_slot_hash = hash: {
+        const hash, var hash_lg =
+            bank_forks.slots.getPtr(duplicate_slot).?.state.hash.readWithLock();
+        defer hash_lg.unlock();
+        break :hash hash.*.?;
+    };
+    try state_change.markSlotDuplicate(
+        duplicate_slot,
+        &heaviest_subtree_fork_choice,
+        duplicate_slot_hash,
+    );
+    try std.testing.expect(!heaviest_subtree_fork_choice.isCandidate(&.{
+        .slot = duplicate_slot,
+        .hash = duplicate_slot_hash,
+    }).?);
+    for ([_][]const sig.core.Slot{
+        descendants.get(duplicate_slot).?.sorted_map.keys(),
+        &.{duplicate_slot},
+    }) |child_slot_set| {
+        for (child_slot_set) |child_slot| {
+            try std.testing.expectEqual(
+                duplicate_slot,
+                heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                    .slot = child_slot,
+                    .hash = hash: {
+                        const hash, var hash_lg =
+                            bank_forks.slots.getPtr(child_slot).?.state.hash.readWithLock();
+                        defer hash_lg.unlock();
+                        break :hash hash.*.?;
+                    },
+                }).?,
+            );
+        }
+    }
+    try std.testing.expect(duplicate_slots_to_repair.count() == 0);
+
+    // Simulate detecting another hash that is the correct version,
+    // RepairDuplicateConfirmedVersion should add the slot to repair
+    // to `duplicate_slots_to_repair`
+    try std.testing.expect(duplicate_slots_to_repair.count() == 0);
+    const correct_hash: sig.core.Hash = .initRandom(random);
+    try state_change.repairDuplicateConfirmedVersion(
+        allocator,
+        duplicate_slot,
+        &duplicate_slots_to_repair,
+        correct_hash,
+    );
+    try std.testing.expectEqual(1, duplicate_slots_to_repair.count());
+    try std.testing.expectEqual(
+        correct_hash,
+        duplicate_slots_to_repair.get(duplicate_slot).?,
+    );
+}
+
 // -- handleEdgeCases END -- //
 
 fn processConsensus() void {
