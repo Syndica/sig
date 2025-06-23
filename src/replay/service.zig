@@ -502,7 +502,7 @@ fn processAncestorHashesDuplicateSlots(
                     const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
                     defer bank_forks_lg.unlock();
 
-                    const bank = bank_forks.slots.getPtr(epoch_slots_frozen_slot) orelse
+                    const bank = bank_forks.slots.get(epoch_slots_frozen_slot) orelse
                         break :hash null;
                     const hash_ptr, var hash_lg = bank.state.hash.readWithLock();
                     defer hash_lg.unlock();
@@ -583,7 +583,7 @@ fn processDuplicateConfirmedSlots(
                     .{ .hash = hash: {
                         const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
                         defer bank_forks_lg.unlock();
-                        const bf_elem = bank_forks.slots.getPtr(confirmed_slot).?;
+                        const bf_elem = bank_forks.slots.get(confirmed_slot).?;
                         const bf_hash, var bf_hash_lg = bf_elem.state.hash.readWithLock();
                         defer bf_hash_lg.unlock();
                         break :hash bf_hash.*;
@@ -741,7 +741,7 @@ fn processDuplicateSlots(
         var bank_hashes: std.BoundedArray(?sig.core.Hash, MAX_BATCH_SIZE) = .{};
         for (new_duplicate_slots.constSlice()) |duplicate_slot| {
             bank_hashes.appendAssumeCapacity(hash: {
-                const bf_elem = r_bank_forks.slots.getPtr(duplicate_slot) orelse break :hash null;
+                const bf_elem = r_bank_forks.slots.get(duplicate_slot) orelse break :hash null;
                 const hash, var hash_lg = bf_elem.state.hash.readWithLock();
                 defer hash_lg.unlock();
                 break :hash hash.*;
@@ -1531,8 +1531,8 @@ fn testSetup(
         .initRandom(2, 3, random),
     };
 
-    var bank_forks: sig.replay.trackers.SlotTracker = .{ .root = 0 };
-    errdefer bank_forks.slots.deinit(allocator);
+    var bank_forks: sig.replay.trackers.SlotTracker = .init(0);
+    errdefer bank_forks.deinit(allocator);
 
     var fork_choice: sig.consensus.HeaviestSubtreeForkChoice = try .init(allocator, logger, .{
         .slot = 0,
@@ -1540,7 +1540,6 @@ fn testSetup(
     });
     errdefer fork_choice.deinit();
 
-    try bank_forks.slots.ensureUnusedCapacity(allocator, slot_infos.len);
     for (slot_infos) |slot_info| {
         try fork_choice.addNewLeafSlot(
             .{ .slot = slot_info.slot, .hash = slot_info.hash },
@@ -1550,26 +1549,29 @@ fn testSetup(
             } else null,
         );
 
-        bank_forks.slots.putAssumeCapacity(slot_info.slot, .{
-            .constants = .{
-                .slot = slot_info.slot,
+        try bank_forks.put(
+            allocator,
+            slot_info.slot,
+            .{
                 .parent_slot = slot_info.parent_slot orelse (slot_info.slot -| 1),
                 .parent_hash = slot_infos[slot_info.parent_slot orelse (slot_info.slot -| 1)].hash,
                 .block_height = 1,
-                .hard_forks = .{ .items = &.{} },
+                .collector_id = .initRandom(random),
                 .max_tick_height = 1,
                 .fee_rate_governor = .initRandom(random),
                 .epoch_reward_status = .inactive,
             },
-            .state = .{
+            .{
+                .blockhash_queue = .init(try .initRandom(random, allocator, 0)),
                 .hash = .init(slot_info.hash),
                 .capitalization = .init(random.int(u64)),
                 .transaction_count = .init(random.int(u64)),
+                .signature_count = .init(1),
                 .tick_height = .init(random.int(u64)),
                 .collected_rent = .init(random.int(u64)),
                 .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
             },
-        });
+        );
     }
 
     var descendants: Descendants = .empty;
@@ -1595,7 +1597,7 @@ test "apply state changes" {
     var heaviest_subtree_fork_choice, //
     var descendants: Descendants //
     = try testSetup(allocator, .noop, random);
-    defer bank_forks.slots.deinit(allocator);
+    defer bank_forks.deinit(allocator);
     defer heaviest_subtree_fork_choice.deinit();
     defer {
         for (descendants.values()) |*child_set| child_set.sorted_map.deinit(allocator);
@@ -1609,8 +1611,7 @@ test "apply state changes" {
     // the slot from fork choice
     const duplicate_slot = bank_forks.root + 1;
     const duplicate_slot_hash = hash: {
-        const hash, var hash_lg =
-            bank_forks.slots.getPtr(duplicate_slot).?.state.hash.readWithLock();
+        const hash, var hash_lg = bank_forks.slots.get(duplicate_slot).?.state.hash.readWithLock();
         defer hash_lg.unlock();
         break :hash hash.*.?;
     };
@@ -1634,7 +1635,7 @@ test "apply state changes" {
                     .slot = child_slot,
                     .hash = hash: {
                         const hash, var hash_lg =
-                            bank_forks.slots.getPtr(child_slot).?.state.hash.readWithLock();
+                            bank_forks.slots.get(child_slot).?.state.hash.readWithLock();
                         defer hash_lg.unlock();
                         break :hash hash.*.?;
                     },
