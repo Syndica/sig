@@ -20,7 +20,6 @@ const Instruction = instruction.Instruction;
 
 const InstructionContext = runtime.InstructionContext;
 const BorrowedAccount = runtime.BorrowedAccount;
-const TransactionContext = runtime.TransactionContext;
 
 const StakeStateV2 = state.StakeStateV2;
 const Authorized = StakeStateV2.Authorized;
@@ -28,7 +27,6 @@ const Lockup = StakeStateV2.Lockup;
 const StakeAuthorize = StakeStateV2.StakeAuthorize;
 
 const MAX_RETURN_DATA = runtime.transaction_context.TransactionReturnData.MAX_RETURN_DATA;
-const MAX_ACCOUNT_METAS = runtime.InstructionInfo.MAX_ACCOUNT_METAS;
 const MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION = 5;
 
 pub const ID: Pubkey = .parse("Stake11111111111111111111111111111111111111");
@@ -544,7 +542,9 @@ fn authorizeWithSeed(
 }
 
 fn getMinimumDelegation(feature_set: *const runtime.FeatureSet) u64 {
-    return if (feature_set.active.contains(runtime.features.STAKE_RAISE_MINIMUM_DELEGATION_TO_1_SOL))
+    return if (feature_set.active.contains(
+        runtime.features.STAKE_RAISE_MINIMUM_DELEGATION_TO_1_SOL,
+    ))
         1_000_000_000
     else
         1;
@@ -602,7 +602,11 @@ fn redelegateStake(
 ) ?StakeError {
     const new_rate_activation_epoch = newWarmupCooldownRateEpoch(ic);
 
-    if (stake.delegation.effectiveStake(clock.epoch, stake_history, new_rate_activation_epoch) != 0) {
+    if (stake.delegation.effectiveStake(
+        clock.epoch,
+        stake_history,
+        new_rate_activation_epoch,
+    ) != 0) {
         if (stake.delegation.voter_pubkey.equals(voter_pubkey) and
             clock.epoch == stake.delegation.deactivation_epoch)
         {
@@ -669,7 +673,12 @@ fn delegate(
         },
         .stake => |*args| {
             try args.meta.authorized.check(signers, .staker);
-            const validated = try validateDelegatedAmount(ic, &stake_account, &args.meta, feature_set);
+            const validated = try validateDelegatedAmount(
+                ic,
+                &stake_account,
+                &args.meta,
+                feature_set,
+            );
             const stake_amount = validated.stake_amount;
 
             const current_vote_state = try (try vote_state).convertToCurrent(allocator);
