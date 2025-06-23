@@ -10,6 +10,7 @@ const sysvar = runtime.sysvar;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
+const Slot = sig.core.Slot;
 
 const Pubkey = sig.core.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -1709,4 +1710,97 @@ fn moveLamports(
 
     try source_account.subtractLamports(lamports);
     try destination_account.addLamports(lamports);
+}
+
+test "initialize" {
+    const allocator = std.testing.allocator;
+    const ExecuteContextsParams = sig.runtime.testing.ExecuteContextsParams;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
+        .clock = runtime.sysvar.Clock.DEFAULT,
+        .slot_hashes = runtime.sysvar.SlotHashes{
+            .entries = &.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }},
+        },
+        .rent = runtime.sysvar.Rent.DEFAULT,
+        .epoch_rewards = .DEFAULT,
+    };
+
+    {
+        const accounts: []const ExecuteContextsParams.AccountParams = &.{
+            .{ .pubkey = Pubkey.initRandom(random), .owner = ID },
+            .{ .pubkey = sysvar.Rent.ID },
+            .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+        };
+
+        try runtime.program.testing.expectProgramExecuteError(
+            error.InvalidAccountData,
+            allocator,
+            ID,
+            Instruction{ .initialize = .{ Authorized.DEFAULT, Lockup.DEFAULT } },
+            &.{ .{}, .{ .index_in_transaction = 1 }, .{ .index_in_transaction = 2 } },
+            .{ .accounts = accounts, .compute_meter = 10_000, .sysvar_cache = sysvar_cache },
+            .{},
+        );
+    }
+
+    // success
+    {
+        var buf: [StakeStateV2.SIZE]u8 = @splat(0);
+        _ = try sig.bincode.writeToSlice(&buf, StakeStateV2.uninitialized, .{});
+
+        var buf_after: [StakeStateV2.SIZE]u8 = @splat(0);
+        _ = try sig.bincode.writeToSlice(&buf_after, StakeStateV2{
+            .initialized = .{
+                .authorized = .DEFAULT,
+                .lockup = .DEFAULT,
+                .rent_exempt_reserve = sysvar_cache.rent.?.minimumBalance(StakeStateV2.SIZE),
+            },
+        }, .{});
+
+        const initial_accounts: []const ExecuteContextsParams.AccountParams = &.{
+            .{
+                .pubkey = Pubkey.initRandom(random),
+                .owner = ID,
+                .data = &buf,
+                .lamports = 1_000_000_000,
+            },
+            .{ .pubkey = sysvar.Rent.ID },
+            .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+        };
+
+        const after_accounts: []const ExecuteContextsParams.AccountParams = &.{
+            .{
+                .pubkey = initial_accounts[0].pubkey,
+                .owner = ID,
+                .data = &buf_after,
+                .lamports = 1_000_000_000,
+            },
+            .{ .pubkey = sysvar.Rent.ID },
+            .{ .pubkey = ID, .owner = runtime.ids.NATIVE_LOADER_ID },
+        };
+
+        try runtime.program.testing.expectProgramExecuteResult(
+            allocator,
+            ID,
+            Instruction{ .initialize = .{ Authorized.DEFAULT, Lockup.DEFAULT } },
+            &.{
+                .{ .is_writable = true },
+                .{ .index_in_transaction = 1 },
+                .{ .index_in_transaction = 2 },
+            },
+            .{
+                .accounts = initial_accounts,
+                .compute_meter = 10_000,
+                .sysvar_cache = sysvar_cache,
+            },
+            .{
+                .accounts = after_accounts,
+                .compute_meter = 10_000 - COMPUTE_UNITS,
+                .sysvar_cache = sysvar_cache,
+            },
+            .{},
+        );
+    }
 }
