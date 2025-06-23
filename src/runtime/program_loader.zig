@@ -266,6 +266,29 @@ test "loadPrograms: load v3 program" {
             .loaded => std.debug.panic("Program should not load!", .{}),
         }
     }
+
+    { // Bad elf
+        const account = accounts.getPtr(program_data_key).?;
+        const tmp_byte = account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1];
+        account.data[bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE + 1] = 0xFF; // Corrupt the first byte of the elf
+        defer account.data[0] = tmp_byte;
+
+        var loaded_programs = try loadPrograms(
+            allocator,
+            &accounts,
+            &environment,
+            program_deployment_slot + 1,
+        );
+        defer {
+            for (loaded_programs.values()) |*loaded_program| loaded_program.deinit(allocator);
+            loaded_programs.deinit(allocator);
+        }
+
+        switch (loaded_programs.get(program_key).?) {
+            .failed => {},
+            .loaded => std.debug.panic("Program should not load!", .{}),
+        }
+    }
 }
 
 pub fn createV3ProgramAccountData(
