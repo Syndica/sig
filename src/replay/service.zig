@@ -21,6 +21,11 @@ const EpochTracker = replay.trackers.EpochTracker;
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
 
+const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
+pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
+
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
     allocator: Allocator,

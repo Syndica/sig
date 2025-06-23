@@ -14,6 +14,7 @@ const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
 
 const EpochStakeMap = sig.core.stake.EpochStakeMap;
+const BlockhashQueue = sig.core.bank.BlockhashQueue;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -944,32 +945,30 @@ test "checkAndHandleNewRoot - missing slot" {
     defer {
         var it = slot_tracker.slots.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.*.constants.hard_forks.deinit(testing.allocator);
+            testing.allocator.destroy(entry.value_ptr.*);
         }
         slot_tracker.slots.deinit(testing.allocator);
     }
 
-    try slot_tracker.slots.put(testing.allocator, root.slot, .{
-        .constants = .{
-            .slot = 0,
-            .parent_slot = 0,
-            .parent_hash = Hash.ZEROES,
-            .block_height = 0,
-            .hard_forks = try .initRandom(random, testing.allocator, 10),
-            .max_tick_height = 0,
-            .fee_rate_governor = .initRandom(random),
-            .epoch_reward_status = .inactive,
-        },
-        .state = .{
-            .hash = RwMux(?Hash).init(null),
-            .capitalization = std.atomic.Value(u64).init(0),
-            .transaction_count = std.atomic.Value(u64).init(0),
-            .tick_height = std.atomic.Value(u64).init(0),
-            .collected_rent = std.atomic.Value(u64).init(0),
-            .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
-                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
-            }),
-        },
+    try slot_tracker.put(testing.allocator, root.slot, .{
+        .parent_slot = 0,
+        .parent_hash = Hash.ZEROES,
+        .block_height = 0,
+        .collector_id = Pubkey.ZEROES,
+        .max_tick_height = 0,
+        .fee_rate_governor = .initRandom(random),
+        .epoch_reward_status = .inactive,
+    }, .{
+        .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
+        .hash = RwMux(?Hash).init(null),
+        .capitalization = std.atomic.Value(u64).init(0),
+        .transaction_count = std.atomic.Value(u64).init(0),
+        .signature_count = std.atomic.Value(u64).init(0),
+        .tick_height = std.atomic.Value(u64).init(0),
+        .collected_rent = std.atomic.Value(u64).init(0),
+        .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+            .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+        }),
     });
 
     const logger = .noop;
@@ -1020,32 +1019,30 @@ test "checkAndHandleNewRoot - missing hash" {
     defer {
         var it = slot_tracker.slots.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.*.constants.hard_forks.deinit(testing.allocator);
+            testing.allocator.destroy(entry.value_ptr.*);
         }
         slot_tracker.slots.deinit(testing.allocator);
     }
 
-    try slot_tracker.slots.put(testing.allocator, root.slot, .{
-        .constants = .{
-            .slot = 0,
-            .parent_slot = 0,
-            .parent_hash = Hash.ZEROES,
-            .block_height = 0,
-            .hard_forks = try .initRandom(random, testing.allocator, 10),
-            .max_tick_height = 0,
-            .fee_rate_governor = .initRandom(random),
-            .epoch_reward_status = .inactive,
-        },
-        .state = .{
-            .hash = RwMux(?Hash).init(null),
-            .capitalization = std.atomic.Value(u64).init(0),
-            .transaction_count = std.atomic.Value(u64).init(0),
-            .tick_height = std.atomic.Value(u64).init(0),
-            .collected_rent = std.atomic.Value(u64).init(0),
-            .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
-                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
-            }),
-        },
+    try slot_tracker.put(testing.allocator, root.slot, .{
+        .parent_slot = 0,
+        .parent_hash = Hash.ZEROES,
+        .block_height = 0,
+        .collector_id = Pubkey.ZEROES,
+        .max_tick_height = 0,
+        .fee_rate_governor = .initRandom(random),
+        .epoch_reward_status = .inactive,
+    }, .{
+        .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
+        .hash = RwMux(?Hash).init(null),
+        .capitalization = std.atomic.Value(u64).init(0),
+        .transaction_count = std.atomic.Value(u64).init(0),
+        .signature_count = std.atomic.Value(u64).init(0),
+        .tick_height = std.atomic.Value(u64).init(0),
+        .collected_rent = std.atomic.Value(u64).init(0),
+        .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+            .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+        }),
     });
 
     const logger = .noop;
@@ -1153,54 +1150,51 @@ test "checkAndHandleNewRoot - success" {
     defer {
         var it = slot_tracker.slots.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.*.constants.hard_forks.deinit(testing.allocator);
+            testing.allocator.destroy(entry.value_ptr.*);
         }
         slot_tracker.slots.deinit(testing.allocator);
     }
 
-    try slot_tracker.slots.put(testing.allocator, hash2.slot, .{
-        .constants = .{
-            .slot = hash2.slot,
-            .parent_slot = hash1.slot,
-            .parent_hash = Hash.ZEROES,
-            .block_height = 0,
-            .hard_forks = try .initRandom(random, testing.allocator, 10),
-            .max_tick_height = 0,
-            .fee_rate_governor = .initRandom(random),
-            .epoch_reward_status = .inactive,
-        },
-        .state = .{
-            .hash = RwMux(?Hash).init(hash2.hash),
-            .capitalization = std.atomic.Value(u64).init(0),
-            .transaction_count = std.atomic.Value(u64).init(0),
-            .tick_height = std.atomic.Value(u64).init(0),
-            .collected_rent = std.atomic.Value(u64).init(0),
-            .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
-                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
-            }),
-        },
+    try slot_tracker.put(testing.allocator, hash2.slot, .{
+        .parent_slot = hash1.slot,
+        .parent_hash = Hash.ZEROES,
+        .block_height = 0,
+        .collector_id = Pubkey.ZEROES,
+        .max_tick_height = 0,
+        .fee_rate_governor = .initRandom(random),
+        .epoch_reward_status = .inactive,
+    }, .{
+        .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
+        .hash = RwMux(?Hash).init(hash2.hash),
+        .capitalization = std.atomic.Value(u64).init(0),
+        .transaction_count = std.atomic.Value(u64).init(0),
+        .signature_count = std.atomic.Value(u64).init(0),
+        .tick_height = std.atomic.Value(u64).init(0),
+        .collected_rent = std.atomic.Value(u64).init(0),
+        .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+            .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+        }),
     });
-    try slot_tracker.slots.put(testing.allocator, hash3.slot, .{
-        .constants = .{
-            .slot = hash3.slot,
-            .parent_slot = hash2.slot,
-            .parent_hash = Hash.ZEROES,
-            .block_height = 0,
-            .hard_forks = try .initRandom(random, testing.allocator, 10),
-            .max_tick_height = 0,
-            .fee_rate_governor = .initRandom(random),
-            .epoch_reward_status = .inactive,
-        },
-        .state = .{
-            .hash = RwMux(?Hash).init(hash3.hash),
-            .capitalization = std.atomic.Value(u64).init(0),
-            .transaction_count = std.atomic.Value(u64).init(0),
-            .tick_height = std.atomic.Value(u64).init(0),
-            .collected_rent = std.atomic.Value(u64).init(0),
-            .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
-                .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
-            }),
-        },
+
+    try slot_tracker.put(testing.allocator, hash3.slot, .{
+        .parent_slot = hash2.slot,
+        .parent_hash = Hash.ZEROES,
+        .block_height = 0,
+        .collector_id = Pubkey.ZEROES,
+        .max_tick_height = 0,
+        .fee_rate_governor = .initRandom(random),
+        .epoch_reward_status = .inactive,
+    }, .{
+        .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
+        .hash = RwMux(?Hash).init(hash3.hash),
+        .capitalization = std.atomic.Value(u64).init(0),
+        .transaction_count = std.atomic.Value(u64).init(0),
+        .signature_count = std.atomic.Value(u64).init(0),
+        .tick_height = std.atomic.Value(u64).init(0),
+        .collected_rent = std.atomic.Value(u64).init(0),
+        .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
+            .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
+        }),
     });
 
     // Add some entries to progress map that should be removed

@@ -101,6 +101,25 @@ pub const SlotTracker = struct {
         }
         return frozen_slots;
     }
+
+    pub fn parents(
+        self: *const SlotTracker,
+        allocator: Allocator,
+        slot: Slot,
+    ) Allocator.Error![]const Slot {
+        var parents_list = std.ArrayListUnmanaged(Slot){};
+        errdefer parents_list.deinit(allocator);
+
+        var current_slot = slot;
+        while (self.slots.get(current_slot)) |current| {
+            const parent_slot = current.constants.parent_slot;
+            try parents_list.append(allocator, parent_slot);
+
+            current_slot = parent_slot;
+        }
+
+        return try parents_list.toOwnedSlice(allocator);
+    }
 };
 
 pub const EpochTracker = struct {
