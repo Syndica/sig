@@ -336,7 +336,12 @@ pub fn execute(
 
             try deactivateDelinquent(allocator, ic, &me, 1, 2, clock.epoch);
         },
-        ._redelegate => @panic("TODO"),
+        // deprecated
+        ._redelegate => {
+            var me = try getStakeAccount(ic);
+            defer me.release();
+            return error.InvalidInstructionData;
+        },
         .move_stake => |lamports| {
             _ = lamports;
             @panic("TODO");
