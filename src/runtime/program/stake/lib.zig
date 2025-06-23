@@ -27,7 +27,9 @@ const Authorized = StakeStateV2.Authorized;
 const Lockup = StakeStateV2.Lockup;
 const StakeAuthorize = StakeStateV2.StakeAuthorize;
 
+const MAX_RETURN_DATA = runtime.transaction_context.TransactionReturnData.MAX_RETURN_DATA;
 const MAX_ACCOUNT_METAS = runtime.InstructionInfo.MAX_ACCOUNT_METAS;
+const MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION = 5;
 
 pub const ID: Pubkey = .parse("Stake11111111111111111111111111111111111111");
 pub const SOURCE_ID: Pubkey = .parse("8t3vv6v99tQA6Gp7fVdsBH66hQMaswH5qsJVqJqo8xvG");
@@ -315,8 +317,25 @@ pub fn execute(
             const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
             try setLockup(allocator, &me, &lockup, ic.ixn_info.getSigners().slice(), &clock);
         },
-        .get_minimum_delegation => @panic("TODO"),
-        .deactivate_delinquent => @panic("TODO"),
+        .get_minimum_delegation => {
+            const min_delegation = getMinimumDelegation(ic.tc.feature_set);
+            const bytes = std.mem.asBytes(&std.mem.nativeToLittle(u64, min_delegation));
+
+            std.debug.assert(bytes.len == 8);
+            const data = std.BoundedArray(u8, MAX_RETURN_DATA).fromSlice(bytes) catch unreachable;
+
+            ic.tc.return_data = .{
+                .program_id = ID,
+                .data = data,
+            };
+        },
+        .deactivate_delinquent => {
+            var me = try getStakeAccount(ic);
+            defer me.release();
+            const clock = try ic.tc.sysvar_cache.get(sysvar.Clock);
+
+            try deactivateDelinquent(allocator, ic, &me, 1, 2, clock.epoch);
+        },
         ._redelegate => @panic("TODO"),
         .move_stake => |lamports| {
             _ = lamports;
@@ -1295,6 +1314,95 @@ fn deactivate(
     });
 }
 
+fn deactivateDelinquent(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    stake_account: *BorrowedAccount,
+    delinquent_vote_account_index: u16,
+    reference_vote_account_index: u16,
+    current_epoch: Epoch,
+) (error{OutOfMemory} || InstructionError)!void {
+    const delinquent_vote_account_meta = ic.ixn_info.getAccountMetaAtIndex(
+        delinquent_vote_account_index,
+    ) orelse return error.NotEnoughAccountKeys;
+
+    const delinquent_vote_account = try ic.borrowInstructionAccount(delinquent_vote_account_index);
+    defer delinquent_vote_account.release();
+    if (!delinquent_vote_account.account.owner.equals(&runtime.program.vote.ID))
+        return error.IncorrectProgramId;
+    const delinquent_vote_state_raw = try delinquent_vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+    const delinquent_vote_state = try delinquent_vote_state_raw.convertToCurrent(allocator);
+
+    const reference_vote_account = try ic.borrowInstructionAccount(reference_vote_account_index);
+    defer reference_vote_account.release();
+    if (!reference_vote_account.account.owner.equals(&runtime.program.vote.ID))
+        return error.IncorrectProgramId;
+    const reference_vote_state_raw = try reference_vote_account.deserializeFromAccountData(
+        allocator,
+        VoteStateVersions,
+    );
+    const reference_vote_state = try reference_vote_state_raw.convertToCurrent(allocator);
+
+    if (!acceptableReferenceEpochCredits(reference_vote_state.epoch_credits.items, current_epoch)) {
+        ic.tc.custom_error = @intFromEnum(StakeError.insufficient_reference_votes);
+        return error.Custom;
+    }
+
+    const stake_account_state = try stake_account.deserializeFromAccountData(
+        allocator,
+        StakeStateV2,
+    );
+
+    if (stake_account_state != .stake) return error.InvalidAccountData;
+
+    var stake = stake_account_state.stake.stake;
+    const meta = stake_account_state.stake.meta;
+    const stake_flags = stake_account_state.stake.flags;
+
+    if (!stake.delegation.voter_pubkey.equals(&delinquent_vote_account_meta.pubkey)) {
+        ic.tc.custom_error = @intFromEnum(StakeError.vote_address_mismatch);
+        return error.Custom;
+    }
+
+    if (!eligibleForAccountDelinquent(delinquent_vote_state.epoch_credits.items, current_epoch)) {
+        ic.tc.custom_error = @intFromEnum(
+            StakeError.minimum_delinquent_epochs_for_deactivation_not_met,
+        );
+        return error.Custom;
+    }
+
+    if (stake.deactivate(current_epoch)) |err| {
+        ic.tc.custom_error = @intFromEnum(err);
+        return error.Custom;
+    }
+    try stake_account.serializeIntoAccountData(StakeStateV2{
+        .stake = .{
+            .meta = meta,
+            .stake = stake,
+            .flags = stake_flags,
+        },
+    });
+}
+
+fn acceptableReferenceEpochCredits(
+    epoch_credits: []const runtime.program.vote.state.EpochCredit,
+    current_epoch: Epoch,
+) bool {
+    const epoch_index = sub(epoch_credits.len, 5) orelse return false;
+
+    var epoch = current_epoch;
+
+    var i = epoch_credits.len - 1;
+    while (i >= epoch_index) : (i -|= 1) {
+        if (epoch_credits[i].epoch != epoch) return false;
+        epoch -|= 1;
+    }
+    return true;
+}
+
 fn setLockup(
     allocator: std.mem.Allocator,
     stake_account: *BorrowedAccount,
@@ -1323,4 +1431,18 @@ fn setLockup(
         },
         else => return error.InvalidAccountData,
     }
+}
+
+fn eligibleForAccountDelinquent(
+    epoch_credits: []const runtime.program.vote.state.EpochCredit,
+    current_epoch: Epoch,
+) bool {
+    if (epoch_credits.len == 0) return true;
+
+    const last = epoch_credits[epoch_credits.len - 1];
+
+    const minimum_epoch = sub(current_epoch, MINIMUM_DELINQUENT_EPOCHS_FOR_DEACTIVATION) orelse
+        return false;
+
+    return last.epoch <= minimum_epoch;
 }
