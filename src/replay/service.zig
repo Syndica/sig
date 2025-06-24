@@ -13,7 +13,7 @@ const ProgressMap = sig.consensus.ProgressMap;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
-
+const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
@@ -37,6 +37,8 @@ pub const ReplayDependencies = struct {
     epoch_schedule: sig.core.EpochSchedule,
     /// Used to get the entries to validate them and execute the transactions
     blockstore_reader: *BlockstoreReader,
+    /// Used to update the ledger with consensus results
+    ledger_result_writer: *LedgerResultWriter,
     /// Used to get the entries to validate them and execute the transactions
     accounts_db: *AccountsDB,
     slot_leaders: SlotLeaders,
