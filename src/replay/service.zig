@@ -1758,6 +1758,105 @@ test "apply state changes bank frozen" {
     try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 }
 
+test "apply state changes duplicate confirmed matches frozen" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(7353);
+    const random = prng.random();
+
+    var test_data: TestData = try .init(allocator, .noop, random);
+    defer test_data.deinit(allocator);
+
+    const bank_forks = test_data.slot_tracker;
+    const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
+    const descendants = &test_data.descendants;
+
+    var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
+    defer duplicate_slots_to_repair.deinit(allocator);
+
+    var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
+    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+
+    const duplicate_slot = bank_forks.root + 1;
+    const our_duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var blockstore = try sig.ledger.tests.TestDB.init(@src());
+    defer blockstore.deinit();
+
+    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var ledger_reader: sig.ledger.BlockstoreReader = try .init(
+        allocator,
+        .noop,
+        blockstore,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
+        allocator,
+        .noop,
+        blockstore,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    // Setup and check the state that is about to change.
+    try duplicate_slots_to_repair.put(allocator, duplicate_slot, .initRandom(random));
+    try purge_repair_slot_counter.sorted_map.put(allocator, duplicate_slot, 1);
+    try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
+    try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+
+    // DuplicateConfirmedSlotMatchesCluster should:
+    // 1) Re-enable fork choice
+    // 2) Clear any pending repairs from `duplicate_slots_to_repair` since we have the
+    //    right version now
+    // 3) Clear the slot from `purge_repair_slot_counter`
+    // 3) Set the status to duplicate confirmed in Blockstore
+    {
+        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
+        try state_change.duplicateConfirmedSlotMatchesCluster(
+            duplicate_slot,
+            heaviest_subtree_fork_choice,
+            &duplicate_slots_to_repair,
+            &ledger_writer,
+            &purge_repair_slot_counter,
+            &not_duplicate_confirmed_frozen_hash,
+            our_duplicate_slot_hash,
+        );
+
+        try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+    }
+
+    for ([_][]const sig.core.Slot{
+        descendants.get(duplicate_slot).?.sorted_map.keys(),
+        &.{duplicate_slot},
+    }) |child_slot_set| {
+        for (child_slot_set) |child_slot| {
+            try std.testing.expectEqual(
+                null,
+                heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                    .slot = child_slot,
+                    .hash = bank_forks.slots.get(child_slot).?.state.hash.readCopy().?,
+                }),
+            );
+        }
+    }
+
+    try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isCandidate(&.{
+        .slot = duplicate_slot,
+        .hash = our_duplicate_slot_hash,
+    }));
+    try std.testing.expectEqual(0, duplicate_slots_to_repair.count());
+    try std.testing.expectEqual(0, purge_repair_slot_counter.sorted_map.count());
+    try std.testing.expectEqual(our_duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
+    try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+}
+
 // -- handleEdgeCases END -- //
 
 fn processConsensus() void {
