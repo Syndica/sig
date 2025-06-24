@@ -1673,6 +1673,91 @@ test "apply state changes" {
     );
 }
 
+test "apply state changes bank frozen" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(7353);
+    const random = prng.random();
+
+    var test_data: TestData = try .init(allocator, .noop, random);
+    defer test_data.deinit(allocator);
+
+    const bank_forks = test_data.slot_tracker;
+    const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
+
+    const duplicate_slot = bank_forks.root + 1;
+    const duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+
+    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
+    defer registry.deinit();
+
+    var blockstore = try sig.ledger.tests.TestDB.init(@src());
+    defer blockstore.deinit();
+
+    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var ledger_reader: sig.ledger.BlockstoreReader = try .init(
+        allocator,
+        .noop,
+        blockstore,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
+        allocator,
+        .noop,
+        blockstore,
+        &registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
+
+    // Simulate ReplayStage freezing a Bank with the given hash.
+    // BankFrozen should mark it down in Blockstore.
+    try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
+
+    {
+        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
+        state_change.bankFrozen(
+            duplicate_slot,
+            heaviest_subtree_fork_choice,
+            &not_duplicate_confirmed_frozen_hash,
+            duplicate_slot_hash,
+        );
+        try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+    }
+
+    try std.testing.expectEqual(duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
+    try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+
+    // If we freeze another version of the bank, it should overwrite the first
+    // version in blockstore.
+    const new_bank_hash: sig.core.Hash = .initRandom(random);
+    const root_slot_hash: sig.core.hash.SlotAndHash = rsh: {
+        const root_bank = bank_forks.get(bank_forks.root).?;
+        break :rsh .{
+            .slot = bank_forks.root,
+            .hash = root_bank.state.hash.readCopy().?,
+        };
+    };
+    try heaviest_subtree_fork_choice.addNewLeafSlot(.{ .slot = duplicate_slot, .hash = new_bank_hash }, root_slot_hash);
+    {
+        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
+        state_change.bankFrozen(
+            duplicate_slot,
+            heaviest_subtree_fork_choice,
+            &not_duplicate_confirmed_frozen_hash,
+            new_bank_hash,
+        );
+        try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+    }
+    try std.testing.expectEqual(new_bank_hash, ledger_reader.getBankHash(duplicate_slot));
+    try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
+}
+
 // -- handleEdgeCases END -- //
 
 fn processConsensus() void {
