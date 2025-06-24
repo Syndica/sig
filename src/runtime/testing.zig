@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 const sysvar = sig.runtime.sysvar;
+const vm = sig.vm;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
@@ -19,6 +20,8 @@ const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
+const AccountCache = sig.runtime.account_loader.BatchAccountCache;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub const ExecuteContextsParams = struct {
     // If a user requires a mutable reference to the created feature set, they should
@@ -27,6 +30,13 @@ pub const ExecuteContextsParams = struct {
     feature_set_ptr: ?*FeatureSet = null,
     feature_set: []const FeatureParams = &.{},
     epoch_stakes: []const EpochStakeParam = &.{},
+
+    // Programs to be inserted into the program map.
+    program_map: *const ProgramMap = &.{},
+
+    // Environment used to load and verify programs.
+    vm_environment: *const vm.Environment = &.{},
+    next_vm_environment: ?*const vm.Environment = null,
 
     // Slot Context
     sysvar_cache: SysvarCacheParams = .{},
@@ -83,7 +93,7 @@ pub fn createTransactionContext(
     allocator: std.mem.Allocator,
     random: std.Random,
     params: ExecuteContextsParams,
-) !TransactionContext {
+) !struct { AccountCache, TransactionContext } {
     if (!builtin.is_test)
         @compileError("createTransactionContext should only be called in test mode");
 
@@ -105,22 +115,42 @@ pub fn createTransactionContext(
     errdefer sysvar_cache.deinit(allocator);
 
     // Create Accounts
-    var accounts = std.ArrayList(TransactionContextAccount).init(allocator);
-    errdefer accounts.deinit();
+    var accounts = try std.ArrayListUnmanaged(TransactionContextAccount).initCapacity(
+        allocator,
+        params.accounts.len,
+    );
+    errdefer accounts.deinit(allocator);
+
+    var account_cache = AccountCache{};
+    errdefer account_cache.deinit(allocator);
+
+    var account_keys = try std.ArrayListUnmanaged(Pubkey).initCapacity(
+        allocator,
+        params.accounts.len,
+    );
+    defer account_keys.deinit(allocator);
 
     for (params.accounts) |account_params| {
-        try accounts.append(
-            TransactionContextAccount.init(
-                account_params.pubkey orelse Pubkey.initRandom(random),
-                .{
-                    .lamports = account_params.lamports,
-                    .data = try allocator.dupe(u8, account_params.data),
-                    .owner = account_params.owner orelse Pubkey.initRandom(random),
-                    .executable = account_params.executable,
-                    .rent_epoch = account_params.rent_epoch,
-                },
-            ),
+        const key = account_params.pubkey orelse Pubkey.initRandom(random);
+        account_keys.appendAssumeCapacity(key);
+        try account_cache.account_cache.put(
+            allocator,
+            key,
+            .{
+                .lamports = account_params.lamports,
+                .data = try allocator.dupe(u8, account_params.data),
+                .owner = account_params.owner orelse Pubkey.initRandom(random),
+                .executable = account_params.executable,
+                .rent_epoch = account_params.rent_epoch,
+            },
         );
+    }
+
+    for (account_keys.items) |key| {
+        accounts.appendAssumeCapacity(TransactionContextAccount.init(
+            key,
+            account_cache.account_cache.getPtr(key) orelse unreachable,
+        ));
     }
 
     // Create Return Data
@@ -134,7 +164,10 @@ pub fn createTransactionContext(
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
         .epoch_stakes = epoch_stakes,
-        .accounts = try accounts.toOwnedSlice(),
+        .vm_environment = params.vm_environment,
+        .next_vm_environment = params.next_vm_environment,
+        .program_map = params.program_map,
+        .accounts = try accounts.toOwnedSlice(allocator),
         .serialized_accounts = .{},
         .instruction_stack = .{},
         .instruction_trace = .{},
@@ -149,7 +182,7 @@ pub fn createTransactionContext(
         .prev_lamports_per_signature = params.prev_lamports_per_signature,
     };
 
-    return tc;
+    return .{ account_cache, tc };
 }
 
 pub fn deinitTransactionContext(
@@ -270,9 +303,9 @@ pub fn createSysvarCache(
             ),
         };
     }
-    sysvar_cache.fees = params.fees;
+    sysvar_cache.fees_obj = params.fees;
     if (params.recent_blockhashes) |recent_blockhashes| {
-        sysvar_cache.recent_blockhashes = .{
+        sysvar_cache.recent_blockhashes_obj = .{
             .entries = try allocator.dupe(
                 sysvar.RecentBlockhashes.Entry,
                 recent_blockhashes.entries,

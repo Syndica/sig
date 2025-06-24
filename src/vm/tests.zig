@@ -9,7 +9,8 @@ const executor = sig.runtime.executor;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const Elf = sig.vm.elf.Elf;
 const Executable = sig.vm.Executable;
-const BuiltinProgram = sig.vm.BuiltinProgram;
+const Registry = sig.vm.Registry;
+const Syscall = sig.vm.syscalls.Syscall;
 const Config = sig.vm.Config;
 const Region = sig.vm.memory.Region;
 const MemoryMap = sig.vm.memory.MemoryMap;
@@ -44,7 +45,7 @@ fn testAsmWithMemory(
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
@@ -69,12 +70,16 @@ fn testAsmWithMemory(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    var tc = try createTransactionContext(
+    var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{ .compute_meter = expected[1] },
     );
-    defer deinitTranactionContext(allocator, tc);
+    defer {
+        deinitTranactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
+
     var vm = try Vm.init(
         allocator,
         &executable,
@@ -1898,12 +1903,15 @@ test "pqr" {
     program[40] = @intFromEnum(OpCode.exit_or_syscall);
 
     var prng = std.Random.DefaultPrng.init(10);
-    var tc = try createTransactionContext(
+    var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{ .compute_meter = 6 },
     );
-    defer deinitTranactionContext(allocator, tc);
+    defer {
+        deinitTranactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const max_int = std.math.maxInt(u64);
     inline for (
@@ -1979,7 +1987,7 @@ test "pqr" {
         const config: Config = .{ .maximum_version = .v2 };
 
         var registry: sig.vm.Registry(u64) = .{};
-        var loader: BuiltinProgram = .{};
+        var loader: Registry(Syscall) = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
@@ -2029,7 +2037,7 @@ test "pqr divide by zero" {
         const config: Config = .{ .maximum_version = .v2 };
 
         var registry: sig.vm.Registry(u64) = .{};
-        var loader: BuiltinProgram = .{};
+        var loader: Registry(Syscall) = .{};
         var executable = try Executable.fromTextBytes(
             allocator,
             &program,
@@ -2043,12 +2051,15 @@ test "pqr divide by zero" {
         const map = try MemoryMap.init(allocator, &.{}, .v3, .{});
         var prng = std.Random.DefaultPrng.init(10);
 
-        var tc = try createTransactionContext(
+        var cache, var tc = try createTransactionContext(
             allocator,
             prng.random(),
             .{ .compute_meter = 2 },
         );
-        defer deinitTranactionContext(allocator, tc);
+        defer {
+            deinitTranactionContext(allocator, tc);
+            cache.deinit(allocator);
+        }
 
         var vm = try Vm.init(
             allocator,
@@ -2288,11 +2299,11 @@ pub fn testElfWithSyscalls(
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     defer loader.deinit(allocator);
 
     for (extra_syscalls) |syscall| {
-        _ = try loader.functions.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
             syscall.name,
             syscall.builtin_fn,
@@ -2321,7 +2332,7 @@ pub fn testElfWithSyscalls(
     );
 
     var prng = std.Random.DefaultPrng.init(10);
-    var tc = try createTransactionContext(
+    var cache, var tc = try createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -2331,7 +2342,10 @@ pub fn testElfWithSyscalls(
             .compute_meter = expected[1],
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const instr_info = InstructionInfo{
         .program_meta = .{
@@ -2534,11 +2548,11 @@ fn testVerifyTextBytesWithSyscalls(
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     defer loader.deinit(allocator);
 
     for (extra_syscalls) |syscall| {
-        _ = try loader.functions.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
             syscall.name,
             syscall.builtin_fn,
@@ -2568,11 +2582,11 @@ fn testVerifyWithSyscalls(
 ) !void {
     const allocator = std.testing.allocator;
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     defer loader.deinit(allocator);
 
     for (extra_syscalls) |syscall| {
-        _ = try loader.functions.registerHashed(
+        _ = try loader.registerHashed(
             allocator,
             syscall.name,
             syscall.builtin_fn,
@@ -2932,14 +2946,17 @@ pub fn testSyscall(
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{.{
             .pubkey = sig.core.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }},
         .compute_meter = config.compute_meter,
     });
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var registers = sig.vm.interpreter.RegisterMap.initFill(0);
     var memory_map = try MemoryMap.init(

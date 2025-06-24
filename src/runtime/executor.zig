@@ -5,6 +5,7 @@ const ids = sig.runtime.ids;
 const program = sig.runtime.program;
 const stable_log = sig.runtime.stable_log;
 const features = sig.runtime.features;
+const bpf_loader_program = sig.runtime.program.bpf_loader;
 
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
@@ -59,9 +60,8 @@ pub fn pushInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L250-L253
     // [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/fd_executor.c#L1001-L1011
-    if (program_id.equals(&ids.NATIVE_LOADER_ID)) {
+    if (program_id.equals(&ids.NATIVE_LOADER_ID))
         return InstructionError.UnsupportedProgramId;
-    }
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
@@ -73,8 +73,6 @@ pub fn pushInstruction(
             return InstructionError.ReentrancyNotAllowed;
         }
     }
-
-    // TODO: syscall_context.push(None)
 
     // Push the instruction onto the stack and trace, creating the instruction context
     // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L366-L403
@@ -135,16 +133,26 @@ fn processNextInstruction(
     const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
     // Lookup the program id
-    // [agave] https://github.com/anza-xyz/agave/blob/a1ed2b1052bde05e79c31388b399dba9da10f7de/program-runtime/src/invoke_context.rs#L518-L529
-    const program_id = blk: {
+    // [agave] https://github.com/anza-xyz/agave/blob/1ceeab0548d5db0bbcf7dab7726c2ffb4180fa76/program-runtime/src/invoke_context.rs#L509-L533
+    const native_program_id, const program_id = blk: {
         const program_account = ic.borrowProgramAccount() catch
             return InstructionError.UnsupportedProgramId;
         defer program_account.release();
 
-        break :blk if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
-            program_account.pubkey
-        else
-            program_account.account.owner;
+        if (ids.NATIVE_LOADER_ID.equals(&program_account.account.owner))
+            break :blk .{ program_account.pubkey, program_account.pubkey };
+
+        const owner_id = program_account.account.owner;
+        if (ic.tc.feature_set.active.contains(features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS)) {
+            if (bpf_loader_program.v1.ID.equals(&owner_id) or
+                bpf_loader_program.v2.ID.equals(&owner_id) or
+                bpf_loader_program.v3.ID.equals(&owner_id) or
+                bpf_loader_program.v4.ID.equals(&owner_id))
+                break :blk .{ owner_id, program_account.pubkey };
+            return InstructionError.UnsupportedProgramId;
+        }
+
+        break :blk .{ owner_id, program_account.pubkey };
     };
 
     // Lookup native program function
@@ -155,11 +163,11 @@ fn processNextInstruction(
     // - precompile entrypoints
 
     const maybe_precompile_fn =
-        program.PRECOMPILE_ENTRYPOINTS.get(program_id.base58String().slice());
+        program.PRECOMPILE_ENTRYPOINTS.get(native_program_id.base58String().slice());
 
     const maybe_native_program_fn = maybe_precompile_fn orelse blk: {
         const native_program_fn = program.PROGRAM_ENTRYPOINTS.get(
-            program_id.base58String().slice(),
+            native_program_id.base58String().slice(),
         );
         ic.tc.return_data.data.len = 0;
         break :blk native_program_fn;
@@ -409,7 +417,7 @@ test "pushInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -420,7 +428,10 @@ test "pushInstruction" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -493,7 +504,7 @@ test "processNextInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -505,7 +516,10 @@ test "processNextInstruction" {
             .compute_meter = system_program.COMPUTE_UNITS,
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -557,7 +571,7 @@ test "popInstruction" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -568,7 +582,10 @@ test "popInstruction" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     var instruction_info = try testing.createInstructionInfo(
         &tc,
@@ -639,7 +656,7 @@ test "prepareCpiInstructionInfo" {
     var prng = std.Random.DefaultPrng.init(0);
 
     var feature_set = try allocator.create(FeatureSet);
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -652,7 +669,10 @@ test "prepareCpiInstructionInfo" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const caller = try testing.createInstructionInfo(
         &tc,
@@ -790,7 +810,7 @@ test "sumAccountLamports" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(
+    var cache, var tc = try testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -802,7 +822,10 @@ test "sumAccountLamports" {
             },
         },
     );
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     {
         // Success: 0 + 1 + 2 + 3 = 6

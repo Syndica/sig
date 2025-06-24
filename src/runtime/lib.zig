@@ -1,5 +1,6 @@
 pub const account_loader = @import("account_loader.zig");
 pub const borrowed_account = @import("borrowed_account.zig");
+pub const check_transactions = @import("check_transactions.zig");
 pub const compute_budget = @import("compute_budget.zig");
 pub const executor = @import("executor.zig");
 pub const features = @import("features.zig");
@@ -10,6 +11,7 @@ pub const log_collector = @import("log_collector.zig");
 pub const nonce = @import("nonce.zig");
 pub const program = @import("program/lib.zig");
 pub const program_cache = @import("program_cache.zig");
+pub const program_loader = @import("program_loader.zig");
 pub const pubkey_utils = @import("pubkey_utils.zig");
 pub const stable_log = @import("stable_log.zig");
 pub const sysvar = @import("sysvar/lib.zig");

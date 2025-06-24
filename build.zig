@@ -320,14 +320,16 @@ fn addInstallAndRun(
     exe: *Build.Step.Compile,
     config: Config,
 ) void {
+    const install_step = b.getInstallStep();
     var send_step: ?*Build.Step = null;
 
     step.dependOn(&exe.step);
+    install_step.dependOn(&exe.step);
 
     if (config.install or (config.ssh_host != null and config.run)) {
         const install = b.addInstallArtifact(exe, .{});
         step.dependOn(&install.step);
-        b.getInstallStep().dependOn(&install.step);
+        install_step.dependOn(&install.step);
 
         if (config.ssh_host) |host| {
             const install_dir = if (config.ssh_install_dir[0] == '/')

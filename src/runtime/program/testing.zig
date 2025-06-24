@@ -63,7 +63,7 @@ pub fn expectProgramExecuteResult(
     // Create the initial transaction context
     var initial_prng = std.Random.DefaultPrng.init(0);
 
-    var initial_tc = try createTransactionContext(
+    var initial_cache, var initial_tc = try createTransactionContext(
         allocator,
         initial_prng.random(),
         context_params,
@@ -77,17 +77,21 @@ pub fn expectProgramExecuteResult(
             }
         }
         deinitTransactionContext(allocator, initial_tc);
+        initial_cache.deinit(allocator);
     }
 
     // Create the expected transaction context
     var expected_prng = std.Random.DefaultPrng.init(0);
 
-    const expected_tc = try createTransactionContext(
+    var expected_cache, const expected_tc = try createTransactionContext(
         allocator,
         expected_prng.random(),
         expected_context_params,
     );
-    defer deinitTransactionContext(allocator, expected_tc);
+    defer {
+        deinitTransactionContext(allocator, expected_tc);
+        expected_cache.deinit(allocator);
+    }
 
     // Create the instruction info
     var instruction_info = try createInstructionInfo(

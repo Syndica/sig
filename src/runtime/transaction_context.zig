@@ -2,6 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const program = sig.runtime.program;
+const vm = sig.vm;
 
 const Hash = sig.core.Hash;
 const Instruction = sig.core.instruction.Instruction;
@@ -20,6 +21,7 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const Rent = sig.runtime.sysvar.Rent;
 const SerializedAccountMetadata = sig.runtime.program.bpf.serialize.SerializedAccountMeta;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 // https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/program-runtime/src/compute_budget.rs#L139
 pub const MAX_INSTRUCTION_TRACE_LENGTH = 64;
@@ -39,25 +41,35 @@ pub const TransactionContext = struct {
     // This exists per-slot.
     sysvar_cache: *const SysvarCache,
 
+    // The enviroment used to load and validate BPF programs.
+    // Changes once per epoch, next is used when deploying bpf programs in the slot
+    // prior to the next epoch. For all other slots, next is null.
+    vm_environment: *const vm.Environment,
+    next_vm_environment: ?*const vm.Environment,
+
+    // Program map is used to laod and invoke valid BPF programs.
+    program_map: *const ProgramMap,
+
     /// Transaction accounts
+    /// TransactionContextAccount contains a non-owning reference to an AccountSharedData
     accounts: []TransactionContextAccount,
 
     /// Used by CPI to access serialized account metadata.
     serialized_accounts: std.BoundedArray(
         SerializedAccountMetadata,
         InstructionInfo.MAX_ACCOUNT_METAS,
-    ),
+    ) = .{},
 
     /// Used by syscall.allocFree to implement sbrk bump allocation
     bpf_alloc_pos: u64 = 0,
 
-    instruction_stack: InstructionStack,
-    instruction_trace: InstructionTrace,
+    instruction_stack: InstructionStack = .{},
+    instruction_trace: InstructionTrace = .{},
     top_level_instruction_index: u16 = 0,
-    return_data: TransactionReturnData,
+    return_data: TransactionReturnData = .{},
 
     /// Total change to account data size within transaction
-    accounts_resize_delta: i64,
+    accounts_resize_delta: i64 = 0,
 
     /// Instruction compute meter, for tracking compute units consumed against
     /// the designated compute budget during program execution.
@@ -66,9 +78,9 @@ pub const TransactionContext = struct {
 
     /// If an error other than an InstructionError occurs during execution its value will
     /// be set here and InstructionError.custom will be returned
-    custom_error: ?u32,
+    custom_error: ?u32 = null,
 
-    log_collector: ?LogCollector,
+    log_collector: ?LogCollector = null,
     rent: Rent,
 
     /// Previous blockhash and lamports per signature from the blockhash queue
@@ -86,7 +98,6 @@ pub const TransactionContext = struct {
     }, MAX_INSTRUCTION_TRACE_LENGTH);
 
     pub fn deinit(self: TransactionContext) void {
-        for (self.accounts) |account| account.deinit(self.allocator);
         self.allocator.free(self.accounts);
         if (self.log_collector) |lc| lc.deinit(self.allocator);
     }
@@ -204,9 +215,9 @@ pub const TransactionReturnData = struct {
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L137-L139
 pub const TransactionContextAccount = struct {
     pubkey: Pubkey,
-    account: AccountSharedData,
-    read_refs: usize,
-    write_ref: bool,
+    account: *AccountSharedData,
+    read_refs: usize = 0,
+    write_ref: bool = false,
 
     pub const RLockGuard = struct {
         read_refs: *usize,
@@ -226,7 +237,7 @@ pub const TransactionContextAccount = struct {
 
     pub fn init(
         pubkey: Pubkey,
-        account: AccountSharedData,
+        account: *AccountSharedData,
     ) TransactionContextAccount {
         return .{
             .pubkey = pubkey,
@@ -236,16 +247,12 @@ pub const TransactionContextAccount = struct {
         };
     }
 
-    pub fn deinit(self: TransactionContextAccount, allocator: std.mem.Allocator) void {
-        allocator.free(self.account.data);
-    }
-
     pub fn writeWithLock(
         self: *TransactionContextAccount,
     ) ?struct { *AccountSharedData, WLockGuard } {
         if (self.write_ref or self.read_refs > 0) return null;
         self.write_ref = true;
-        return .{ &self.account, .{ .write_ref = &self.write_ref } };
+        return .{ self.account, .{ .write_ref = &self.write_ref } };
     }
 
     pub fn readWithLock(
@@ -253,6 +260,6 @@ pub const TransactionContextAccount = struct {
     ) ?struct { *AccountSharedData, RLockGuard } {
         if (self.write_ref) return null;
         self.read_refs += 1;
-        return .{ &self.account, .{ .read_refs = &self.read_refs } };
+        return .{ self.account, .{ .read_refs = &self.read_refs } };
     }
 };

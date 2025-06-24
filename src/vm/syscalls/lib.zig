@@ -1,26 +1,24 @@
-const std = @import("std");
 const builtin = @import("builtin");
-const cpi = @import("cpi.zig");
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
+pub const cpi = @import("cpi.zig");
 pub const memops = @import("memops.zig");
 pub const hash = @import("hash.zig");
 pub const ecc = @import("ecc.zig");
 pub const sysvar = @import("sysvar.zig");
 
-const features = sig.runtime.features;
 const stable_log = sig.runtime.stable_log;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
 
 const memory = sig.vm.memory;
+
 const SyscallError = sig.vm.SyscallError;
 const Pubkey = sig.core.Pubkey;
 const MemoryMap = memory.MemoryMap;
 const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
-const BuiltinProgram = sig.vm.BuiltinProgram;
-const FeatureSet = sig.runtime.features.FeatureSet;
 const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -38,280 +36,6 @@ pub const Entry = struct {
     name: []const u8,
     builtin_fn: Syscall,
 };
-
-// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/syscalls/mod.rs#L335
-pub fn register(
-    allocator: std.mem.Allocator,
-    feature_set: *const FeatureSet,
-    slot: u64,
-    is_deploy: bool,
-) !BuiltinProgram {
-    // Register syscalls
-    var syscalls = BuiltinProgram{};
-    errdefer syscalls.deinit(allocator);
-
-    // Abort
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "abort",
-        abort,
-    );
-
-    // Panic
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_panic_",
-        panic,
-    );
-
-    // Alloc Free
-    if (!is_deploy) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_alloc_free",
-            allocFree,
-        );
-    }
-
-    // Logging
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_",
-        log,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_64_",
-        log64,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_pubkey",
-        logPubkey,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_compute_units_",
-        logComputeUnits,
-    );
-
-    // Log Data
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_log_data",
-        logData,
-    );
-
-    // Program derived addresses
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_create_program_address",
-        createProgramAddress,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_try_find_program_address",
-        findProgramAddress,
-    );
-
-    // Sha256, Keccak256, Secp256k1Recover
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_sha256",
-        hash.sha256,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_keccak256",
-        hash.keccak256,
-    );
-    // _ = try syscalls.functions.registerHashed(allocator, "sol_secp256k1_recover", secp256k1Recover,);
-
-    // Blake3
-    if (feature_set.isActive(features.BLAKE3_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_blake3",
-            hash.blake3,
-        );
-    }
-
-    // Elliptic Curve
-    if (feature_set.isActive(features.CURVE25519_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_curve_validate_point",
-            ecc.curvePointValidation,
-        );
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_curve_group_op",
-            ecc.curveGroupOp,
-        );
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_curve_multiscalar_mul",
-            ecc.curveMultiscalarMul,
-        );
-    }
-
-    // Sysvars
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_clock_sysvar",
-        sysvar.getClock,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_epoch_schedule_sysvar",
-        sysvar.getEpochSchedule,
-    );
-    if (!feature_set.isActive(features.DISABLE_FEES_SYSVAR, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_get_fees_sysvar",
-            sysvar.getFees,
-        );
-    }
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_rent_sysvar",
-        sysvar.getRent,
-    );
-    if (feature_set.isActive(features.LAST_RESTART_SLOT_SYSVAR, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_get_last_restart_slot",
-            sysvar.getLastRestartSlot,
-        );
-    }
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_epoch_rewards_sysvar",
-        sysvar.getEpochRewards,
-    );
-
-    // Memory
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memcpy_",
-        memops.memcpy,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memmove_",
-        memops.memmove,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memset_",
-        memops.memset,
-    );
-
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_memcmp_",
-        memops.memcmp,
-    );
-
-    // Processed Sibling
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_processed_sibling_instruction",
-        getProcessedSiblingInstruction,
-    );
-
-    // Stack Height
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_stack_height",
-        getStackHeight,
-    );
-
-    // Return Data
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_set_return_data",
-        setReturnData,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_get_return_data",
-        getReturnData,
-    );
-
-    // Cross Program Invocation
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_invoke_signed_c",
-        cpi.invokeSignedC,
-    );
-    _ = try syscalls.functions.registerHashed(
-        allocator,
-        "sol_invoke_signed_rust",
-        cpi.invokeSignedRust,
-    );
-
-    // Memory Allocator
-    if (!feature_set.isActive(features.DISABLE_DEPLOY_OF_ALLOC_FREE_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_alloc_free_",
-            allocFree,
-        );
-    }
-
-    // Alt_bn128
-    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN128_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn128_group_op", altBn128GroupOp,);
-    // }
-
-    // Big_mod_exp
-    // if (feature_set.isActive(feature_set.ENABLE_BIG_MOD_EXP_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_big_mod_exp", bigModExp,);
-    // }
-
-    // Poseidon
-    if (feature_set.isActive(features.ENABLE_POSEIDON_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_poseidon",
-            hash.poseidon,
-        );
-    }
-
-    // Remaining Compute Units
-    if (feature_set.isActive(features.REMAINING_COMPUTE_UNITS_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(
-            allocator,
-            "sol_remaining_compute_units",
-            remainingComputeUnits,
-        );
-    }
-
-    // Alt_bn_128_compression
-    // if (feature_set.isActive(feature_set.ENABLE_ALT_BN_128_COMPRESSION_SYSCALL, slot)) {
-    //     _ = try syscalls.functions.registerHashed(allocator, "sol_alt_bn_128_compression", altBn128Compression,);
-    // }
-
-    // Sysvar Getter
-    if (feature_set.isActive(features.GET_SYSVAR_SYSCALL_ENABLED, slot)) {
-        _ = try syscalls.functions.registerHashed(allocator, "sol_get_sysvar", sysvar.getSysvar);
-    }
-
-    // Get Epoch Stake
-    if (feature_set.isActive(features.ENABLE_GET_EPOCH_STAKE_SYSCALL, slot)) {
-        _ = try syscalls.functions.registerHashed(allocator, "sol_get_epoch_stake", getEpochStake);
-    }
-
-    return syscalls;
-}
 
 // logging
 /// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
@@ -974,7 +698,7 @@ test findProgramAddress {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = Pubkey.initRandom(prng.random()),
@@ -982,7 +706,10 @@ test findProgramAddress {
             },
         },
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const cost = tc.compute_budget.create_program_address_units;
     const address = sig.runtime.program.bpf_loader.v3.ID;
@@ -1089,7 +816,7 @@ test createProgramAddress {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{
             .{
                 .pubkey = Pubkey.initRandom(prng.random()),
@@ -1097,7 +824,10 @@ test createProgramAddress {
             },
         },
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const cost = tc.compute_budget.create_program_address_units;
     const address = sig.runtime.program.bpf_loader.v3.ID;
@@ -1251,12 +981,15 @@ test allocFree {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
 
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{},
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const heap = try allocator.alloc(u8, 4096);
     defer allocator.free(heap);
@@ -1302,10 +1035,13 @@ test getProcessedSiblingInstruction {
         .owner = sig.runtime.program.bpf_loader.v2.ID,
     };
 
-    var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &account_params,
     });
-    defer testing.deinitTransactionContext(allocator, tc);
+    defer {
+        testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const trace_indexes: [8]u8 = std.simd.iota(u8, 8);
     for ([_]u8{ 1, 2, 3, 2, 2, 3, 4, 3 }, 0..) |stack_height, index_in_trace| {
@@ -1448,7 +1184,7 @@ test getEpochStake {
     const target_vote_address = Pubkey.initRandom(prng.random());
     const total_epoch_stake = 200_000_000_000_000;
 
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -1465,7 +1201,10 @@ test getEpochStake {
             },
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     // Test get total stake
     {
@@ -1568,7 +1307,7 @@ test "set and get return data" {
     var id_buffer: [32]u8 = .{0} ** 32;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var tc = try sig.runtime.testing.createTransactionContext(
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
         allocator,
         prng.random(),
         .{
@@ -1579,7 +1318,10 @@ test "set and get return data" {
             .compute_meter = 10_000,
         },
     );
-    defer sig.runtime.testing.deinitTransactionContext(allocator, tc);
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, tc);
+        cache.deinit(allocator);
+    }
 
     const program_id = sig.runtime.program.bpf_loader.v2.ID;
     const instr_info = sig.runtime.InstructionInfo{

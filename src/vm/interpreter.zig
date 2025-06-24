@@ -7,9 +7,10 @@ const memory = sig.vm.memory;
 const MemoryMap = memory.MemoryMap;
 const Instruction = sbpf.Instruction;
 const Executable = sig.vm.Executable;
-const BuiltinProgram = sig.vm.BuiltinProgram;
 const TransactionContext = sig.runtime.TransactionContext;
 const ExecutionError = sig.vm.ExecutionError;
+const Syscall = sig.vm.syscalls.Syscall;
+const Registry = sig.vm.Registry;
 
 pub const RegisterMap = std.EnumArray(sbpf.Instruction.Register, u64);
 
@@ -19,7 +20,7 @@ pub const Vm = struct {
 
     registers: RegisterMap,
     memory_map: MemoryMap,
-    loader: *const BuiltinProgram,
+    loader: *const Registry(Syscall),
 
     vm_addr: u64,
     call_frames: std.ArrayListUnmanaged(CallFrame),
@@ -38,7 +39,7 @@ pub const Vm = struct {
         allocator: std.mem.Allocator,
         executable: *const Executable,
         memory_map: MemoryMap,
-        loader: *const BuiltinProgram,
+        loader: *const Registry(Syscall),
         stack_len: u64,
         ctx: *TransactionContext,
     ) error{OutOfMemory}!Vm {
@@ -90,6 +91,18 @@ pub const Vm = struct {
         return .{ self.result, instruction_count };
     }
 
+    fn dispatchSyscall(self: *Vm, entry: anytype) !void {
+        if (self.executable.config.enable_instruction_meter)
+            self.transaction_context.consumeUnchecked(self.instruction_count);
+        self.instruction_count = 0;
+        self.registers.set(.r0, 0);
+        try entry.value(
+            self.transaction_context,
+            &self.memory_map,
+            &self.registers,
+        );
+    }
+
     fn step(self: *Vm) ExecutionError!bool {
         const config = self.executable.config;
         if (config.enable_instruction_meter and
@@ -99,6 +112,10 @@ pub const Vm = struct {
         }
 
         self.instruction_count += 1;
+        if (self.registers.get(.pc) >= self.executable.instructions.len) {
+            return error.ExecutionOverrun;
+        }
+
         const version = self.executable.version;
         const registers = &self.registers;
         const pc = registers.get(.pc);
@@ -582,13 +599,8 @@ pub const Vm = struct {
             => {
                 if (opcode == .exit_or_syscall and version.enableStaticSyscalls()) {
                     // SBPFv3 SYSCALL instruction
-                    if (self.loader.functions.lookupKey(inst.imm)) |entry| {
-                        registers.set(.r0, 0);
-                        try entry.value(
-                            self.transaction_context,
-                            &self.memory_map,
-                            &self.registers,
-                        );
+                    if (self.loader.lookupKey(inst.imm)) |entry| {
+                        try self.dispatchSyscall(entry);
                     } else {
                         @panic("TODO: detect invalid syscall in verifier");
                     }
@@ -621,14 +633,9 @@ pub const Vm = struct {
                     .{ true, true };
 
                 if (external) {
-                    if (self.loader.functions.lookupKey(inst.imm)) |entry| {
+                    if (self.loader.lookupKey(inst.imm)) |entry| {
                         resolved = true;
-                        registers.set(.r0, 0);
-                        try entry.value(
-                            self.transaction_context,
-                            &self.memory_map,
-                            &self.registers,
-                        );
+                        try self.dispatchSyscall(entry);
                     }
                 }
 
@@ -655,6 +662,7 @@ pub const Vm = struct {
                 try self.pushCallFrame();
 
                 next_pc = (target_pc -% self.vm_addr) / 8;
+                if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
             },
 
             // other instructions
@@ -673,7 +681,6 @@ pub const Vm = struct {
             else => return error.UnsupportedInstruction,
         }
 
-        if (next_pc >= instructions.len) return error.CallOutsideTextSegment;
         self.registers.set(.pc, next_pc);
         return true;
     }
