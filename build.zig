@@ -22,9 +22,11 @@ pub const Config = struct {
         var self: Config = .{
             .target = b.standardTargetOptions(.{}),
             .optimize = b.standardOptimizeOption(.{}),
-            .filters = b.option([]const []const u8, "filter",
-                \\List of filters, used for example to filter unit tests by name.
-                \\Specified as a series like `-Dfilter='filter1' -Dfilter='filter2'`.
+            .filters = b.option(
+                []const []const u8,
+                "filter",
+                "List of filters, used for example to filter unit tests by name. " ++
+                    "Specified as a series like `-Dfilter='filter1' -Dfilter='filter2'`.",
             ),
             .enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite"),
             .blockstore_db = b.option(
@@ -32,16 +34,17 @@ pub const Config = struct {
                 "blockstore",
                 "Blockstore database backend",
             ) orelse .rocksdb,
-            .run = !(b.option(bool, "no-run",
-                \\Don't run any of the executables implied by the specified steps, only install them.
-                \\Use in conjunction with 'no-bin' to avoid installation as well.
+            .run = !(b.option(
+                bool,
+                "no-run",
+                "Don't run any of the executables implied by the specified steps, only install " ++
+                    "them. Use in conjunction with 'no-bin' to avoid installation as well.",
             ) orelse false),
             .install = !(b.option(
                 bool,
                 "no-bin",
-                \\Don't install any of the binaries implied by the specified steps, only run them.
-                \\Use in conjunction with 'no-run' to avoid running as well.
-                ,
+                "Don't install any of the binaries implied by the specified steps, only run " ++
+                    "them. Use in conjunction with 'no-run' to avoid running as well.",
             ) orelse false),
             .ssh_host = b.option(
                 []const u8,
@@ -358,9 +361,12 @@ const BlockstoreDB = enum {
 
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
 fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
-    const zls_is_build_runner = b.option(bool, "zls-is-build-runner",
-        \\Option passed by zls to indicate that it's the one running this build script (configured in the local zls.build.json).
-        \\This should not be specified on the command line nor as a dependency argument.
+    const zls_is_build_runner = b.option(
+        bool,
+        "zls-is-build-runner",
+        "Option passed by zls to indicate that it's the one running this build script " ++
+            "(configured in the local zls.build.json). This should not be specified on the " ++
+            "command line nor as a dependency argument.",
     ) orelse false;
     if (!zls_is_build_runner) return;
 
@@ -411,17 +417,21 @@ const ssh = struct {
             },
         };
 
-        const targets = try std.json.parseFromSlice(
+        const stdoutz = try b.allocator.dupeZ(u8, run_result.stdout);
+        defer b.allocator.free(stdoutz);
+        const targets = try std.zon.parse.fromSlice(
             Targets,
             b.allocator,
-            run_result.stdout,
+            stdoutz,
+            null,
             .{ .ignore_unknown_fields = true },
         );
-        defer targets.deinit();
+        defer b.allocator.free(targets.native.triple);
+        defer b.allocator.free(targets.native.cpu.name);
 
         const query = try Build.parseTargetQuery(.{
-            .arch_os_abi = targets.value.native.triple,
-            .cpu_features = targets.value.native.cpu.name,
+            .arch_os_abi = targets.native.triple,
+            .cpu_features = targets.native.cpu.name,
         });
 
         return b.resolveTargetQuery(query);
@@ -435,7 +445,7 @@ const ssh = struct {
         remote_dir: []const u8,
     ) *Build.Step.Run {
         const local_path = b.getInstallPath(install.dest_dir.?, install.dest_sub_path);
-        const remote_path = b.pathJoin(&.{ remote_dir, local_path });
+        const remote_path = b.pathJoin(&.{ remote_dir, install.dest_sub_path });
         const exe = sendFileExe(b);
         const run = b.addRunArtifact(exe);
         run.addArgs(&.{ local_path, host, remote_path });
@@ -448,15 +458,17 @@ const ssh = struct {
         const static = struct {
             var exe: ?*Build.Step.Compile = null;
         };
-        if (static.exe) |exe| return exe;
-        const exe = b.addExecutable(.{
-            .name = "send-file",
-            .root_source_file = b.path("scripts/send-file.zig"),
-            .target = b.graph.host,
-            .link_libc = true,
-        });
-        static.exe = exe;
-        return exe;
+
+        if (static.exe == null) {
+            static.exe = b.addExecutable(.{
+                .name = "send-file",
+                .root_source_file = b.path("scripts/send-file.zig"),
+                .target = b.graph.host,
+                .link_libc = true,
+            });
+        }
+
+        return static.exe.?;
     }
 
     /// add a build step to run a command on a remote host using ssh.
