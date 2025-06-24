@@ -4,6 +4,7 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 const sysvar = sig.runtime.sysvar;
+const vm = sig.vm;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
@@ -20,6 +21,7 @@ const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnD
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const AccountCache = sig.runtime.account_loader.BatchAccountCache;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 pub const ExecuteContextsParams = struct {
     // If a user requires a mutable reference to the created feature set, they should
@@ -28,6 +30,13 @@ pub const ExecuteContextsParams = struct {
     feature_set_ptr: ?*FeatureSet = null,
     feature_set: []const FeatureParams = &.{},
     epoch_stakes: []const EpochStakeParam = &.{},
+
+    // Programs to be inserted into the program map.
+    program_map: *const ProgramMap = &.{},
+
+    // Environment used to load and verify programs.
+    vm_environment: *const vm.Environment = &.{},
+    next_vm_environment: ?*const vm.Environment = null,
 
     // Slot Context
     sysvar_cache: SysvarCacheParams = .{},
@@ -155,6 +164,9 @@ pub fn createTransactionContext(
         .feature_set = feature_set,
         .sysvar_cache = sysvar_cache,
         .epoch_stakes = epoch_stakes,
+        .vm_environment = params.vm_environment,
+        .next_vm_environment = params.next_vm_environment,
+        .program_map = params.program_map,
         .accounts = try accounts.toOwnedSlice(allocator),
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -291,9 +303,9 @@ pub fn createSysvarCache(
             ),
         };
     }
-    sysvar_cache.fees = params.fees;
+    sysvar_cache.fees_obj = params.fees;
     if (params.recent_blockhashes) |recent_blockhashes| {
-        sysvar_cache.recent_blockhashes = .{
+        sysvar_cache.recent_blockhashes_obj = .{
             .entries = try allocator.dupe(
                 sysvar.RecentBlockhashes.Entry,
                 recent_blockhashes.entries,

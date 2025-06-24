@@ -10,95 +10,54 @@ const ExecutionError = sig.vm.ExecutionError;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
+const Registry = sig.vm.Registry;
+const Syscall = sig.vm.syscalls.Syscall;
 
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
 ) ExecutionError!void {
-
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1584-L1587
     const direct_mapping = ic.tc.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
     );
 
-    var executable, var syscalls, const source = blk: {
+    const executable = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
 
-        const feature_set = &ic.tc.feature_set.active;
-
-        // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L434
-        if (!feature_set.contains(
+        const remove_accounts_executable_flag_checks = ic.tc.feature_set.active.contains(
             features.REMOVE_ACCOUNTS_EXECUTABLE_FLAG_CHECKS,
-        ) and
+        );
+
+        if (!remove_accounts_executable_flag_checks and
             !program_account.account.executable)
         {
             try ic.tc.log("Program is not executable", .{});
             return InstructionError.IncorrectProgramId;
         }
 
-        // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
-        var syscalls = vm.syscalls.register(
-            allocator,
-            ic.tc.feature_set,
-            0,
-            false,
-        ) catch |err| {
-            try ic.tc.log("Failed to register syscalls: {s}", .{@errorName(err)});
-            return InstructionError.ProgramEnvironmentSetupFailure;
+        const loaded_program = ic.tc.program_map.getPtr(program_account.pubkey) orelse {
+            try ic.tc.log("Program is not cached", .{});
+            if (remove_accounts_executable_flag_checks)
+                return InstructionError.UnsupportedProgramId
+            else
+                return InstructionError.InvalidAccountData;
         };
-        errdefer syscalls.deinit(allocator);
 
-        // [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L357-L374
-        const min_sbpf_version: vm.sbpf.Version = if (!feature_set.contains(
-            features.DISABLE_SBPF_V0_EXECUTION,
-        ) or feature_set.contains(
-            features.REENABLE_SBPF_V0_EXECUTION,
-        )) .v0 else .v3;
-
-        const max_sbpf_version: vm.sbpf.Version = if (feature_set.contains(
-            features.ENABLE_SBPF_V3_DEPLOYMENT_AND_EXECUTION,
-        )) .v3 else if (feature_set.contains(
-            features.ENABLE_SBPF_V2_DEPLOYMENT_AND_EXECUTION,
-        )) .v2 else if (feature_set.contains(
-            features.ENABLE_SBPF_V1_DEPLOYMENT_AND_EXECUTION,
-        )) .v1 else .v0;
-
-        std.debug.assert(max_sbpf_version.gte(min_sbpf_version));
-
-        // Clone required to prevent modification of underlying account elf
-        const source = try allocator.dupe(u8, program_account.account.data);
-        errdefer allocator.free(source);
-
-        // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L133-L143
-        const executable = vm.Executable.fromBytes(
-            allocator,
-            source,
-            &syscalls,
-            .{
-                .max_call_depth = ic.tc.compute_budget.max_call_depth,
-                .stack_frame_size = ic.tc.compute_budget.stack_frame_size,
-                .enable_address_translation = true,
-                .enable_stack_frame_gaps = !direct_mapping,
-                .aligned_memory_mapping = !direct_mapping,
-                .minimum_version = min_sbpf_version,
-                .maximum_version = max_sbpf_version,
-                .optimize_rodata = false,
+        switch (loaded_program.*) {
+            .failed => {
+                try ic.tc.log("Program is not deployed", .{});
+                if (remove_accounts_executable_flag_checks)
+                    return InstructionError.UnsupportedProgramId
+                else
+                    return InstructionError.InvalidAccountData;
             },
-        ) catch |err| {
-            try ic.tc.log("{s}", .{@errorName(err)});
-            return InstructionError.InvalidAccountData;
-        };
-        break :blk .{ executable, syscalls, source };
+            .loaded => |entry| {
+                break :blk entry.executable;
+            },
+        }
     };
-    defer {
-        executable.deinit(allocator);
-        syscalls.deinit(allocator);
-        allocator.free(source);
-    }
-
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1583-L1584
-    // TODO: jit
 
     const mask_out_rent_epoch_in_vm_serialization = ic.tc.feature_set.active.contains(
         features.BPF_ACCOUNT_DATA_DIRECT_MAPPING,
@@ -132,7 +91,7 @@ pub fn execute(
             ic.tc,
             &executable,
             regions.items,
-            &syscalls,
+            &ic.tc.vm_environment.loader,
         ) catch |err| {
             try ic.tc.log("Failed to create SBPF VM: {s}", .{@errorName(err)});
             return InstructionError.ProgramEnvironmentSetupFailure;
@@ -170,7 +129,9 @@ pub fn execute(
     switch (result) {
         // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1642-L1645
         .ok => |status| if (status != 0) {
-            maybe_execute_error = sig.vm.executionErrorFromStatusCode(status);
+            const execution_error = sig.vm.executionErrorFromStatusCode(status);
+            if (execution_error == error.Custom) ic.tc.custom_error = @intCast(status);
+            maybe_execute_error = execution_error;
         },
         .err => |err| {
             const err_kind = sig.vm.getExecutionErrorKind(err);
@@ -212,7 +173,7 @@ pub fn initVm(
     tc: *TransactionContext,
     executable: *const vm.Executable,
     regions: []vm.memory.Region,
-    syscalls: *const vm.BuiltinProgram,
+    syscalls: *const Registry(Syscall),
 ) !struct {
     vm.Vm,
     []u8,
