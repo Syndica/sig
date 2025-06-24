@@ -8,10 +8,10 @@ const sbpf = @import("sbpf.zig");
 const memory = @import("memory.zig");
 
 const lib = @import("lib.zig");
-const BuiltinProgram = lib.BuiltinProgram;
 const Config = lib.Config;
 const Registry = lib.Registry;
 const Section = lib.Section;
+const Syscall = sig.vm.syscalls.Syscall;
 
 const elf = std.elf;
 const assert = std.debug.assert;
@@ -466,7 +466,7 @@ pub const Elf = struct {
             allocator: std.mem.Allocator,
             headers: Headers,
             bytes: []u8,
-            loader: *BuiltinProgram,
+            loader: *const Registry(Syscall),
             function_registry: *Registry(u64),
             version: sbpf.Version,
             config: Config,
@@ -681,7 +681,7 @@ pub const Elf = struct {
                         } else {
                             const hash = sbpf.hashSymbolName(symbol_name);
                             if (config.reject_broken_elfs and
-                                loader.functions.lookupKey(hash) == null)
+                                loader.lookupKey(hash) == null)
                             {
                                 return error.UnresolvedSymbol;
                             }
@@ -733,7 +733,7 @@ pub const Elf = struct {
     pub fn parse(
         allocator: std.mem.Allocator,
         bytes: []u8,
-        loader: *BuiltinProgram,
+        loader: *const Registry(Syscall),
         config: Config,
     ) !Elf {
         const headers = try Headers.parse(bytes);
@@ -945,7 +945,7 @@ pub const Elf = struct {
         data: Data,
         sbpf_version: sbpf.Version,
         config: Config,
-        loader: *BuiltinProgram,
+        loader: *const Registry(Syscall),
     ) !Elf {
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
@@ -1148,7 +1148,7 @@ test "parsing failing allocation" {
             const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
             defer allocator.free(bytes);
 
-            var loader: BuiltinProgram = .{};
+            var loader: Registry(Syscall) = .{};
             var parsed = try Elf.parse(allocator, bytes, &loader, .{});
             defer parsed.deinit(allocator);
         }
@@ -1160,7 +1160,7 @@ test "parsing failing allocation" {
 
 test "strict header empty" {
     const allocator = std.testing.allocator;
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     try expectEqual(
         error.OutOfBounds,
         Elf.parse(allocator, &.{}, &loader, .{}),
@@ -1176,7 +1176,7 @@ test "strict header version" {
     // set the e_flags to an invalid SBPF version
     bytes[0x0030] = 0xFF;
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     try expectEqual(
         error.VersionUnsupported,
         Elf.parse(allocator, bytes, &loader, .{}),
@@ -1189,7 +1189,7 @@ test "strict header functions" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     var parsed = try Elf.parse(
         allocator,
         bytes,
@@ -1235,7 +1235,7 @@ test "strict header corrupt file header" {
         defer allocator.free(copy);
         copy[offset] = 0xAF;
 
-        var loader: BuiltinProgram = .{};
+        var loader: Registry(Syscall) = .{};
         var result = Elf.parse(allocator, copy, &loader, .{});
         defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
@@ -1283,11 +1283,12 @@ test "strict header corrupt program header" {
             defer allocator.free(copy);
             copy[true_offset] = 0xAF;
 
-            var loader: BuiltinProgram = .{};
+            var loader: Registry(Syscall) = .{};
             var result = Elf.parse(allocator, copy, &loader, .{}) catch |e| switch (e) {
                 error.OutOfBounds => error.InvalidProgramHeader,
                 else => e,
             };
+
             defer if (result) |*parsed| parsed.deinit(allocator) else |_| {};
 
             if (expected) |err| {
@@ -1308,7 +1309,7 @@ test "elf load" {
     const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
     defer allocator.free(bytes);
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     var parsed = try Elf.parse(allocator, bytes, &loader, .{});
     defer parsed.deinit(allocator);
 }
@@ -1389,7 +1390,7 @@ test "SHT_DYNAMIC fallback" {
     // specific input, the p_type is 232 bytes from the start.
     @as(*align(1) u32, @ptrCast(bytes[232..][0..4])).* = elf.PT_NULL;
 
-    var loader: BuiltinProgram = .{};
+    var loader: Registry(Syscall) = .{};
     var parsed = try Elf.parse(
         allocator,
         bytes,

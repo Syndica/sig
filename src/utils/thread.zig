@@ -160,6 +160,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         max_concurrent_tasks: ?usize,
 
         pub const Task = TaskType;
+        pub const TaskError = @typeInfo(TaskResult).error_union.error_set;
 
         const Self = @This();
 
@@ -238,6 +239,8 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
                     return false;
                 }
                 assert(max >= self.num_running_tasks.fetchAdd(1, .monotonic));
+            } else {
+                _ = self.num_running_tasks.fetchAdd(1, .monotonic);
             }
 
             const task = try self.task_pool.create();
@@ -248,6 +251,20 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
             self.pool.schedule(Batch.from(&task.pool_task));
             return true;
+        }
+
+        /// Checks if all tasks are complete.
+        /// Returns a result indicating the outcome:
+        /// - done: all succeeded.
+        /// - pending: some are still running.
+        /// - err: all completed, and at least one failed.
+        pub fn pollFallible(self: *Self) union(enum) { done, pending, err: TaskError } {
+            for (self.tasks.items) |task| {
+                if (!task.done.load(.acquire)) {
+                    return .pending;
+                }
+            }
+            return if (self.joinFallible()) |_| .done else |err| .{ .err = err };
         }
 
         /// Blocks until all tasks are complete.
@@ -277,7 +294,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
             }
 
             for (self.tasks.items) |task| task.join();
-            for (self.tasks.items) |task| try task.result;
+            for (self.tasks.items) |task| _ = try task.result;
         }
     };
 }

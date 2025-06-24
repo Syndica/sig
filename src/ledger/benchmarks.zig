@@ -200,9 +200,10 @@ pub const BenchmarkLedger = struct {
         result.deinit();
 
         var timer = try sig.time.Timer.start();
-        const items = try reader.getSlotEntriesWithShredInfo(result.slot + 2, 0, true);
+        const items =
+            try reader.getSlotEntriesWithShredInfo(std.heap.c_allocator, result.slot + 2, 0, true);
         const duration = timer.read();
-        try std.testing.expect(items[0].items.len > 0);
+        try std.testing.expect(items[0].len > 0);
         return duration;
     }
 
