@@ -68,7 +68,7 @@ pub fn epochStakeMapRandom(
 
 /// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
 pub const EpochStakes = struct {
-    stakes: Stakes(.delegation),
+    stakes: Stakes(Delegation),
     total_stake: u64,
     node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
     epoch_authorized_voters: EpochAuthorizedVoters,
@@ -138,7 +138,7 @@ pub const EpochStakes = struct {
         random: std.Random,
         max_list_entries: usize,
     ) Allocator.Error!EpochStakes {
-        var result_stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
+        var result_stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries);
         errdefer result_stakes.deinit(allocator);
 
         const node_id_to_vote_accounts =
@@ -159,15 +159,13 @@ pub const EpochStakes = struct {
 };
 
 /// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186).
-/// It differs in that its delegation element parameterization is narrowed to only accept the specific types we actually need to implement.
-pub fn Stakes(comptime delegation_type: enum {
-    delegation,
-    stake,
-}) type {
-    const Element = switch (delegation_type) {
-        .delegation => Delegation,
-        .stake => Stake,
-    };
+/// It differs in that its delegation element parameterization is narrowed to
+/// only accept the specific types we actually need to implement.
+pub fn Stakes(StakeElement: type) type {
+    switch (StakeElement) {
+        Delegation, Stake => {},
+        else => @compileError("Prohibited Stake Element type."),
+    }
 
     return struct {
         vote_accounts: VoteAccounts,
@@ -178,7 +176,7 @@ pub fn Stakes(comptime delegation_type: enum {
         history: EpochAndStakeHistory,
 
         const Self = @This();
-        pub const DelegationsMap = std.AutoArrayHashMapUnmanaged(Pubkey, Element);
+        pub const DelegationsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeElement);
 
         pub fn deinit(stakes: Self, allocator: Allocator) void {
             var copy = stakes;
@@ -229,7 +227,7 @@ pub fn Stakes(comptime delegation_type: enum {
                 const key = Pubkey.initRandom(random);
                 const gop = delegations.getOrPutAssumeCapacity(key);
                 if (gop.found_existing) continue;
-                gop.value_ptr.* = Element.initRandom(random);
+                gop.value_ptr.* = StakeElement.initRandom(random);
             }
 
             const history = try stakeHistoryRandom(random, allocator, max_list_entries);
@@ -411,7 +409,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
     }
 
     pub const Current = struct {
-        stakes: Stakes(.stake),
+        stakes: Stakes(Stake),
         total_stake: u64,
         node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
         epoch_authorized_voters: EpochAuthorizedVoters,
@@ -428,7 +426,7 @@ pub const VersionedEpochStake = union(enum(u32)) {
             random: std.Random,
             max_list_entries: usize,
         ) Allocator.Error!Current {
-            const stakes = try Stakes(.stake).initRandom(allocator, random, max_list_entries);
+            const stakes = try Stakes(Stake).initRandom(allocator, random, max_list_entries);
             errdefer stakes.deinit(allocator);
 
             const node_id_to_vote_accounts = try nodeIdToVoteAccountsMapRandom(

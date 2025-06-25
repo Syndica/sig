@@ -401,6 +401,7 @@ const Cmd = struct {
         force_unpack_snapshot: bool,
         number_of_index_shards: u64,
         accounts_per_file_estimate: u64,
+        skip_snapshot_validation: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .use_disk_index = .{
@@ -454,6 +455,14 @@ const Cmd = struct {
                 .help = "number of accounts to estimate inside of account files" ++
                     " (used for pre-allocation)",
             },
+            .skip_snapshot_validation = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "skip the validation of the snapshot",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -463,6 +472,7 @@ const Cmd = struct {
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
             cfg.accounts_db.number_of_index_shards = args.number_of_index_shards;
             cfg.accounts_db.accounts_per_file_estimate = args.accounts_per_file_estimate;
+            cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1040,7 +1050,7 @@ fn validator(
     var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
-        .validate_snapshot = true,
+        .validate_snapshot = cfg.accounts_db.skip_snapshot_validation,
     });
     defer loaded_snapshot.deinit();
 
@@ -1052,7 +1062,7 @@ fn validator(
     if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
         try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
     } else {
-        const schedule = try bank_fields.leaderSchedule(allocator);
+        const schedule = try collapsed_manifest.leaderSchedule(allocator, null);
         errdefer schedule.deinit();
         try leader_schedule_cache.put(bank_fields.epoch, schedule);
     }
@@ -1109,8 +1119,8 @@ fn validator(
 
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
-    const staked_nodes =
-        try bank_fields.getStakedNodes(allocator, epoch);
+
+    const staked_nodes = try collapsed_manifest.getStakedNodes(allocator, epoch);
 
     var epoch_context_manager = try sig.adapter.EpochContextManager.init(
         allocator,
@@ -1453,7 +1463,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
         break :b .{
             bank_fields.slot - slot_index,
-            try bank_fields.leaderSchedule(allocator),
+            try loaded_snapshot.collapsed_manifest.leaderSchedule(allocator, null),
         };
     };
 
