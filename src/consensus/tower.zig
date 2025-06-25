@@ -508,7 +508,7 @@ pub fn isSlotDuplicateConfirmed(
 }
 
 test "is slot duplicate confirmed not enough stake failure" {
-    var stakes = VotedStakes{};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -523,7 +523,7 @@ test "is slot duplicate confirmed not enough stake failure" {
 }
 
 test "is slot duplicate confirmed unknown slot" {
-    var stakes = VotedStakes{};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
 
     const result = isSlotDuplicateConfirmed(
@@ -535,7 +535,7 @@ test "is slot duplicate confirmed unknown slot" {
 }
 
 test "is slot duplicate confirmed pass" {
-    var stakes = VotedStakes{};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
