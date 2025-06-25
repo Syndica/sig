@@ -1611,6 +1611,60 @@ const TestData = struct {
     }
 };
 
+const TestLedgerRwState = struct {
+    registry: sig.prometheus.Registry(.{}),
+    lowest_cleanup_slot: sig.sync.RwMux(Slot),
+    max_root: std.atomic.Value(Slot),
+
+    fn init() TestLedgerRwState {
+        return .{
+            .registry = .init(std.testing.allocator),
+            .lowest_cleanup_slot = .init(0),
+            .max_root = .init(0),
+        };
+    }
+
+    fn deinit(self: *TestLedgerRwState) void {
+        self.registry.deinit();
+    }
+};
+
+fn testLedgerRw(
+    comptime src_loc: std.builtin.SourceLocation,
+    logger: sig.trace.Logger,
+    state: *TestLedgerRwState,
+) !struct {
+    sig.ledger.BlockstoreDB,
+    sig.ledger.BlockstoreReader,
+    sig.ledger.LedgerResultWriter,
+} {
+    var ledger_db = try sig.ledger.tests.TestDB.init(src_loc);
+    errdefer ledger_db.deinit();
+
+    const reader: sig.ledger.BlockstoreReader = try .init(
+        std.testing.allocator,
+        logger,
+        ledger_db,
+        &state.registry,
+        &state.lowest_cleanup_slot,
+        &state.max_root,
+    );
+    const writer: sig.ledger.LedgerResultWriter = try .init(
+        std.testing.allocator,
+        logger,
+        ledger_db,
+        &state.registry,
+        &state.lowest_cleanup_slot,
+        &state.max_root,
+    );
+
+    return .{
+        ledger_db,
+        reader,
+        writer,
+    };
+}
+
 test "apply state changes" {
     const allocator = std.testing.allocator;
 
@@ -1687,30 +1741,12 @@ test "apply state changes bank frozen" {
     const bank_forks = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
 
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
-    defer registry.deinit();
+    var ledger_state: TestLedgerRwState = .init();
+    defer ledger_state.deinit();
 
-    var blockstore = try sig.ledger.tests.TestDB.init(@src());
-    defer blockstore.deinit();
-
-    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-    var ledger_reader: sig.ledger.BlockstoreReader = try .init(
-        allocator,
-        .noop,
-        blockstore,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
-        allocator,
-        .noop,
-        blockstore,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
+    var ledger, var ledger_reader, var ledger_writer =
+        try testLedgerRw(@src(), .noop, &ledger_state);
+    defer ledger.deinit();
 
     const duplicate_slot = bank_forks.root + 1;
     const duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
@@ -1773,39 +1809,22 @@ test "apply state changes duplicate confirmed matches frozen" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const descendants = &test_data.descendants;
 
+    var ledger_state: TestLedgerRwState = .init();
+    defer ledger_state.deinit();
+
+    var ledger, var ledger_reader, var ledger_writer =
+        try testLedgerRw(@src(), .noop, &ledger_state);
+    defer ledger.deinit();
+
+    const duplicate_slot = bank_forks.root + 1;
+    const our_duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+
     var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
     defer duplicate_slots_to_repair.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
     defer purge_repair_slot_counter.sorted_map.deinit(allocator);
 
-    const duplicate_slot = bank_forks.root + 1;
-    const our_duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
-
-    var registry: sig.prometheus.Registry(.{}) = .init(allocator);
-    defer registry.deinit();
-
-    var blockstore = try sig.ledger.tests.TestDB.init(@src());
-    defer blockstore.deinit();
-
-    var lowest_cleanup_slot: sig.sync.RwMux(Slot) = .init(0);
-    var max_root = std.atomic.Value(Slot).init(0);
-    var ledger_reader: sig.ledger.BlockstoreReader = try .init(
-        allocator,
-        .noop,
-        blockstore,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
-    var ledger_writer: sig.ledger.LedgerResultWriter = try .init(
-        allocator,
-        .noop,
-        blockstore,
-        &registry,
-        &lowest_cleanup_slot,
-        &max_root,
-    );
     // Setup and check the state that is about to change.
     try duplicate_slots_to_repair.put(allocator, duplicate_slot, .initRandom(random));
     try purge_repair_slot_counter.sorted_map.put(allocator, duplicate_slot, 1);
