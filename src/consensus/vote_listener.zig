@@ -79,8 +79,69 @@ pub const BankForksStub = struct {
 
     pub const BankStub = struct {
         slot: Slot,
-        st_elem: SlotTracker.Reference,
-        et_elem: ?sig.core.EpochConstants,
+        /// If this is Hash.ZEROES, it means the bank isn't frozen.
+        hash: Hash,
+        ancestors: sig.core.Ancestors,
+        epoch_schedule: sig.core.EpochSchedule,
+        epoch_stakes: sig.core.stake.EpochStakeMap,
+
+        pub fn deinit(self: BankStub, allocator: std.mem.Allocator) void {
+            var copy = self;
+            copy.ancestors.deinit(allocator);
+            sig.core.stake.epochStakeMapDeinit(copy.epoch_stakes, allocator);
+        }
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            params: struct {
+                slot: Slot,
+                hash: Hash,
+                ancestors: sig.core.Ancestors,
+                epoch_schedule: sig.core.EpochSchedule,
+                epoch_stakes: sig.core.stake.EpochStakeMap,
+            },
+        ) std.mem.Allocator.Error!BankStub {
+            var ancestors = try params.ancestors.clone(allocator);
+            errdefer ancestors.deinit(allocator);
+
+            var epoch_stakes =
+                try sig.core.stake.epochStakeMapClone(params.epoch_stakes, allocator);
+            errdefer sig.core.stake.epochStakeMapDeinit(epoch_stakes, allocator);
+
+            const slot_epoch = params.epoch_schedule.getEpoch(params.slot);
+            const gop = try epoch_stakes.getOrPut(allocator, slot_epoch);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = try sig.core.stake.EpochStakes.initEmpty(allocator);
+            }
+
+            return .{
+                .slot = params.slot,
+                .hash = params.hash,
+                .ancestors = ancestors,
+                .epoch_schedule = params.epoch_schedule,
+                .epoch_stakes = epoch_stakes,
+            };
+        }
+
+        pub fn clone(
+            self: BankStub,
+            allocator: std.mem.Allocator,
+        ) std.mem.Allocator.Error!BankStub {
+            var ancestors = try self.ancestors.clone(allocator);
+            errdefer ancestors.deinit(allocator);
+
+            const epoch_stakes =
+                try sig.core.stake.epochStakeMapClone(self.epoch_stakes, allocator);
+            errdefer sig.core.stake.epochStakeMapDeinit(epoch_stakes, allocator);
+
+            return .{
+                .slot = self.slot,
+                .hash = self.hash,
+                .ancestors = ancestors,
+                .epoch_schedule = self.epoch_schedule,
+                .epoch_stakes = epoch_stakes,
+            };
+        }
     };
 };
 

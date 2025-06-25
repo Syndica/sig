@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 const Ancestors = sig.core.Ancestors;
-const BlockhashQueue = sig.core.BlockhashQueue;
+const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const AccountMeta = sig.core.instruction.InstructionAccount;

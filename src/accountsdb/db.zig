@@ -1816,39 +1816,24 @@ pub const AccountsDB = struct {
         return account;
     }
 
-    pub fn getSlotAndAccount(
-        self: *AccountsDB,
-        pubkey: *const Pubkey,
-    ) GetAccountError!struct { Slot, Account } {
-        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
-            return error.PubkeyNotInIndex;
-        defer lock.unlock();
-
-        // NOTE: this will always be a safe unwrap since both bounds are null
-        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        const account = try self.getAccountFromRef(max_ref);
-
-        return .{ max_ref.slot, account };
-    }
-
     /// gets an account given an associated pubkey. mut ref is required for locks.
     /// Will only find rooted accounts, or unrooted accounts from a slot in ancestors.
     pub fn getAccountWithAncestors(
         self: *AccountsDB,
         pubkey: *const Pubkey,
         ancestors: *const sig.core.Ancestors,
-    ) GetFileFromRefError!?Account {
+        /// below this slot, consider totally rooted/finalised (=> ancestors irrelevant)
+        min_ancestors_slot: Slot,
+    ) GetAccountError!Account {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
-            return null;
+            return error.PubkeyNotInIndex;
         defer lock.unlock();
 
-        const max_ref = greatestInAncestors(
-            head_ref.ref_ptr,
-            ancestors,
-            self.largest_flushed_slot.load(.monotonic),
-        ) orelse return null;
+        const max_ref = greatestInAncestors(head_ref, ancestors, min_ancestors_slot) orelse
+            return error.PubkeyNotInIndex;
+        const account = try self.getAccountFromRef(max_ref);
 
-        return try self.getAccountFromRef(max_ref);
+        return .{ account, max_ref.* };
     }
 
     pub fn getAccountAndReference(
@@ -2369,35 +2354,21 @@ pub const AccountsDB = struct {
         return .{ gop.value_ptr, bank_hash_stats_lg };
     }
 
-    /// first searches for the highest slot in ancestors. if none are found,
-    /// then searches for the highest rooted slot that has been flushed.
-    ///
-    /// we need to filter by flushed slots here because if you just filter by
-    /// rooted, you might catch some accounts from another branch before
-    /// flushing should remove items from the cache.
     fn greatestInAncestors(
         ref_ptr: *AccountRef,
         ancestors: *const sig.core.Ancestors,
-        largest_flushed_slot: Slot,
+        /// below this slot, consider totally rooted/finalised (=> ancestors irrelevant)
+        min_ancestors_slot: Slot,
     ) ?*AccountRef {
         var biggest: ?*AccountRef = null;
 
-        var curr: ?*AccountRef = ref_ptr;
-        while (curr) |ref| : (curr = ref.next_ptr) {
-            if (ancestors.containsSlot(ref.slot)) {
-                const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
-                if (new_biggest) biggest = ref;
+        var curr = ref_ptr;
+        while (curr.next_ptr) |ref| {
+            if (curr.slot < min_ancestors_slot or ancestors.containsSlot(curr.slot)) {
+                const new_biggest = if (biggest) |big| curr.slot > big.slot else true;
+                if (new_biggest) biggest = curr;
             }
-        }
-
-        if (biggest == null) {
-            curr = ref_ptr;
-            while (curr) |ref| : (curr = ref.next_ptr) {
-                if (ref.slot < largest_flushed_slot) {
-                    const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
-                    if (new_biggest) biggest = ref;
-                }
-            }
+            curr = ref;
         }
 
         return biggest;
@@ -2916,22 +2887,27 @@ pub const AccountsDB = struct {
         try self.snapshot_dir.deleteFile(file_name);
     }
 
-    /// inclusive bound
-    inline fn slotSatisfiesMax(slot: Slot, max_slot: ?Slot) bool {
+    inline fn slotSatisfiesMax(
+        slot: Slot,
+        max_slot: ?Slot,
+    ) bool {
         if (max_slot) |max| return slot <= max;
         return true;
     }
 
-    /// exclusive bound
-    inline fn slotSatisfiesMin(slot: Slot, min_slot: ?Slot) bool {
+    inline fn slotSatisfiesMin(
+        slot: Slot,
+        min_slot: ?Slot,
+    ) bool {
         if (min_slot) |min| return slot > min;
         return true;
     }
 
-    /// Checks if slot is in range (min, max]
-    ///
-    /// This is exclusive of the min and inclusive of the max
-    inline fn slotInRange(slot: Slot, min_slot: ?Slot, max_slot: ?Slot) bool {
+    inline fn slotInRange(
+        slot: Slot,
+        min_slot: ?Slot,
+        max_slot: ?Slot,
+    ) bool {
         return slotSatisfiesMax(slot, max_slot) and slotSatisfiesMin(slot, min_slot);
     }
 };

@@ -45,8 +45,7 @@ const EpochStakes = core.EpochStakes;
 const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
 
-const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
-const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
+const Ancestors = sig.core.Ancestors;
 
 /// Information about a slot that is determined when the slot is initialized and
 /// then never changes.
