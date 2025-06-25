@@ -279,7 +279,8 @@ pub const StakeStateV2 = union(enum) {
                     @floatFromInt(prev_cluster_stake.effective),
                 ) * warmup_cooldown_rate;
 
-                const newly_not_effective_stake: u64 = @intFromFloat(
+                const newly_not_effective_stake: u64 = std.math.lossyCast(
+                    u64,
                     @max(1, weight * newly_not_effective_cluster_take),
                 );
 
@@ -315,10 +316,10 @@ pub const StakeStateV2 = union(enum) {
             var prev_epoch = self.activation_epoch;
             var prev_cluster_stake = entry;
 
-            var current_epoch: Epoch = prev_epoch - 1;
+            var current_epoch: Epoch = prev_epoch + 1;
             var current_effective_stake: u64 = 0;
             while (true) {
-                current_epoch = prev_epoch - 1;
+                current_epoch = prev_epoch + 1;
                 if (prev_cluster_stake.activating == 0) break;
 
                 const remaining_activating_stake = delegated_stake - current_effective_stake;
@@ -335,7 +336,8 @@ pub const StakeStateV2 = union(enum) {
                     @floatFromInt(prev_cluster_stake.effective),
                 ) * warmup_cooldown_rate;
 
-                const newly_effective_stake: u64 = @intFromFloat(
+                const newly_effective_stake: u64 = std.math.lossyCast(
+                    u64,
                     @max(1, weight * newly_effective_cluster_take),
                 );
 
