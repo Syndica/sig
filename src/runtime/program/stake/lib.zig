@@ -43,7 +43,10 @@ pub fn execute(
     // agave: consumed in declare_process_instruction
     try ic.tc.consumeCompute(program.COMPUTE_UNITS);
 
-    const epoch_rewards_active = (try ic.tc.sysvar_cache.get(sysvar.EpochRewards)).active;
+    const epoch_rewards_active: bool = if (ic.tc.sysvar_cache.get(sysvar.EpochRewards)) |x|
+        x.active
+    else |_|
+        false;
 
     const stake_instruction = try ic.ixn_info.deserializeInstruction(
         allocator,
@@ -1015,6 +1018,7 @@ const MergeKind = union(enum) {
                 };
 
                 const err = StakeError.merge_transient_stake;
+                // std.debug.panic("failed, {}\n", .{err});
                 try ic.tc.log("{}", .{err});
                 ic.tc.custom_error = @intFromEnum(err);
                 return error.Custom;

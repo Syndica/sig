@@ -188,6 +188,8 @@ fn processNextInstruction(
     );
 
     native_program_fn(allocator, ic) catch |err| {
+        // if (@errorReturnTrace()) |trace| std.debug.panic("trace: {}\n", .{trace});
+
         // This approach to failure logging is used to prevent requiring all native programs to return
         // an ExecutionError. Instead, native programs return an InstructionError, and more granular
         // failure logging for bpf programs is handled in the BPF executor.
