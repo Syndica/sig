@@ -104,10 +104,10 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     // Vote on the fork
     if (maybe_voted_slot) |voted| {
         const slot_tracker = deps.slot_tracker;
-        var found_slot = slot_tracker.slots.get(voted.slot) orelse
+        const found_slot_info = slot_tracker.get(voted.slot) orelse
             return error.MissingSlot;
 
-        const voted_hash = found_slot.state.hash.read().get().* orelse
+        const voted_hash = found_slot_info.state.hash.readCopy() orelse
             return error.MissingSlotInTracker;
 
         try handleVotableBank(
