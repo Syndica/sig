@@ -125,7 +125,7 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
     // Reset onto a fork
     if (maybe_reset_slot) |reset_slot| {
         // TODO implement
-        _ = &reset_slot;
+        _ = reset_slot;
     }
 }
 
