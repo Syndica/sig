@@ -248,7 +248,7 @@ fn SortedMapStub(comptime K: type, comptime V: type) type {
         pub const empty: SortedMapStub(K, V) = .{ .sorted_map = .empty };
 
         /// Use before accessing `sorted_map` in a way where it's expected to be sorted.
-        pub fn sort(self: *PurgeRepairSlotCounter) void {
+        pub fn sort(self: *SortedMapStub(K, V)) void {
             const sort_ctx: SortCtx = .{ .sorted_map = &self.sorted_map };
             self.sorted_map.sort(sort_ctx);
         }
@@ -1601,6 +1601,7 @@ const TestData = struct {
         descendants.putAssumeCapacity(1, .{ .sorted_map = try .init(allocator, &.{ 3, 2 }, &.{}) });
         descendants.putAssumeCapacity(2, .{ .sorted_map = try .init(allocator, &.{3}, &.{}) });
         descendants.putAssumeCapacity(3, .empty);
+        for (descendants.values()) |*slot_set| slot_set.sort();
 
         return .{
             .slot_tracker = bank_forks,
