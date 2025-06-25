@@ -19,6 +19,7 @@ pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
 
 pub const Account = account.Account;
+pub const Ancestors = status_cache.Ancestors;
 pub const BankFields = bank.BankFields;
 pub const ClusterType = genesis_config.ClusterType;
 pub const Entry = entry.Entry;

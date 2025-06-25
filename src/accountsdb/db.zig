@@ -1652,9 +1652,26 @@ pub const AccountsDB = struct {
         }
     }
 
-    pub const GetAccountError = GetFileFromRefError || error{PubkeyNotInIndex};
     /// gets an account given an associated pubkey. mut ref is required for locks.
     pub fn getAccount(
+        self: *AccountsDB,
+        pubkey: *const Pubkey,
+    ) GetAccountError!?Account {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return null;
+        defer lock.unlock();
+
+        // NOTE: this will always be a safe unwrap since both bounds are null
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        const account = try self.getAccountFromRef(max_ref);
+
+        return account;
+    }
+
+    pub const GetAccountError = GetFileFromRefError || error{PubkeyNotInIndex};
+
+    /// DEPRECATED: use getAccount and handle null at call site.
+    pub fn getAccountDeprecated(
         self: *AccountsDB,
         pubkey: *const Pubkey,
     ) GetAccountError!Account {
@@ -1685,6 +1702,7 @@ pub const AccountsDB = struct {
     }
 
     pub const GetAccountWithReadLockError = GetAccountFromRefError || error{PubkeyNotInIndex};
+
     pub fn getAccountWithReadLock(
         self: *AccountsDB,
         pubkey: *const Pubkey,
@@ -1715,6 +1733,7 @@ pub const AccountsDB = struct {
     }
 
     pub const GetTypeFromAccountError = GetAccountWithReadLockError || error{DeserializationError};
+
     pub fn getTypeFromAccount(
         self: *AccountsDB,
         allocator: std.mem.Allocator,
@@ -3122,14 +3141,14 @@ test "write and read an account" {
     var pubkeys = [_]Pubkey{pubkey};
     try accounts_db.putAccountSlice(&accounts, &pubkeys, 19);
 
-    var account = try accounts_db.getAccount(&pubkey);
+    var account = try accounts_db.getAccountDeprecated(&pubkey);
     defer account.deinit(allocator);
     try std.testing.expect(test_account.equals(&account));
 
     // new account
     accounts[0].lamports = 20;
     try accounts_db.putAccountSlice(&accounts, &pubkeys, 28);
-    var account_2 = try accounts_db.getAccount(&pubkey);
+    var account_2 = try accounts_db.getAccountDeprecated(&pubkey);
     defer account_2.deinit(allocator);
     try std.testing.expect(accounts[0].equals(&account_2));
 }
@@ -3972,7 +3991,7 @@ pub const BenchmarkAccountsDB = struct {
             var i: usize = 0;
             while (i < n_accounts) : (i += 1) {
                 const pubkey_idx = indexer.sample();
-                const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+                const account = try accounts_db.getAccountDeprecated(&pubkeys[pubkey_idx]);
                 account.deinit(allocator);
             }
         }
@@ -3983,7 +4002,7 @@ pub const BenchmarkAccountsDB = struct {
         var i: usize = 0;
         while (i < do_read_count) : (i += 1) {
             const pubkey_idx = indexer.sample();
-            const account = try accounts_db.getAccount(&pubkeys[pubkey_idx]);
+            const account = try accounts_db.getAccountDeprecated(&pubkeys[pubkey_idx]);
             defer account.deinit(allocator);
             if (account.data.len() != (pubkey_idx % 1_000)) std.debug.panic(
                 "account data len dnm {}: {} != {}",

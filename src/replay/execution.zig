@@ -21,6 +21,8 @@ const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
 const SlotTracker = replay.trackers.SlotTracker;
 
+const SvmSlot = replay.svm_gateway.SvmSlot;
+
 const confirmSlot = replay.confirm_slot.confirmSlot;
 
 /// State used for replaying and validating data from blockstore/accountsdb/svm
@@ -193,6 +195,24 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     confirmation_progress.num_entries += entries.len;
     for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
 
+    const blockhash_queue = bhq: {
+        var bhq = slot_info.state.blockhash_queue.read();
+        defer bhq.unlock();
+        break :bhq try bhq.get().clone(state.allocator);
+    };
+    errdefer blockhash_queue.deinit(state.allocator);
+
+    const svm_params = SvmSlot.Params{
+        .slot = slot,
+        .max_age = sig.core.bank.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
+        .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
+        .blockhash_queue = blockhash_queue,
+        .ancestors = &slot_info.constants.ancestors,
+        .feature_set = .{ .active = slot_info.constants.feature_set },
+        .rent_collector = &epoch_info.rent_collector,
+        .epoch_stakes = &epoch_info.stakes,
+    };
+
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
@@ -200,6 +220,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         state.thread_pool,
         entries,
         confirmation_progress.last_entry,
+        svm_params,
         .{
             .tick_height = slot_info.state.tickHeight(),
             .max_tick_height = slot_info.constants.max_tick_height,

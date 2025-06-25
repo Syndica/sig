@@ -1179,7 +1179,7 @@ fn validator(
             .epoch_schedule = bank_fields.epoch_schedule,
             .slot_leaders = epoch_context_manager.slotLeaders(),
             .root_slot = bank_fields.slot,
-            .root_slot_constants = .fromBankFields(bank_fields),
+            .root_slot_constants = try .fromBankFields(allocator, bank_fields, .empty),
             .root_slot_state = try .fromBankFields(allocator, bank_fields),
         }},
     );

@@ -413,7 +413,7 @@ test "loadAndExecuteTransactions: no transactions" {
 
     const ancestors: Ancestors = .{};
     const feature_set: FeatureSet = FeatureSet.EMPTY;
-    const status_cache = StatusCache.default();
+    const status_cache = StatusCache.DEFAULT;
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
@@ -507,7 +507,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         &.{
             .ancestors = &Ancestors{},
             .feature_set = &FeatureSet.EMPTY,
-            .status_cache = &StatusCache.default(),
+            .status_cache = &StatusCache.DEFAULT,
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
             .vm_environment = &vm.Environment{},
@@ -655,7 +655,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     const feature_set = try FeatureSet.allEnabled(allocator);
     defer feature_set.deinit(allocator);
 
-    var status_cache = StatusCache.default();
+    var status_cache = StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     const sysvar_cache = SysvarCache{};

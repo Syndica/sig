@@ -4,4 +4,5 @@ pub const execution = @import("execution.zig");
 pub const resolve_lookup = @import("resolve_lookup.zig");
 pub const scheduler = @import("scheduler.zig");
 pub const service = @import("service.zig");
+pub const svm_gateway = @import("svm_gateway.zig");
 pub const trackers = @import("trackers.zig");

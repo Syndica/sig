@@ -6,6 +6,7 @@ const core = sig.core;
 
 const Allocator = std.mem.Allocator;
 
+const Hash = core.Hash;
 const InstructionAccount = core.instruction.InstructionAccount;
 const Pubkey = core.Pubkey;
 const Transaction = core.Transaction;
@@ -17,6 +18,7 @@ const AddressLookupTable = sig.runtime.program.address_lookup_table.AddressLooku
 const InstructionInfo = sig.runtime.InstructionInfo;
 const AccountMeta = sig.runtime.InstructionInfo.AccountMeta;
 const ProgramMeta = sig.runtime.InstructionInfo.ProgramMeta;
+const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 
 const LockableAccount = sig.replay.account_locks.LockableAccount;
 
@@ -48,6 +50,17 @@ pub const ResolvedTransaction = struct {
         var acc = self.accounts;
         acc.deinit(allocator);
         allocator.free(self.instructions);
+    }
+
+    pub fn toRuntimeTransaction(self: ResolvedTransaction, message_hash: Hash) RuntimeTransaction {
+        return .{
+            .signature_count = self.transaction.signatures.len,
+            .fee_payer = self.transaction.msg.account_keys[0],
+            .msg_hash = message_hash,
+            .recent_blockhash = self.transaction.msg.recent_blockhash,
+            .instruction_infos = self.instructions,
+            .accounts = self.accounts,
+        };
     }
 };
 
@@ -223,7 +236,8 @@ fn resolveLookupTableAccounts(
     // handle lookup table accounts
     for (address_lookups) |lookup| {
         const table = try lookup_table_provider
-            .get(provider_tag, table_provider, &lookup.table_address);
+            .get(provider_tag, table_provider, &lookup.table_address) orelse
+            return error.LookupTableNotFound;
 
         // resolve writable addresses
         for (lookup.writable_indexes) |index| {
@@ -267,7 +281,7 @@ const lookup_table_provider = struct {
         comptime tag: Tag,
         table_provider: tag.T(),
         table_address: *const Pubkey,
-    ) !AddressLookupTable {
+    ) !?AddressLookupTable {
         switch (tag) {
             .accounts_db => {
                 const accounts_db: *AccountsDB = table_provider;
@@ -275,7 +289,7 @@ const lookup_table_provider = struct {
                 // it against the current slot's ancestors. This won't be usable
                 // until consensus is implemented in replay, so it's not
                 // implemented yet.
-                const account = try accounts_db.getAccount(table_address);
+                const account = try accounts_db.getAccount(table_address) orelse return null;
                 if (account.data.len() > AddressLookupTable.MAX_SERIALIZED_SIZE) {
                     return error.LookupTableAccountOverflow;
                 }
@@ -291,9 +305,9 @@ const lookup_table_provider = struct {
             .map => {
                 const map: *const std.AutoArrayHashMapUnmanaged(Pubkey, AddressLookupTable) =
                     table_provider;
-                return map.get(table_address.*) orelse return error.PubkeyNotInIndex;
+                return map.get(table_address.*) orelse return null;
             },
-            .noop => return error.PubkeyNotInIndex,
+            .noop => return null,
         }
     }
 };

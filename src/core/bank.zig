@@ -78,7 +78,19 @@ pub const SlotConstants = struct {
     /// Whether and how epoch rewards should be distributed in this slot.
     epoch_reward_status: EpochRewardStatus,
 
-    pub fn fromBankFields(bank_fields: *const BankFields) SlotConstants {
+    /// Set of slots leading to this one.
+    /// Includes the current slot.
+    /// Does not go back to genesis, may prune slots beyond 8192 generations ago.
+    ancestors: Ancestors,
+
+    /// A map of activated features to the slot when they were activated.
+    feature_set: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+
+    pub fn fromBankFields(
+        allocator: Allocator,
+        bank_fields: *const BankFields,
+        feature_set: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    ) Allocator.Error!SlotConstants {
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,
@@ -87,6 +99,8 @@ pub const SlotConstants = struct {
             .max_tick_height = bank_fields.max_tick_height,
             .fee_rate_governor = bank_fields.fee_rate_governor,
             .epoch_reward_status = .inactive,
+            .ancestors = try bank_fields.ancestors.clone(allocator),
+            .feature_set = feature_set,
         };
     }
 
@@ -99,11 +113,15 @@ pub const SlotConstants = struct {
             .max_tick_height = 0,
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
+            .ancestors = .{},
+            .feature_set = .empty,
         };
     }
 
     pub fn deinit(self: SlotConstants, allocator: Allocator) void {
         self.epoch_reward_status.deinit(allocator);
+        self.ancestors.deinit(allocator);
+        self.feature_set.deinit(allocator);
     }
 };
 
@@ -230,6 +248,8 @@ pub const EpochConstants = struct {
 
     /// The pre-determined stakes assigned to this epoch.
     stakes: EpochStakes,
+
+    rent_collector: RentCollector,
 
     pub fn genesis(
         allocator: Allocator,
@@ -518,7 +538,7 @@ pub const BlockhashQueue = struct {
 
     pub const DEFAULT = BlockhashQueue.init(MAX_RECENT_BLOCKHASHES);
 
-    const MAX_RECENT_BLOCKHASHES = 300;
+    pub const MAX_RECENT_BLOCKHASHES = 300;
 
     pub fn init(max_age: usize) BlockhashQueue {
         return .{

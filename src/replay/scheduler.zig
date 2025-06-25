@@ -14,6 +14,9 @@ const AccountLocks = replay.account_locks.AccountLocks;
 const ConfirmSlotStatus = replay.confirm_slot.ConfirmSlotStatus;
 const ResolvedTransaction = replay.resolve_lookup.ResolvedTransaction;
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
+const SvmSlot = replay.svm_gateway.SvmSlot;
+
+const executeTransaction = replay.svm_gateway.executeTransaction;
 
 const ScopedLogger = sig.trace.ScopedLogger("replay-batcher");
 
@@ -22,15 +25,18 @@ const assert = std.debug.assert;
 /// Processes a batch of transactions by verifying their signatures and
 /// executing them with the SVM.
 pub fn processBatch(
+    allocator: Allocator,
+    svm_slot: *SvmSlot,
     transactions: []const ResolvedTransaction,
     exit: *std.atomic.Value(bool),
-) ?TransactionError {
+) !?TransactionError {
     for (transactions) |transaction| {
         if (exit.load(.monotonic)) {
             return null;
         }
-        _ = transaction.transaction.verifyAndHashMessage() catch return .SignatureFailure;
-        // TODO: call svm
+        const hash = transaction.transaction.verifyAndHashMessage() catch return .SignatureFailure;
+        const runtime_transaction = transaction.toRuntimeTransaction(hash);
+        _ = try executeTransaction(allocator, svm_slot, &runtime_transaction);
     }
     // TODO: commit results
 
@@ -38,6 +44,8 @@ pub fn processBatch(
 }
 
 /// Batches transactions and executes them on a thread pool.
+///
+/// Only intended for execution of transactions from a single slot.
 ///
 /// Internally, transaction results are communicated on a channel instead of
 /// collecting the return values through HomogeneousThreadPool to allow faster
@@ -63,6 +71,8 @@ pub const TransactionScheduler = struct {
     exit: std.atomic.Value(bool),
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.confirm_slot.ConfirmSlotError,
+
+    svm_state: ?SvmSlot,
 
     const BatchResult = struct { batch_index: usize, maybe_err: ?TransactionError };
 
@@ -92,6 +102,7 @@ pub const TransactionScheduler = struct {
             .batches_finished = 0,
             .exit = std.atomic.Value(bool).init(false),
             .failure = null,
+            .svm_state = null,
         };
     }
 
@@ -164,6 +175,8 @@ pub const TransactionScheduler = struct {
             // maximum number of tasks. See the `null` value passed into
             // HomogeneousThreadPool.initBorrowed
             assert(try self.thread_pool.trySchedule(self.allocator, .{
+                .allocator = self.allocator,
+                .svm_slot = &self.svm_state.?,
                 .batch_index = self.batches_started,
                 .transactions = batch.transactions,
                 .results = &self.results,
@@ -176,13 +189,21 @@ pub const TransactionScheduler = struct {
 };
 
 const ProcessBatchTask = struct {
+    allocator: Allocator,
+    svm_slot: *SvmSlot,
     batch_index: usize,
     transactions: []const ResolvedTransaction,
     results: *Channel(TransactionScheduler.BatchResult),
     exit: *std.atomic.Value(bool),
 
     pub fn run(self: *ProcessBatchTask) !void {
-        const result = processBatch(self.transactions, self.exit);
+        const result = try processBatch(
+            self.allocator,
+            self.svm_slot,
+            self.transactions,
+            self.exit,
+        );
+
         if (result != null) self.exit.store(true, .monotonic);
         try self.results.send(.{ .batch_index = self.batch_index, .maybe_err = result });
     }
