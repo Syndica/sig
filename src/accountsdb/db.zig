@@ -1669,6 +1669,26 @@ pub const AccountsDB = struct {
         return account;
     }
 
+    /// gets an account given an associated pubkey. mut ref is required for locks.
+    /// Will only find rooted accounts, or unrooted accounts from a slot in ancestors.
+    pub fn getAccountWithAncestors(
+        self: *AccountsDB,
+        pubkey: *const Pubkey,
+        ancestors: *const sig.core.Ancestors,
+        /// below this slot, consider totally rooted/finalised (=> ancestors irrelevant)
+        min_ancestors_slot: Slot,
+    ) GetAccountError!Account {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        const max_ref = greatestInAncestors(head_ref, ancestors, min_ancestors_slot) orelse
+            return error.PubkeyNotInIndex;
+        const account = try self.getAccountFromRef(max_ref);
+
+        return .{ account, max_ref.* };
+    }
+
     pub fn getAccountAndReference(
         self: *AccountsDB,
         pubkey: *const Pubkey,
@@ -1968,19 +1988,39 @@ pub const AccountsDB = struct {
         return .{ gop.value_ptr, bank_hash_stats_lg };
     }
 
-    pub inline fn slotListMaxWithinBounds(
+    fn greatestInAncestors(
+        ref_ptr: *AccountRef,
+        ancestors: *const sig.core.Ancestors,
+        /// below this slot, consider totally rooted/finalised (=> ancestors irrelevant)
+        min_ancestors_slot: Slot,
+    ) ?*AccountRef {
+        var biggest: ?*AccountRef = null;
+
+        var curr = ref_ptr;
+        while (curr.next_ptr) |ref| {
+            if (curr.slot < min_ancestors_slot or ancestors.containsSlot(curr.slot)) {
+                const new_biggest = if (biggest) |big| curr.slot > big.slot else true;
+                if (new_biggest) biggest = curr;
+            }
+            curr = ref;
+        }
+
+        return biggest;
+    }
+
+    inline fn slotListMaxWithinBounds(
         ref_ptr: *AccountRef,
         min_slot: ?Slot,
         max_slot: ?Slot,
     ) ?*AccountRef {
         var biggest: ?*AccountRef = null;
-        if (inBoundsIf(ref_ptr.slot, min_slot, max_slot)) {
+        if (slotInRange(ref_ptr.slot, min_slot, max_slot)) {
             biggest = ref_ptr;
         }
 
         var curr = ref_ptr;
         while (curr.next_ptr) |ref| {
-            if (inBoundsIf(ref.slot, min_slot, max_slot) and
+            if (slotInRange(ref.slot, min_slot, max_slot) and
                 (biggest == null or ref.slot > biggest.?.slot) //
             ) biggest = ref;
             curr = ref;
@@ -2481,42 +2521,28 @@ pub const AccountsDB = struct {
         try self.snapshot_dir.deleteFile(file_name);
     }
 
-    inline fn lessThanIf(
+    inline fn slotSatisfiesMax(
         slot: Slot,
         max_slot: ?Slot,
     ) bool {
-        if (max_slot) |max| {
-            if (slot <= max) {
-                return true;
-            } else {
-                return false;
-            }
-        } else {
-            return true;
-        }
+        if (max_slot) |max| return slot <= max;
+        return true;
     }
 
-    inline fn greaterThanIf(
+    inline fn slotSatisfiesMin(
         slot: Slot,
         min_slot: ?Slot,
     ) bool {
-        if (min_slot) |min| {
-            if (slot > min) {
-                return true;
-            } else {
-                return false;
-            }
-        } else {
-            return true;
-        }
+        if (min_slot) |min| return slot > min;
+        return true;
     }
 
-    inline fn inBoundsIf(
+    inline fn slotInRange(
         slot: Slot,
         min_slot: ?Slot,
         max_slot: ?Slot,
     ) bool {
-        return lessThanIf(slot, max_slot) and greaterThanIf(slot, min_slot);
+        return slotSatisfiesMax(slot, max_slot) and slotSatisfiesMin(slot, min_slot);
     }
 };
 

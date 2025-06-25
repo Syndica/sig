@@ -67,7 +67,7 @@ pub const BankForksStub = struct {
         slot: Slot,
         /// If this is Hash.ZEROES, it means the bank isn't frozen.
         hash: Hash,
-        ancestors: sig.core.status_cache.Ancestors,
+        ancestors: sig.core.Ancestors,
         epoch_schedule: sig.core.EpochSchedule,
         epoch_stakes: sig.core.stake.EpochStakeMap,
 
@@ -82,7 +82,7 @@ pub const BankForksStub = struct {
             params: struct {
                 slot: Slot,
                 hash: Hash,
-                ancestors: sig.core.status_cache.Ancestors,
+                ancestors: sig.core.Ancestors,
                 epoch_schedule: sig.core.EpochSchedule,
                 epoch_stakes: sig.core.stake.EpochStakeMap,
             },

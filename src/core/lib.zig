@@ -1,4 +1,5 @@
 pub const account = @import("account.zig");
+pub const ancestors = @import("ancestors.zig");
 pub const bank = @import("bank.zig");
 pub const entry = @import("entry.zig");
 pub const epoch_context = @import("epoch_context.zig");
@@ -19,6 +20,7 @@ pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
 
 pub const Account = account.Account;
+pub const Ancestors = ancestors.Ancestors;
 pub const BankFields = bank.BankFields;
 pub const ClusterType = genesis_config.ClusterType;
 pub const Entry = entry.Entry;
