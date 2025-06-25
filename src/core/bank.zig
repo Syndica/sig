@@ -42,7 +42,6 @@ const EpochStakes = core.stake.EpochStakes;
 const EpochStakeMap = core.stake.EpochStakeMap;
 const Stake = core.stake.Stake;
 const Stakes = core.stake.Stakes;
-const VersionedEpochStake = core.stake.VersionedEpochStake;
 const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
 const epochStakeMapRandom = core.stake.epochStakeMapRandom;

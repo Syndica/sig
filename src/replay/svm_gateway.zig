@@ -6,21 +6,13 @@ const vm = sig.vm;
 
 const Allocator = std.mem.Allocator;
 
-const Channel = sig.sync.Channel;
-const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
-const ThreadPool = sig.sync.ThreadPool;
-
 const Ancestors = sig.core.status_cache.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const EpochStakes = sig.core.stake.EpochStakes;
-const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
-const Slot = sig.core.Slot;
 const StatusCache = sig.core.StatusCache;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
-
-const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const ResolvedBatch = replay.resolve_lookup.ResolvedBatch;
 
