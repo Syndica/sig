@@ -463,7 +463,7 @@ pub const ForkStats = struct {
     vote_threshold: VoteThreshold,
     is_locked_out: bool,
     voted_stakes: consensus.VotedStakes,
-    duplicate_confirmed_hash: Hash,
+    duplicate_confirmed_hash: ?Hash,
     computed: bool,
     lockout_intervals: LockoutIntervals,
     bank_hash: Hash,
