@@ -1624,9 +1624,6 @@ test "apply state changes" {
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const descendants = test_data.descendants;
 
-    var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
-    defer duplicate_slots_to_repair.deinit(allocator);
-
     // MarkSlotDuplicate should mark progress map and remove
     // the slot from fork choice
     const duplicate_slot = bank_forks.root + 1;
@@ -1654,6 +1651,10 @@ test "apply state changes" {
             );
         }
     }
+
+    var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
+    defer duplicate_slots_to_repair.deinit(allocator);
+
     try std.testing.expect(duplicate_slots_to_repair.count() == 0);
 
     // Simulate detecting another hash that is the correct version,
@@ -1670,7 +1671,7 @@ test "apply state changes" {
     try std.testing.expectEqual(1, duplicate_slots_to_repair.count());
     try std.testing.expectEqual(
         correct_hash,
-        duplicate_slots_to_repair.get(duplicate_slot).?,
+        duplicate_slots_to_repair.get(duplicate_slot),
     );
 }
 
@@ -1685,9 +1686,6 @@ test "apply state changes bank frozen" {
 
     const bank_forks = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
-
-    const duplicate_slot = bank_forks.root + 1;
-    const duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
 
     var registry: sig.prometheus.Registry(.{}) = .init(allocator);
     defer registry.deinit();
@@ -1713,6 +1711,9 @@ test "apply state changes bank frozen" {
         &lowest_cleanup_slot,
         &max_root,
     );
+
+    const duplicate_slot = bank_forks.root + 1;
+    const duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
 
     // Simulate ReplayStage freezing a Bank with the given hash.
     // BankFrozen should mark it down in Blockstore.
@@ -1847,7 +1848,6 @@ test "apply state changes duplicate confirmed matches frozen" {
             );
         }
     }
-
     try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isCandidate(&.{
         .slot = duplicate_slot,
         .hash = our_duplicate_slot_hash,
