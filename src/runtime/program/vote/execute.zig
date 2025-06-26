@@ -3367,7 +3367,11 @@ test "vote_program: vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }});
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
+    );
+    defer slot_hashes.deinit(allocator);
 
     var final_state = try VoteState.init(
         allocator,
@@ -3483,7 +3487,11 @@ test "vote_program: vote switch" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }});
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
+    );
+    defer slot_hashes.deinit(allocator);
 
     var final_state = try VoteState.init(
         allocator,
@@ -3599,7 +3607,11 @@ test "vote_program: vote missing signature" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }});
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
+    );
+    defer slot_hashes.deinit(allocator);
 
     var final_state = try VoteState.init(
         allocator,
@@ -3719,7 +3731,11 @@ test "vote_program: empty vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = sig.core.Hash.ZEROES }});
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{.{ .slot = 0, .hash = sig.core.Hash.ZEROES }},
+    );
+    defer slot_hashes.deinit(allocator);
 
     var final_state = try VoteState.init(
         allocator,
@@ -3884,6 +3900,17 @@ test "vote_program: vote state update" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 8, .hash = vote_slot_hash },
+        },
+    );
+    defer slot_hashes.deinit(allocator);
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -3910,12 +3937,7 @@ test "vote_program: vote state update" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{
@@ -3932,12 +3954,7 @@ test "vote_program: vote state update" {
             .compute_meter = 0,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{},
@@ -4026,6 +4043,17 @@ test "vote_program: vote state update switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 8, .hash = vote_slot_hash },
+        },
+    );
+    defer slot_hashes.deinit(allocator);
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4053,12 +4081,7 @@ test "vote_program: vote state update switch" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{
@@ -4075,12 +4098,7 @@ test "vote_program: vote state update switch" {
             .compute_meter = 0,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{},
@@ -4169,6 +4187,17 @@ test "vote_program: compact vote state update" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 8, .hash = vote_slot_hash },
+        },
+    );
+    defer slot_hashes.deinit(allocator);
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4195,12 +4224,7 @@ test "vote_program: compact vote state update" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{
@@ -4217,12 +4241,7 @@ test "vote_program: compact vote state update" {
             .compute_meter = 0,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{},
@@ -4311,6 +4330,17 @@ test "vote_program: compact vote state update switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 8, .hash = vote_slot_hash },
+        },
+    );
+    defer slot_hashes.deinit(allocator);
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4338,12 +4368,7 @@ test "vote_program: compact vote state update switch" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{
@@ -4360,12 +4385,7 @@ test "vote_program: compact vote state update switch" {
             .compute_meter = 0,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{},
@@ -4455,6 +4475,17 @@ test "vote_program: tower sync" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 8, .hash = vote_slot_hash },
+        },
+    );
+    defer slot_hashes.deinit(allocator);
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4481,12 +4512,7 @@ test "vote_program: tower sync" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
             .feature_set = &.{
                 .{
@@ -4509,12 +4535,7 @@ test "vote_program: tower sync" {
             .compute_meter = 0,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{},
@@ -4604,6 +4625,17 @@ test "vote_program: tower sync switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.defaultWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 8, .hash = vote_slot_hash },
+        },
+    );
+    defer slot_hashes.deinit(allocator);
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4631,12 +4663,7 @@ test "vote_program: tower sync switch" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
             .feature_set = &.{
                 .{
@@ -4659,12 +4686,7 @@ test "vote_program: tower sync switch" {
             .compute_meter = 0,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ .slot = 8, .hash = vote_slot_hash },
-                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-                }),
+                .slot_hashes = slot_hashes,
             },
         },
         .{},
