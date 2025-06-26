@@ -21,9 +21,8 @@ const ScopedLogger = sig.trace.ScopedLogger;
 const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
-// TODO DUPLICATE_THRESHOLD is defined in replay stage in Agave
 pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
-
+pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
 pub const Stake = u64;
