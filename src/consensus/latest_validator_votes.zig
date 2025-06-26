@@ -650,3 +650,104 @@ test "latest_validator_votes_take_votes_dirty_set_is_replay" {
 test "latest_validator_votes_take_votes_dirty_set_is_not_replay" {
     try runFrozenBanksTakeVotesDirtySet(std.testing.allocator, false);
 }
+
+test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(608159);
+    const random = prng.random();
+
+    var latest_validator_votes = LatestValidatorVotes.empty;
+    defer latest_validator_votes.deinit(allocator);
+
+    // First simulate vote from gossip
+    const vote_pubkey = Pubkey.initRandom(random);
+    const vote_slot = 1;
+    const frozen_hash = Hash.initRandom(random);
+    var is_replay_vote = false;
+
+    {
+        const result = try latest_validator_votes.checkAddVote(
+            allocator,
+            vote_pubkey,
+            vote_slot,
+            frozen_hash,
+            is_replay_vote,
+        );
+        try std.testing.expectEqualDeep(
+            .{ true, vote_slot },
+            result,
+        );
+    }
+
+    // Should find the vote in the gossip votes.
+    {
+        const latest_vote = latestVote(
+            &latest_validator_votes,
+            vote_pubkey,
+            is_replay_vote,
+        );
+        try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
+        try std.testing.expectEqual(latest_vote.?.hashes.len, 1);
+        try std.testing.expectEqual(latest_vote.?.hashes[0], frozen_hash);
+    }
+
+    // Shouldn't find the vote in the replayed votes
+    {
+        const latest_vote = latestVote(
+            &latest_validator_votes,
+            vote_pubkey,
+            !is_replay_vote,
+        );
+        try std.testing.expectEqual(null, latest_vote);
+
+        var votes_dirty_set_output =
+            try latest_validator_votes.takeVotesDirtySet(allocator, 0);
+        defer votes_dirty_set_output.deinit(allocator);
+        try std.testing.expectEqual(0, votes_dirty_set_output.items.len);
+    }
+
+    // Next simulate vote from replay
+    is_replay_vote = true;
+    {
+        const result = try latest_validator_votes.checkAddVote(
+            allocator,
+            vote_pubkey,
+            vote_slot,
+            frozen_hash,
+            is_replay_vote,
+        );
+        try std.testing.expectEqualDeep(
+            .{ true, vote_slot },
+            result,
+        );
+    }
+
+    // Should find the vote in the gossip and replay votes
+    {
+        const latest_vote = latestVote(
+            &latest_validator_votes,
+            vote_pubkey,
+            is_replay_vote,
+        );
+        try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
+        try std.testing.expectEqual(latest_vote.?.hashes.len, 1);
+        try std.testing.expectEqual(latest_vote.?.hashes[0], frozen_hash);
+    }
+    {
+        const latest_vote = latestVote(
+            &latest_validator_votes,
+            vote_pubkey,
+            !is_replay_vote,
+        );
+        try std.testing.expectEqual(latest_vote.?.slot, vote_slot);
+        try std.testing.expectEqual(latest_vote.?.hashes.len, 1);
+        try std.testing.expectEqual(latest_vote.?.hashes[0], frozen_hash);
+    }
+    {
+        var result = try latest_validator_votes.takeVotesDirtySet(allocator, 0);
+        defer result.deinit(allocator);
+        try std.testing.expectEqual(result.items[0][0], vote_pubkey);
+        try std.testing.expectEqual(result.items[0][1].slot, vote_slot);
+        try std.testing.expectEqual(result.items[0][1].hash, frozen_hash);
+    }
+}
