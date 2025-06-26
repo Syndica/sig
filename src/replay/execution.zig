@@ -37,6 +37,7 @@ pub const ReplayExecutionState = struct {
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     progress_map: ProgressMap,
+    status_cache: sig.core.StatusCache,
 
     pub fn init(
         allocator: Allocator,
@@ -59,6 +60,7 @@ pub const ReplayExecutionState = struct {
             .slot_tracker = slot_tracker,
             .epochs = epochs,
             .progress_map = ProgressMap.INIT,
+            .status_cache = .DEFAULT,
         };
     }
 };
@@ -211,6 +213,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .feature_set = .{ .active = slot_info.constants.feature_set },
         .rent_collector = &epoch_info.rent_collector,
         .epoch_stakes = &epoch_info.stakes,
+        .status_cache = &state.status_cache,
     };
 
     return .{ .confirm = try confirmSlot(

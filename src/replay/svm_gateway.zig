@@ -54,7 +54,6 @@ pub const SvmSlot = struct {
     /// Data initialized and owned by this struct that will be passed by
     /// reference into the SVM
     state: struct {
-        status_cache: StatusCache,
         sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
@@ -76,6 +75,7 @@ pub const SvmSlot = struct {
         feature_set: FeatureSet,
         rent_collector: *const RentCollector,
         epoch_stakes: *const EpochStakes,
+        status_cache: *const StatusCache,
     };
 
     pub fn init(
@@ -126,8 +126,7 @@ pub const SvmSlot = struct {
         return .{
             .params = params,
             .state = .{
-                .status_cache = .DEFAULT, // TODO: actually use this in replay
-                .sysvar_cache = .{},
+                .sysvar_cache = .{}, // TODO: populate
                 .vm_environment = vm_environment,
                 .next_vm_environment = null, // TODO epoch boundary
                 .accounts = accounts,
@@ -155,7 +154,7 @@ pub const SvmSlot = struct {
         return .{
             .ancestors = self.params.ancestors,
             .feature_set = &self.params.feature_set,
-            .status_cache = &self.state.status_cache,
+            .status_cache = self.params.status_cache,
             .sysvar_cache = &self.state.sysvar_cache,
             .rent_collector = self.params.rent_collector,
             .blockhash_queue = &self.params.blockhash_queue,
