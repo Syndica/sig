@@ -2012,6 +2012,120 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
     try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 }
 
+fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(7353);
+    const random = prng.random();
+
+    var test_data: TestData = try .init(allocator, .noop, random);
+    defer test_data.deinit(allocator);
+
+    const bank_forks = test_data.slot_tracker;
+    const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
+    const progress = &test_data.progress;
+
+    var ledger_state: TestLedgerRwState = .init();
+    defer ledger_state.deinit();
+
+    var ledger, _, var ledger_writer =
+        try testLedgerRw(@src(), .noop, &ledger_state);
+    defer ledger.deinit();
+
+    // Setup a duplicate slot state transition with the initial bank state of the duplicate slot
+    // determined by `initial_bank_hash`, which can be:
+    // 1) A default hash (unfrozen bank),
+    // 2) None (a slot that hasn't even started replay yet).
+    const root: Slot = 0;
+
+    var duplicate_slots_tracker: DuplicateSlotsTracker = .empty;
+    defer duplicate_slots_tracker.sorted_map.deinit(allocator);
+
+    const duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
+
+    var epoch_slots_frozen_slots: EpochSlotsFrozenSlots = .empty;
+    var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
+    var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
+
+    const duplicate_slot: Slot = 2;
+    const duplicate_state: DuplicateState = .fromState(
+        .noop,
+        duplicate_slot,
+        &duplicate_confirmed_slots,
+        heaviest_subtree_fork_choice,
+        .init(if (progress.isDead(duplicate_slot) orelse false)
+            .is_dead
+        else
+            .{ .hash = initial_bank_hash }),
+    );
+    try check_slot_agrees_with_cluster.duplicate(
+        allocator,
+        .noop,
+        duplicate_slot,
+        root,
+        &duplicate_slots_tracker,
+        heaviest_subtree_fork_choice,
+        duplicate_state,
+    );
+    try std.testing.expect(duplicate_slots_tracker.sorted_map.contains(duplicate_slot));
+    // Nothing should be applied yet to fork choice, since bank was not yet frozen
+    for (2..3 + 1) |slot| {
+        const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
+        try std.testing.expectEqual(null, heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+            .slot = slot,
+            .hash = slot_hash,
+        }));
+    }
+
+    // Now freeze the bank
+    const frozen_duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+    const bank_frozen_state: BankFrozenState = .fromState(
+        .noop,
+        duplicate_slot,
+        frozen_duplicate_slot_hash,
+        &duplicate_slots_tracker,
+        &duplicate_confirmed_slots,
+        heaviest_subtree_fork_choice,
+        &epoch_slots_frozen_slots,
+    );
+    try check_slot_agrees_with_cluster.bankFrozen(
+        allocator,
+        .noop,
+        duplicate_slot,
+        root,
+        &ledger_writer,
+        heaviest_subtree_fork_choice,
+        &duplicate_slots_to_repair,
+        &purge_repair_slot_counter,
+        bank_frozen_state,
+    );
+
+    // Progress map should have the correct updates, fork choice should mark duplicate
+    // as unvotable
+    try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isUnconfirmedDuplicate(&.{
+        .slot = duplicate_slot,
+        .hash = frozen_duplicate_slot_hash,
+    }));
+
+    // The ancestor of the duplicate slot should be the best slot now
+    const duplicate_ancestor, const duplicate_parent_hash = blk: {
+        const bank_consts = bank_forks.get(duplicate_slot).?.constants;
+        break :blk .{ bank_consts.parent_slot, bank_consts.parent_hash };
+    };
+    try std.testing.expectEqual(
+        sig.core.hash.SlotAndHash{ .slot = duplicate_ancestor, .hash = duplicate_parent_hash },
+        heaviest_subtree_fork_choice.bestOverallSlot(),
+    );
+}
+
+test "state unfrozen bank duplicate then bank frozen" {
+    try testStateDuplicateThenBankFrozen(.ZEROES);
+}
+
+test "state unreplayed bank duplicate then bank frozen" {
+    try testStateDuplicateThenBankFrozen(null);
+}
+
 // -- handleEdgeCases END -- //
 
 fn processConsensus() void {
