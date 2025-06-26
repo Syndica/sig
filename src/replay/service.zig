@@ -1509,8 +1509,8 @@ fn descendantsDeinit(allocator: std.mem.Allocator, descendants: Descendants) voi
 const TestData = struct {
     slot_tracker: sig.replay.trackers.SlotTracker,
     heaviest_subtree_fork_choice: sig.consensus.HeaviestSubtreeForkChoice,
-    descendants: Descendants,
     progress: ProgressMap,
+    descendants: Descendants,
 
     fn deinit(self: TestData, allocator: std.mem.Allocator) void {
         self.slot_tracker.deinit(allocator);
