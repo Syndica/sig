@@ -231,12 +231,26 @@ fn handleEdgeCases() void {
     _ = &processDuplicateSlots; // TODO:
 }
 
-const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(sig.core.Slot, sig.core.Hash);
-const DuplicateSlotsTracker = sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, void);
-const EpochSlotsFrozenSlots = sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, sig.core.Hash);
-const DuplicateConfirmedSlots = sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, sig.core.Hash);
-
-const PurgeRepairSlotCounter = sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, usize);
+const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(
+    sig.core.Slot,
+    sig.core.Hash,
+);
+const DuplicateSlotsTracker = sig.utils.collections.SortedMapUnmanaged(
+    sig.core.Slot,
+    void,
+);
+const EpochSlotsFrozenSlots = sig.utils.collections.SortedMapUnmanaged(
+    sig.core.Slot,
+    sig.core.Hash,
+);
+const DuplicateConfirmedSlots = sig.utils.collections.SortedMapUnmanaged(
+    sig.core.Slot,
+    sig.core.Hash,
+);
+const PurgeRepairSlotCounter = sig.utils.collections.SortedMapUnmanaged(
+    sig.core.Slot,
+    usize,
+);
 
 const AncestorHashesReplayUpdate = struct {
     slot: sig.core.Slot,
@@ -1534,10 +1548,14 @@ const TestData = struct {
         const slot_infos = [_]SlotInfo{
             .initRandom(random, null, 0, .{
                 .now = .now(),
-                .last_entry = try .parseBase58String("5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR"),
+                .last_entry = try .parseBase58String(
+                    "5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR",
+                ),
                 .prev_leader_slot = null,
                 .validator_stake_info = .{
-                    .validator_vote_pubkey = try .parseBase58String("11111111111111111111111111111111"),
+                    .validator_vote_pubkey = try .parseBase58String(
+                        "11111111111111111111111111111111",
+                    ),
                     .stake = 0,
                     .total_epoch_stake = 10_000,
                 },
@@ -1584,7 +1602,10 @@ const TestData = struct {
 
         for (slot_infos) |slot_info| {
             try progress.map.ensureUnusedCapacity(allocator, 1);
-            progress.map.putAssumeCapacity(slot_info.slot, try .init(allocator, slot_info.fork_progress_init));
+            progress.map.putAssumeCapacity(
+                slot_info.slot,
+                try .init(allocator, slot_info.fork_progress_init),
+            );
 
             try fork_choice.addNewLeafSlot(
                 .{ .slot = slot_info.slot, .hash = slot_info.hash },
@@ -1594,12 +1615,13 @@ const TestData = struct {
                 } else null,
             );
 
+            const parent_slot = slot_info.parent_slot orelse (slot_info.slot -| 1);
             try bank_forks.put(
                 allocator,
                 slot_info.slot,
                 .{
-                    .parent_slot = slot_info.parent_slot orelse (slot_info.slot -| 1),
-                    .parent_hash = slot_infos[slot_info.parent_slot orelse (slot_info.slot -| 1)].hash,
+                    .parent_slot = parent_slot,
+                    .parent_hash = slot_infos[parent_slot].hash,
                     .block_height = 1,
                     .collector_id = .initRandom(random),
                     .max_tick_height = 1,
@@ -1807,7 +1829,13 @@ test "apply state changes bank frozen" {
             .hash = root_bank.state.hash.readCopy().?,
         };
     };
-    try heaviest_subtree_fork_choice.addNewLeafSlot(.{ .slot = duplicate_slot, .hash = new_bank_hash }, root_slot_hash);
+    try heaviest_subtree_fork_choice.addNewLeafSlot(
+        .{
+            .slot = duplicate_slot,
+            .hash = new_bank_hash,
+        },
+        root_slot_hash,
+    );
     {
         // Handle cases where the bank is frozen, but not duplicate confirmed yet.
         var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
@@ -2173,15 +2201,33 @@ test "state ancestor confirmed descendant duplicate" {
             duplicate_confirmed_state,
         );
     }
-    try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isDuplicateConfirmed(&.{ .slot = 2, .hash = slot2_hash }));
+    try std.testing.expectEqual(
+        true,
+        heaviest_subtree_fork_choice.isDuplicateConfirmed(&.{
+            .slot = 2,
+            .hash = slot2_hash,
+        }),
+    );
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.bestOverallSlot(),
     );
     for (0..2 + 1) |slot| {
         const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
-        try std.testing.expectEqual(true, heaviest_subtree_fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = slot_hash }));
-        try std.testing.expectEqual(null, heaviest_subtree_fork_choice.latestInvalidAncestor(&.{ .slot = slot, .hash = slot_hash }));
+        try std.testing.expectEqual(
+            true,
+            heaviest_subtree_fork_choice.isDuplicateConfirmed(&.{
+                .slot = slot,
+                .hash = slot_hash,
+            }),
+        );
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = slot,
+                .hash = slot_hash,
+            }),
+        );
     }
 
     // Mark 3 as duplicate, should not remove the duplicate confirmed slot 2 from fork choice
