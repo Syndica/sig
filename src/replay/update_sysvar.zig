@@ -3,12 +3,14 @@ const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 const sysvars = sig.runtime.sysvar;
+const store_account = sig.replay.store_account;
 
 const AccountsDb = sig.accounts_db.AccountsDB;
 
 const Pubkey = sig.core.Pubkey;
 const Ancestors = sig.core.status_cache.Ancestors;
 const Account = sig.core.Account;
+const SlotState = sig.core.SlotState;
 
 const Clock = sysvars.Clock;
 const EpochSchedule = sysvars.EpochSchedule;
@@ -23,33 +25,43 @@ const SlotHistory = sysvars.SlotHistory;
 
 pub fn updateSysvarAccount(
     allocator: std.mem.Allocator,
-    comptime Sysvar: type,
-    sysvar: Sysvar,
+    state: *SlotState,
     accounts_db: *AccountsDb,
     ancestors: *const Ancestors,
     rent: *const Rent,
+    new_warmup_and_cooldown_rate_epoch: ?u64,
+    slot: u64,
+    comptime Sysvar: type,
+    sysvar: Sysvar,
 ) !void {
     // TODO: accounts_db.load_with_fixed_root(ancestors, pubkey)
     _ = ancestors;
+    const old_account = accounts_db.getAccount(&Sysvar.ID) catch null;
 
-    const account = try createSysvarAccount(
+    const new_account = try createSysvarAccount(
         allocator,
+        rent,
         Sysvar,
         sysvar,
-        rent,
-        accounts_db.getAccount(&Sysvar.ID) catch null,
+        &old_account,
     );
 
-    _ = account;
-
-    // TODO: store_and_update_capitalisation
+    store_account.storeAccount(
+        state,
+        accounts_db,
+        new_warmup_and_cooldown_rate_epoch,
+        slot,
+        Sysvar.ID,
+        new_account,
+        &old_account,
+    );
 }
 
 pub fn createSysvarAccount(
     allocator: std.mem.Allocator,
+    rent: *const Rent,
     comptime Sysvar: type,
     sysvar: Sysvar,
-    rent: *const Rent,
     old_account: ?*const Account,
 ) !Account {
     const sysvar_data = try allocator.alloc(u8, @max(
@@ -128,9 +140,9 @@ fn testCreateSysvarAccount(
 
     const account = try createSysvarAccount(
         allocator,
+        &rent,
         Sysvar,
         sysvar,
-        &rent,
         old_account,
     );
     defer account.deinit(allocator);
