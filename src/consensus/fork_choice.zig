@@ -77,6 +77,12 @@ pub const ForkInfo = struct {
         self.children.deinit();
     }
 
+    /// Returns if this node has been explicitly marked as a duplicate slot
+    fn isUnconfirmedDuplicate(self: *const ForkInfo, my_slot: Slot) bool {
+        const ancestor = self.latest_duplicate_ancestor orelse return false;
+        return ancestor == my_slot;
+    }
+
     /// Returns true if the fork rooted at this node is included in fork choice
     fn isCandidate(self: *const ForkInfo) bool {
         return self.latest_duplicate_ancestor == null;
@@ -312,6 +318,14 @@ pub const ForkChoice = struct {
         return null;
     }
 
+    pub fn bestSlot(
+        self: *const ForkChoice,
+        key: *const SlotAndHash,
+    ) ?SlotAndHash {
+        const fork_info = self.fork_infos.get(key.*) orelse return null;
+        return fork_info.heaviest_subtree_slot;
+    }
+
     pub fn deepestSlot(
         self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
@@ -320,6 +334,10 @@ pub const ForkChoice = struct {
             return fork_info.deepest_slot;
         }
         return null;
+    }
+
+    pub fn bestOverallSlot(self: *const ForkChoice) ?SlotAndHash {
+        return self.bestSlot(&self.tree_root).?;
     }
 
     pub fn deepestOverallSlot(self: *const ForkChoice) SlotAndHash {
@@ -422,6 +440,13 @@ pub const ForkChoice = struct {
             return fork_info.is_duplicate_confirmed;
         }
         return null;
+    }
+
+    /// Returns if the exact node with the specified key has been explicitly marked as a duplicate
+    /// slot (doesn't count ancestors being marked as duplicate).
+    pub fn isUnconfirmedDuplicate(self: ForkChoice, slot_hash_key: *const SlotAndHash) ?bool {
+        const fork_info = self.fork_infos.get(slot_hash_key.*) orelse return null;
+        return fork_info.isUnconfirmedDuplicate(slot_hash_key.slot);
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L1358
