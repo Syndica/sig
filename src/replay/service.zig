@@ -1425,12 +1425,12 @@ const state_change = struct {
 
     fn bankFrozen(
         slot: u64,
-        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+        fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         not_dupe_confirmed_frozen_hash: *NotDupeConfirmedFrozenHash,
         bank_frozen_hash: sig.core.Hash,
     ) void {
-        const is_duplicate_confirmed = fork_choice
-            .isDuplicateConfirmed(&.{ .slot = slot, .hash = bank_frozen_hash }) orelse
+        const is_duplicate_confirmed =
+            fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = bank_frozen_hash }) orelse
             std.debug.panic("frozen bank must exist in fork choice", .{});
         if (!is_duplicate_confirmed) {
             not_dupe_confirmed_frozen_hash.update(bank_frozen_hash);
@@ -1510,6 +1510,7 @@ const TestData = struct {
     slot_tracker: sig.replay.trackers.SlotTracker,
     heaviest_subtree_fork_choice: sig.consensus.HeaviestSubtreeForkChoice,
     descendants: Descendants,
+    progress: ProgressMap,
 
     fn deinit(self: TestData, allocator: std.mem.Allocator) void {
         self.slot_tracker.deinit(allocator);
@@ -1518,6 +1519,8 @@ const TestData = struct {
         fork_choice.deinit();
 
         descendantsDeinit(allocator, self.descendants);
+
+        self.progress.deinit(allocator);
     }
 
     fn init(
@@ -1529,25 +1532,60 @@ const TestData = struct {
             parent_slot: ?sig.core.Slot,
             slot: sig.core.Slot,
             hash: sig.core.Hash,
+            fork_progress_init: sig.consensus.progress_map.ForkProgress.InitParams,
 
             fn initRandom(
+                _random: std.Random,
                 parent_slot: ?sig.core.Slot,
                 slot: sig.core.Slot,
-                _random: std.Random,
+                fork_progress_init: sig.consensus.progress_map.ForkProgress.InitParams,
             ) @This() {
                 return .{
                     .parent_slot = parent_slot,
                     .slot = slot,
                     .hash = .initRandom(_random),
+                    .fork_progress_init = fork_progress_init,
                 };
             }
         };
 
         const slot_infos = [_]SlotInfo{
-            .initRandom(null, 0, random),
-            .initRandom(0, 1, random),
-            .initRandom(1, 2, random),
-            .initRandom(2, 3, random),
+            .initRandom(random, null, 0, .{
+                .now = .now(),
+                .last_entry = try .parseBase58String("5NjW2CAV6MBQYxpL4oK2CESrpdj6tkcvxP3iigAgrHyR"),
+                .prev_leader_slot = null,
+                .validator_stake_info = .{
+                    .validator_vote_pubkey = try .parseBase58String("11111111111111111111111111111111"),
+                    .stake = 0,
+                    .total_epoch_stake = 10_000,
+                },
+                .num_blocks_on_fork = 0,
+                .num_dropped_blocks_on_fork = 0,
+            }),
+            .initRandom(random, 0, 1, .{
+                .now = .now(),
+                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .prev_leader_slot = null,
+                .validator_stake_info = null,
+                .num_blocks_on_fork = 0,
+                .num_dropped_blocks_on_fork = 0,
+            }),
+            .initRandom(random, 1, 2, .{
+                .now = .now(),
+                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .prev_leader_slot = null,
+                .validator_stake_info = null,
+                .num_blocks_on_fork = 0,
+                .num_dropped_blocks_on_fork = 0,
+            }),
+            .initRandom(random, 2, 3, .{
+                .now = .now(),
+                .last_entry = try .parseBase58String("11111111111111111111111111111111"),
+                .prev_leader_slot = null,
+                .validator_stake_info = null,
+                .num_blocks_on_fork = 0,
+                .num_dropped_blocks_on_fork = 0,
+            }),
         };
 
         var bank_forks: sig.replay.trackers.SlotTracker = .init(0);
@@ -1559,7 +1597,13 @@ const TestData = struct {
         });
         errdefer fork_choice.deinit();
 
+        var progress: ProgressMap = .INIT;
+        errdefer progress.deinit(allocator);
+
         for (slot_infos) |slot_info| {
+            try progress.map.ensureUnusedCapacity(allocator, 1);
+            progress.map.putAssumeCapacity(slot_info.slot, try .init(allocator, slot_info.fork_progress_init));
+
             try fork_choice.addNewLeafSlot(
                 .{ .slot = slot_info.slot, .hash = slot_info.hash },
                 if (slot_info.parent_slot) |parent_slot| .{
@@ -1607,6 +1651,7 @@ const TestData = struct {
             .slot_tracker = bank_forks,
             .heaviest_subtree_fork_choice = fork_choice,
             .descendants = descendants,
+            .progress = progress,
         };
     }
 };
