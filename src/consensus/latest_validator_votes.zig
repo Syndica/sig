@@ -11,6 +11,7 @@ const LatestVotes = std.AutoArrayHashMapUnmanaged(
     struct { slot: Slot, hashes: std.ArrayListUnmanaged(Hash) },
 );
 
+/// Analogous to [LatestValidatorVotesForFrozenBanks](https://github.com/anza-xyz/agave/blob/1f147b837a497194977dcd1ed6b5aa25e81de831/core/src/consensus/latest_validator_votes_for_frozen_banks.rs#L10)
 pub const LatestValidatorVotes = struct {
     max_gossip_frozen_votes: LatestVotes,
     max_replay_frozen_votes: LatestVotes,
