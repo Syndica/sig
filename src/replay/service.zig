@@ -225,36 +225,11 @@ fn handleEdgeCases() void {
 }
 
 const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(sig.core.Slot, sig.core.Hash);
-const DuplicateSlotsTracker = SortedMapStub(sig.core.Slot, void);
-const EpochSlotsFrozenSlots = SortedMapStub(sig.core.Slot, sig.core.Hash);
-const DuplicateConfirmedSlots = SortedMapStub(sig.core.Slot, sig.core.Hash);
+const DuplicateSlotsTracker = sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, void);
+const EpochSlotsFrozenSlots = sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, sig.core.Hash);
+const DuplicateConfirmedSlots = sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, sig.core.Hash);
 
-const PurgeRepairSlotCounter = SortedMapStub(sig.core.Slot, usize);
-
-fn SortedMapStub(comptime K: type, comptime V: type) type {
-    return struct {
-        /// Should be replaced with a sorted data structure or something at some point.
-        sorted_map: SortedMap,
-
-        const SortedMap = std.AutoArrayHashMapUnmanaged(K, V);
-
-        pub const empty: SortedMapStub(K, V) = .{ .sorted_map = .empty };
-
-        /// Use before accessing `sorted_map` in a way where it's expected to be sorted.
-        pub fn sort(self: *SortedMapStub(K, V)) void {
-            const sort_ctx: SortCtx = .{ .sorted_map = &self.sorted_map };
-            self.sorted_map.sort(sort_ctx);
-        }
-
-        const SortCtx = struct {
-            sorted_map: *const SortedMap,
-            pub fn lessThan(self: @This(), a_idx: usize, b_idx: usize) bool {
-                const keys = self.sorted_map.keys();
-                return keys[a_idx] < keys[b_idx];
-            }
-        };
-    };
-}
+const PurgeRepairSlotCounter = sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, usize);
 
 const AncestorHashesReplayUpdate = struct {
     slot: sig.core.Slot,
@@ -371,7 +346,7 @@ const BankFrozenState = struct {
             fork_choice,
             frozen_hash,
         );
-        const is_slot_duplicate = duplicate_slots_tracker.sorted_map.contains(slot);
+        const is_slot_duplicate = duplicate_slots_tracker.contains(slot);
         return .{
             .frozen_hash = frozen_hash,
             .cluster_confirmed_hash = cluster_confirmed_hash,
@@ -556,7 +531,7 @@ fn processDuplicateConfirmedSlots(
         const confirmed_slot, const duplicate_confirmed_hash = new_duplicate_confirmed_slot;
         if (confirmed_slot <= root) {
             continue;
-        } else if (try duplicate_confirmed_slots.sorted_map.fetchPut(
+        } else if (try duplicate_confirmed_slots.fetchPut(
             allocator,
             confirmed_slot,
             duplicate_confirmed_hash,
@@ -602,7 +577,7 @@ fn processDuplicateConfirmedSlots(
 }
 
 pub const UnfrozenGossipVerifiedVoteHashes = struct {
-    votes_per_slot: SortedMapStub(sig.core.Slot, HashToVotesMap),
+    votes_per_slot: sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, HashToVotesMap),
 
     const HashToVotesMap = std.AutoArrayHashMapUnmanaged(sig.core.Hash, VoteList);
     const VoteList = std.ArrayListUnmanaged(sig.core.Pubkey);
@@ -642,9 +617,9 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
 
             // Thus we want to record this vote for later, in case a slot with this `vote_slot` + hash gets
             // frozen later
-            const vps_gop = try self.votes_per_slot.sorted_map.getOrPut(allocator, vote_slot);
+            const vps_gop = try self.votes_per_slot.getOrPut(allocator, vote_slot);
             errdefer if (!vps_gop.found_existing) {
-                std.debug.assert(self.votes_per_slot.sorted_map.orderedRemove(vps_gop.key_ptr.*));
+                std.debug.assert(self.votes_per_slot.orderedRemove(vps_gop.key_ptr.*));
             };
             const hash_to_votes: *HashToVotesMap = vps_gop.value_ptr;
 
@@ -784,7 +759,7 @@ fn getClusterConfirmedHashFromState(
     fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
     maybe_bank_frozen_hash: ?sig.core.Hash,
 ) ?ClusterConfirmedHash {
-    const duplicate_confirmed_hash = duplicate_confirmed_slots.sorted_map.get(slot);
+    const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
     // If the bank hasn't been frozen yet, then we haven't duplicate confirmed a local version
     // this slot through replay yet.
     const is_local_replay_duplicate_confirmed = if (maybe_bank_frozen_hash) |bank_frozen_hash|
@@ -802,7 +777,7 @@ fn getClusterConfirmedHashFromState(
         .kind = .duplicate_confirmed,
         .hash = hash,
     };
-    const hash = epoch_slots_frozen_slots.sorted_map.get(slot) orelse return null;
+    const hash = epoch_slots_frozen_slots.get(slot) orelse return null;
     return .{
         .kind = .epoch_slots_frozen,
         .hash = hash,
@@ -816,7 +791,7 @@ fn getDuplicateConfirmedHashFromState(
     fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
     maybe_bank_frozen_hash: ?sig.core.Hash,
 ) ?sig.core.Hash {
-    const duplicate_confirmed_hash = duplicate_confirmed_slots.sorted_map.get(slot);
+    const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
     // If the bank hasn't been frozen yet, then we haven't duplicate confirmed a local version
     // this slot through replay yet.
     const is_local_replay_duplicate_confirmed = if (maybe_bank_frozen_hash) |bank_frozen_hash|
@@ -1189,7 +1164,7 @@ const check_slot_agrees_with_cluster = struct {
 
         // Needs to happen before the bank_frozen_hash.is_none() check below to account for duplicate
         // signals arriving before the bank is constructed in replay.
-        if (try duplicate_slots_tracker.sorted_map.fetchPut(allocator, slot, {})) |_| {
+        if (try duplicate_slots_tracker.fetchPut(allocator, slot, {})) |_| {
             // If this slot has already been processed before, return
             return;
         }
@@ -1262,7 +1237,7 @@ const check_slot_agrees_with_cluster = struct {
         const maybe_duplicate_confirmed_hash = epoch_slots_frozen_state.duplicate_confirmed_hash;
         const is_popular_pruned = epoch_slots_frozen_state.is_popular_pruned;
 
-        if (try epoch_slots_frozen_slots.sorted_map.fetchPut(
+        if (try epoch_slots_frozen_slots.fetchPut(
             allocator,
             slot,
             epoch_slots_frozen_hash,
@@ -1476,7 +1451,7 @@ const state_change = struct {
         }
 
         _ = duplicate_slots_to_repair.swapRemove(slot);
-        _ = purge_repair_slot_counter.sorted_map.orderedRemove(slot);
+        _ = purge_repair_slot_counter.orderedRemove(slot);
     }
 
     fn sendAncestorHashesReplayUpdate(
@@ -1491,10 +1466,10 @@ const state_change = struct {
 
 const Descendants = std.AutoArrayHashMapUnmanaged(
     sig.core.Slot,
-    SortedMapStub(sig.core.Slot, void),
+    sig.utils.collections.SortedMapUnmanaged(sig.core.Slot, void),
 );
 fn descendantsDeinit(allocator: std.mem.Allocator, descendants: Descendants) void {
-    for (descendants.values()) |*child_set| child_set.sorted_map.deinit(allocator);
+    for (descendants.values()) |*child_set| child_set.deinit(allocator);
     var copy = descendants;
     copy.deinit(allocator);
 }
@@ -1632,11 +1607,11 @@ const TestData = struct {
 
         var descendants: Descendants = .empty;
         errdefer descendants.deinit(allocator);
-        errdefer for (descendants.values()) |*child_set| child_set.sorted_map.deinit(allocator);
+        errdefer for (descendants.values()) |*child_set| child_set.deinit(allocator);
         try descendants.ensureUnusedCapacity(allocator, 4);
-        descendants.putAssumeCapacity(0, .{ .sorted_map = try .init(allocator, &.{ 1, 2, 3 }, &.{}) });
-        descendants.putAssumeCapacity(1, .{ .sorted_map = try .init(allocator, &.{ 3, 2 }, &.{}) });
-        descendants.putAssumeCapacity(2, .{ .sorted_map = try .init(allocator, &.{3}, &.{}) });
+        descendants.putAssumeCapacity(0, try .init(allocator, &.{ 1, 2, 3 }, &.{}));
+        descendants.putAssumeCapacity(1, try .init(allocator, &.{ 3, 2 }, &.{}));
+        descendants.putAssumeCapacity(2, try .init(allocator, &.{3}, &.{}));
         descendants.putAssumeCapacity(3, .empty);
         for (descendants.values()) |*slot_set| slot_set.sort();
 
@@ -1730,7 +1705,7 @@ test "apply state changes" {
         .hash = duplicate_slot_hash,
     }).?);
     for ([_][]const sig.core.Slot{
-        descendants.get(duplicate_slot).?.sorted_map.keys(),
+        descendants.getPtr(duplicate_slot).?.keys(),
         &.{duplicate_slot},
     }) |child_slot_set| {
         for (child_slot_set) |child_slot| {
@@ -1861,11 +1836,11 @@ test "apply state changes duplicate confirmed matches frozen" {
     defer duplicate_slots_to_repair.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
-    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+    defer purge_repair_slot_counter.deinit(allocator);
 
     // Setup and check the state that is about to change.
     try duplicate_slots_to_repair.put(allocator, duplicate_slot, .initRandom(random));
-    try purge_repair_slot_counter.sorted_map.put(allocator, duplicate_slot, 1);
+    try purge_repair_slot_counter.put(allocator, duplicate_slot, 1);
     try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
     try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 
@@ -1892,7 +1867,7 @@ test "apply state changes duplicate confirmed matches frozen" {
     }
 
     for ([_][]const sig.core.Slot{
-        descendants.get(duplicate_slot).?.sorted_map.keys(),
+        descendants.getPtr(duplicate_slot).?.keys(),
         &.{duplicate_slot},
     }) |child_slot_set| {
         for (child_slot_set) |child_slot| {
@@ -1910,7 +1885,7 @@ test "apply state changes duplicate confirmed matches frozen" {
         .hash = our_duplicate_slot_hash,
     }));
     try std.testing.expectEqual(0, duplicate_slots_to_repair.count());
-    try std.testing.expectEqual(0, purge_repair_slot_counter.sorted_map.count());
+    try std.testing.expectEqual(0, purge_repair_slot_counter.count());
     try std.testing.expectEqual(our_duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
     try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 }
@@ -1939,14 +1914,14 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
     defer duplicate_slots_to_repair.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
-    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+    defer purge_repair_slot_counter.deinit(allocator);
 
     const duplicate_slot = bank_forks.root + 1;
     const our_duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
 
     // Setup and check the state that is about to change.
     try duplicate_slots_to_repair.put(allocator, duplicate_slot, .initRandom(random));
-    try purge_repair_slot_counter.sorted_map.put(allocator, duplicate_slot, 1);
+    try purge_repair_slot_counter.put(allocator, duplicate_slot, 1);
     try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
     try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 
@@ -1981,7 +1956,7 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
     }
 
     for ([_][]const sig.core.Slot{
-        descendants.get(duplicate_slot).?.sorted_map.keys(),
+        descendants.getPtr(duplicate_slot).?.keys(),
         &.{duplicate_slot},
     }) |child_slot_set| {
         for (child_slot_set) |child_slot| {
@@ -2000,7 +1975,7 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
         .hash = our_duplicate_slot_hash,
     }));
     try std.testing.expectEqual(0, duplicate_slots_to_repair.count());
-    try std.testing.expectEqual(0, purge_repair_slot_counter.sorted_map.count());
+    try std.testing.expectEqual(0, purge_repair_slot_counter.count());
     try std.testing.expectEqual(our_duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
     try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 }
@@ -2032,7 +2007,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
     const root: Slot = 0;
 
     var duplicate_slots_tracker: DuplicateSlotsTracker = .empty;
-    defer duplicate_slots_tracker.sorted_map.deinit(allocator);
+    defer duplicate_slots_tracker.deinit(allocator);
 
     const duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
 
@@ -2060,7 +2035,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
         heaviest_subtree_fork_choice,
         duplicate_state,
     );
-    try std.testing.expect(duplicate_slots_tracker.sorted_map.contains(duplicate_slot));
+    try std.testing.expect(duplicate_slots_tracker.contains(duplicate_slot));
     // Nothing should be applied yet to fork choice, since bank was not yet frozen
     for (2..3 + 1) |slot| {
         const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
@@ -2147,17 +2122,17 @@ test "state ancestor confirmed descendant duplicate" {
     const root = 0;
 
     var duplicate_slots_tracker: DuplicateSlotsTracker = .empty;
-    defer duplicate_slots_tracker.sorted_map.deinit(allocator);
+    defer duplicate_slots_tracker.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
-    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+    defer purge_repair_slot_counter.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
-    defer duplicate_confirmed_slots.sorted_map.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(allocator);
 
     // Mark slot 2 as duplicate confirmed
     const slot2_hash = bank_forks.get(2).?.state.hash.readCopy().?;
-    try duplicate_confirmed_slots.sorted_map.put(allocator, 2, slot2_hash);
+    try duplicate_confirmed_slots.put(allocator, 2, slot2_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot2_hash,
         .bank_status = .init(if (progress.isDead(2) orelse false)
@@ -2215,7 +2190,7 @@ test "state ancestor confirmed descendant duplicate" {
         heaviest_subtree_fork_choice,
         duplicate_state,
     );
-    try std.testing.expect(duplicate_slots_tracker.sorted_map.contains(3));
+    try std.testing.expect(duplicate_slots_tracker.contains(3));
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 2, .hash = slot2_hash },
         heaviest_subtree_fork_choice.bestOverallSlot(),
@@ -2284,13 +2259,13 @@ test "state ancestor duplicate descendant confirmed" {
     const root = 0;
 
     var duplicate_slots_tracker: DuplicateSlotsTracker = .empty;
-    defer duplicate_slots_tracker.sorted_map.deinit(allocator);
+    defer duplicate_slots_tracker.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
-    defer duplicate_confirmed_slots.sorted_map.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
-    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+    defer purge_repair_slot_counter.deinit(allocator);
 
     // Mark 2 as duplicate
     const slot2_hash = bank_forks.get(2).?.state.hash.readCopy().?;
@@ -2316,7 +2291,7 @@ test "state ancestor duplicate descendant confirmed" {
         heaviest_subtree_fork_choice,
         duplicate_state,
     );
-    try std.testing.expect(duplicate_slots_tracker.sorted_map.contains(2));
+    try std.testing.expect(duplicate_slots_tracker.contains(2));
     for (2..3 + 1) |slot| {
         const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
         try std.testing.expectEqual(
@@ -2335,7 +2310,7 @@ test "state ancestor duplicate descendant confirmed" {
     );
 
     // Mark slot 3 as duplicate confirmed, should mark slot 2 as duplicate confirmed as well
-    try duplicate_confirmed_slots.sorted_map.put(allocator, 3, slot3_hash);
+    try duplicate_confirmed_slots.put(allocator, 3, slot3_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
         .bank_status = .init(if (progress.isDead(3) orelse false)
@@ -2440,22 +2415,22 @@ test "state descendant confirmed ancestor duplicate" {
     const root: Slot = 0;
 
     var duplicate_slots_tracker: DuplicateSlotsTracker = .empty;
-    defer duplicate_slots_tracker.sorted_map.deinit(allocator);
+    defer duplicate_slots_tracker.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
-    defer duplicate_confirmed_slots.sorted_map.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(allocator);
 
     var epoch_slots_frozen_slots: EpochSlotsFrozenSlots = .empty;
-    defer epoch_slots_frozen_slots.sorted_map.deinit(allocator);
+    defer epoch_slots_frozen_slots.deinit(allocator);
 
     var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
     defer duplicate_slots_to_repair.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
-    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+    defer purge_repair_slot_counter.deinit(allocator);
 
     // Mark 3 as duplicate confirmed
-    try duplicate_confirmed_slots.sorted_map.put(allocator, 3, slot3_hash);
+    try duplicate_confirmed_slots.put(allocator, 3, slot3_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
         .bank_status = .init(if (progress.isDead(3) orelse false)
@@ -2507,7 +2482,7 @@ test "state descendant confirmed ancestor duplicate" {
         heaviest_subtree_fork_choice,
         duplicate_state,
     );
-    try std.testing.expect(duplicate_slots_tracker.sorted_map.contains(1));
+    try std.testing.expect(duplicate_slots_tracker.contains(1));
     try verifyAllSlotsDuplicateConfirmed(bank_forks, heaviest_subtree_fork_choice, 3, true);
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
@@ -2544,19 +2519,19 @@ test "duplicate confirmed and epoch slots frozen" {
     const root: Slot = 0;
 
     var duplicate_slots_tracker: DuplicateSlotsTracker = .empty;
-    defer duplicate_slots_tracker.sorted_map.deinit(allocator);
+    defer duplicate_slots_tracker.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
-    defer duplicate_confirmed_slots.sorted_map.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(allocator);
 
     var epoch_slots_frozen_slots: EpochSlotsFrozenSlots = .empty;
-    defer epoch_slots_frozen_slots.sorted_map.deinit(allocator);
+    defer epoch_slots_frozen_slots.deinit(allocator);
 
     var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
     defer duplicate_slots_to_repair.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
-    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+    defer purge_repair_slot_counter.deinit(allocator);
 
     // Mark 3 as only epoch slots frozen, matching our `slot3_hash`, should not duplicate
     // confirm the slot
@@ -2595,7 +2570,7 @@ test "duplicate confirmed and epoch slots frozen" {
 
     // Mark 3 as duplicate confirmed and epoch slots frozen with the same hash. Should
     // duplicate confirm all descendants of 3
-    try duplicate_confirmed_slots.sorted_map.put(allocator, 3, slot3_hash);
+    try duplicate_confirmed_slots.put(allocator, 3, slot3_hash);
     expected_is_duplicate_confirmed = true;
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
@@ -2618,7 +2593,7 @@ test "duplicate confirmed and epoch slots frozen" {
     );
     try std.testing.expectEqual(
         slot3_hash,
-        epoch_slots_frozen_slots.sorted_map.get(3),
+        epoch_slots_frozen_slots.get(3),
     );
     try verifyAllSlotsDuplicateConfirmed(
         bank_forks,
@@ -2661,19 +2636,19 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     const root: Slot = 0;
 
     var duplicate_slots_tracker: DuplicateSlotsTracker = .empty;
-    defer duplicate_slots_tracker.sorted_map.deinit(allocator);
+    defer duplicate_slots_tracker.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
-    defer duplicate_confirmed_slots.sorted_map.deinit(allocator);
+    defer duplicate_confirmed_slots.deinit(allocator);
 
     var epoch_slots_frozen_slots: EpochSlotsFrozenSlots = .empty;
-    defer epoch_slots_frozen_slots.sorted_map.deinit(allocator);
+    defer epoch_slots_frozen_slots.deinit(allocator);
 
     var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
     defer duplicate_slots_to_repair.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
-    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+    defer purge_repair_slot_counter.deinit(allocator);
 
     // Mark 3 as only epoch slots frozen with different hash than the our
     // locally replayed `slot3_hash`. This should not duplicate confirm the slot,
@@ -2715,7 +2690,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     // the epoch slots frozen hash above. Should duplicate confirm all descendants of
     // 3 and remove the mismatched hash from `duplicate_slots_to_repair`, since we
     // have the right version now, no need to repair
-    try duplicate_confirmed_slots.sorted_map.put(allocator, 3, slot3_hash);
+    try duplicate_confirmed_slots.put(allocator, 3, slot3_hash);
     expected_is_duplicate_confirmed = true;
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
@@ -2740,7 +2715,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
         duplicate_confirmed_state,
     );
     try std.testing.expectEqual(0, duplicate_slots_to_repair.count());
-    try std.testing.expectEqual(mismatched_hash, epoch_slots_frozen_slots.sorted_map.get(3).?);
+    try std.testing.expectEqual(mismatched_hash, epoch_slots_frozen_slots.get(3).?);
     try verifyAllSlotsDuplicateConfirmed(
         bank_forks,
         heaviest_subtree_fork_choice,
