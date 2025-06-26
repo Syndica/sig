@@ -1187,7 +1187,7 @@ pub const VoteState = struct {
             // a matching slot hash in step 2)
             return VoteError.slots_mismatch;
         }
-        if (!vote_hash.eql(slot_hash_entries[j][1])) {
+        if (!vote_hash.eql(slot_hash_entries[j].hash)) {
             // This means the newest slot in the `vote_slots` has a match that
             // doesn't match the expected hash for that slot on this
             // fork
@@ -1299,7 +1299,7 @@ pub const VoteState = struct {
 
         const slot_hash_entries = slot_hashes.entries.slice();
         const earliest_slot_in_history = if (slot_hash_entries.len != 0)
-            slot_hash_entries[slot_hash_entries.len - 1][0]
+            slot_hash_entries[slot_hash_entries.len - 1].slot
         else
             0;
 
@@ -1479,7 +1479,7 @@ pub const VoteState = struct {
             return VoteError.slots_mismatch;
         }
 
-        const earliest_slot_hash_in_history = slot_hash_entries[slot_hash_entries.len - 1][0];
+        const earliest_slot_hash_in_history = slot_hash_entries[slot_hash_entries.len - 1].slot;
 
         // Check if the proposed vote state is too old to be in the SlotHash history
         if (last_proposed_slot < earliest_slot_hash_in_history) {
@@ -1666,9 +1666,9 @@ pub const VoteState = struct {
         // `proposed_vote_slot < earliest_slot_hash_in_history` ran, which is equivalent to
         // `last_proposed_slot < earliest_slot_hash_in_history`, but this is impossible
         // due to assumption 3) above.
-        std.debug.assert(last_proposed_slot == slot_hash_entries[slot_hashes_index][0]);
+        std.debug.assert(last_proposed_slot == slot_hash_entries[slot_hashes_index].slot);
 
-        if (!slot_hash_entries[slot_hashes_index][1].eql(proposed_hash)) {
+        if (!slot_hash_entries[slot_hashes_index].hash.eql(proposed_hash)) {
             return VoteError.slot_hash_mismatch;
         }
 
@@ -2975,9 +2975,7 @@ test "state.VoteState.processVote process missed votes" {
 
     const vote = Vote{ .slots = &slots, .hash = Hash.ZEROES, .timestamp = null };
 
-    var slot_hashes = try SlotHashes.init(allocator);
-    defer slot_hashes.deinit(allocator);
-
+    var slot_hashes = SlotHashes.DEFAULT;
     var iter = std.mem.reverseIterator(vote.slots);
     while (iter.next()) |vote_slot| {
         slot_hashes.entries.appendAssumeCapacity(.{
@@ -2985,7 +2983,6 @@ test "state.VoteState.processVote process missed votes" {
             .hash = vote.hash,
         });
     }
-    const slot_hashes = SlotHashes.initWithEntries(entries.items);
 
     {
         const maybe_error = vote_state_a.processVote(
@@ -3033,7 +3030,7 @@ test "state.VoteState.processVote skips old vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ 0, vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
 
     const maybe_error = try vote_state.processVote(allocator, &vote, slot_hashes, 0, 0);
     try std.testing.expectEqual(null, maybe_error);
@@ -3063,8 +3060,8 @@ test "state.VoteState filter old votes" {
     // Vote with all slots that are all older than the SlotHashe
     // error with `VotesTooOldAllFiltered`
     const slot_hashes = SlotHashes.initWithEntries(&.{
-        .{ 3, Hash.initRandom(random) },
-        .{ 2, Hash.initRandom(random) },
+        .{ .slot = 3, .hash = Hash.initRandom(random) },
+        .{ .slot = 2, .hash = Hash.initRandom(random) },
     });
     const slot_hash_entries = slot_hashes.entries.slice();
 
@@ -3075,8 +3072,8 @@ test "state.VoteState filter old votes" {
     // filter out those older slots
     const vote_slot = 2;
     const vote_slot_hash = for (slot_hash_entries) |entry| {
-        if (entry[0] == vote_slot) {
-            break entry[1];
+        if (entry.slot == vote_slot) {
+            break entry.hash;
         }
     } else unreachable;
 
@@ -3132,7 +3129,7 @@ test "state.VoteState.checkSlotsAreValid new vote" {
     };
 
     const slot_hashes = SlotHashes.initWithEntries(&.{
-        .{ vote.slots[vote.slots.len - 1], vote.hash },
+        .{ .slot = vote.slots[vote.slots.len - 1], .hash = vote.hash },
     });
 
     try std.testing.expectEqual(
@@ -3156,7 +3153,7 @@ test "state.VoteState.checkSlotsAreValid bad timestamp" {
     };
 
     const slot_hashes = SlotHashes.initWithEntries(&.{
-        .{ vote.slots[vote.slots.len - 1], vote.hash },
+        .{ .slot = vote.slots[vote.slots.len - 1], .hash = vote.hash },
     });
 
     try std.testing.expectEqual(
@@ -3181,7 +3178,7 @@ test "state.VoteState.checkSlotsAreValid bad hash" {
     };
 
     const slot_hashes = SlotHashes.initWithEntries(&.{
-        .{ vote.slots[vote.slots.len - 1], Hash.generateSha256(&vote.hash.data) },
+        .{ .slot = vote.slots[vote.slots.len - 1], .hash = Hash.generateSha256(&vote.hash.data) },
     });
 
     const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &slot_hashes);
@@ -3203,7 +3200,7 @@ test "state.VoteState.checkSlotsAreValid bad slot" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ 0, vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
 
     const result = try vote_state.checkSlotsAreValid(&vote, vote.slots, &slot_hashes);
     try std.testing.expectEqual(VoteError.slots_mismatch, result);
@@ -3224,7 +3221,7 @@ test "state.VoteState.checkSlotsAreValid duplicate vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ 0, vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
 
     const maybe_error = try vote_state.processVote(allocator, &vote, slot_hashes, 0, 0);
     try std.testing.expectEqual(null, maybe_error);
@@ -3247,7 +3244,7 @@ test "state.VoteState.checkSlotsAreValid next vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ 0, vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
 
     const maybe_error = try vote_state.processVote(allocator, &vote, slot_hashes, 0, 0);
     try std.testing.expectEqual(null, maybe_error);
@@ -3261,8 +3258,8 @@ test "state.VoteState.checkSlotsAreValid next vote" {
     };
 
     const next_slot_hashes = SlotHashes.initWithEntries(&.{
-        .{ 1, vote.hash },
-        .{ 0, vote.hash },
+        .{ .slot = 1, .hash = vote.hash },
+        .{ .slot = 0, .hash = vote.hash },
     });
 
     const result = try vote_state.checkSlotsAreValid(
@@ -3288,7 +3285,7 @@ test "state.VoteState.checkSlotsAreValid next vote only" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ 0, vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = vote.hash }});
 
     const maybe_error = try vote_state.processVote(allocator, &vote, slot_hashes, 0, 0);
     try std.testing.expectEqual(null, maybe_error);
@@ -3302,8 +3299,8 @@ test "state.VoteState.checkSlotsAreValid next vote only" {
     };
 
     const next_slot_hashes = SlotHashes.initWithEntries(&.{
-        .{ 1, vote.hash },
-        .{ 0, vote.hash },
+        .{ .slot = 1, .hash = vote.hash },
+        .{ .slot = 0, .hash = vote.hash },
     });
 
     const result = try vote_state.checkSlotsAreValid(
@@ -4050,9 +4047,7 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const empty_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{});
-    defer empty_slot_hashes.deinit(allocator);
-
+    const empty_slot_hashes = try buildSlotHashes(random, &[_]Slot{});
     var empty_vote_state = try buildVoteState(
         allocator,
         &[_]Slot{},
@@ -4071,7 +4066,7 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
-            &SlotHashes.initWithEntries(empty_slot_hashes.items),
+            &empty_slot_hashes,
         );
         try std.testing.expectEqual(VoteError.empty_slots, maybe_error);
     }
@@ -4091,7 +4086,7 @@ test "state.VoteState.checkAndFilterProposedVoteState empty" {
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
-            &SlotHashes.initWithEntries(empty_slot_hashes.items),
+            &empty_slot_hashes,
         );
         try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
     }
@@ -4103,8 +4098,7 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
     const latest_vote = 4;
-    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
-    defer slot_hashes.deinit(allocator);
+    const slot_hashes = try buildSlotHashes(random, &[_]Slot{ 1, 2, 3, 4 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4129,7 +4123,7 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
-            &SlotHashes.initWithEntries(slot_hashes.items),
+            &slot_hashes,
         );
         try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
     }
@@ -4139,11 +4133,9 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
     // 2) `X` > latest_vote
     const earliest_slot_in_history = latest_vote + 2;
     const another_slot_hashes = try buildSlotHashes(
-        allocator,
         random,
         &[_]Slot{earliest_slot_in_history},
     );
-    defer another_slot_hashes.deinit(allocator);
 
     var another_tower_sync = try testTowerSync(
         allocator,
@@ -4158,7 +4150,7 @@ test "state.VoteState.checkAndFilterProposedVoteState too old" {
         &another_tower_sync.lockouts,
         &another_tower_sync.root,
         another_tower_sync.hash,
-        &SlotHashes.initWithEntries(another_slot_hashes.items),
+        &another_slot_hashes,
     );
 
     try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
@@ -4347,8 +4339,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
-    defer slot_hashes.deinit(allocator);
+    const slot_hashes = try buildSlotHashes(random, &[_]Slot{ 1, 2, 3, 4 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4383,7 +4374,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
-            &SlotHashes.initWithEntries(slot_hashes.items),
+            &slot_hashes,
         );
         try std.testing.expectEqual(VoteError.slots_not_ordered, maybe_error);
     }
@@ -4407,7 +4398,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slots not ordered" {
             &tower_sync.lockouts,
             &tower_sync.root,
             tower_sync.hash,
-            &SlotHashes.initWithEntries(slot_hashes.items),
+            &slot_hashes,
         );
         try std.testing.expectEqual(VoteError.slots_not_ordered, maybe_error);
     }
@@ -4418,8 +4409,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 1, 2, 3, 4 });
-    defer init_slot_hashes.deinit(allocator);
+    const init_slot_hashes = try buildSlotHashes(random, &[_]Slot{ 1, 2, 3, 4 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4434,11 +4424,9 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
     // This slot should be filtered out
     const earliest_slot_in_history = 11;
     const slot_hashes = try buildSlotHashes(
-        allocator,
         random,
         &[_]Slot{ earliest_slot_in_history, 12, 13, 14 },
     );
-    defer slot_hashes.deinit(allocator);
 
     const vote_slot = 12;
     const vote_slot_hash = blk: {
@@ -4466,7 +4454,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(null, maybe_error);
 
@@ -4484,7 +4472,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots f
 
     const another_maybe_error = try vote_state.processTowerSync(
         allocator,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
         0,
         0,
         &tower_sync,
@@ -4497,8 +4485,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{4});
-    defer init_slot_hashes.deinit(allocator);
+    const init_slot_hashes = try buildSlotHashes(random, &[_]Slot{4});
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4513,11 +4500,9 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
     // This slot should *NOT* be filtered out
     const earliest_slot_in_history = 11;
     const slot_hashes = try buildSlotHashes(
-        allocator,
         random,
         &[_]Slot{ earliest_slot_in_history, 12, 13, 14 },
     );
-    defer slot_hashes.deinit(allocator);
 
     const vote_slot = 12;
     const vote_slot_hash = blk: {
@@ -4544,7 +4529,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(null, maybe_error);
 
@@ -4564,7 +4549,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older than history slots n
 
     const another_maybe_error = try vote_state.processTowerSync(
         allocator,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
         0,
         0,
         &tower_sync,
@@ -4577,8 +4562,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const init_slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{6});
-    defer init_slot_hashes.deinit(allocator);
+    const init_slot_hashes = try buildSlotHashes(random, &[_]Slot{6});
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4599,11 +4583,9 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
     // which should be filtered
     const earliest_slot_in_history = 11;
     const slot_hashes = try buildSlotHashes(
-        allocator,
         random,
         &[_]Slot{ earliest_slot_in_history, 12, 13, 14 },
     );
-    defer slot_hashes.deinit(allocator);
 
     const vote_slot = 14;
     const vote_slot_hash = blk: {
@@ -4633,7 +4615,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(null, maybe_error);
 
@@ -4652,7 +4634,7 @@ test "state.VoteState.checkAndFilterProposedVoteState older history slots filter
 
     const another_maybe_error = try vote_state.processTowerSync(
         allocator,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
         0,
         0,
         &tower_sync,
@@ -4665,8 +4647,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
-    defer slot_hashes.deinit(allocator);
+    const slot_hashes = try buildSlotHashes(random, &[_]Slot{ 2, 4, 6, 8 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4708,7 +4689,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
 
@@ -4732,7 +4713,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot not on fork" {
         &another_tower_sync.lockouts,
         &another_tower_sync.root,
         another_tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(VoteError.slots_mismatch, another_maybe_error);
 }
@@ -4742,8 +4723,7 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
-    defer slot_hashes.deinit(allocator);
+    const slot_hashes = try buildSlotHashes(random, &[_]Slot{ 2, 4, 6, 8 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4762,7 +4742,7 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
     // Have to vote for a slot greater than the last vote in the vote state to avoid VoteTooOld
     // errors, but also this slot must be present in SlotHashes
     const vote_slot = 8;
-    try std.testing.expectEqual(slot_hashes.entries.buffer[0].slot, vote_slot);
+    try std.testing.expectEqual(slot_hashes.entries.constSlice()[0].slot, vote_slot);
     const vote_slot_hash = blk: {
         for (slot_hashes.entries.constSlice()) |item| {
             if (item.slot == vote_slot) {
@@ -4786,7 +4766,7 @@ test "state.VoteState.checkAndFilterProposedVoteState root on different fork" {
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(VoteError.root_on_different_fork, maybe_error);
 }
@@ -4796,8 +4776,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8, 10 });
-    defer slot_hashes.deinit(allocator);
+    const slot_hashes = try buildSlotHashes(random, &[_]Slot{ 2, 4, 6, 8, 10 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4811,7 +4790,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
     // 2) The slot is greater than the newest slot in the slot history
     // Thus this slot is not part of the fork and the update should be rejected
     // with error `SlotsMismatch`
-    const missing_vote_slot = slot_hashes.entries.buffer[0].slot + 1;
+    const missing_vote_slot = slot_hashes.entries.constSlice()[0].slot + 1;
 
     const vote_slot_hash = Hash.initRandom(random);
 
@@ -4829,7 +4808,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot newer than slot histo
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
 }
@@ -4839,8 +4818,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
-    defer slot_hashes.deinit(allocator);
+    const slot_hashes = try buildSlotHashes(random, &[_]Slot{ 2, 4, 6, 8 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4881,7 +4859,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(null, maybe_error);
 
@@ -4900,7 +4878,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot all slot hases in upd
 
     const another_maybe_error = try vote_state.processTowerSync(
         allocator,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
         0,
         0,
         &tower_sync,
@@ -4913,8 +4891,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8, 10 });
-    defer slot_hashes.deinit(allocator);
+    const slot_hashes = try buildSlotHashes(random, &[_]Slot{ 2, 4, 6, 8, 10 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -4953,7 +4930,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(null, maybe_error);
 
@@ -4973,7 +4950,7 @@ test "state.VoteState.checkAndFilterProposedVoteState some slot hashes in update
     // we should get a lockout conflict
     const another_maybe_error = try vote_state.processTowerSync(
         allocator,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
         0,
         0,
         &tower_sync,
@@ -4986,8 +4963,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(5083);
     const random = prng.random();
-    const slot_hashes = try buildSlotHashes(allocator, random, &[_]Slot{ 2, 4, 6, 8 });
-    defer slot_hashes.deinit(allocator);
+    const slot_hashes = try buildSlotHashes(random, &[_]Slot{ 2, 4, 6, 8 });
 
     var vote_state = try buildVoteState(
         allocator,
@@ -5020,7 +4996,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(VoteError.slot_hash_mismatch, maybe_error);
 }
@@ -5041,7 +5017,7 @@ pub fn processSlotVoteUnchecked(
     };
 
     const slot_hashes = SlotHashes.initWithEntries(&.{
-        .{ vote.slots[vote.slots.len - 1], vote.hash },
+        .{ .slot = vote.slots[vote.slots.len - 1], .hash = vote.hash },
     });
     const epoch = if (vote_state.epoch_credits.items.len == 0)
         0
@@ -5165,7 +5141,6 @@ fn cloneVoteState(
 }
 
 fn buildSlotHashes(
-    allocator: std.mem.Allocator,
     random: std.Random,
     slots: []const Slot,
 ) !SlotHashes {
@@ -5173,8 +5148,8 @@ fn buildSlotHashes(
         @panic("buildSlotHashes should only be called in test mode");
     }
 
-    var result = try SlotHashes.init(allocator);
-    errdefer result.deinit(allocator);
+    var result = SlotHashes.DEFAULT;
+    errdefer result.deinit();
 
     var iter = std.mem.reverseIterator(slots);
     while (iter.next()) |slot| {
@@ -5218,7 +5193,7 @@ fn buildVoteState(
         _ = try vote_state.processVoteUnfiltered(
             vote.slots,
             &vote,
-            &SlotHashes.initWithEntries(slot_hashes),
+            &slot_hashes,
             0,
             0,
         );
@@ -5300,16 +5275,15 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
         try slots.append(slot);
     }
 
-    var slot_hashes = try buildSlotHashes(allocator, random, slots.items);
-    defer slot_hashes.deinit(allocator);
+    var slot_hashes = try buildSlotHashes(random, slots.items);
 
     var vote_state = try buildVoteState(allocator, current_vote_state_slots, slot_hashes);
     defer vote_state.deinit();
     vote_state.root_slot = current_vote_state_root;
 
     var j: usize = 0;
-    while (j < slot_hashes.entries.len) {
-        if (slot_hashes.entries.buffer[j].slot < earliest_slot_in_history) {
+    while (j < slot_hashes.entries.constSlice().len) {
+        if (slot_hashes.entries.constSlice()[j].slot < earliest_slot_in_history) {
             _ = slot_hashes.entries.orderedRemove(j);
         } else {
             j += 1;
@@ -5341,7 +5315,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
         &tower_sync.lockouts,
         &tower_sync.root,
         tower_sync.hash,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
     );
     try std.testing.expectEqual(null, maybe_error);
     try std.testing.expectEqual(expected_root, tower_sync.root);
@@ -5351,7 +5325,7 @@ fn runTestCheckAndFilterProposedVoteStateOlderThanHistoryRoot(
 
     const another_maybe_error = try vote_state.processTowerSync(
         allocator,
-        &SlotHashes.initWithEntries(slot_hashes.items),
+        &slot_hashes,
         0,
         0,
         &tower_sync,

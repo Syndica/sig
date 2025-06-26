@@ -746,7 +746,7 @@ test "address-lookup-table create" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = .initWithEntries(&.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }}),
+        .slot_hashes = .initWithEntries(&.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }}),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -850,7 +850,7 @@ test "address-lookup-table freeze" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = .initWithEntries(&.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }}),
+        .slot_hashes = .initWithEntries(&.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }}),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -958,7 +958,7 @@ test "address-lookup-table close" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = .initWithEntries(&.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }}),
+        .slot_hashes = .initWithEntries(&.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }}),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -1064,7 +1064,7 @@ test "address-lookup-table deactivate" {
 
     const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
         .clock = runtime.sysvar.Clock.DEFAULT,
-        .slot_hashes = .initWithEntries(&.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }}),
+        .slot_hashes = .initWithEntries(&.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }}),
         .rent = runtime.sysvar.Rent.DEFAULT,
     };
 
@@ -1194,7 +1194,7 @@ test "address-lookup-table extend" {
 
         const sysvar_cache = ExecuteContextsParams.SysvarCacheParams{
             .clock = runtime.sysvar.Clock.DEFAULT,
-            .slot_hashes = .initWithEntries(&.{.{ std.math.maxInt(Slot), sig.core.Hash.ZEROES }}),
+            .slot_hashes = .initWithEntries(&.{.{ .slot = std.math.maxInt(Slot), .hash = sig.core.Hash.ZEROES }}),
             .rent = runtime.sysvar.Rent.DEFAULT,
         };
 
