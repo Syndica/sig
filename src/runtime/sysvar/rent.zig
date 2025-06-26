@@ -39,6 +39,8 @@ pub const Rent = extern struct {
         .burn_percent = DEFAULT_BURN_PERCENT,
     };
 
+    pub const SIZE_OF: u64 = @sizeOf(Rent);
+
     pub fn initRandom(random: std.Random) Rent {
         return .{
             .lamports_per_byte_year = random.int(u64),

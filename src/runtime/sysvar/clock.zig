@@ -36,4 +36,6 @@ pub const Clock = extern struct {
         .leader_schedule_epoch = 0,
         .unix_timestamp = 0,
     };
+
+    pub const SIZE_OF: u64 = @sizeOf(Clock);
 };

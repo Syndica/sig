@@ -287,30 +287,15 @@ pub fn createSysvarCache(
     }
     if (params.slot_hashes) |slot_hashes| {
         sysvar_cache.slot_hashes = try sysvar.serialize(allocator, slot_hashes);
-        sysvar_cache.slot_hashes_obj = .{
-            .entries = try allocator.dupe(
-                sysvar.SlotHashes.Entry,
-                slot_hashes.entries,
-            ),
-        };
+        sysvar_cache.slot_hashes_obj = slot_hashes;
     }
     if (params.stake_history) |stake_history| {
         sysvar_cache.stake_history = try sysvar.serialize(allocator, stake_history);
-        sysvar_cache.stake_history_obj = .{
-            .entries = try allocator.dupe(
-                sysvar.StakeHistory.Entry,
-                stake_history.entries,
-            ),
-        };
+        sysvar_cache.stake_history_obj = stake_history;
     }
     sysvar_cache.fees_obj = params.fees;
     if (params.recent_blockhashes) |recent_blockhashes| {
-        sysvar_cache.recent_blockhashes_obj = .{
-            .entries = try allocator.dupe(
-                sysvar.RecentBlockhashes.Entry,
-                recent_blockhashes.entries,
-            ),
-        };
+        sysvar_cache.recent_blockhashes_obj = recent_blockhashes;
     }
 
     return sysvar_cache;

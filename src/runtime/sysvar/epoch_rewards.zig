@@ -46,4 +46,6 @@ pub const EpochRewards = extern struct {
         .distributed_rewards = 0,
         .active = false,
     };
+
+    pub const SIZE_OF: u64 = @sizeOf(EpochRewards);
 };
