@@ -568,7 +568,8 @@ fn testGetSlotHashes(filled: bool) !void {
         try entries.append(.{ .slot = slot, .hash = result });
     }
 
-    const src_hashes = sysvar.SlotHashes.initWithEntries(entries.constSlice());
+    const src_hashes = try sysvar.SlotHashes.defaultWithEntries(allocator, entries.constSlice());
+    defer src_hashes.deinit(allocator);
 
     {
         const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.SIZE_OF);
@@ -611,10 +612,11 @@ fn testGetSlotHashes(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
+    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.SlotHashes.Entry,
-        obj_parsed.entries.constSlice(),
-        src_hashes.entries.constSlice(),
+        obj_parsed.inner.items,
+        src_hashes.inner.items,
     );
 }
