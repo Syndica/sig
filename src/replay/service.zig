@@ -505,9 +505,9 @@ fn processAncestorHashesDuplicateSlots(
             logger,
             epoch_slots_frozen_slot,
             root,
-            epoch_slots_frozen_slots,
             fork_choice,
             duplicate_slots_to_repair,
+            epoch_slots_frozen_slots,
             epoch_slots_frozen_state,
         );
     }
@@ -1231,9 +1231,9 @@ const check_slot_agrees_with_cluster = struct {
         logger: sig.trace.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
-        epoch_slots_frozen_slots: *EpochSlotsFrozenSlots,
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
+        epoch_slots_frozen_slots: *EpochSlotsFrozenSlots,
         epoch_slots_frozen_state: EpochSlotsFrozenState,
     ) !void {
         logger.info().logf(
@@ -2570,9 +2570,9 @@ test "duplicate confirmed and epoch slots frozen" {
         .noop,
         3,
         root,
-        &epoch_slots_frozen_slots,
         heaviest_subtree_fork_choice,
         &duplicate_slots_to_repair,
+        &epoch_slots_frozen_slots,
         epoch_slots_frozen_state,
     );
     try verifyAllSlotsDuplicateConfirmed(
@@ -2687,9 +2687,9 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
         .noop,
         3,
         root,
-        &epoch_slots_frozen_slots,
         heaviest_subtree_fork_choice,
         &duplicate_slots_to_repair,
+        &epoch_slots_frozen_slots,
         epoch_slots_frozen_state,
     );
     try std.testing.expectEqual(mismatched_hash, duplicate_slots_to_repair.get(3).?);
