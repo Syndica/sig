@@ -25,7 +25,7 @@ const UnixTimestamp = sig.core.UnixTimestamp;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotesForFrozenBanks;
 const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 const ProgressMap = sig.consensus.ProgressMap;
 const Tower = sig.consensus.tower.Tower;
@@ -560,7 +560,7 @@ pub const ReplayTower = struct {
             // 5) Don't consider any banks before the root because
             //    all lockouts must be ancestors of `last_vote`
             const is_progress_computed = if (progress.getForkStats(candidate_slot)) |stats|
-                stats.computed
+                stats.is_computed
             else
                 false;
 
@@ -571,7 +571,7 @@ pub const ReplayTower = struct {
             const is_descendant_computed = if (!is_progress_computed) blk: {
                 break :blk for (candidate_descendants.items()) |d| {
                     if (progress.getForkStats(d)) |stats|
-                        break stats.computed
+                        break stats.is_computed
                     else
                         break false;
                 } else false;
@@ -3053,7 +3053,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
 
     var fp = try ForkProgress.zeroes(allocator);
     defer fp.deinit(allocator);
-    fp.fork_stats.computed = true;
+    fp.fork_stats.is_computed = true;
     try fixture.progress.map.put(allocator, 0, fp);
 
     // Build fork structure:
@@ -3531,7 +3531,7 @@ pub const TestFixture = struct {
             // Populate progress map
             var fp = try ForkProgress.zeroes(allocator);
             defer fp.deinit(allocator);
-            fp.fork_stats.computed = true;
+            fp.fork_stats.is_computed = true;
             fp.fork_stats.my_latest_landed_vote = null;
             _ = try self.progress.map.getOrPutValue(
                 allocator,

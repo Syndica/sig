@@ -4,9 +4,9 @@ pub const replay_tower = @import("replay_tower.zig");
 pub const tower = @import("tower.zig");
 pub const tower_state = @import("tower_state.zig");
 pub const tower_storage = @import("tower_storage.zig");
-pub const unimplemented = @import("unimplemented.zig");
 pub const vote_listener = @import("vote_listener.zig");
 pub const vote_tracker = @import("vote_tracker.zig");
+pub const latest_validator_votes = @import("latest_validator_votes_for_frozen_banks.zig");
 pub const vote_transaction = @import("vote_transaction.zig");
 
 pub const HeaviestSubtreeForkChoice = fork_choice.ForkChoice;

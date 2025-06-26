@@ -11,7 +11,10 @@ const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotesForFrozenBanks;
+const ClusterSlots = struct {};
+const VoteTracker = sig.consensus.VoteTracker;
+const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 
 const EpochStakeMap = sig.core.stake.EpochStakeMap;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
@@ -32,6 +35,7 @@ const Hash = sig.core.Hash;
 const RwMux = sig.sync.RwMux;
 
 pub const isSlotDuplicateConfirmed = sig.consensus.tower.isSlotDuplicateConfirmed;
+const collectVoteLockouts = sig.consensus.tower.collectVoteLockouts;
 
 const MAX_VOTE_REFRESH_INTERVAL_MILLIS: usize = 5000;
 
@@ -432,6 +436,47 @@ fn resetFork(
     _ = &last_reset_hash;
     _ = &last_blockhash;
     _ = &last_reset_bank_descendants;
+}
+
+fn compute_bank_stats(
+    allocator: std.mem.Allocator,
+    my_vote_pubkey: Pubkey,
+    ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
+    slot_tracker: *SlotTracker,
+    tower: *ReplayTower,
+    progress: *ProgressMap,
+    vote_tracker: *const VoteTracker,
+    cluster_slots: *const ClusterSlots,
+    fork_choice: *ForkChoice,
+    latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
+) []Slot {
+    var new_stats = std.ArrayListUnmanaged(Slot).empty;
+    var frozen_slots = try slot_tracker.frozenSlots(allocator);
+    var it = frozen_slots.iterator();
+    while (it.next()) |entry| {
+        const fork_stat = progress.getForkStats(entry.key_ptr) orelse return error.MissingSlot;
+        if (!fork_stat.is_computed) {
+            // Check if our tower is behind, if so adopt the on chain tower from this Bank
+            // TODO Self::adopt_on_chain_tower_if_behind
+            const computed_bank_state = collectVoteLockouts(
+                allocator,
+                .noop,
+                my_vote_pubkey,
+                slot_tracker.voteAccounts(),
+                ancestors,
+                progress,
+                latest_validator_votes_for_frozen_banks,
+            );
+            _ = computed_bank_state;
+            _ = tower;
+            _ = vote_tracker;
+            _ = cluster_slots;
+            _ = fork_choice;
+            // Notify any listeners of the votes found in this newly computed
+            // bank
+        }
+    }
+    return try new_stats.toOwnedSlice();
 }
 
 const testing = std.testing;

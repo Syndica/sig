@@ -21,7 +21,7 @@ const EpochTracker = replay.trackers.EpochTracker;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotesForFrozenBanks;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;

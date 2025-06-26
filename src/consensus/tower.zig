@@ -7,9 +7,10 @@ const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Hash = sig.core.Hash;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotesForFrozenBanks;
 const Lockout = sig.runtime.program.vote.state.Lockout;
-const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
+const ProgressMap = sig.consensus.ProgressMap;
+
 const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
@@ -19,7 +20,6 @@ const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const Vote = sig.runtime.program.vote.state.Vote;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
-const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
 const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
@@ -27,6 +27,15 @@ const ScopedLogger = sig.trace.ScopedLogger;
 const DUPLICATE_THRESHOLD = sig.replay.service.DUPLICATE_THRESHOLD;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
+
+pub const ExpirationSlot = Slot;
+const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
+    ExpirationSlot,
+    std.ArrayList(VotedSlotAndPubkey),
+);
+pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
+
+const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
 
 pub const Stake = u64;
 
@@ -291,27 +300,27 @@ pub fn collectVoteLockouts(
     bank_slot: Slot,
     vote_accounts: *const StakeAndVoteAccountsMap,
     ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
-    get_frozen_hash: fn (Slot) ?Hash,
+    progress_map: *const ProgressMap,
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
-) ComputedBankState {
+) !ComputedBankState {
     var vote_slots = SortedSet(Slot).init(allocator);
     defer vote_slots.deinit();
 
-    var voted_stakes = std.AutoArrayHashMap(Slot, u64).init(allocator);
-    defer voted_stakes.deinit();
+    var voted_stakes = std.AutoArrayHashMapUnmanaged(Slot, u64).empty;
+    defer voted_stakes.deinit(allocator);
 
     var total_stake: u64 = 0;
 
     // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
     // keyed by end of the range
-    var lockout_intervals = LockoutIntervals.init(allocator);
+    var lockout_intervals = LockoutIntervals.empty;
     var my_latest_landed_vote: ?Slot = null;
 
     var vote_accounts_iter = vote_accounts.iterator();
     while (vote_accounts_iter.next()) |entry| {
         const key = entry.key_ptr.*;
-        const voted_stake = entry.value_ptr.*.stake;
-        const vote_account = entry.value_ptr.*.account;
+        const voted_stake = entry.value_ptr.*.@"0";
+        const vote_account = entry.value_ptr.*.@"1";
         // Skip accounts with no stake.
         if (voted_stake == 0) {
             continue;
@@ -322,21 +331,23 @@ pub fn collectVoteLockouts(
             .{ vote_account_pubkey, key, voted_stake },
         );
 
-        var vote_state = TowerVoteState.fromAccount(&vote_account);
+        // TODO use vote_account to construct TowerVoteState
+        _ = vote_account;
+        var vote_state = TowerVoteState{};
 
-        for (vote_state.votes.items) |vote| {
+        for (vote_state.votes.constSlice()) |vote| {
             const interval = try lockout_intervals
-                .getOrPut(vote.lastLockedOutSlot());
+                .getOrPut(allocator, vote.lastLockedOutSlot());
             if (!interval.found_existing) {
-                interval.value_ptr.* = std.ArrayList(VotedSlotAndPubkey);
+                interval.value_ptr.* = std.ArrayList(VotedSlotAndPubkey).init(allocator);
             }
             try interval.value_ptr.*.append(.{ .slot = vote.slot, .pubkey = key });
         }
 
         // Vote account for this validator
         if (key.equals(vote_account_pubkey)) {
-            my_latest_landed_vote = if (vote_state.nthRecentLockout(0)) |l| l.slot() else null;
-            logger.debug().logf("vote state {any}", vote_state);
+            my_latest_landed_vote = if (vote_state.nthRecentLockout(0)) |l| l.slot else null;
+            logger.debug().logf("vote state {any}", .{vote_state});
             const observed_slot = if (vote_state.nthRecentLockout(0)) |l| l.slot else 0;
 
             logger.debug().logf("observed slot {any}", .{observed_slot});
@@ -345,18 +356,19 @@ pub fn collectVoteLockouts(
 
         // Add the last vote to update the `heaviest_subtree_fork_choice`
         if (vote_state.lastVotedSlot()) |last_landed_voted_slot| {
-            latest_validator_votes_for_frozen_banks.checkAddVote(
+            _ = try latest_validator_votes_for_frozen_banks.checkAddVote(
+                allocator,
                 key,
                 last_landed_voted_slot,
-                get_frozen_hash(last_landed_voted_slot),
+                progress_map.getHash(last_landed_voted_slot),
                 true,
             );
         }
 
         // Simulate next vote and extract vote slots using the provided bank slot.
-        vote_state.processNextVoteSlot(bank_slot);
+        try vote_state.processNextVoteSlot(bank_slot);
 
-        for (vote_state.votes.items) |vote| {
+        for (vote_state.votes.constSlice()) |vote| {
             try vote_slots.put(vote.slot);
         }
 
@@ -364,12 +376,12 @@ pub fn collectVoteLockouts(
             if (start_root) |root| {
                 const vote = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
                 logger.trace().logf("ROOT: {}", .{vote.slot});
-                try vote_slots.put(vote.slot());
+                try vote_slots.put(vote.slot);
             }
         }
         if (vote_state.root_slot) |root| {
             const vote = Lockout{ .slot = root, .confirmation_count = MAX_LOCKOUT_HISTORY };
-            try vote_slots.put(vote.slot());
+            try vote_slots.put(vote.slot);
         }
 
         // The last vote in the vote stack is a simulated vote on bank_slot, which
@@ -388,6 +400,7 @@ pub fn collectVoteLockouts(
         if (vote_state.nthRecentLockout(1)) |vote| {
             // Update all the parents of this last vote with the stake of this vote account
             try updateAncestorVotedStakes(
+                allocator,
                 &voted_stakes,
                 vote.slot,
                 voted_stake,
@@ -397,23 +410,29 @@ pub fn collectVoteLockouts(
         total_stake += voted_stake;
     }
 
-    try populateAncestorVotedStakes(&voted_stakes, &vote_slots, ancestors);
+    try populateAncestorVotedStakes(
+        allocator,
+        &voted_stakes,
+        vote_slots.items(),
+        ancestors,
+    );
 
     // As commented above, since the votes at current bank_slot are
     // simulated votes, the voted_stake for `bank_slot` is not populated.
     // Therefore, we use the voted_stake for the parent of bank_slot as the
     // `fork_stake` instead.
     const fork_stake = blk: {
-        const bank_ancestors = ancestors.get(bank_slot) orelse break :blk 0;
+        var bank_ancestors = ancestors.get(bank_slot) orelse break :blk @as(u64, 0);
         var max_parent: ?Slot = null;
-        var iter = bank_ancestors.iterator();
-        while (iter.next()) |slot| {
-            if (max_parent == null or slot.* > max_parent.?) {
-                max_parent = slot.*;
+        for (bank_ancestors.items()) |slot| {
+            if (max_parent == null or slot > max_parent.?) {
+                max_parent = slot;
             }
         }
         if (max_parent) |parent| {
-            break :blk voted_stakes.get(parent) orelse 0;
+            break :blk voted_stakes.get(parent) orelse @as(u64, 0);
+        } else {
+            break :blk @as(u64, 0);
         }
     };
 
@@ -458,7 +477,8 @@ fn stateFromAccount(
 }
 
 pub fn populateAncestorVotedStakes(
-    voted_stakes: *SortedSet(Slot),
+    allocator: std.mem.Allocator,
+    voted_stakes: *std.AutoArrayHashMapUnmanaged(Slot, u64),
     vote_slots: []const Slot,
     ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
@@ -466,30 +486,31 @@ pub fn populateAncestorVotedStakes(
     // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
     // this slot
     for (vote_slots) |vote_slot| {
-        if (ancestors.getPtr(vote_slot)) |maybe_slot_ancestors| {
-            try voted_stakes.put(vote_slot);
-            for (maybe_slot_ancestors.items()) |slot| {
-                _ = try voted_stakes.put(slot);
+        if (ancestors.getPtr(vote_slot)) |slot_ancestors| {
+            _ = try voted_stakes.getOrPutValue(allocator, vote_slot, 0);
+
+            for (slot_ancestors.items()) |slot| {
+                _ = try voted_stakes.getOrPutValue(allocator, slot, 0);
             }
         }
     }
 }
 
 fn updateAncestorVotedStakes(
+    allocator: std.mem.Allocator,
     voted_stakes: *VotedStakes,
     voted_slot: Slot,
     voted_stake: u64,
     ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
-) void {
+) !void {
     // If there's no ancestors, that means this slot must be from
     // before the current root, so ignore this slot
     if (ancestors.getPtr(voted_slot)) |vote_slot_ancestors| {
-        var entry_vote_stake = try voted_stakes.getOrPutValue(voted_slot, 0);
-        entry_vote_stake.value_ptr += voted_stake;
-        var iter = vote_slot_ancestors.*.iterator();
-        for (iter.next()) |ancestor_slot| {
-            var entry_voted_stake = try voted_stakes.getOrPutValue(ancestor_slot, 0);
-            entry_voted_stake.value_ptr += voted_stake;
+        const entry_vote_stake = try voted_stakes.getOrPutValue(allocator, voted_slot, 0);
+        entry_vote_stake.value_ptr.* += voted_stake;
+        for (vote_slot_ancestors.items()) |ancestor_slot| {
+            const entry_voted_stake = try voted_stakes.getOrPutValue(allocator, ancestor_slot, 0);
+            entry_voted_stake.value_ptr.* += voted_stake;
         }
     }
 }

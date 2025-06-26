@@ -9,6 +9,7 @@ const EpochSchedule = sig.core.EpochSchedule;
 const Slot = sig.core.Slot;
 const SlotConstants = sig.core.SlotConstants;
 const SlotState = sig.core.SlotState;
+const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 
 /// Central registry that tracks high-level info about slots and how they fork.
 ///
@@ -119,6 +120,12 @@ pub const SlotTracker = struct {
         }
 
         return try parents_list.toOwnedSlice(allocator);
+    }
+
+    pub fn voteAccounts(self: *const SlotTracker) StakeAndVoteAccountsMap {
+        // TODO Implement
+        _ = self;
+        return StakeAndVoteAccountsMap.empty;
     }
 };
 
