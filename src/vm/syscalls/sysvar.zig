@@ -559,13 +559,13 @@ fn testGetSlotHashes(filled: bool) !void {
         sysvar.SlotHashes.MAX_ENTRIES / 2;
 
     var entries: std.BoundedArray(
-        sysvar.SlotHashes.SlotAndHash,
+        sysvar.SlotHashes.Entry,
         sysvar.SlotHashes.MAX_ENTRIES,
     ) = .{};
     for (1..slots) |slot| {
         var result: Hash = undefined;
         std.crypto.hash.sha2.Sha256.hash(std.mem.asBytes(&@as(u64, slot)), &result.data, .{});
-        try entries.append(.{ slot, result });
+        try entries.append(.{ .slot = slot, .hash = result });
     }
 
     const src_hashes = sysvar.SlotHashes.initWithEntries(entries.constSlice());
@@ -613,7 +613,7 @@ fn testGetSlotHashes(filled: bool) !void {
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
 
     try std.testing.expectEqualSlices(
-        sysvar.SlotHashes.SlotAndHash,
+        sysvar.SlotHashes.Entry,
         obj_parsed.entries.constSlice(),
         src_hashes.entries.constSlice(),
     );

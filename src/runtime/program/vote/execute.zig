@@ -3367,7 +3367,7 @@ test "vote_program: vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ slots[slots.len - 1], vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }});
 
     var final_state = try VoteState.init(
         allocator,
@@ -3483,7 +3483,7 @@ test "vote_program: vote switch" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ slots[slots.len - 1], vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }});
 
     var final_state = try VoteState.init(
         allocator,
@@ -3599,7 +3599,7 @@ test "vote_program: vote missing signature" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ slots[slots.len - 1], vote.hash }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }});
 
     var final_state = try VoteState.init(
         allocator,
@@ -3719,7 +3719,7 @@ test "vote_program: empty vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes.initWithEntries(&.{.{ 0, sig.core.Hash.ZEROES }});
+    const slot_hashes = SlotHashes.initWithEntries(&.{.{ .slot = 0, .hash = sig.core.Hash.ZEROES }});
 
     var final_state = try VoteState.init(
         allocator,
@@ -3911,10 +3911,10 @@ test "vote_program: vote state update" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -3933,10 +3933,10 @@ test "vote_program: vote state update" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -4054,10 +4054,10 @@ test "vote_program: vote state update switch" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -4076,10 +4076,10 @@ test "vote_program: vote state update switch" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -4196,10 +4196,10 @@ test "vote_program: compact vote state update" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -4218,10 +4218,10 @@ test "vote_program: compact vote state update" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -4339,10 +4339,10 @@ test "vote_program: compact vote state update switch" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -4361,10 +4361,10 @@ test "vote_program: compact vote state update switch" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -4482,10 +4482,10 @@ test "vote_program: tower sync" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
             .feature_set = &.{
@@ -4510,10 +4510,10 @@ test "vote_program: tower sync" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
@@ -4632,10 +4632,10 @@ test "vote_program: tower sync switch" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
             .feature_set = &.{
@@ -4660,10 +4660,10 @@ test "vote_program: tower sync switch" {
             .sysvar_cache = .{
                 .clock = clock,
                 .slot_hashes = SlotHashes.initWithEntries(&.{
-                    .{ 8, vote_slot_hash },
-                    .{ 6, sig.core.Hash.ZEROES },
-                    .{ 4, sig.core.Hash.ZEROES },
-                    .{ 2, sig.core.Hash.ZEROES },
+                    .{ .slot = 8, .hash = vote_slot_hash },
+                    .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+                    .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
                 }),
             },
         },
