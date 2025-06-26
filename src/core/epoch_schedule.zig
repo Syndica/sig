@@ -44,6 +44,8 @@ pub const EpochSchedule = extern struct {
         .warmup = true,
     });
 
+    pub const SIZE_OF: u64 = @sizeOf(EpochSchedule);
+
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
     }
