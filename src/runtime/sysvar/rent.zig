@@ -39,13 +39,15 @@ pub const Rent = extern struct {
         .burn_percent = DEFAULT_BURN_PERCENT,
     };
 
-    pub const FREE: Rent = .{
-        .lamports_per_byte_year = 0,
-        .exemption_threshold = 0,
-        .burn_percent = 0,
-    };
+    pub const SIZE_OF: u64 = @sizeOf(Rent);
 
-    pub const STORAGE_SIZE: u64 = 17;
+    pub fn initRandom(random: std.Random) Rent {
+        return .{
+            .lamports_per_byte_year = random.int(u64),
+            .exemption_threshold = random.float(f64),
+            .burn_percent = random.uintAtMost(u8, 100),
+        };
+    }
 
     pub fn minimumBalance(self: Rent, data_len: usize) u64 {
         const bytes: u64 = @intCast(data_len);

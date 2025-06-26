@@ -38,17 +38,5 @@ pub const Clock = extern struct {
         .unix_timestamp = 0,
     };
 
-    pub const STORAGE_SIZE: u64 = 40;
-
-    pub fn initRandom(random: std.Random) Clock {
-        // TODO: Uncomment once not required by bank init random
-        // if (!builtin.is_test) @compileError("only for testing");
-        return Clock{
-            .slot = random.int(Slot),
-            .epoch_start_timestamp = random.int(i64),
-            .epoch = random.int(Epoch),
-            .leader_schedule_epoch = random.int(Epoch),
-            .unix_timestamp = random.int(i64),
-        };
-    }
+    pub const SIZE_OF: u64 = @sizeOf(Clock);
 };

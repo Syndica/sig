@@ -12,86 +12,37 @@ const Slot = sig.core.Slot;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/slot-hashes/src/lib.rs#L43
 pub const SlotHashes = struct {
-    entries: *std.BoundedArray(Entry, MAX_ENTRIES),
+    entries: std.BoundedArray(SlotAndHash, MAX_ENTRIES) = .{},
 
-    pub const Entry = extern struct {
-        slot: Slot,
-        hash: Hash,
+    pub const SlotAndHash = struct { Slot, Hash };
 
         pub fn sortCmp(_: void, a: Entry, b: Entry) bool {
             return b.slot < a.slot; // Sort by descending slot
         }
 
-        pub fn searchCmp(key: Slot, mid_item: Entry) std.math.Order {
-            return std.math.order(mid_item.slot, key);
-        }
-    };
-
-    pub const ID: Pubkey = .parse("SysvarS1otHashes111111111111111111111111111");
+    pub const DEFAULT: SlotHashes = .{ .entries = .{} };
 
     pub const MAX_ENTRIES: usize = 512;
 
-    pub const STORAGE_SIZE: usize = 20_488;
+    pub const SIZE_OF: usize = 20_488;
 
-    pub fn init(allocator: Allocator) Allocator.Error!SlotHashes {
-        const entries = try allocator.create(std.BoundedArray(Entry, MAX_ENTRIES));
-        entries.* = std.BoundedArray(Entry, MAX_ENTRIES){};
-        return .{ .entries = entries };
+    pub fn initWithEntries(entries: []const SlotAndHash) SlotHashes {
+        std.debug.assert(entries.len <= MAX_ENTRIES);
+        var self: SlotHashes = .{};
+        for (entries) |entry| self.entries.appendAssumeCapacity(entry);
+        return self;
     }
 
-    pub fn deinit(self: SlotHashes, allocator: Allocator) void {
-        allocator.destroy(self.entries);
+    fn compareFn(key: Slot, mid_item: SlotAndHash) std.math.Order {
+        return std.math.order(key, mid_item[0]);
     }
 
     pub fn getIndex(self: *const SlotHashes, slot: u64) ?usize {
-        return std.sort.binarySearch(Entry, self.entries.constSlice(), slot, Entry.searchCmp);
+        return std.sort.binarySearch(SlotAndHash, self.entries.slice(), slot, compareFn);
     }
 
-    pub fn get(self: *const SlotHashes, slot: Slot) ?Hash {
-        return if (self.getIndex(slot)) |index|
-            self.entries.buffer[index].hash
-        else
-            null;
-    }
-
-    pub fn add(self: *SlotHashes, slot: Slot, hash: Hash) void {
-        const index = std.sort.lowerBound(Entry, self.entries.constSlice(), slot, Entry.searchCmp);
-        // If the slot is to old, do not insert. Otherwise if the entries are full, pop the last entry.
-        if (index == MAX_ENTRIES) return;
-
-        // If the entries are full, pop the last entry to make space for the new one.
-        if (self.entries.len == MAX_ENTRIES) _ = self.entries.pop();
-
-        // If the slot already exists update the hash, otherwise insert a new entry.
-        if (index < self.entries.len and
-            self.entries.buffer[index].slot == slot)
-            self.entries.buffer[index].hash = hash
-        else
-            // SAFETY: entries has space for at least one more entry due to popping the last entry if it was full.
-            self.entries.insert(index, .{ .slot = slot, .hash = hash }) catch unreachable;
-    }
-
-    pub fn initWithEntries(
-        allocator: Allocator,
-        entries: []const Entry,
-    ) Allocator.Error!SlotHashes {
-        if (!builtin.is_test) @compileError("only for testing");
-        std.debug.assert(entries.len <= MAX_ENTRIES);
-        var self = try SlotHashes.init(allocator);
-        self.entries.appendSlice(entries) catch unreachable;
-        std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
-        return self;
-    }
-
-    pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!SlotHashes {
-        if (!builtin.is_test) @compileError("only for testing");
-        var self = try SlotHashes.init(allocator);
-        for (0..random.uintLessThan(usize, MAX_ENTRIES)) |_| self.add(
-            random.intRangeAtMost(Slot, 0, 1_000),
-            Hash.initRandom(random),
-        );
-        std.sort.heap(Entry, self.entries.slice(), {}, Entry.sortCmp);
-        return self;
+    pub fn get(self: *const SlotHashes, slot: u64) ?Hash {
+        return self.entries.slice()[(self.getIndex(slot) orelse return null)][1];
     }
 };
 

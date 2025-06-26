@@ -45,11 +45,7 @@ pub const SysvarCache = struct {
         if (self.rent) |rent| allocator.free(rent);
         if (self.last_restart_slot) |last_restart_slot| allocator.free(last_restart_slot);
         if (self.slot_hashes) |slot_hashes| allocator.free(slot_hashes);
-        if (self.slot_hashes_obj) |slot_hashes_obj| slot_hashes_obj.deinit(allocator);
         if (self.stake_history) |stake_history| allocator.free(stake_history);
-        if (self.stake_history_obj) |stake_history_obj| stake_history_obj.deinit(allocator);
-        if (self.recent_blockhashes_obj) |recent_blockhashes_obj|
-            recent_blockhashes_obj.deinit(allocator);
     }
 
     /// Returns the sysvar as an object if it is supported

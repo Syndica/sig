@@ -489,8 +489,7 @@ fn testGetStakeHistory(filled: bool) !void {
         } });
     }
 
-    const src_history = try sysvar.StakeHistory.initWithEntries(allocator, entries.constSlice());
-    // deinitialised by transaction context
+    const src_history = sysvar.StakeHistory.initWithEntries(entries.constSlice());
 
     {
         const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.STORAGE_SIZE);
@@ -533,7 +532,6 @@ fn testGetStakeHistory(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
-    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.StakeHistory.Entry,
@@ -558,7 +556,7 @@ fn testGetSlotHashes(filled: bool) !void {
         sysvar.SlotHashes.MAX_ENTRIES / 2;
 
     var entries: std.BoundedArray(
-        sysvar.SlotHashes.Entry,
+        sysvar.SlotHashes.SlotAndHash,
         sysvar.SlotHashes.MAX_ENTRIES,
     ) = .{};
     for (1..slots) |slot| {
@@ -567,8 +565,7 @@ fn testGetSlotHashes(filled: bool) !void {
         try entries.append(.{ .slot = slot, .hash = result });
     }
 
-    const src_hashes = try sysvar.SlotHashes.initWithEntries(allocator, entries.constSlice());
-    // deinitialised by transaction context
+    const src_hashes = sysvar.SlotHashes.initWithEntries(entries.constSlice());
 
     {
         const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.STORAGE_SIZE);
@@ -611,10 +608,9 @@ fn testGetSlotHashes(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
-    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
-        sysvar.SlotHashes.Entry,
+        sysvar.SlotHashes.SlotAndHash,
         obj_parsed.entries.constSlice(),
         src_hashes.entries.constSlice(),
     );

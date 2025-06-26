@@ -14,7 +14,9 @@ const Pubkey = sig.core.Pubkey;
 /// The first entry holds the most recent blockhash.
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/recent_blockhashes.rs#L99
 pub const RecentBlockhashes = struct {
-    entries: *std.BoundedArray(Entry, MAX_ENTRIES),
+    /// A list of entries ordered by descending block height. The first
+    /// entry holds the most recent blockhash.
+    entries: std.BoundedArray(Entry, MAX_ENTRIES),
 
     pub const Entry = extern struct {
         blockhash: Hash,
@@ -23,18 +25,21 @@ pub const RecentBlockhashes = struct {
 
     pub const ID: Pubkey = .parse("SysvarRecentB1ockHashes11111111111111111111");
 
+    pub const DEFAULT: RecentBlockhashes = .{ .entries = .{} };
+
     pub const MAX_ENTRIES: u64 = 150;
 
-    pub const STORAGE_SIZE: u64 = 6_008;
+    pub const SIZE_OF: u64 = 6_008;
 
-    pub fn init(allocator: Allocator) Allocator.Error!RecentBlockhashes {
-        const entries = try allocator.create(std.BoundedArray(Entry, MAX_ENTRIES));
-        entries.* = std.BoundedArray(Entry, MAX_ENTRIES){};
-        return .{ .entries = entries };
+    pub fn initWithSingleEntry(entry: Entry) RecentBlockhashes {
+        var self = RecentBlockhashes.DEFAULT;
+        self.entries.appendAssumeCapacity(entry);
+        return self;
     }
 
-    pub fn deinit(self: RecentBlockhashes, allocator: Allocator) void {
-        allocator.destroy(self.entries);
+    pub fn last(self: RecentBlockhashes) ?Entry {
+        if (self.entries.len == 0) return null;
+        return self.entries.slice()[self.entries.len - 1];
     }
 
     pub fn isEmpty(self: RecentBlockhashes) bool {
