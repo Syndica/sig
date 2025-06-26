@@ -244,21 +244,20 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
 
     defer db.metrics.number_files_flushed.inc();
 
-    const pubkeys, const accounts: []const Account = blk: {
+    var pubkeys_and_accounts = blk: {
         // NOTE: flush should be the only function to delete/free cache slices of a flushed slot
         // -- purgeSlot removes slices but we should never purge rooted slots
         const unrooted_accounts, var unrooted_accounts_lg = db.unrooted_accounts.readWithLock();
         defer unrooted_accounts_lg.unlock();
 
-        const pubkeys, const accounts = unrooted_accounts.get(slot) orelse
+        const pubkeys_and_accounts = unrooted_accounts.get(slot) orelse
             return error.SlotNotFound;
-        break :blk .{ pubkeys, accounts };
+        break :blk pubkeys_and_accounts;
     };
-    std.debug.assert(accounts.len == pubkeys.len);
 
     // create account file which is big enough
     var size: usize = 0;
-    for (accounts) |*account| {
+    for (pubkeys_and_accounts.items(.account)) |*account| {
         const account_size_in_file = account.getSizeInFile();
         size += account_size_in_file;
         db.metrics.flush_account_file_size.observe(account_size_in_file);
@@ -267,17 +266,21 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     const file, const file_id = try db.createAccountFile(size, slot);
     errdefer file.close();
 
-    const offsets = try db.allocator.alloc(u64, accounts.len);
+    const offsets = try db.allocator.alloc(u64, pubkeys_and_accounts.len);
     defer db.allocator.free(offsets);
 
     var file_size: usize = 0;
-    for (accounts) |account| file_size += account.getSizeInFile();
+    for (pubkeys_and_accounts.items(.account)) |account| file_size += account.getSizeInFile();
 
     var account_file_buf = std.ArrayList(u8).init(db.allocator);
     defer account_file_buf.deinit();
 
     var current_offset: u64 = 0;
-    for (offsets, accounts, pubkeys) |*offset, account, pubkey| {
+    for (
+        offsets,
+        pubkeys_and_accounts.items(.account),
+        pubkeys_and_accounts.items(.pubkey),
+    ) |*offset, account, pubkey| {
         try account_file_buf.resize(account.getSizeInFile());
 
         offset.* = current_offset;
@@ -293,7 +296,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         .id = file_id,
         .length = current_offset,
     }, slot);
-    account_file.number_of_accounts = accounts.len;
+    account_file.number_of_accounts = pubkeys_and_accounts.len;
 
     // update the file map
     {
@@ -305,7 +308,7 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
     db.metrics.flush_accounts_written.add(account_file.number_of_accounts);
 
     // update the reference AFTER the data exists
-    for (pubkeys, offsets) |pubkey, offset| {
+    for (pubkeys_and_accounts.items(.pubkey), offsets) |pubkey, offset| {
         const head_ref, var head_reference_lg =
             db.account_index.pubkey_ref_map.getWrite(&pubkey) orelse return error.PubkeyNotFound;
         defer head_reference_lg.unlock();
@@ -339,11 +342,8 @@ fn flushSlot(db: *AccountsDB, slot: Slot) !FileId {
         std.debug.assert(did_remove);
 
         // free slices
-        for (accounts) |account| {
-            account.data.deinit(db.allocator);
-        }
-        db.allocator.free(accounts);
-        db.allocator.free(pubkeys);
+        for (pubkeys_and_accounts.items(.account)) |account| account.data.deinit(db.allocator);
+        pubkeys_and_accounts.deinit(db.allocator);
     }
 
     db.metrics.time_flush.observe(timer.read().asNanos());
@@ -853,9 +853,7 @@ fn shrinkAccountFiles(
 fn purgeSlot(db: *AccountsDB, slot: Slot) void {
     var timer = sig.time.Timer.start() catch @panic("Timer unsupported");
 
-    const pubkeys: []const Pubkey, //
-    const accounts: []const Account //
-    = blk: {
+    var pubkeys_and_accounts = blk: {
         const unrooted_accounts, var unrooted_accounts_lg = db.unrooted_accounts.writeWithLock();
         defer unrooted_accounts_lg.unlock();
 
@@ -864,11 +862,12 @@ fn purgeSlot(db: *AccountsDB, slot: Slot) void {
             // rooted slots should never need to be purged so we should never get here
             @panic("purging an account file not supported");
         };
+
         break :blk removed_entry.value;
     };
 
     // remove the references
-    for (pubkeys) |*pubkey| {
+    for (pubkeys_and_accounts.items(.pubkey)) |*pubkey| {
         db.account_index.removeReference(pubkey, slot) catch |err| switch (err) {
             error.PubkeyNotFound => std.debug.panic(
                 "pubkey not found in index while purging: {any}",
@@ -893,11 +892,9 @@ fn purgeSlot(db: *AccountsDB, slot: Slot) void {
     }
 
     // free the account memory
-    for (accounts) |account| {
-        account.deinit(db.allocator);
-    }
-    db.allocator.free(accounts);
-    db.allocator.free(pubkeys);
+    for (pubkeys_and_accounts.items(.account)) |account| account.deinit(db.allocator);
+
+    pubkeys_and_accounts.deinit(db.allocator);
 
     db.metrics.time_purge.observe(timer.read().asNanos());
 }
