@@ -1871,7 +1871,12 @@ pub const AccountsDB = struct {
 
     /// writes one account to storage
     /// intended for use from runtime
-    pub fn putAccount(self: *AccountsDB, account: sig.runtime.AccountSharedData, slot: Slot, pubkey: Pubkey) !void {
+    pub fn putAccount(
+        self: *AccountsDB,
+        account: sig.runtime.AccountSharedData,
+        slot: Slot,
+        pubkey: Pubkey,
+    ) !void {
         const duplicated = Account{
             .data = .{
                 .owned_allocation = try self.allocator.dupe(u8, account.data),
