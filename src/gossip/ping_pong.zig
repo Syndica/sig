@@ -210,7 +210,7 @@ pub const PingCache = struct {
         our_keypair: KeyPair,
         peers: []ThreadSafeContactInfo,
     ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
-        const now = std.time.Instant.now() catch @panic("time not supported by OS!");
+        const now = sig.time.clock.sample();
         var valid_peers = std.ArrayList(usize).init(allocator);
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
@@ -234,7 +234,7 @@ pub const PingCache = struct {
         _ = self.pongs.put(PubkeyAndSocketAddr{
             .pubkey = peer,
             .socket_addr = socket_addr,
-        }, std.time.Instant.now() catch unreachable);
+        }, sig.time.clock.sample());
     }
 };
 
@@ -251,7 +251,7 @@ test "PingCache works" {
     const random = prng.random();
 
     const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.initRandom(random), .socket_addr = SocketAddr.UNSPECIFIED };
-    const now1 = try std.time.Instant.now();
+    const now1 = sig.time.clock.sample();
     var our_kp = KeyPair.generate();
 
     const ping = ping_cache.maybePing(
@@ -260,7 +260,7 @@ test "PingCache works" {
         &our_kp,
     );
 
-    const now2 = try std.time.Instant.now();
+    const now2 = sig.time.clock.sample();
 
     const resp = ping_cache.check(now2, the_node, &our_kp);
     try testing.expect(!resp.passes_ping_check);

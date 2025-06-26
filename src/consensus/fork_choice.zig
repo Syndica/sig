@@ -5,7 +5,7 @@ const builtin = @import("builtin");
 const ScopedLogger = sig.trace.ScopedLogger;
 
 const AutoHashMap = std.AutoHashMap;
-const Instant = sig.time.Instant;
+const Instant = std.time.Instant;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const SortedMap = sig.utils.collections.SortedMap;
@@ -164,7 +164,7 @@ pub const ForkChoice = struct {
             .fork_infos = AutoHashMap(SlotAndHash, ForkInfo).init(allocator),
             .latest_votes = AutoHashMap(Pubkey, SlotAndHash).init(allocator),
             .tree_root = tree_root,
-            .last_root_time = Instant.now(),
+            .last_root_time = sig.time.clock.sample(),
         };
 
         try self.addNewLeafSlot(tree_root, null);
@@ -278,7 +278,7 @@ pub const ForkChoice = struct {
 
         try self.propagateNewLeaf(&slot_hash_key, &parent);
         // TODO: Revisit, this was set first in the Agave code.
-        self.last_root_time = Instant.now();
+        self.last_root_time = sig.time.clock.sample();
     }
 
     pub fn containsBlock(self: *const ForkChoice, key: *const SlotAndHash) bool {
@@ -412,7 +412,7 @@ pub const ForkChoice = struct {
 
         root_fork_info.parent = null;
         self.tree_root = new_root.*;
-        self.last_root_time = Instant.now();
+        self.last_root_time = sig.time.clock.sample();
     }
 
     pub fn isDuplicateConfirmed(

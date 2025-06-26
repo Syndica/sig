@@ -135,14 +135,17 @@ pub const MockTransferService = struct {
 
     /// Wait for a signature to be confirmed, return true if confirmed, false if failed
     pub fn waitForSignatureConfirmation(self: *MockTransferService, signature: Signature, max_wait: Duration, log: bool) !bool {
-        const start = sig.time.Instant.now();
+        const start = sig.time.clock.sample();
         var log_timer = try sig.time.Timer.start();
-        while (start.elapsed().asNanos() < max_wait.asNanos()) {
+        while (true) {
+            const now = sig.time.clock.sample();
+            if (now.since(start) >= max_wait.asNanos()) break;
+
             if (log_timer.read().asSecs() > 10) {
-                const time_remaining = max_wait.asSecs() - start.elapsed().asSecs();
+                const time_remaining = max_wait.asNanos() - now.since(start);
                 if (log) {
                     self.logger.info().logf("waiting for signature confirmation ({}s remaining): {s}", .{
-                        time_remaining,
+                        Duration.fromNanos(time_remaining),
                         signature,
                     });
                 }
