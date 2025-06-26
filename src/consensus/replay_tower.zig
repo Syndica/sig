@@ -3051,10 +3051,12 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     var fixture = try TestFixture.init(allocator, root);
     defer fixture.deinit(allocator);
 
-    var fp = try ForkProgress.zeroes(allocator);
-    defer fp.deinit(allocator);
-    fp.fork_stats.computed = true;
-    try fixture.progress.map.put(allocator, 0, fp);
+    try fixture.progress.map.put(allocator, 0, fp: {
+        var fp = try ForkProgress.zeroes(allocator);
+        errdefer fp.deinit(allocator);
+        fp.fork_stats.computed = true;
+        break :fp fp;
+    });
 
     // Build fork structure:
     //
@@ -3471,31 +3473,14 @@ const TestFixture = struct {
 
     pub fn deinit(self: *TestFixture, allocator: std.mem.Allocator) void {
         self.fork_choice.deinit();
-        self.progress.map.deinit(allocator);
+        self.progress.deinit(allocator);
+        sig.core.stake.epochStakeMapDeinit(self.epoch_stake_map, allocator);
 
-        {
-            var it = self.epoch_stake_map.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.stakes.deinit(allocator);
-                entry.value_ptr.epoch_authorized_voters.deinit(allocator);
-            }
-            self.epoch_stake_map.deinit(allocator);
-        }
+        for (self.descendants.values()) |descendant| descendant.deinit();
+        self.descendants.deinit(allocator);
 
-        {
-            var it = self.descendants.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
-            self.descendants.deinit(allocator);
-        }
-        {
-            var it = self.ancestors.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
-            self.ancestors.deinit(allocator);
-        }
+        for (self.ancestors.values()) |ancestor| ancestor.deinit();
+        self.ancestors.deinit(allocator);
     }
 
     pub fn update_fork_stat_lockout(self: *TestFixture, slot: Slot, locked_out: bool) void {
@@ -3530,7 +3515,7 @@ const TestFixture = struct {
             try self.fork_choice.addNewLeafSlot(tree[0], tree[1]);
             // Populate progress map
             var fp = try ForkProgress.zeroes(allocator);
-            defer fp.deinit(allocator);
+            errdefer fp.deinit(allocator);
             fp.fork_stats.computed = true;
             fp.fork_stats.my_latest_landed_vote = null;
             _ = try self.progress.map.getOrPutValue(
@@ -3749,13 +3734,15 @@ pub fn extendForkTree(
 
     for (extension.keys(), extension.values()) |slot, e_children| {
         var extension_children = e_children;
-        var original_children = original.getPtr(slot) orelse {
-            try original.put(allocator, slot, try extension_children.clone());
+        const original_children = original.getPtr(slot) orelse {
+            try original.ensureUnusedCapacity(allocator, 1);
+            original.putAssumeCapacity(slot, try extension_children.clone());
             continue;
         };
 
+        try original_children.ensureUnusedCapacity(extension_children.count());
         for (extension_children.items()) |extension_child| {
-            try original_children.put(extension_child);
+            original_children.putAssumeCapacity(extension_child);
         }
     }
 }
