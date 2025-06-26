@@ -572,6 +572,18 @@ pub fn SortedMapUnmanagedCustom(
             self_mut.inner.deinit(allocator);
         }
 
+        pub fn init(
+            allocator: std.mem.Allocator,
+            keys_init: []const K,
+            values_init: []const V,
+        ) std.mem.Allocator.Error!SortedMapSelf {
+            var result: SortedMapSelf = .empty;
+            errdefer result.deinit(allocator);
+            try result.inner.reinit(allocator, keys_init, values_init);
+            result.sort();
+            return result;
+        }
+
         pub fn clone(
             self: SortedMapSelf,
             allocator: std.mem.Allocator,
