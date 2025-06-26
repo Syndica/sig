@@ -2389,6 +2389,35 @@ test "state ancestor duplicate descendant confirmed" {
     );
 }
 
+fn verifyAllSlotsDuplicateConfirmed(
+    bank_forks: *sig.replay.trackers.SlotTracker,
+    heaviest_subtree_fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+    upper_bound: Slot,
+    expected_is_duplicate_confirmed: bool,
+) !void {
+    for (0..upper_bound) |slot| {
+        const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
+        const expected_is_duplicate_confirmed_or_slot0 =
+            expected_is_duplicate_confirmed or
+            // root is always duplicate confirmed
+            slot == 0;
+        try std.testing.expectEqual(
+            expected_is_duplicate_confirmed_or_slot0,
+            heaviest_subtree_fork_choice.isDuplicateConfirmed(&.{
+                .slot = slot,
+                .hash = slot_hash,
+            }),
+        );
+        try std.testing.expectEqual(
+            null,
+            heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
+                .slot = slot,
+                .hash = slot_hash,
+            }),
+        );
+    }
+}
+
 // -- handleEdgeCases END -- //
 
 fn processConsensus() void {
