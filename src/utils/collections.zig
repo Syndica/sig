@@ -650,6 +650,23 @@ pub fn SortedMapUnmanagedCustom(
             }
         }
 
+        /// Inserts a new `Entry` into the hash map, returning the previous one, if any.
+        pub fn fetchPut(
+            self: *SortedMapSelf,
+            allocator: Allocator,
+            key: K,
+            value: V,
+        ) std.mem.Allocator.Error!?Inner.KV {
+            const gop = try self.getOrPut(allocator, key);
+            const result: ?Inner.KV = if (!gop.found_existing) null else .{
+                .key = gop.key_ptr.*,
+                .value = gop.value_ptr.*,
+            };
+            gop.key_ptr.* = key;
+            gop.value_ptr.* = value;
+            return result;
+        }
+
         pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
             const was_removed = self.inner.orderedRemove(key);
             if (was_removed) _ = self.resetMaxOnRemove(key);
