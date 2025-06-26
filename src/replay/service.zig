@@ -445,6 +445,7 @@ pub const EpochSlotsFrozenState = struct {
     }
 };
 
+/// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1627
 fn processAncestorHashesDuplicateSlots(
     allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
@@ -516,6 +517,7 @@ fn processAncestorHashesDuplicateSlots(
 /// This only tracks duplicate slot confirmations on the exact
 /// single slots and does not account for votes on their descendants. Used solely
 /// for duplicate slot recovery.
+/// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1866
 fn processDuplicateConfirmedSlots(
     allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
@@ -644,6 +646,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
     }
 };
 
+/// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1917
 fn processGossipVerifiedVoteHashes(
     allocator: std.mem.Allocator,
     gossip_verified_vote_hash_receiver: *sig.sync.Channel(GossipVerifiedVoteHash),
@@ -669,6 +672,7 @@ fn processGossipVerifiedVoteHashes(
     }
 }
 
+/// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1828
 fn processPopularPrunedForks(
     logger: sig.trace.Logger,
     popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
@@ -694,6 +698,7 @@ fn processPopularPrunedForks(
 }
 
 /// Checks for and handle forks with duplicate slots.
+/// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1938
 fn processDuplicateSlots(
     allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
@@ -861,6 +866,7 @@ fn getDuplicateConfirmedHash(
     return maybe_duplicate_confirmed_hash;
 }
 
+/// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L848
 const check_slot_agrees_with_cluster = struct {
     fn bankFrozen(
         allocator: std.mem.Allocator,
@@ -1371,6 +1377,7 @@ const check_slot_agrees_with_cluster = struct {
     }
 };
 
+/// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L793
 const state_change = struct {
     const NotDupeConfirmedFrozenHash = struct {
         frozen_hash: ?sig.core.Hash,
