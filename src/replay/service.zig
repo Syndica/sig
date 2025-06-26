@@ -1555,7 +1555,7 @@ const TestData = struct {
 
         var fork_choice: sig.consensus.HeaviestSubtreeForkChoice = try .init(allocator, logger, .{
             .slot = 0,
-            .hash = try .parseBase58String("Ck2ViMTVdaFQAmaSnE3zKzmBsaaWD2jvduRZmev89VXq"),
+            .hash = slot_infos[0].hash,
         });
         errdefer fork_choice.deinit();
 
