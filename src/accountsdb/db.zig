@@ -1869,12 +1869,27 @@ pub const AccountsDB = struct {
         }
     }
 
-    // writes one account to storage
-    pub fn putAccount(self: *AccountsDB, account: Account, pubkey: Pubkey, slot: Slot) !void {
+    /// writes one account to storage
+    /// intended for use from runtime
+    pub fn putAccount(self: *AccountsDB, account: sig.runtime.AccountSharedData, slot: Slot, pubkey: Pubkey) !void {
+        const duplicated = Account{
+            .data = .{
+                .owned_allocation = try self.allocator.dupe(u8, account.data),
+            },
+            .executable = account.executable,
+            .lamports = account.lamports,
+            .owner = account.owner,
+            .rent_epoch = account.rent_epoch,
+        };
+        var inserted_duplicate: bool = false;
+        defer {
+            if (!inserted_duplicate) duplicated.deinit(self.allocator);
+        }
+
         if (self.geyser_writer) |geyser_writer| {
             const data_versioned = sig.geyser.core.VersionedAccountPayload{
                 .AccountPayloadV1 = .{
-                    .accounts = &.{account},
+                    .accounts = &.{duplicated},
                     .pubkeys = &.{pubkey},
                     .slot = slot,
                 },
@@ -1887,7 +1902,7 @@ pub const AccountsDB = struct {
             defer bhs_lg.unlock();
             bhs.update(.{
                 .lamports = account.lamports,
-                .data_len = account.data.len(),
+                .data_len = account.data.len,
                 .executable = account.executable,
             });
         }
@@ -1899,14 +1914,12 @@ pub const AccountsDB = struct {
 
             const entry = try unrooted_accounts.getOrPut(slot);
 
-            const duped = try account.cloneOwned(self.allocator);
-            errdefer duped.deinit(self.allocator);
-
             if (!entry.found_existing) entry.value_ptr.* = .{};
             try entry.value_ptr.append(
                 self.allocator,
-                .{ .account = duped, .pubkey = pubkey },
+                .{ .account = duplicated, .pubkey = pubkey },
             );
+            inserted_duplicate = true;
         }
 
         // prealloc the ref map space
@@ -3265,15 +3278,25 @@ test "write and read an account (write single + read with ancestors)" {
 
     var prng = std.Random.DefaultPrng.init(0);
     const pubkey = Pubkey.initRandom(prng.random());
+
+    var data = [_]u8{ 1, 2, 3 };
+
     const test_account = Account{
-        .data = AccountDataHandle.initAllocated(&.{ 1, 2, 3 }),
+        .data = AccountDataHandle.initAllocated(&data),
+        .executable = false,
+        .lamports = 100,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    };
+    const test_account_shared = sig.runtime.AccountSharedData{
+        .data = &data,
         .executable = false,
         .lamports = 100,
         .owner = Pubkey.ZEROES,
         .rent_epoch = 0,
     };
 
-    try accounts_db.putAccount(test_account, pubkey, 5083);
+    try accounts_db.putAccount(test_account_shared, 5083, pubkey);
 
     // normal get
     {
@@ -3308,15 +3331,25 @@ test "write and read an account (write single + read with ancestors)" {
 
     // write account to the same pubkey in the next slot (!)
     {
+        var data_2 = [_]u8{ 0, 1, 0, 1 };
+
         const test_account_2 = Account{
-            .data = AccountDataHandle.initAllocated(&.{ 0, 1, 0, 1 }),
+            .data = AccountDataHandle.initAllocated(&data_2),
             .executable = true,
             .lamports = 1000,
             .owner = Pubkey.ZEROES,
             .rent_epoch = 1,
         };
 
-        try accounts_db.putAccount(test_account_2, pubkey, 5084);
+        const test_account_2_shared = sig.runtime.AccountSharedData{
+            .data = &data_2,
+            .executable = true,
+            .lamports = 1000,
+            .owner = Pubkey.ZEROES,
+            .rent_epoch = 1,
+        };
+
+        try accounts_db.putAccount(test_account_2_shared, 5084, pubkey);
 
         // prev slot, get prev account
         {
