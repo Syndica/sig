@@ -3,9 +3,10 @@ const sig = @import("../sig.zig");
 
 const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
-const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
+const Hash = sig.core.Hash;
+const LatestValidatorVotesForFrozenBanks =
+    sig.consensus.latest_validator_votes.LatestValidatorVotesForFrozenBanks;
 const Lockout = sig.runtime.program.vote.state.Lockout;
-const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -13,14 +14,30 @@ const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
+const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
+
+const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
+// TODO DUPLICATE_THRESHOLD is defined in replay stage in Agave
+pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
 pub const Stake = u64;
 
 pub const VotedSlot = Slot;
+
+const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
+pub const ExpirationSlot = Slot;
+/// TODO Should be improved.
+const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
+    ExpirationSlot,
+    std.ArrayList(VotedSlotAndPubkey),
+);
+pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
 
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted

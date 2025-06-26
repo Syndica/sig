@@ -1034,7 +1034,7 @@ fn trackNewVotesAndNotifyConfirmations(
 
 const ThresholdReachedResults = std.bit_set.IntegerBitSet(THRESHOLDS_TO_CHECK.len);
 const THRESHOLDS_TO_CHECK: [2]f64 = .{
-    sig.replay.service.DUPLICATE_THRESHOLD,
+    sig.consensus.tower.DUPLICATE_THRESHOLD,
     sig.consensus.replay_tower.VOTE_THRESHOLD_SIZE,
 };
 
