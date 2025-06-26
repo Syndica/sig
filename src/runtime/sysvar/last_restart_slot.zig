@@ -14,4 +14,6 @@ pub const LastRestartSlot = extern struct {
     pub const DEFAULT = LastRestartSlot{
         .last_restart_slot = 0,
     };
+
+    pub const SIZE_OF: u64 = @sizeOf(LastRestartSlot);
 };

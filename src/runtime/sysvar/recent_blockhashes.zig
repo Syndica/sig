@@ -9,7 +9,7 @@ const Fees = sig.runtime.sysvar.Fees;
 pub const RecentBlockhashes = struct {
     /// A list of entries ordered by descending block height. The first
     /// entry holds the most recent blockhash.
-    entries: []const Entry,
+    entries: std.BoundedArray(Entry, MAX_ENTRIES),
 
     pub const Entry = struct {
         blockhash: Hash,
@@ -19,13 +19,21 @@ pub const RecentBlockhashes = struct {
     pub const ID =
         Pubkey.parseBase58String("SysvarRecentB1ockHashes11111111111111111111") catch unreachable;
 
-    pub fn deinit(self: RecentBlockhashes, allocator: std.mem.Allocator) void {
-        allocator.free(self.entries);
+    pub const DEFAULT: RecentBlockhashes = .{ .entries = .{} };
+
+    pub const MAX_ENTRIES: u64 = 150;
+
+    pub const SIZE_OF: u64 = 6_008;
+
+    pub fn initWithSingleEntry(entry: Entry) RecentBlockhashes {
+        var self = RecentBlockhashes.DEFAULT;
+        self.entries.appendAssumeCapacity(entry);
+        return self;
     }
 
     pub fn last(self: RecentBlockhashes) ?Entry {
         if (self.entries.len == 0) return null;
-        return self.entries[self.entries.len - 1];
+        return self.entries.slice()[self.entries.len - 1];
     }
 
     pub fn isEmpty(self: RecentBlockhashes) bool {

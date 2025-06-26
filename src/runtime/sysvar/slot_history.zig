@@ -22,8 +22,19 @@ pub const SlotHistory = struct {
     pub const ID =
         Pubkey.parseBase58String("SysvarS1otHistory11111111111111111111111111") catch unreachable;
 
+    pub const SIZE_OF: u64 = 131_097;
+
+    pub fn default(allocator: std.mem.Allocator) !SlotHistory {
+        var bits = try DynamicArrayBitSet(u64).initEmpty(allocator, MAX_ENTRIES);
+        bits.set(0);
+        return .{
+            .bits = bits,
+            .next_slot = 1,
+        };
+    }
+
     pub fn deinit(self: SlotHistory, allocator: std.mem.Allocator) void {
-        sig.bincode.free(allocator, self);
+        self.bits.deinit(allocator);
     }
 
     pub fn add(self: *SlotHistory, slot: u64) void {

@@ -16,4 +16,6 @@ pub const Fees = extern struct {
     pub const DEFAULT = Fees{
         .fee_calculator = .{ .lamports_per_signature = 0 },
     };
+
+    pub const SIZE_OF: u64 = @sizeOf(Fees);
 };
