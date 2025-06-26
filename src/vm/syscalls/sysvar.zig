@@ -556,7 +556,7 @@ fn testGetSlotHashes(filled: bool) !void {
         sysvar.SlotHashes.MAX_ENTRIES / 2;
 
     var entries: std.BoundedArray(
-        sysvar.SlotHashes.SlotAndHash,
+        sysvar.SlotHashes.Entry,
         sysvar.SlotHashes.MAX_ENTRIES,
     ) = .{};
     for (1..slots) |slot| {
@@ -610,7 +610,7 @@ fn testGetSlotHashes(filled: bool) !void {
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
 
     try std.testing.expectEqualSlices(
-        sysvar.SlotHashes.SlotAndHash,
+        sysvar.SlotHashes.Entry,
         obj_parsed.entries.constSlice(),
         src_hashes.entries.constSlice(),
     );
