@@ -127,6 +127,7 @@ pub fn run(deps: ReplayDependencies) !void {
 /// - replay all active slots that have not been replayed yet
 /// - running concensus on the latest updates
 fn advanceReplay(state: *ReplayState) !void {
+    state.logger.info().log("advancing replay");
     try trackNewSlots(
         state.allocator,
         state.accounts_db,

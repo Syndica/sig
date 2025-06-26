@@ -71,6 +71,7 @@ pub const ReplayExecutionState = struct {
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
+    state.logger.info().logf("{} active slots to replay", .{active_slots.len});
     if (active_slots.len == 0) {
         return false;
     }
@@ -81,6 +82,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         slot_statuses.deinit(state.allocator);
     }
     for (active_slots) |slot| {
+        state.logger.info().logf("replaying slot: {}", .{slot});
         const result = try replaySlot(state, slot);
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });

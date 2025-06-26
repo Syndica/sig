@@ -1108,7 +1108,6 @@ fn validator(
         cfg.max_shreds,
         app_base.exit,
     });
-    defer cleanup_service_handle.join();
 
     // Random number generator
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
@@ -1121,20 +1120,26 @@ fn validator(
     const epoch = bank_fields.epoch;
 
     const staked_nodes = try collapsed_manifest.getStakedNodes(allocator, epoch);
+    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    defer epoch_context_manager.deinit();
+    try epoch_context_manager.contexts.realign(epoch);
+    {
+        var staked_nodes_cloned = try staked_nodes.clone(allocator);
+        errdefer staked_nodes_cloned.deinit(allocator);
 
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(
-        allocator,
-        epoch_schedule,
-    );
-    try epoch_context_manager.put(epoch, .{
-        .staked_nodes = try staked_nodes.clone(allocator),
-        .leader_schedule = try LeaderSchedule.fromStakedNodes(
+        const leader_schedule = try LeaderSchedule.fromStakedNodes(
             allocator,
             epoch,
             epoch_schedule.slots_per_epoch,
             staked_nodes,
-        ),
-    });
+        );
+        errdefer allocator.free(leader_schedule);
+
+        try epoch_context_manager.put(epoch, .{
+            .staked_nodes = staked_nodes_cloned,
+            .leader_schedule = leader_schedule,
+        });
+    }
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
@@ -1198,6 +1203,7 @@ fn validator(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
+    cleanup_service_handle.join();
 }
 
 fn shredNetwork(
@@ -1290,7 +1296,6 @@ fn shredNetwork(
         cfg.max_shreds,
         app_base.exit,
     });
-    defer cleanup_service_handle.join();
 
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
@@ -1318,6 +1323,7 @@ fn shredNetwork(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
+    cleanup_service_handle.join();
 }
 
 fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
