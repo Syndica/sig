@@ -144,6 +144,7 @@ pub const AccountsDB = struct {
     const PubkeyAndAccount = struct { pubkey: Pubkey, account: Account };
 
     pub const PubkeysAndAccounts = std.MultiArrayList(PubkeyAndAccount);
+    // pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
     pub const SlotPubkeyAccounts = std.AutoHashMap(Slot, PubkeysAndAccounts);
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
@@ -1829,11 +1830,11 @@ pub const AccountsDB = struct {
             return error.PubkeyNotInIndex;
         defer lock.unlock();
 
-        const max_ref = greatestInAncestors(head_ref, ancestors, min_ancestors_slot) orelse
+        const max_ref = greatestInAncestors(head_ref.ref_ptr, ancestors, min_ancestors_slot) orelse
             return error.PubkeyNotInIndex;
         const account = try self.getAccountFromRef(max_ref);
 
-        return .{ account, max_ref.* };
+        return account;
     }
 
     pub fn getAccountAndReference(
@@ -2015,34 +2016,17 @@ pub const AccountsDB = struct {
         }
     }
 
-    /// writes one account to storage
-    /// intended for use from runtime
-    pub fn putAccount(
-        self: *AccountsDB,
-        slot: Slot,
-        pubkey: Pubkey,
-        account: sig.runtime.AccountSharedData,
-    ) !void {
-        const duplicated = Account{
-            .data = .{ .owned_allocation = try self.allocator.dupe(u8, account.data) },
-            .executable = account.executable,
-            .lamports = account.lamports,
-            .owner = account.owner,
-            .rent_epoch = account.rent_epoch,
-        };
-        var inserted_duplicate: bool = false;
-        defer {
-            if (!inserted_duplicate) duplicated.deinit(self.allocator);
-        }
-
+    // writes one account to storage
+    pub fn putAccount(self: *AccountsDB, account: Account, pubkey: Pubkey, slot: Slot) !void {
         if (self.geyser_writer) |geyser_writer| {
-            try geyser_writer.writePayloadToPipe(.{
+            const data_versioned = sig.geyser.core.VersionedAccountPayload{
                 .AccountPayloadV1 = .{
-                    .accounts = &.{duplicated},
+                    .accounts = &.{account},
                     .pubkeys = &.{pubkey},
                     .slot = slot,
                 },
-            });
+            };
+            try geyser_writer.writePayloadToPipe(data_versioned);
         }
 
         {
@@ -2050,39 +2034,9 @@ pub const AccountsDB = struct {
             defer bhs_lg.unlock();
             bhs.update(.{
                 .lamports = account.lamports,
-                .data_len = account.data.len,
+                .data_len = account.data.len(),
                 .executable = account.executable,
             });
-        }
-
-        // look for existing account at this slot and overwrite in-place if present.
-        search_and_overwrite: {
-            const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(&pubkey) orelse
-                break :search_and_overwrite;
-            defer lock.unlock();
-
-            const min_slot = if (slot == 0) null else slot - 1;
-            const ref = slotListMaxWithinBounds(head_ref.ref_ptr, min_slot, slot) orelse
-                break :search_and_overwrite;
-
-            const index = switch (ref.location) {
-                .UnrootedMap => |location| location.index,
-                else => return error.CannotWriteRootedSlot,
-            };
-
-            const unrooted_accounts, var unrooted_lock = self.unrooted_accounts.readWithLock();
-            defer unrooted_lock.unlock();
-
-            const slot_list = unrooted_accounts.get(ref.slot) orelse return error.SlotNotFound;
-            const slot_accounts: []Account = slot_list.items(.account);
-
-            const old_account = slot_accounts[index];
-            slot_accounts[index] = duplicated;
-            inserted_duplicate = true;
-            old_account.deinit(self.allocator);
-
-            // no need to insert/reindex if we were able to overwrite an existing account
-            return;
         }
 
         {
@@ -2092,12 +2046,14 @@ pub const AccountsDB = struct {
 
             const entry = try unrooted_accounts.getOrPut(slot);
 
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            const duped = try account.cloneOwned(self.allocator);
+            errdefer duped.deinit(self.allocator);
+
+            if (!entry.found_existing) entry.value_ptr.* = .{};
             try entry.value_ptr.append(
                 self.allocator,
-                .{ .account = duplicated, .pubkey = pubkey },
+                .{ .account = duped, .pubkey = pubkey },
             );
-            inserted_duplicate = true;
         }
 
         // prealloc the ref map space
@@ -2110,164 +2066,42 @@ pub const AccountsDB = struct {
         }
 
         // update index
-        try self.expandSlotRefsAndInsert(slot, &.{pubkey});
-    }
+        var accounts_dead_count: u64 = 0;
+        const reference_buf, const global_ref_index = try self.account_index
+            .reference_manager.allocOrExpand(1);
 
-    fn expandSlotRefsAndInsert(self: *AccountsDB, slot: Slot, pubkeys: []const Pubkey) !void {
-        std.debug.assert(pubkeys.len > 0);
+        reference_buf[0] = AccountRef{
+            .pubkey = pubkey,
+            .slot = slot,
+            .location = .{ .UnrootedMap = .{ .index = 0 } },
+        };
 
-        const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
-        defer lock.unlock();
-
-        const slot_entry = try slot_ref_map.getOrPut(slot);
-
-        if (!slot_entry.found_existing) {
-            // no entry means realloc always needed, value set in realloc_needed block
-            slot_entry.value_ptr.* = .{
-                .refs = .empty,
-                .global_index = std.math.maxInt(u64), // u64-max == invalid value / replaced soon
-            };
+        const was_inserted = self.account_index
+            .indexRefIfNotDuplicateSlotAssumeCapacity(
+            &reference_buf[0],
+            global_ref_index,
+        );
+        if (!was_inserted) {
+            self.logger.warn().logf(
+                "duplicate reference not inserted: slot: {d} pubkey: {s}",
+                .{ slot, pubkey },
+            );
+            accounts_dead_count += 1;
         }
-        const realloc_needed = slot_entry.value_ptr.refs.unusedCapacitySlice().len < pubkeys.len;
-        if (!slot_entry.found_existing) std.debug.assert(realloc_needed);
 
-        const old_refs = slot_entry.value_ptr.refs.items;
-        const new_len = old_refs.len + pubkeys.len;
+        std.debug.assert(self.account_index.exists(&pubkey, slot));
 
-        if (realloc_needed) {
-            // not enough space, need to realloc
+        // track the slot's references
+        {
+            const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
+            defer lock.unlock();
+            try slot_ref_map.putNoClobber(slot, reference_buf);
+        }
 
-            // round up the size a little, so we don't realloc every time
-            const new_capacity = std.math.ceilPowerOfTwo(usize, new_len) catch new_len;
-
-            const reference_buf, const global_ref_index = try self.account_index
-                .reference_manager.allocOrExpand(new_capacity);
-
-            slot_entry.value_ptr.global_index = global_ref_index;
-
-            @memset(reference_buf, .DEFAULT);
-            for (0.., reference_buf[0..new_len]) |i, *ref| {
-                if (i < old_refs.len) {
-                    ref.* = old_refs[i];
-
-                    // go back to prev & rewrite its next to make it valid again (we're moving these accountrefs)
-                    if (ref.prev_ptr) |prev| {
-                        prev.next_ptr = ref;
-                        prev.next_index = global_ref_index + i;
-                    }
-                } else {
-                    // new ref
-                    ref.* = AccountRef{
-                        .pubkey = pubkeys[i - old_refs.len],
-                        .slot = slot,
-                        .location = .{ .UnrootedMap = .{ .index = i } },
-                    };
-                }
-            }
-
-            // fix up any copied references' heads
-            {
-                for (0.., reference_buf[0..old_refs.len]) |i, *ref| {
-                    const shard_map: *ShardedPubkeyRefMap.PubkeyRefMap, var shard_map_lg =
-                        self.account_index.pubkey_ref_map.getShard(&ref.pubkey).writeWithLock();
-                    defer shard_map_lg.unlock();
-
-                    // if we just moved an accountref which is the head, fix up the head
-                    if (shard_map.getPtr(ref.pubkey)) |head| {
-                        if (head.ref_ptr.slot == ref.slot and
-                            head.ref_ptr.pubkey.equals(&ref.pubkey))
-                        {
-                            head.ref_index = global_ref_index + i;
-                            head.ref_ptr = ref;
-                        }
-                    }
-
-                    const head = shard_map.getPtr(ref.pubkey) orelse continue;
-                    if (head.ref_ptr.slot == ref.slot and head.ref_ptr.pubkey.equals(&ref.pubkey)) {
-                        head.ref_index = global_ref_index + i;
-                        head.ref_ptr = ref;
-                    }
-                }
-            }
-
-            // insert + check if inserted
-            for (0.., reference_buf[0..new_len]) |i, *ref| {
-                if (i < old_refs.len) continue;
-
-                const was_inserted = try self.account_index.indexRefIfNotDuplicateSlot(
-                    ref,
-                    global_ref_index + i,
-                );
-                if (!was_inserted) {
-                    self.logger.warn().logf(
-                        "account was not referenced because its slot was a duplicate: {any}",
-                        .{.{ .slot = ref.slot, .pubkey = ref.pubkey }},
-                    );
-                    // TODO: Make this error actually impossible to reach.
-                    // Hitting this error means the account was added to
-                    // accountsdb but not indexed, which is a big problem and
-                    // will likely break consensus immediately. Ideally this
-                    // would be unreachable, but technically a race is possible
-                    // if multiple threads call putAccount for the same pubkey
-                    // in the same slot. Replay won't do this, but we still want
-                    // accountsdb to be safe without relying on that assumption.
-                    // This may require significant changes to how accountsdb's
-                    // internal data structures are locked.
-                    return error.InsertIndexFailed;
-                }
-
-                std.debug.assert(self.account_index.exists(&pubkeys[i - old_refs.len], slot));
-            }
-
-            // free old ref
-            if (slot_entry.found_existing) {
-                self.account_index.reference_manager.free(slot_entry.value_ptr.refs.items.ptr);
-            }
-            slot_entry.value_ptr.* = .{
-                .global_index = global_ref_index,
-                .refs = .{
-                    .capacity = new_capacity,
-                    .items = reference_buf[0..new_len],
-                },
-            };
-        } else {
-            // no realloc necessary
-
-            // guard against invalid slot entry
-            std.debug.assert(slot_entry.value_ptr.global_index != std.math.maxInt(u64));
-
-            slot_entry.value_ptr.refs.items.len = new_len;
-
-            for (0.., slot_entry.value_ptr.refs.items) |i, *ref| {
-                if (i < old_refs.len) continue;
-                // new ref
-                ref.* = AccountRef{
-                    .pubkey = pubkeys[i - old_refs.len],
-                    .slot = slot,
-                    .location = .{ .UnrootedMap = .{ .index = i } },
-                };
-            }
-
-            // insert + check if inserted
-            for (0.., slot_entry.value_ptr.refs.items) |i, *ref| {
-                if (i < old_refs.len) continue;
-
-                const was_inserted = try self.account_index.indexRefIfNotDuplicateSlot(
-                    ref,
-                    slot_entry.value_ptr.global_index + i,
-                );
-                if (!was_inserted) {
-                    self.logger.warn().logf(
-                        "account was not referenced because its slot was a duplicate: {any}",
-                        .{.{ .slot = ref.slot, .pubkey = ref.pubkey }},
-                    );
-                    // TODO: ideally this should be unreachable. see comment
-                    // above for more context about this error.
-                    return error.InsertIndexFailed;
-                }
-
-                std.debug.assert(self.account_index.exists(&pubkeys[i - old_refs.len], slot));
-            }
+        if (accounts_dead_count != 0) {
+            const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
+            defer dead_accounts_lg.unlock();
+            try dead_accounts.putNoClobber(slot, accounts_dead_count);
         }
     }
 
@@ -2315,7 +2149,7 @@ pub const AccountsDB = struct {
             defer unrooted_accounts_lg.unlock();
 
             const entry = try unrooted_accounts.getOrPut(slot);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            if (!entry.found_existing) entry.value_ptr.* = .{};
             try entry.value_ptr.ensureUnusedCapacity(self.allocator, pubkeys.len);
             for (pubkeys, accounts_duped) |pubkey, account| {
                 entry.value_ptr.appendAssumeCapacity(.{ .account = account, .pubkey = pubkey });
@@ -2362,13 +2196,12 @@ pub const AccountsDB = struct {
     ) ?*AccountRef {
         var biggest: ?*AccountRef = null;
 
-        var curr = ref_ptr;
-        while (curr.next_ptr) |ref| {
-            if (curr.slot < min_ancestors_slot or ancestors.containsSlot(curr.slot)) {
-                const new_biggest = if (biggest) |big| curr.slot > big.slot else true;
-                if (new_biggest) biggest = curr;
+        var curr: ?*AccountRef = ref_ptr;
+        while (curr) |ref| : (curr = ref.next_ptr) {
+            if (ref.slot < min_ancestors_slot or ancestors.containsSlot(ref.slot)) {
+                const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
+                if (new_biggest) biggest = ref;
             }
-            curr = ref;
         }
 
         return biggest;
@@ -3542,25 +3375,15 @@ test "write and read an account (write single + read with ancestors)" {
 
     var prng = std.Random.DefaultPrng.init(0);
     const pubkey = Pubkey.initRandom(prng.random());
-
-    var data = [_]u8{ 1, 2, 3 };
-
     const test_account = Account{
-        .data = AccountDataHandle.initAllocated(&data),
-        .executable = false,
-        .lamports = 100,
-        .owner = Pubkey.ZEROES,
-        .rent_epoch = 0,
-    };
-    const test_account_shared = sig.runtime.AccountSharedData{
-        .data = &data,
+        .data = AccountDataHandle.initAllocated(&.{ 1, 2, 3 }),
         .executable = false,
         .lamports = 100,
         .owner = Pubkey.ZEROES,
         .rent_epoch = 0,
     };
 
-    try accounts_db.putAccount(5083, pubkey, test_account_shared);
+    try accounts_db.putAccount(test_account, pubkey, 5083);
 
     // normal get
     {
@@ -3571,9 +3394,7 @@ test "write and read an account (write single + read with ancestors)" {
 
     // assume we've progessed past the need for ancestors
     {
-        accounts_db.largest_flushed_slot.store(10_000, .monotonic);
-        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &.{})).?;
-        accounts_db.largest_flushed_slot.store(0, .monotonic);
+        var account = try accounts_db.getAccountWithAncestors(&pubkey, &.{}, 10_000);
         defer account.deinit(allocator);
         try std.testing.expect(test_account.equals(&account));
     }
@@ -3584,35 +3405,28 @@ test "write and read an account (write single + read with ancestors)" {
         defer ancestors.deinit(allocator);
         try ancestors.ancestors.put(allocator, 5083, {});
 
-        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+        var account = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors, 0);
         defer account.deinit(allocator);
         try std.testing.expect(test_account.equals(&account));
     }
 
     // slot is not in ancestors
-    try std.testing.expectEqual(null, accounts_db.getAccountWithAncestors(&pubkey, &.{}));
+    try std.testing.expectError(
+        error.PubkeyNotInIndex,
+        accounts_db.getAccountWithAncestors(&pubkey, &.{}, 0),
+    );
 
     // write account to the same pubkey in the next slot (!)
     {
-        var data_2 = [_]u8{ 0, 1, 0, 1 };
-
         const test_account_2 = Account{
-            .data = .initAllocated(&data_2),
+            .data = AccountDataHandle.initAllocated(&.{ 0, 1, 0, 1 }),
             .executable = true,
             .lamports = 1000,
             .owner = Pubkey.ZEROES,
             .rent_epoch = 1,
         };
 
-        const test_account_2_shared = sig.runtime.AccountSharedData{
-            .data = &data_2,
-            .executable = true,
-            .lamports = 1000,
-            .owner = Pubkey.ZEROES,
-            .rent_epoch = 1,
-        };
-
-        try accounts_db.putAccount(5084, pubkey, test_account_2_shared);
+        try accounts_db.putAccount(test_account_2, pubkey, 5084);
 
         // prev slot, get prev account
         {
@@ -3620,7 +3434,7 @@ test "write and read an account (write single + read with ancestors)" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, 5083, {});
 
-            var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+            var account = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors, 0);
             defer account.deinit(allocator);
             try std.testing.expect(test_account.equals(&account));
         }
@@ -3631,7 +3445,7 @@ test "write and read an account (write single + read with ancestors)" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, 5084, {});
 
-            var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+            var account = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors, 0);
             defer account.deinit(allocator);
             try std.testing.expect(test_account_2.equals(&account));
         }
