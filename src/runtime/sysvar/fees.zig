@@ -16,9 +16,4 @@ pub const Fees = extern struct {
     };
 
     pub const SIZE_OF: u64 = @sizeOf(Fees);
-
-    pub fn initRandom(random: std.Random) Fees {
-        if (!builtin.is_test) @compileError("only for testing");
-        return .{ .lamports_per_signature = random.int(u64) };
-    }
 };

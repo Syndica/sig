@@ -25,7 +25,7 @@ pub const SlotHistory = struct {
 
     pub const SIZE_OF: u64 = 131_097;
 
-    pub fn default(allocator: Allocator) Allocator.Error!SlotHistory {
+    pub fn default(allocator: std.mem.Allocator) !SlotHistory {
         var bits = try DynamicArrayBitSet(u64).initEmpty(allocator, MAX_ENTRIES);
         bits.set(0);
         return .{
@@ -34,7 +34,7 @@ pub const SlotHistory = struct {
         };
     }
 
-    pub fn deinit(self: SlotHistory, allocator: Allocator) void {
+    pub fn deinit(self: SlotHistory, allocator: std.mem.Allocator) void {
         self.bits.deinit(allocator);
     }
 
