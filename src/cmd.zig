@@ -1050,7 +1050,7 @@ fn validator(
     var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
-        .validate_snapshot = cfg.accounts_db.skip_snapshot_validation,
+        .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
     });
     defer loaded_snapshot.deinit();
 
