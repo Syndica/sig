@@ -143,8 +143,19 @@ pub fn loadDeploymentSlotAndExecutableBytes(
 
         return .{ slot, program_elf_bytes };
     } else if (account.owner.equals(&bpf_loader.v4.ID)) {
-        // Loader v4 is not implemented yet.
-        return null;
+        const program_state = sig.bincode.readFromSlice(
+            failing_allocator,
+            bpf_loader.v4.State,
+            account.data,
+            .{},
+        ) catch return null;
+
+        if (program_state.status == .retracted) return null;
+
+        return .{
+            program_state.slot,
+            account.data[bpf_loader.v4.State.PROGRAM_DATA_METADATA_SIZE..],
+        };
     } else {
         return null;
     }
