@@ -5,7 +5,7 @@ const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Hash = sig.core.Hash;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.latest_validator_votes.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;

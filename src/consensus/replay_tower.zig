@@ -29,7 +29,7 @@ const UnixTimestamp = sig.core.UnixTimestamp;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.latest_validator_votes.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const ThresholdDecision = sig.consensus.tower.ThresholdDecision;
 const ProgressMap = sig.consensus.ProgressMap;
 const Tower = sig.consensus.tower.Tower;
