@@ -2522,6 +2522,123 @@ test "state descendant confirmed ancestor duplicate" {
     );
 }
 
+test "duplicate confirmed and epoch slots frozen" {
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(7353);
+    const random = prng.random();
+
+    var test_data: TestData = try .init(allocator, .noop, random);
+    defer test_data.deinit(allocator);
+
+    const bank_forks = &test_data.slot_tracker;
+    const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
+    const progress = &test_data.progress;
+
+    var ledger_state: TestLedgerRwState = .init();
+    defer ledger_state.deinit();
+
+    var ledger, _, var ledger_writer =
+        try testLedgerRw(@src(), .noop, &ledger_state);
+    defer ledger.deinit();
+
+    const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
+    try std.testing.expectEqual(
+        sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
+        heaviest_subtree_fork_choice.bestOverallSlot(),
+    );
+
+    const root: Slot = 0;
+
+    var duplicate_slots_tracker: DuplicateSlotsTracker = .empty;
+    defer duplicate_slots_tracker.sorted_map.deinit(allocator);
+
+    var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
+    defer duplicate_confirmed_slots.sorted_map.deinit(allocator);
+
+    var epoch_slots_frozen_slots: EpochSlotsFrozenSlots = .empty;
+    defer epoch_slots_frozen_slots.sorted_map.deinit(allocator);
+
+    var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
+    defer duplicate_slots_to_repair.deinit(allocator);
+
+    var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
+    defer purge_repair_slot_counter.sorted_map.deinit(allocator);
+
+    // Mark 3 as only epoch slots frozen, matching our `slot3_hash`, should not duplicate
+    // confirm the slot
+    var expected_is_duplicate_confirmed = false;
+    const epoch_slots_frozen_state: EpochSlotsFrozenState = .fromState(
+        .noop,
+        3,
+        slot3_hash,
+        &duplicate_confirmed_slots,
+        heaviest_subtree_fork_choice,
+        .init(if (progress.isDead(3) orelse false)
+            .is_dead
+        else
+            .{ .hash = slot3_hash }),
+        false,
+    );
+    var ancestor_hashes_replay_update_sender: sig.sync.Channel(AncestorHashesReplayUpdate) =
+        try .init(allocator);
+    defer ancestor_hashes_replay_update_sender.deinit();
+    try check_slot_agrees_with_cluster.epochSlotsFrozen(
+        allocator,
+        .noop,
+        3,
+        root,
+        &epoch_slots_frozen_slots,
+        heaviest_subtree_fork_choice,
+        &duplicate_slots_to_repair,
+        epoch_slots_frozen_state,
+    );
+    try verifyAllSlotsDuplicateConfirmed(
+        bank_forks,
+        heaviest_subtree_fork_choice,
+        3,
+        expected_is_duplicate_confirmed,
+    );
+
+    // Mark 3 as duplicate confirmed and epoch slots frozen with the same hash. Should
+    // duplicate confirm all descendants of 3
+    try duplicate_confirmed_slots.sorted_map.put(allocator, 3, slot3_hash);
+    expected_is_duplicate_confirmed = true;
+    const duplicate_confirmed_state: DuplicateConfirmedState = .{
+        .duplicate_confirmed_hash = slot3_hash,
+        .bank_status = .init(if (progress.isDead(2) orelse false)
+            .is_dead
+        else
+            .{ .hash = slot3_hash }),
+    };
+    try check_slot_agrees_with_cluster.duplicateConfirmed(
+        allocator,
+        .noop,
+        3,
+        root,
+        &ledger_writer,
+        heaviest_subtree_fork_choice,
+        &duplicate_slots_to_repair,
+        &ancestor_hashes_replay_update_sender,
+        &purge_repair_slot_counter,
+        duplicate_confirmed_state,
+    );
+    try std.testing.expectEqual(
+        slot3_hash,
+        epoch_slots_frozen_slots.sorted_map.get(3),
+    );
+    try verifyAllSlotsDuplicateConfirmed(
+        bank_forks,
+        heaviest_subtree_fork_choice,
+        3,
+        expected_is_duplicate_confirmed,
+    );
+    try std.testing.expectEqual(
+        sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
+        heaviest_subtree_fork_choice.bestOverallSlot(),
+    );
+}
+
 // -- handleEdgeCases END -- //
 
 fn processConsensus() void {
