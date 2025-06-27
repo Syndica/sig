@@ -318,14 +318,6 @@ pub const ForkChoice = struct {
         return null;
     }
 
-    pub fn bestSlot(
-        self: *const ForkChoice,
-        key: *const SlotAndHash,
-    ) ?SlotAndHash {
-        const fork_info = self.fork_infos.get(key.*) orelse return null;
-        return fork_info.heaviest_subtree_slot;
-    }
-
     pub fn deepestSlot(
         self: *const ForkChoice,
         slot_hash_key: *const SlotAndHash,
@@ -334,10 +326,6 @@ pub const ForkChoice = struct {
             return fork_info.deepest_slot;
         }
         return null;
-    }
-
-    pub fn bestOverallSlot(self: *const ForkChoice) ?SlotAndHash {
-        return self.bestSlot(&self.tree_root).?;
     }
 
     pub fn deepestOverallSlot(self: *const ForkChoice) SlotAndHash {
