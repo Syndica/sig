@@ -580,6 +580,7 @@ fn deserializeParametersUnaligned(
                         if (can_data_be_mutated) |err| return err;
                     }
                 }
+                start += pre_len;
             }
         }
 
