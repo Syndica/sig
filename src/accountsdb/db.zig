@@ -1872,9 +1872,9 @@ pub const AccountsDB = struct {
     /// intended for use from runtime
     pub fn putAccount(
         self: *AccountsDB,
-        account: sig.runtime.AccountSharedData,
         slot: Slot,
         pubkey: Pubkey,
+        account: sig.runtime.AccountSharedData,
     ) !void {
         const duplicated = Account{
             .data = .{
@@ -3300,7 +3300,7 @@ test "write and read an account (write single + read with ancestors)" {
         .rent_epoch = 0,
     };
 
-    try accounts_db.putAccount(test_account_shared, 5083, pubkey);
+    try accounts_db.putAccount(5083, pubkey, test_account_shared);
 
     // normal get
     {
@@ -3353,7 +3353,7 @@ test "write and read an account (write single + read with ancestors)" {
             .rent_epoch = 1,
         };
 
-        try accounts_db.putAccount(test_account_2_shared, 5084, pubkey);
+        try accounts_db.putAccount(5084, pubkey, test_account_2_shared);
 
         // prev slot, get prev account
         {
