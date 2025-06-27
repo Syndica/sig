@@ -117,7 +117,7 @@ pub const SlotTracker = struct {
         var current_slot = slot;
         while (self.slots.get(current_slot)) |current| {
             const parent_slot = current.constants.parent_slot;
-            parents_list.appendAssumeCapacity(parent_slot);
+            try parents_list.append(allocator, parent_slot);
 
             current_slot = parent_slot;
         }
