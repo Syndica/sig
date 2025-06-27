@@ -550,17 +550,14 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
         0.67,
     );
 
-    var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
-        std.testing.allocator,
-        3,
-    );
+    var expected_slots: std.ArrayListUnmanaged(Lockout) =
+        .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
+            .{ .slot = 3, .confirmation_count = 3 },
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        }));
     defer expected_slots.deinit(std.testing.allocator);
-    var lockouts = [_]Lockout{
-        Lockout{ .slot = 0, .confirmation_count = 3 },
-        Lockout{ .slot = 1, .confirmation_count = 2 },
-        Lockout{ .slot = 2, .confirmation_count = 1 },
-    };
-    try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+
     replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = expected_slots,
@@ -631,17 +628,14 @@ test "maybeRefreshLastVote - non voting validator" {
         0.67,
     );
 
-    var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
-        std.testing.allocator,
-        3,
-    );
+    var expected_slots: std.ArrayListUnmanaged(Lockout) =
+        .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
+            .{ .slot = 3, .confirmation_count = 3 },
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        }));
     defer expected_slots.deinit(std.testing.allocator);
-    var lockouts = [_]Lockout{
-        Lockout{ .slot = 3, .confirmation_count = 3 },
-        Lockout{ .slot = 4, .confirmation_count = 2 },
-        Lockout{ .slot = 5, .confirmation_count = 1 },
-    };
-    try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+
     replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = expected_slots,
@@ -715,17 +709,14 @@ test "maybeRefreshLastVote - hotspare validator" {
         0.67,
     );
 
-    var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
-        std.testing.allocator,
-        3,
-    );
+    var expected_slots: std.ArrayListUnmanaged(Lockout) =
+        .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
+            .{ .slot = 3, .confirmation_count = 3 },
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        }));
     defer expected_slots.deinit(std.testing.allocator);
-    var lockouts = [_]Lockout{
-        Lockout{ .slot = 3, .confirmation_count = 3 },
-        Lockout{ .slot = 4, .confirmation_count = 2 },
-        Lockout{ .slot = 5, .confirmation_count = 1 },
-    };
-    try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+
     replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = expected_slots,
@@ -799,17 +790,14 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
         0.67,
     );
 
-    var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
-        std.testing.allocator,
-        3,
-    );
+    var expected_slots: std.ArrayListUnmanaged(Lockout) =
+        .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
+            .{ .slot = 3, .confirmation_count = 3 },
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        }));
     defer expected_slots.deinit(std.testing.allocator);
-    var lockouts = [_]Lockout{
-        Lockout{ .slot = 3, .confirmation_count = 3 },
-        Lockout{ .slot = 4, .confirmation_count = 2 },
-        Lockout{ .slot = 5, .confirmation_count = 1 },
-    };
-    try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+
     replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = expected_slots,
@@ -886,17 +874,14 @@ test "maybeRefreshLastVote - successfully refreshed and mark last_vote_tx_blockh
         0.67,
     );
 
-    var expected_slots = try std.ArrayListUnmanaged(Lockout).initCapacity(
-        std.testing.allocator,
-        3,
-    );
+    var expected_slots: std.ArrayListUnmanaged(Lockout) =
+        .fromOwnedSlice(try std.testing.allocator.dupe(Lockout, &.{
+            .{ .slot = 3, .confirmation_count = 3 },
+            .{ .slot = 4, .confirmation_count = 2 },
+            .{ .slot = 5, .confirmation_count = 1 },
+        }));
     defer expected_slots.deinit(std.testing.allocator);
-    var lockouts = [_]Lockout{
-        Lockout{ .slot = 3, .confirmation_count = 3 },
-        Lockout{ .slot = 4, .confirmation_count = 2 },
-        Lockout{ .slot = 5, .confirmation_count = 1 },
-    };
-    try expected_slots.appendSlice(std.testing.allocator, &lockouts);
+
     replay_tower.last_vote = sig.consensus.vote_transaction.VoteTransaction{
         .tower_sync = sig.runtime.program.vote.state.TowerSync{
             .lockouts = expected_slots,
