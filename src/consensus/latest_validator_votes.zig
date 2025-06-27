@@ -161,22 +161,23 @@ pub const LatestValidatorVotes = struct {
         ).empty;
         errdefer result.deinit(allocator);
 
-        var iter = self.fork_choice_dirty_set.iterator();
-        while (iter.next()) |entry| {
-            const slot = entry.value_ptr.slot;
-            if (slot >= root) {
-                for (entry.value_ptr.hashes.items) |hash| {
+        for (self.fork_choice_dirty_set.keys(), self.fork_choice_dirty_set.values()) |
+            key,
+            value,
+        | {
+            const slot = value.slot;
+            if (value.slot >= root) {
+                for (value.hashes.items) |hash| {
                     try result.append(
                         allocator,
-                        .{ entry.key_ptr.*, .{ .slot = slot, .hash = hash } },
+                        .{ key, .{ .slot = slot, .hash = hash } },
                     );
                 }
             }
         }
 
-        iter = self.fork_choice_dirty_set.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.hashes.deinit(allocator);
+        for (self.fork_choice_dirty_set.values()) |*entry| {
+            entry.hashes.deinit(allocator);
         }
         self.fork_choice_dirty_set.clearAndFree(allocator);
         return result;
