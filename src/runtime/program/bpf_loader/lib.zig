@@ -43,6 +43,7 @@ pub const v4 = struct {
 
     pub const instruction = @import("v4_instruction.zig");
     pub const Instruction = instruction.Instruction;
+    pub const State = @import("v4_state.zig").State;
 };
 
 pub const execute = @import("execute.zig").execute;

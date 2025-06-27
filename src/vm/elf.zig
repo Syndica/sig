@@ -775,15 +775,6 @@ pub const Elf = struct {
                 config,
             );
         } else {
-            if (sbpf_version.enableElfVaddr() and
-                config.optimize_rodata != true)
-            {
-                return error.UnsupportedSBPFVersion;
-            }
-            if (headers.phdrs.len >= 10) {
-                return error.InvalidProgramHeader;
-            }
-
             return try parseLenient(
                 allocator,
                 bytes,
@@ -811,7 +802,7 @@ pub const Elf = struct {
         bytes: []u8,
         headers: Headers,
         data: Data,
-        sbpf_version: sbpf.Version,
+        real_sbpf_version: sbpf.Version,
         config: Config,
     ) !Elf {
         const header = headers.header;
@@ -899,7 +890,7 @@ pub const Elf = struct {
             .headers = headers,
             .data = data,
             .entry_pc = entry_pc,
-            .version = sbpf_version,
+            .version = real_sbpf_version,
             .function_registry = .{},
             .config = config,
             .ro_section = ro_section,
@@ -943,14 +934,36 @@ pub const Elf = struct {
         bytes: []u8,
         headers: Headers,
         data: Data,
-        sbpf_version: sbpf.Version,
+        real_sbpf_version: sbpf.Version,
         config: Config,
         loader: *const Registry(Syscall),
     ) !Elf {
+        const sbpf_version: sbpf.Version = switch (headers.header.e_flags) {
+            sbpf.EM_SBPF_V1 => .reserved,
+            else => .v0,
+        };
+
+        try validate(bytes, headers, data, sbpf_version, config);
+
         const text_section = data.getShdrByName(headers, ".text") orelse
             return error.NoTextSection;
-        const offset = headers.header.e_entry -| text_section.sh_addr;
-        const entry_pc = try std.math.divExact(u64, offset, 8);
+
+        // Double check text_section bounds
+        const text_section_vaddr = 
+            if (sbpf_version.enableElfVaddr() and text_section.sh_addr >= memory.RODATA_START)
+                text_section.sh_addr
+            else
+                text_section.sh_addr +| memory.RODATA_START;
+        const text_section_vaddr_end =
+            if (sbpf_version.rejectRodataStackOverlap())
+                text_section_vaddr +| text_section.sh_size
+            else
+                text_section_vaddr;
+        if (config.reject_broken_elfs and
+            !sbpf_version.enableElfVaddr() and
+            text_section.sh_addr != text_section.sh_offset or
+            text_section_vaddr_end > memory.STACK_START
+        ) return error.ValueOutOfBounds;
 
         var function_registry: Registry(u64) = .{};
         errdefer function_registry.deinit(allocator);
@@ -964,6 +977,9 @@ pub const Elf = struct {
             sbpf_version,
             config,
         );
+
+        const offset = headers.header.e_entry -| text_section.sh_addr;
+        const entry_pc = std.math.divExact(u64, offset, 8) catch return error.InvalidEntrypoint;
 
         if (!sbpf_version.enableStaticSyscalls()) {
             const hash = sbpf.hashSymbolName("entrypoint");
@@ -988,20 +1004,16 @@ pub const Elf = struct {
         );
         errdefer ro_section.deinit(allocator);
 
-        var self: Elf = .{
+        return .{
             .bytes = bytes,
             .headers = headers,
             .data = data,
             .entry_pc = entry_pc,
-            .version = sbpf_version,
+            .version = real_sbpf_version,
             .function_registry = function_registry,
             .config = config,
             .ro_section = ro_section,
         };
-
-        try self.validate();
-
-        return self;
     }
 
     const SectionAttributes = packed struct(u64) {
@@ -1023,8 +1035,14 @@ pub const Elf = struct {
     };
 
     /// Validates the Elf. Returns errors for issues encountered.
-    fn validate(self: *Elf) !void {
-        const header = self.headers.header;
+    fn validate(
+        bytes: []u8,
+        headers: Headers,
+        data: Data,
+        sbpf_version: sbpf.Version,
+        config: Config,
+    ) !void {
+        const header = headers.header;
 
         // Ensure 64-bit class
         if (header.e_ident[elf.EI_CLASS] != elf.ELFCLASS64) {
@@ -1047,11 +1065,27 @@ pub const Elf = struct {
             return error.NotDynElf;
         }
 
+        // Check that the sbpf_version matches the config
+        if (@intFromEnum(sbpf_version) < @intFromEnum(config.minimum_version) or
+            @intFromEnum(sbpf_version) > @intFromEnum(config.maximum_version))
+        {
+            return error.UnsupportedSBPFVersion;
+        }
+        if (sbpf_version.enableElfVaddr()) {
+            if (!config.optimize_rodata) {
+                return error.UnsupportedSBPFVersion;
+            }
+
+            if (headers.phdrs.len >= 10) {
+                return error.InvalidProgramHeader;
+            }
+        }
+
         // Ensure there is only one `.text` section
         {
             var count: u32 = 0;
-            for (self.headers.shdrs) |shdr| {
-                if (std.mem.eql(u8, self.data.getString(shdr.sh_name), ".text")) {
+            for (headers.shdrs) |shdr| {
+                if (std.mem.eql(u8, data.getString(shdr.sh_name), ".text")) {
                     count += 1;
                 }
             }
@@ -1063,8 +1097,8 @@ pub const Elf = struct {
         // Writable sections are not supported in our usecase that will include
         // ".bss", and ".data" sections that are writable ".data.rel" is
         // allowed though.
-        for (self.headers.shdrs) |shdr| {
-            const name = self.data.getString(shdr.sh_name);
+        for (headers.shdrs) |shdr| {
+            const name = data.getString(shdr.sh_name);
             if (std.mem.startsWith(u8, name, ".bss")) {
                 return error.WritableSectionsNotSupported;
             }
@@ -1079,19 +1113,19 @@ pub const Elf = struct {
         }
 
         // Ensure all of the section headers are within bounds
-        for (self.headers.shdrs) |shdr| {
+        for (headers.shdrs) |shdr| {
             const start = shdr.sh_offset;
             const end = try std.math.add(u64, start, shdr.sh_size);
 
-            const file_size = self.bytes.len;
+            const file_size = bytes.len;
             if (start > file_size or end > file_size) return error.SectionHeaderOutOfBounds;
         }
 
         // Ensure that the entry point is inside of the ".text" section
         const entrypoint = header.e_entry;
-        const text_section_index = self.getShdrIndexByName(".text") orelse
+        const text_section_index = data.getShdrIndexByName(headers, ".text") orelse
             return error.NoTextSection;
-        if (!self.inRangeOfShdrVaddr(text_section_index, entrypoint)) {
+        if (!inRangeOfShdrVaddr(headers, text_section_index, entrypoint)) {
             return error.EntrypointOutsideTextSection;
         }
     }
@@ -1109,8 +1143,8 @@ pub const Elf = struct {
         return self.data.getShdrByName(self.headers, name);
     }
 
-    fn inRangeOfShdrVaddr(self: *const Elf, index: usize, addr: usize) bool {
-        const shdr = self.headers.shdrs[index];
+    fn inRangeOfShdrVaddr(headers: Headers, index: usize, addr: usize) bool {
+        const shdr = headers.shdrs[index];
         const sh_addr = shdr.sh_addr;
         const sh_size = shdr.sh_size;
         const offset = std.math.add(u64, sh_addr, sh_size) catch return false;
