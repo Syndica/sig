@@ -641,6 +641,18 @@ pub const Instant = struct {
         }
     }
 
+    pub fn sub(self: Instant, duration: Duration) Instant {
+        if (is_posix) {
+            const new_ns = self.inner.timestamp.nsec - @as(isize, @intCast(duration.ns));
+            return .{ .inner = .{ .timestamp = .{
+                .sec = self.inner.timestamp.sec + @divFloor(new_ns, std.time.ns_per_s),
+                .nsec = @mod(new_ns, std.time.ns_per_s),
+            } } };
+        } else {
+            return .{ .inner = .{ .timestamp = self.inner.timestamp - duration.ns } };
+        }
+    }
+
     pub fn format(
         self: @This(),
         comptime _: []const u8,
