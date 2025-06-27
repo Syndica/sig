@@ -41,6 +41,8 @@ pub const ReplayDependencies = struct {
     root_slot: Slot,
     root_slot_constants: sig.core.SlotConstants,
     root_slot_state: sig.core.SlotState,
+    current_epoch: sig.core.Epoch,
+    current_epoch_constants: sig.core.EpochConstants,
 };
 
 const ReplayState = struct {
@@ -65,22 +67,20 @@ const ReplayState = struct {
             deps.allocator,
             deps.accounts_db,
             deps.root_slot,
-            undefined, // TODO: wrong
+            &root_slot_constants.ancestors,
         );
 
         const slot_tracker = try deps.allocator.create(SlotTracker);
         errdefer deps.allocator.destroy(slot_tracker);
         slot_tracker.* = .init(deps.root_slot);
-        try slot_tracker.put(
-            deps.allocator,
-            deps.root_slot,
-            root_slot_constants,
-            deps.root_slot_state,
-        );
+        try slot_tracker
+            .put(deps.allocator, deps.root_slot, root_slot_constants, deps.root_slot_state);
 
         const epoch_tracker = try deps.allocator.create(EpochTracker);
         errdefer deps.allocator.destroy(epoch_tracker);
         epoch_tracker.* = .{ .schedule = deps.epoch_schedule };
+        try epoch_tracker.epochs
+            .put(deps.allocator, deps.current_epoch, deps.current_epoch_constants);
 
         return .{
             .allocator = deps.allocator,

@@ -421,6 +421,34 @@ pub const VersionedEpochStake = union(enum(u32)) {
             epoch_authorized_voters.deinit(allocator);
         }
 
+        /// Creates an empty `EpochStakes` with a single stake history entry at epoch 0.
+        pub fn initEmpty(allocator: std.mem.Allocator) !Current {
+            var history: EpochAndStakeHistory = .{};
+            try history.append(allocator, .{
+                .epoch = 0,
+                .history_entry = .{
+                    .effective = 0,
+                    .activating = 0,
+                    .deactivating = 0,
+                },
+            });
+            return .{
+                .total_stake = 0,
+                .stakes = .{
+                    .epoch = 0,
+                    .history = history,
+                    .vote_accounts = .{
+                        .accounts = .{},
+                        .staked_nodes = null,
+                    },
+                    .delegations = .{},
+                    .unused = 0,
+                },
+                .node_id_to_vote_accounts = .{},
+                .epoch_authorized_voters = .{},
+            };
+        }
+
         pub fn initRandom(
             allocator: Allocator,
             random: std.Random,

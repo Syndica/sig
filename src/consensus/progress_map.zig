@@ -319,7 +319,7 @@ pub const ForkProgress = struct {
             slot_hash: ?Hash,
             last_entry: Hash,
             i_am_leader: bool,
-            epoch_stakes: *const sig.core.stake.EpochStakes,
+            epoch_stakes: *const sig.core.stake.VersionedEpochStake.Current,
         },
     ) !ForkProgress {
         const parent = params.parent;
@@ -1355,6 +1355,8 @@ test "ForkProgress.init" {
     });
     defer actual_init_from_bank.deinit(allocator);
 
+    const epoch_stakes = try sig.core.stake.VersionedEpochStake.Current
+        .initRandom(allocator, random, 10);
     const actual_init_from_parent = try ForkProgress.initFromParent(allocator, .{
         .now = now,
         .slot = bank.data.slot + 1,
@@ -1364,12 +1366,7 @@ test "ForkProgress.init" {
         .slot_hash = bank.data.hash,
         .last_entry = bank.data.blockhash_queue.last_hash.?,
         .i_am_leader = true,
-        .epoch_stakes = &.{
-            .stakes = bank.data.stakes,
-            .total_stake = bank.totalEpochStake(),
-            .node_id_to_vote_accounts = .empty,
-            .epoch_authorized_voters = .empty,
-        },
+        .epoch_stakes = &epoch_stakes,
     });
     defer actual_init_from_parent.deinit(allocator);
 

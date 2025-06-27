@@ -1181,6 +1181,10 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
+    const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+        return error.EpochStakesMissingFromSnapshot;
+
     const replay_thread = try app_base.spawnService(
         "replay",
         sig.replay.service.run,
@@ -1196,6 +1200,11 @@ fn validator(
             .root_slot = bank_fields.slot,
             .root_slot_constants = try .fromBankFields(allocator, bank_fields, .empty),
             .root_slot_state = try .fromBankFields(allocator, bank_fields),
+            .current_epoch = epoch,
+            .current_epoch_constants = try .fromBankFields(
+                bank_fields,
+                (try epoch_stakes.clone(allocator)).current,
+            ),
         }},
     );
 

@@ -249,7 +249,7 @@ pub const EpochConstants = struct {
     slots_per_year: f64,
 
     /// The pre-determined stakes assigned to this epoch.
-    stakes: EpochStakes,
+    stakes: sig.core.stake.VersionedEpochStake.Current,
 
     rent_collector: RentCollector,
 
@@ -264,6 +264,21 @@ pub const EpochConstants = struct {
             .genesis_creation_time = genesis_config.creation_time,
             .slots_per_year = genesis_config.slotsPerYear(),
             .stakes = .initEmpty(allocator),
+        };
+    }
+
+    pub fn fromBankFields(
+        bank_fields: *const BankFields,
+        epoch_stakes: sig.core.stake.VersionedEpochStake.Current,
+    ) Allocator.Error!EpochConstants {
+        return .{
+            .hashes_per_tick = bank_fields.hashes_per_tick,
+            .ticks_per_slot = bank_fields.ticks_per_slot,
+            .ns_per_slot = bank_fields.ns_per_slot,
+            .genesis_creation_time = bank_fields.genesis_creation_time,
+            .slots_per_year = bank_fields.slots_per_year,
+            .stakes = epoch_stakes,
+            .rent_collector = bank_fields.rent_collector,
         };
     }
 

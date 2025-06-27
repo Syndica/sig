@@ -215,7 +215,7 @@ pub fn getEpochStake(
     );
 
     if (tc.epoch_stakes.stakes.delegations.getPtr(vote_address.*)) |delegation| {
-        registers.set(.r0, delegation.stake);
+        registers.set(.r0, delegation.delegation.stake);
     } else {
         registers.set(.r0, 0);
     }
