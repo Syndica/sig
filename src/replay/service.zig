@@ -2124,7 +2124,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
     };
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = duplicate_ancestor, .hash = duplicate_parent_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 }
 
@@ -2159,7 +2159,7 @@ test "state ancestor confirmed descendant duplicate" {
     const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
     const root = 0;
 
@@ -2210,7 +2210,7 @@ test "state ancestor confirmed descendant duplicate" {
     );
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
     for (0..2 + 1) |slot| {
         const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
@@ -2253,7 +2253,7 @@ test "state ancestor confirmed descendant duplicate" {
     try std.testing.expect(duplicate_slots_tracker.contains(3));
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 2, .hash = slot2_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
     for (0..3 + 1) |slot| {
         const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
@@ -2314,7 +2314,7 @@ test "state ancestor duplicate descendant confirmed" {
     const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
     const root = 0;
 
@@ -2366,7 +2366,7 @@ test "state ancestor duplicate descendant confirmed" {
     const slot1_hash = bank_forks.get(1).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 1, .hash = slot1_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 
     // Mark slot 3 as duplicate confirmed, should mark slot 2 as duplicate confirmed as well
@@ -2413,7 +2413,7 @@ test "state ancestor duplicate descendant confirmed" {
     }
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 }
 
@@ -2469,7 +2469,7 @@ test "state descendant confirmed ancestor duplicate" {
     const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 
     const root: Slot = 0;
@@ -2516,7 +2516,7 @@ test "state descendant confirmed ancestor duplicate" {
     try verifyAllSlotsDuplicateConfirmed(bank_forks, heaviest_subtree_fork_choice, 3, true);
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 
     // Mark ancestor 1 as duplicate, fork choice should be unaffected since
@@ -2546,7 +2546,7 @@ test "state descendant confirmed ancestor duplicate" {
     try verifyAllSlotsDuplicateConfirmed(bank_forks, heaviest_subtree_fork_choice, 3, true);
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 }
 
@@ -2573,7 +2573,7 @@ test "duplicate confirmed and epoch slots frozen" {
     const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 
     const root: Slot = 0;
@@ -2663,7 +2663,7 @@ test "duplicate confirmed and epoch slots frozen" {
     );
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 }
 
@@ -2690,7 +2690,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 
     const root: Slot = 0;
@@ -2784,7 +2784,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     );
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
-        heaviest_subtree_fork_choice.bestOverallSlot(),
+        heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
 }
 
