@@ -19,30 +19,25 @@ pub const LatestValidatorVotes = struct {
     // fork choice update
     fork_choice_dirty_set: LatestVotes,
 
-    const Self = @This();
-
-    pub const empty: Self = .{
+    pub const empty: LatestValidatorVotes = .{
         .max_gossip_frozen_votes = .empty,
         .max_replay_frozen_votes = .empty,
         .fork_choice_dirty_set = .empty,
     };
 
     pub fn deinit(self: *LatestValidatorVotes, allocator: std.mem.Allocator) void {
-        var iter = self.max_gossip_frozen_votes.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.hashes.deinit(allocator);
+        for (self.max_gossip_frozen_votes.values()) |*entry| {
+            entry.hashes.deinit(allocator);
         }
         self.max_gossip_frozen_votes.deinit(allocator);
 
-        iter = self.max_replay_frozen_votes.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.hashes.deinit(allocator);
+        for (self.max_replay_frozen_votes.values()) |*entry| {
+            entry.hashes.deinit(allocator);
         }
         self.max_replay_frozen_votes.deinit(allocator);
 
-        iter = self.fork_choice_dirty_set.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.hashes.deinit(allocator);
+        for (self.fork_choice_dirty_set.values()) |*entry| {
+            entry.hashes.deinit(allocator);
         }
         self.fork_choice_dirty_set.deinit(allocator);
     }
@@ -78,6 +73,8 @@ pub const LatestValidatorVotes = struct {
                     latest_frozen_vote_hashes.deinit(allocator);
 
                     var hashes = std.ArrayListUnmanaged(Hash).empty;
+                    errdefer hashes.deinit(allocator);
+
                     try hashes.append(allocator, frozen_hash);
                     if (is_replay_vote) {
                         // Only record votes detected through replaying blocks,
@@ -124,6 +121,8 @@ pub const LatestValidatorVotes = struct {
                 }
             } else {
                 var hashes = std.ArrayListUnmanaged(Hash).empty;
+                errdefer hashes.deinit(allocator);
+
                 try hashes.append(allocator, frozen_hash);
                 try vote_map.put(
                     allocator,
@@ -131,7 +130,9 @@ pub const LatestValidatorVotes = struct {
                     .{ .slot = vote_slot, .hashes = hashes },
                 );
                 if (is_replay_vote) {
-                    const hashes_cloned = try hashes.clone(allocator);
+                    var hashes_cloned = try hashes.clone(allocator);
+                    errdefer hashes_cloned.deinit(allocator);
+
                     try self.fork_choice_dirty_set.putNoClobber(
                         allocator,
                         vote_pubkey,
@@ -158,8 +159,9 @@ pub const LatestValidatorVotes = struct {
         var result = std.ArrayListUnmanaged(
             struct { Pubkey, SlotAndHash },
         ).empty;
-        var iter = self.fork_choice_dirty_set.iterator();
+        errdefer result.deinit(allocator);
 
+        var iter = self.fork_choice_dirty_set.iterator();
         while (iter.next()) |entry| {
             const slot = entry.value_ptr.slot;
             if (slot >= root) {
