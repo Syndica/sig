@@ -144,7 +144,6 @@ pub const AccountsDB = struct {
     const PubkeyAndAccount = struct { pubkey: Pubkey, account: Account };
 
     pub const PubkeysAndAccounts = std.MultiArrayList(PubkeyAndAccount);
-    // pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
     pub const SlotPubkeyAccounts = std.AutoHashMap(Slot, PubkeysAndAccounts);
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
