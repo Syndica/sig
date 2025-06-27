@@ -53,6 +53,7 @@ const ReplayState = struct {
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
     accounts_db: *AccountsDB,
+    progress_map: *ProgressMap,
     blockstore_db: BlockstoreDB,
     execution: ReplayExecutionState,
 
@@ -82,6 +83,21 @@ const ReplayState = struct {
         try epoch_tracker.epochs
             .put(deps.allocator, deps.current_epoch, deps.current_epoch_constants);
 
+        const progress_map = try deps.allocator.create(ProgressMap);
+        progress_map.* = ProgressMap.INIT;
+        try progress_map.map.put(
+            deps.allocator,
+            slot_tracker.root,
+            try .init(deps.allocator, .{
+                .now = .now(),
+                .last_entry = .ZEROES, // TODO this is wrong
+                .prev_leader_slot = null, // non-block-producing
+                .validator_stake_info = null, // non-voting
+                .num_blocks_on_fork = 0,
+                .num_dropped_blocks_on_fork = 0,
+            }),
+        );
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -91,6 +107,7 @@ const ReplayState = struct {
             .epochs = epoch_tracker,
             .accounts_db = deps.accounts_db,
             .blockstore_db = deps.blockstore_reader.db,
+            .progress_map = progress_map,
             .execution = try ReplayExecutionState.init(
                 deps.allocator,
                 deps.logger,
@@ -100,6 +117,7 @@ const ReplayState = struct {
                 deps.blockstore_reader,
                 slot_tracker,
                 epoch_tracker,
+                progress_map,
             ),
         };
     }
@@ -135,7 +153,7 @@ fn advanceReplay(state: *ReplayState) !void {
         state.slot_tracker,
         state.epochs,
         state.slot_leaders,
-        &state.execution.progress_map,
+        state.progress_map,
     );
 
     _ = try replay.execution.replayActiveSlots(&state.execution);
