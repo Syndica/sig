@@ -391,10 +391,9 @@ fn checkAndHandleNewRoot(
     );
     defer to_remove.deinit(allocator);
 
-    var it = progress.map.iterator();
-    while (it.next()) |entry| {
-        if (slot_tracker.slots.get(entry.key_ptr.*) == null) {
-            to_remove.appendAssumeCapacity(entry.key_ptr.*);
+    for (progress.map.keys()) |progress_slot| {
+        if (slot_tracker.get(progress_slot) == null) {
+            to_remove.appendAssumeCapacity(progress_slot);
         }
     }
 
