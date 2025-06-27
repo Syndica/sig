@@ -110,10 +110,13 @@ pub const SlotTracker = struct {
         var parents_list = std.ArrayListUnmanaged(Slot).empty;
         errdefer parents_list.deinit(allocator);
 
+        const max_possible_parent_count = self.slots.count() - (self.slots.getIndex(slot) orelse self.slots.count());
+        try parents_list.ensureTotalCapacity(allocator, max_possible_parent_count);
+
         var current_slot = slot;
         while (self.slots.get(current_slot)) |current| {
             const parent_slot = current.constants.parent_slot;
-            try parents_list.append(allocator, parent_slot);
+            parents_list.appendAssumeCapacity(parent_slot);
 
             current_slot = parent_slot;
         }
