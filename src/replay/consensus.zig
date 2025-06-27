@@ -365,10 +365,9 @@ fn checkAndHandleNewRoot(
 ) !void {
     // get the root bank before squash.
     if (slot_tracker.slots.count() == 0) return error.EmptySlotTracker;
-    var root_tracker = slot_tracker.slots.get(new_root) orelse return error.MissingSlot;
-    const maybe_root_hash, var hash_lg = root_tracker.state.hash.readWithLock();
-    defer hash_lg.unlock();
-    const root_hash = maybe_root_hash.* orelse return error.MissingHash;
+    const root_tracker = slot_tracker.get(new_root) orelse return error.MissingSlot;
+    const maybe_root_hash = root_tracker.state.hash.readCopy();
+    const root_hash = maybe_root_hash orelse return error.MissingHash;
 
     const rooted_slots = try slot_tracker.parents(allocator, new_root);
     defer allocator.free(rooted_slots);
