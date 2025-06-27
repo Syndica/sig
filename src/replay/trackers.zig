@@ -107,7 +107,7 @@ pub const SlotTracker = struct {
         allocator: Allocator,
         slot: Slot,
     ) Allocator.Error![]const Slot {
-        var parents_list = std.ArrayListUnmanaged(Slot){};
+        var parents_list = std.ArrayListUnmanaged(Slot).empty;
         errdefer parents_list.deinit(allocator);
 
         var current_slot = slot;
