@@ -88,22 +88,31 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
     }
+    var processed_a_slot = false;
     for (slot_statuses.items) |slot_status| {
         // NOTE: currently this just awaits the futures and discards the
         // results. this will change once we call the svm and process the
         // results of execution.
         _, const status = slot_status;
-        while (status == .confirm and try status.confirm.poll() == .pending) {
-            std.time.sleep(std.time.ns_per_ms); // TODO: consider futex-based wait like ResetEvent
+        if (status == .confirm) {
+            // NOTE: agave does this a bit differently, it indicates that a slot
+            // was *finished*, not just processed partially.
+            processed_a_slot = true;
+            while (try status.confirm.poll() == .pending) {
+                // TODO: consider futex-based wait like ResetEvent
+                std.time.sleep(std.time.ns_per_ms);
+            }
         }
-        status.deinit(state.allocator);
     }
 
     // TODO: process_replay_results: https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3443
-    return false;
+    return processed_a_slot;
 }
 
 const ReplaySlotStatus = union(enum) {
+    /// We have no entries available to verify for this slot. No work was done.
+    empty,
+
     /// The slot was previously marked as dead (not this time), which means we
     /// don't need to do anything. see here that agave also does nothing:
     /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L3005-L3007)
@@ -194,6 +203,13 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     errdefer {
         for (entries) |entry| entry.deinit(state.allocator);
         state.allocator.free(entries);
+    }
+    state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
+
+    if (entries.len == 0) {
+        for (entries) |entry| entry.deinit(state.allocator);
+        state.allocator.free(entries);
+        return .empty;
     }
 
     confirmation_progress.num_shreds += num_shreds;

@@ -156,7 +156,8 @@ fn advanceReplay(state: *ReplayState) !void {
         state.progress_map,
     );
 
-    _ = try replay.execution.replayActiveSlots(&state.execution);
+    const processed_a_slot = try replay.execution.replayActiveSlots(&state.execution);
+    if (!processed_a_slot) std.time.sleep(100 * std.time.ns_per_ms);
 
     handleEdgeCases();
 

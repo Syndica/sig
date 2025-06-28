@@ -45,6 +45,7 @@ pub fn confirmSlot(
     svm_params: SvmSlot.Params,
     verify_ticks_params: VerifyTicksParams,
 ) !*ConfirmSlotFuture {
+    logger.info().log("confirming slot");
     const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries);
     errdefer future.destroy(allocator);
 
