@@ -160,10 +160,7 @@ test "epoch_schedule" {
         );
 
         try std.testing.expectEqual(epoch_schedule.getFirstSlotInEpoch(0), 0);
-        try std.testing.expectEqual(
-            epoch_schedule.getLastSlotInEpoch(0),
-            MINIMUM_SLOTS_PER_EPOCH - 1,
-        );
+        try std.testing.expectEqual(epoch_schedule.getLastSlotInEpoch(0), MINIMUM_SLOTS_PER_EPOCH - 1);
 
         var last_leader_schedule: u64 = 0;
         var last_epoch: u64 = 0;
