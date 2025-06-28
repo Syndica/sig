@@ -115,6 +115,10 @@ pub const LoadedTransactionAccounts = struct {
 pub const CachedAccount = struct {
     pubkey: Pubkey,
     account: *AccountSharedData,
+
+    pub fn getAccount(self: *const CachedAccount) *const AccountSharedData {
+        return self.account;
+    }
 };
 
 /// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.

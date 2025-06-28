@@ -32,7 +32,7 @@ pub fn checkStatusCache(
     msg_hash: *const Hash,
     recent_blockhash: *const Hash,
     ancestors: *const Ancestors,
-    status_cache: *const sig.core.StatusCache,
+    status_cache: *sig.core.StatusCache,
 ) ?TransactionError {
     if (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors) != null)
         return .AlreadyProcessed;

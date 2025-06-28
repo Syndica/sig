@@ -65,7 +65,7 @@ pub const RuntimeTransaction = struct {
 pub const TransactionExecutionEnvironment = struct {
     ancestors: *const Ancestors,
     feature_set: *const FeatureSet,
-    status_cache: *const StatusCache,
+    status_cache: *StatusCache,
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
@@ -92,7 +92,7 @@ pub const TransactionExecutionConfig = struct {
 pub const TransactionRollbacks = union(enum(u8)) {
     fee_payer_only: CopiedAccount,
     same_nonce_and_fee_payer: CopiedAccount,
-    separate_nonce_and_fee_payer: struct { CopiedAccount, CopiedAccount },
+    separate_nonce_and_fee_payer: [2]CopiedAccount,
 
     pub fn new(
         allocator: std.mem.Allocator,
@@ -129,14 +129,21 @@ pub const TransactionRollbacks = union(enum(u8)) {
         }
     }
 
+    pub fn accounts(self: *const TransactionRollbacks) []const CopiedAccount {
+        switch (self.*) {
+            .fee_payer_only, .same_nonce_and_fee_payer => |item| {
+                return @as([*]const CopiedAccount, @ptrCast(&item))[0..1];
+            },
+            .separate_nonce_and_fee_payer => |items| return &items,
+        }
+    }
+
     pub fn deinit(self: TransactionRollbacks, allocator: std.mem.Allocator) void {
         switch (self) {
             .fee_payer_only => |fee_payer_account| allocator.free(fee_payer_account.account.data),
             .same_nonce_and_fee_payer => |account| allocator.free(account.account.data),
-            .separate_nonce_and_fee_payer => |accounts| {
-                const nonce, const fee_payer = accounts;
-                allocator.free(nonce.account.data);
-                allocator.free(fee_payer.account.data);
+            .separate_nonce_and_fee_payer => |both_accounts| for (both_accounts) |account| {
+                allocator.free(account.account.data);
             },
         }
     }
@@ -145,6 +152,10 @@ pub const TransactionRollbacks = union(enum(u8)) {
 pub const CopiedAccount = struct {
     pubkey: Pubkey,
     account: AccountSharedData,
+
+    pub fn getAccount(self: *const CopiedAccount) *const AccountSharedData {
+        return &self.account;
+    }
 };
 
 pub const ExecutedTransaction = struct {
@@ -180,6 +191,22 @@ pub const ProcessedTransaction = union(enum(u8)) {
             },
             else => {},
         }
+    }
+
+    pub const Accounts = union(enum) {
+        success: []const CachedAccount,
+        rollback: []const CopiedAccount,
+    };
+
+    pub fn accounts(self: *const ProcessedTransaction) Accounts {
+        return switch (self.*) {
+            .fees_only => |f| .{ .rollback = f.rollbacks.accounts() },
+            .executed => |e| if (e.executed_transaction.err != null) .{
+                .rollback = e.rollbacks.accounts(),
+            } else .{
+                .success = e.loaded_accounts.accounts.slice(),
+            },
+        };
     }
 };
 
@@ -413,7 +440,7 @@ test "loadAndExecuteTransactions: no transactions" {
 
     const ancestors: Ancestors = .{};
     const feature_set: FeatureSet = FeatureSet.EMPTY;
-    const status_cache = StatusCache.DEFAULT;
+    var status_cache = StatusCache.DEFAULT;
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
@@ -500,6 +527,8 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
     const epoch_stakes = try VersionedEpochStake.Current.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
 
+    var status_cache = StatusCache.DEFAULT;
+
     const results = try loadAndExecuteTransactions(
         allocator,
         &.{transaction},
@@ -507,7 +536,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
         &.{
             .ancestors = &Ancestors{},
             .feature_set = &FeatureSet.EMPTY,
-            .status_cache = &StatusCache.DEFAULT,
+            .status_cache = &status_cache,
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
             .vm_environment = &vm.Environment{},

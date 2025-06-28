@@ -16,6 +16,7 @@ const TransactionError = sig.ledger.transaction_status.TransactionError;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 
+const Committer = replay.commit.Committer;
 const SvmSlot = replay.svm_gateway.SvmSlot;
 const TransactionScheduler = replay.scheduler.TransactionScheduler;
 
@@ -43,10 +44,11 @@ pub fn confirmSlot(
     entries: []const Entry,
     last_entry: Hash,
     svm_params: SvmSlot.Params,
+    committer: Committer,
     verify_ticks_params: VerifyTicksParams,
 ) !*ConfirmSlotFuture {
     logger.info().log("confirming slot");
-    const future = try ConfirmSlotFuture.create(allocator, thread_pool, entries);
+    const future = try ConfirmSlotFuture.create(allocator, thread_pool, committer, entries);
     errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
@@ -138,9 +140,11 @@ pub const ConfirmSlotFuture = struct {
     fn create(
         allocator: Allocator,
         thread_pool: *ThreadPool,
+        committer: Committer,
         entries: []const Entry,
     ) !*ConfirmSlotFuture {
-        var scheduler = try TransactionScheduler.initCapacity(allocator, entries.len, thread_pool);
+        var scheduler = try TransactionScheduler
+            .initCapacity(allocator, committer, entries.len, thread_pool);
         errdefer scheduler.deinit();
 
         const poh_verifier = try HomogeneousThreadPool(PohTask)
@@ -330,6 +334,7 @@ test "happy path: trivial case" {
         &.{},
         .ZEROES,
         undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = 0,
             .slot = 0,
@@ -363,6 +368,7 @@ test "happy path: partial slot" {
         &thread_pool,
         try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
         .ZEROES,
+        undefined, // TODO
         undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
@@ -398,6 +404,7 @@ test "happy path: full slot" {
         try allocator.dupe(Entry, entries),
         .ZEROES,
         undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -431,6 +438,7 @@ test "fail: full slot not marked full -> .InvalidLastTick" {
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        undefined, // TODO
         undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
@@ -468,6 +476,7 @@ test "fail: no trailing tick at max height -> .TrailingEntry" {
         &thread_pool,
         try allocator.dupe(Entry, entries[0 .. entries.len - 1]),
         .ZEROES,
+        undefined, // TODO
         undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
@@ -509,6 +518,7 @@ test "fail: invalid poh chain" {
         try allocator.dupe(Entry, entries),
         .ZEROES,
         undefined, // TODO
+        undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,
             .slot = 0,
@@ -545,6 +555,7 @@ test "fail: sigverify" {
         &thread_pool,
         try allocator.dupe(Entry, entries),
         .ZEROES,
+        undefined, // TODO
         undefined, // TODO
         .{
             .hashes_per_tick = poh.hashes_per_tick,

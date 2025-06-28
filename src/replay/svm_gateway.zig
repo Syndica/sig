@@ -75,7 +75,7 @@ pub const SvmSlot = struct {
         feature_set: FeatureSet,
         rent_collector: *const RentCollector,
         epoch_stakes: *const VersionedEpochStake.Current,
-        status_cache: *const StatusCache,
+        status_cache: *StatusCache,
     };
 
     pub fn init(

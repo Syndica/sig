@@ -1,4 +1,5 @@
 pub const account_locks = @import("account_locks.zig");
+pub const commit = @import("commit.zig");
 pub const confirm_slot = @import("confirm_slot.zig");
 pub const execution = @import("execution.zig");
 pub const resolve_lookup = @import("resolve_lookup.zig");

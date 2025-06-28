@@ -39,6 +39,8 @@ pub const ReplayExecutionState = struct {
     progress_map: *ProgressMap,
     status_cache: sig.core.StatusCache,
 
+    // TODO distinguish borrows from owned and maybe pass down borrows separately
+
     pub fn init(
         allocator: Allocator,
         logger: sig.trace.Logger,
@@ -235,6 +237,12 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .status_cache = &state.status_cache,
     };
 
+    const committer = replay.commit.Committer{
+        .accounts_db = state.accounts_db,
+        .slot_state = slot_info.state,
+        .status_cache = &state.status_cache,
+    };
+
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
@@ -243,6 +251,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         entries,
         confirmation_progress.last_entry,
         svm_params,
+        committer,
         .{
             .tick_height = slot_info.state.tickHeight(),
             .max_tick_height = slot_info.constants.max_tick_height,
