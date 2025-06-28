@@ -37,6 +37,8 @@ pub fn processBatch(
     exit: *std.atomic.Value(bool),
 ) !?TransactionError {
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
+    defer allocator.free(results);
+
     for (transactions, 0..) |transaction, i| {
         if (exit.load(.monotonic)) {
             return null;
