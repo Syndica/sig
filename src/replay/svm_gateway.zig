@@ -6,7 +6,7 @@ const vm = sig.vm;
 
 const Allocator = std.mem.Allocator;
 
-const Ancestors = sig.core.status_cache.Ancestors;
+const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
 const RentCollector = sig.core.rent_collector.RentCollector;

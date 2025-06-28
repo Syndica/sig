@@ -7,7 +7,7 @@ const executor = sig.runtime.executor;
 const compute_budget_program = sig.runtime.program.compute_budget;
 const vm = sig.vm;
 
-const Ancestors = sig.core.status_cache.Ancestors;
+const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
 const Hash = sig.core.Hash;

@@ -46,7 +46,7 @@ const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
 const epochStakeMapRandom = core.stake.epochStakeMapRandom;
 
-const Ancestors = sig.core.status_cache.Ancestors;
+const Ancestors = sig.core.Ancestors;
 
 /// Information about a slot that is determined when the slot is initialized and
 /// then never changes.

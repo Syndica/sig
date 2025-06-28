@@ -427,7 +427,7 @@ pub const AuthorizedVoters = struct {
     }
 
     pub fn last(self: *const AuthorizedVoters) ?struct { Epoch, Pubkey } {
-        const last_epoch = self.voters.max orelse return null;
+        const last_epoch = self.voters.unmanaged.max orelse return null;
         if (self.voters.get(last_epoch)) |last_pubkey| {
             return .{ last_epoch, last_pubkey };
         } else {
