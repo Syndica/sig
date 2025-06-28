@@ -1822,18 +1822,18 @@ pub const AccountsDB = struct {
         self: *AccountsDB,
         pubkey: *const Pubkey,
         ancestors: *const sig.core.Ancestors,
-        /// below this slot, consider totally rooted/finalised (=> ancestors irrelevant)
-        min_ancestors_slot: Slot,
-    ) GetAccountError!Account {
+    ) GetFileFromRefError!?Account {
         const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
-            return error.PubkeyNotInIndex;
+            return null;
         defer lock.unlock();
 
-        const max_ref = greatestInAncestors(head_ref.ref_ptr, ancestors, min_ancestors_slot) orelse
-            return error.PubkeyNotInIndex;
-        const account = try self.getAccountFromRef(max_ref);
+        const max_ref = greatestInAncestors(
+            head_ref.ref_ptr,
+            ancestors,
+            self.largest_flushed_slot.load(.monotonic),
+        ) orelse return null;
 
-        return account;
+        return try self.getAccountFromRef(max_ref);
     }
 
     pub fn getAccountAndReference(
@@ -2205,19 +2205,34 @@ pub const AccountsDB = struct {
         return .{ gop.value_ptr, bank_hash_stats_lg };
     }
 
+    /// first searches for the highest slot in ancestors. if none are found,
+    /// then searches for the highest rooted slot that has been flushed.
+    ///
+    /// we need to filter by flushed slots here because if you just filter by
+    /// rooted, you might catch some accounts from another branch before
+    /// flushing should remove items from the cache.
     fn greatestInAncestors(
         ref_ptr: *AccountRef,
         ancestors: *const sig.core.Ancestors,
-        /// below this slot, consider totally rooted/finalised (=> ancestors irrelevant)
-        min_ancestors_slot: Slot,
+        largest_flushed_slot: Slot,
     ) ?*AccountRef {
         var biggest: ?*AccountRef = null;
 
         var curr: ?*AccountRef = ref_ptr;
         while (curr) |ref| : (curr = ref.next_ptr) {
-            if (ref.slot < min_ancestors_slot or ancestors.containsSlot(ref.slot)) {
+            if (ancestors.containsSlot(ref.slot)) {
                 const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
                 if (new_biggest) biggest = ref;
+            }
+        }
+
+        if (biggest == null) {
+            curr = ref_ptr;
+            while (curr) |ref| : (curr = ref.next_ptr) {
+                if (ref.slot < largest_flushed_slot) {
+                    const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
+                    if (new_biggest) biggest = ref;
+                }
             }
         }
 
@@ -3421,7 +3436,9 @@ test "write and read an account (write single + read with ancestors)" {
 
     // assume we've progessed past the need for ancestors
     {
-        var account = try accounts_db.getAccountWithAncestors(&pubkey, &.{}, 10_000);
+        accounts_db.largest_flushed_slot.store(10_000, .monotonic);
+        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &.{})).?;
+        accounts_db.largest_flushed_slot.store(0, .monotonic);
         defer account.deinit(allocator);
         try std.testing.expect(test_account.equals(&account));
     }
@@ -3432,16 +3449,13 @@ test "write and read an account (write single + read with ancestors)" {
         defer ancestors.deinit(allocator);
         try ancestors.ancestors.put(allocator, 5083, {});
 
-        var account = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors, 0);
+        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
         defer account.deinit(allocator);
         try std.testing.expect(test_account.equals(&account));
     }
 
     // slot is not in ancestors
-    try std.testing.expectError(
-        error.PubkeyNotInIndex,
-        accounts_db.getAccountWithAncestors(&pubkey, &.{}, 0),
-    );
+    try std.testing.expectEqual(null, accounts_db.getAccountWithAncestors(&pubkey, &.{}));
 
     // write account to the same pubkey in the next slot (!)
     {
@@ -3471,7 +3485,7 @@ test "write and read an account (write single + read with ancestors)" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, 5083, {});
 
-            var account = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors, 0);
+            var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
             defer account.deinit(allocator);
             try std.testing.expect(test_account.equals(&account));
         }
@@ -3482,7 +3496,7 @@ test "write and read an account (write single + read with ancestors)" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, 5084, {});
 
-            var account = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors, 0);
+            var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
             defer account.deinit(allocator);
             try std.testing.expect(test_account_2.equals(&account));
         }
