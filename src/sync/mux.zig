@@ -267,6 +267,15 @@ pub fn RwMux(comptime T: type) type {
             };
         }
 
+        /// `write` returns a `WLockGuard` after acquiring a `write` lock
+        pub fn tryWrite(self: *Self) ?WLockGuard {
+            if (!self.private.r.tryLock()) return null;
+            return WLockGuard{
+                .private = &self.private,
+                .valid = true,
+            };
+        }
+
         pub fn set(self: *Self, item: T) void {
             self.private.r.lock();
             defer self.private.r.unlock();

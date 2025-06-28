@@ -46,9 +46,9 @@ pub const StatusCache = struct {
     };
 
     pub fn deinit(self: *StatusCache, allocator: std.mem.Allocator) void {
-        var roots = self.roots.write();
-        var cache = self.cache.write();
-        var slot_deltas = self.slot_deltas.write();
+        var roots = self.roots.tryWrite() orelse unreachable;
+        var cache = self.cache.tryWrite() orelse unreachable;
+        var slot_deltas = self.slot_deltas.tryWrite() orelse unreachable;
         defer roots.unlock();
         defer cache.unlock();
         defer slot_deltas.unlock();
