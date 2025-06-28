@@ -257,6 +257,10 @@ pub const EpochConstants = struct {
     pub fn deinit(self: EpochConstants, allocator: Allocator) void {
         self.stakes.deinit(allocator);
     }
+
+    fn timestampFromGenesis(self: *const EpochConstants, slot: u128) i64 {
+        return self.genesis_creation_time +| ((slot *| self.ns_per_slot) / 1_000_000_000);
+    }
 };
 
 /// Used for serialization of aggregated bank data, for example in snapshots.
