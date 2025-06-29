@@ -85,9 +85,6 @@ pub const SlotConstants = struct {
     /// Whether and how epoch rewards should be distributed in this slot.
     epoch_reward_status: EpochRewardStatus,
 
-    /// The initial accounts data size at the start of this slot, before processing any transactions/etc
-    // accounts_data_size_initial: u64,
-
     pub fn fromBankFields(bank_fields: *const BankFields) SlotConstants {
         return .{
             .parent_slot = bank_fields.parent_slot,
@@ -170,12 +167,6 @@ pub const SlotState = struct {
 
     /// 100% paid to leader
     collected_priority_fees: Atomic(u64),
-
-    /// The change to accounts data size in this slot, due on-chain events (i.e. transactions)
-    // accounts_data_size_delta_on_chain: Atomic(i64),
-
-    /// The change to accounts data size in this slot, due to off-chain events (i.e. rent collection)
-    // accounts_data_size_delta_off_chain: Atomic(i64),
 
     pub const GENESIS = SlotState{
         .blockhash_queue = .init(.DEFAULT),
