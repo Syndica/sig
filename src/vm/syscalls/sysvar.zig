@@ -127,7 +127,7 @@ test getSysvar {
             .first_normal_slot = 4,
         });
         const fees = fill(false, sysvar.Fees{
-            .fee_calculator = .{ .lamports_per_signature = 1 },
+            .lamports_per_signature = 1,
         });
         const rent = fill(false, sysvar.Rent{
             .lamports_per_byte_year = 1,
@@ -291,7 +291,7 @@ test getSysvar {
         const obj_addr = 0x100000000;
 
         var clean_obj = src.fill(true, obj); // has bytes/padding zeroed.
-        clean_obj.fee_calculator = src.fees.fee_calculator;
+        clean_obj = src.fees;
 
         var memory_map = try MemoryMap.init(
             allocator,

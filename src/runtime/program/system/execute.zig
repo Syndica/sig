@@ -737,7 +737,7 @@ pub fn authorizeNonceAccount(
     const nonce_state = nonce.State{ .initialized = nonce.Data.init(
         authority,
         nonce_data.durable_nonce,
-        nonce_data.fee_calculator.lamports_per_signature,
+        nonce_data.lamports_per_signature,
     ) };
 
     switch (versioned_nonce) {

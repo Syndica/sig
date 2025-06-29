@@ -26,7 +26,6 @@ const RwMux = sig.sync.RwMux;
 
 const BlockhashQueue = core.BlockhashQueue;
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
-const FeeCalculator = core.FeeCalculator;
 const Hash = core.hash.Hash;
 const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
@@ -283,7 +282,9 @@ pub const BankFields = struct {
     block_height: u64,
     collector_id: Pubkey,
     collector_fees: u64,
-    fee_calculator: FeeCalculator,
+    /// This is a FeeCalculator in Agave which is just a wrapped u64 containing lamports per signature.
+    /// Lamports per signature is already stored in `fee_rate_governor`, so
+    fee_calculator: u64,
     fee_rate_governor: FeeRateGovernor,
     collected_rent: u64,
     rent_collector: RentCollector,
@@ -471,7 +472,7 @@ pub const BankFields = struct {
             .block_height = random.int(u64),
             .collector_id = Pubkey.initRandom(random),
             .collector_fees = random.int(u64),
-            .fee_calculator = FeeCalculator.initRandom(random),
+            .fee_calculator = random.int(u64),
             .fee_rate_governor = FeeRateGovernor.initRandom(random),
             .collected_rent = random.int(u64),
             .rent_collector = RentCollector.initRandom(random),

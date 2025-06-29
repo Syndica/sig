@@ -322,15 +322,13 @@ fn checkLoadAndAdvanceMessageNonceAccount(
         batch_account_cache,
     ) orelse return null;
 
-    const previous_lamports_per_signature = nonce_data.fee_calculator.lamports_per_signature;
+    const previous_lamports_per_signature = nonce_data.lamports_per_signature;
     const next_nonce_state = NonceVersions{
         .current = NonceState{
             .initialized = .{
                 .authority = nonce_data.authority,
                 .durable_nonce = next_durable_nonce.*,
-                .fee_calculator = .{
-                    .lamports_per_signature = next_lamports_per_signature,
-                },
+                .lamports_per_signature = next_lamports_per_signature,
             },
         },
     };
@@ -529,7 +527,7 @@ test "checkAge: nonce account" {
                 .initialized = .{
                     .authority = nonce_authority_key,
                     .durable_nonce = recent_blockhash,
-                    .fee_calculator = .{ .lamports_per_signature = 5000 },
+                    .lamports_per_signature = 5000,
                 },
             } },
             .{},
@@ -636,7 +634,7 @@ test "checkAge: nonce account" {
             );
             try std.testing.expectEqual(
                 5001,
-                nv.getState().initialized.fee_calculator.lamports_per_signature,
+                nv.getState().initialized.lamports_per_signature,
             );
         },
         .err => return error.ExpectedOk,
