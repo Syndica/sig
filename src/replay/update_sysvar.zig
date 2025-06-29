@@ -1,6 +1,8 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const Allocator = std.mem.Allocator;
+
 const bincode = sig.bincode;
 const sysvars = sig.runtime.sysvar;
 const features = sig.runtime.features;
@@ -44,7 +46,7 @@ pub fn updateClock(
     slot: Slot,
     epoch: Epoch,
     parent_epoch: ?Epoch,
-) !void {
+) Allocator.Error!void {
     const clock = nextClock(
         ancestors,
         epoch_schedule,
@@ -75,7 +77,7 @@ pub fn updateLastRestartSlot(
     state: *SlotState,
     accounts_db: *AccountsDb,
     slot: Slot,
-) !void {
+) Allocator.Error!void {
     if (!feature_set.active.contains(features.LAST_RESTART_SLOT_SYSVAR)) return;
 
     const new_last_restart_slot = blk: {
@@ -113,7 +115,7 @@ pub fn updateSlotHistory(
     state: *SlotState,
     accounts_db: *AccountsDb,
     slot: Slot,
-) !void {
+) Allocator.Error!void {
     const slot_history: SlotHistory = getSysvarFromAccount(
         allocator,
         accounts_db,
@@ -143,7 +145,7 @@ pub fn updateSlotHashes(
     state: *SlotState,
     accounts_db: *AccountsDb,
     slot: Slot,
-) !void {
+) Allocator.Error!void {
     const slot_hashes: SlotHashes = getSysvarFromAccount(
         allocator,
         accounts_db,
@@ -215,7 +217,7 @@ pub fn updateRent(
     state: *SlotState,
     accounts_db: *AccountsDb,
     slot: Slot,
-) !void {
+) Allocator.Error!void {
     try updateSysvarAccount(
         allocator,
         state,
@@ -236,7 +238,7 @@ pub fn updateEpochSchedule(
     accounts_db: *AccountsDb,
     slot: Slot,
     epoch_schedule: EpochSchedule,
-) !void {
+) Allocator.Error!void {
     try updateSysvarAccount(
         allocator,
         state,
@@ -275,17 +277,32 @@ pub fn updateEpochSchedule(
 // }
 
 // TODO: Update RecentBlockhashes
-// pub fn updateRecentBlockhashes(
-//     allocator: std.mem.Allocator,
-//     ancestors: *const Ancestors,
-//     rent: *const Rent,
-//     state: *SlotState,
-//     accounts_db: *AccountsDb,
-//     slot: Slot,
-//     blockhash_queue: *const BlockhashQueue,
-// ) !void {
-//     const recent_blockhashes = blockhash_queue.
-// }
+pub fn updateRecentBlockhashes(
+    allocator: std.mem.Allocator,
+    ancestors: *const Ancestors,
+    rent: *const Rent,
+    state: *SlotState,
+    accounts_db: *AccountsDb,
+    slot: Slot,
+    blockhash_queue: *const BlockhashQueue,
+) Allocator.Error!void {
+    const recent_blockhashes = try RecentBlockhashes.fromBlockhashQueue(
+        allocator,
+        blockhash_queue,
+    );
+    defer recent_blockhashes.deinit(allocator);
+
+    try updateSysvarAccount(
+        allocator,
+        state,
+        accounts_db,
+        ancestors,
+        rent,
+        slot,
+        RecentBlockhashes,
+        recent_blockhashes,
+    );
+}
 
 /// Update sysvar account is used to update sysvar accounts in the validator runtime
 /// outside of the SVM. This is referred to as an 'off-chain' account update. The current sysvar
@@ -302,7 +319,7 @@ fn updateSysvarAccount(
     slot: u64,
     comptime Sysvar: type,
     sysvar: Sysvar,
-) !void {
+) Allocator.Error!void {
     const old_account = accounts_db.getAccountWithAncestors(
         &Sysvar.ID,
         ancestors,
@@ -334,7 +351,7 @@ fn createSysvarAccount(
     comptime Sysvar: type,
     sysvar: Sysvar,
     old_account: ?*const Account,
-) !AccountSharedData {
+) Allocator.Error!AccountSharedData {
     const sysvar_data = try allocator.alloc(u8, @max(
         Sysvar.SIZE_OF,
         bincode.sizeOf(sysvar, .{}),
@@ -342,7 +359,9 @@ fn createSysvarAccount(
     errdefer allocator.free(sysvar_data);
     @memset(sysvar_data, 0);
 
-    _ = try bincode.writeToSlice(sysvar_data, sysvar, .{});
+    // writeToSlice may return a 'NoSpaceLeft' error, but the above allocation ensures
+    // that there is enough space for serialisation.
+    _ = bincode.writeToSlice(sysvar_data, sysvar, .{}) catch unreachable;
 
     const lamports_for_rent = rent.minimumBalance(sysvar_data.len);
     const lamports, const rent_epoch = if (old_account) |acc|
