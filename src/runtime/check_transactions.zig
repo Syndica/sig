@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
 const Ancestors = sig.core.Ancestors;
-const BlockhashQueue = sig.core.bank.BlockhashQueue;
+const BlockhashQueue = sig.core.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const AccountMeta = sig.core.instruction.InstructionAccount;
@@ -52,7 +52,7 @@ pub fn checkAge(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
 ) TransactionResult(?CachedAccount) {
-    if (blockhash_queue.getHashInfoIfValid(&transaction.recent_blockhash, max_age) != null) {
+    if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
     }
 
@@ -598,7 +598,7 @@ test "checkAge: nonce account" {
     var blockhash_queue = BlockhashQueue{
         .last_hash = null,
         .max_age = 0,
-        .ages = .{},
+        .hash_infos = .{},
         .last_hash_index = 0,
     };
 
