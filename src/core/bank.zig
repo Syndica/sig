@@ -26,7 +26,6 @@ const RwMux = sig.sync.RwMux;
 
 const BlockhashQueue = core.BlockhashQueue;
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
-const FeeCalculator = core.FeeCalculator;
 const Hash = core.hash.Hash;
 const HardForks = core.HardForks;
 const LtHash = core.hash.LtHash;
