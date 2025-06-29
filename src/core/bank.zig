@@ -37,14 +37,16 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
+const Delegation = core.stake.Delegation;
 const EpochStakes = core.stake.EpochStakes;
 const EpochStakeMap = core.stake.EpochStakeMap;
+const Stake = core.stake.Stake;
 const Stakes = core.stake.Stakes;
 const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
 const epochStakeMapRandom = core.stake.epochStakeMapRandom;
 
-const Ancestors = sig.core.status_cache.Ancestors;
+const Ancestors = sig.core.Ancestors;
 
 /// Information about a slot that is determined when the slot is initialized and
 /// then never changes.
@@ -78,7 +80,19 @@ pub const SlotConstants = struct {
     /// Whether and how epoch rewards should be distributed in this slot.
     epoch_reward_status: EpochRewardStatus,
 
-    pub fn fromBankFields(bank_fields: *const BankFields) SlotConstants {
+    /// Set of slots leading to this one.
+    /// Includes the current slot.
+    /// Does not go back to genesis, may prune slots beyond 8192 generations ago.
+    ancestors: Ancestors,
+
+    /// A map of activated features to the slot when they were activated.
+    feature_set: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+
+    pub fn fromBankFields(
+        allocator: Allocator,
+        bank_fields: *const BankFields,
+        feature_set: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    ) Allocator.Error!SlotConstants {
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,
@@ -87,6 +101,8 @@ pub const SlotConstants = struct {
             .max_tick_height = bank_fields.max_tick_height,
             .fee_rate_governor = bank_fields.fee_rate_governor,
             .epoch_reward_status = .inactive,
+            .ancestors = try bank_fields.ancestors.clone(allocator),
+            .feature_set = feature_set,
         };
     }
 
@@ -99,11 +115,15 @@ pub const SlotConstants = struct {
             .max_tick_height = 0,
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
+            .ancestors = .{},
+            .feature_set = .empty,
         };
     }
 
     pub fn deinit(self: SlotConstants, allocator: Allocator) void {
         self.epoch_reward_status.deinit(allocator);
+        self.ancestors.deinit(allocator);
+        self.feature_set.deinit(allocator);
     }
 };
 
@@ -229,7 +249,9 @@ pub const EpochConstants = struct {
     slots_per_year: f64,
 
     /// The pre-determined stakes assigned to this epoch.
-    stakes: EpochStakes,
+    stakes: sig.core.stake.VersionedEpochStake.Current,
+
+    rent_collector: RentCollector,
 
     pub fn genesis(
         allocator: Allocator,
@@ -242,6 +264,21 @@ pub const EpochConstants = struct {
             .genesis_creation_time = genesis_config.creation_time,
             .slots_per_year = genesis_config.slotsPerYear(),
             .stakes = .initEmpty(allocator),
+        };
+    }
+
+    pub fn fromBankFields(
+        bank_fields: *const BankFields,
+        epoch_stakes: sig.core.stake.VersionedEpochStake.Current,
+    ) Allocator.Error!EpochConstants {
+        return .{
+            .hashes_per_tick = bank_fields.hashes_per_tick,
+            .ticks_per_slot = bank_fields.ticks_per_slot,
+            .ns_per_slot = bank_fields.ns_per_slot,
+            .genesis_creation_time = bank_fields.genesis_creation_time,
+            .slots_per_year = bank_fields.slots_per_year,
+            .stakes = epoch_stakes,
+            .rent_collector = bank_fields.rent_collector,
         };
     }
 
@@ -283,7 +320,7 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes(.delegation),
+    stakes: Stakes(Delegation),
     unused_accounts: UnusedAccounts,
     epoch_stakes: EpochStakeMap,
     is_delta: bool,
@@ -380,43 +417,6 @@ pub const BankFields = struct {
             @as(f64, @floatFromInt(ticks_per_slot));
     }
 
-    pub fn getStakedNodes(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
-        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
-    }
-
-    /// Returns the leader schedule for this bank's epoch
-    pub fn leaderSchedule(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-    ) !core.leader_schedule.LeaderSchedule {
-        return self.leaderScheduleForEpoch(allocator, self.epoch);
-    }
-
-    /// Returns the leader schedule for an arbitrary epoch.
-    /// Only works if the bank is aware of the staked nodes for that epoch.
-    pub fn leaderScheduleForEpoch(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-    ) !core.leader_schedule.LeaderSchedule {
-        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
-        const staked_nodes = try self.getStakedNodes(allocator, epoch);
-        return .{
-            .allocator = allocator,
-            .slot_leaders = try core.leader_schedule.LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                slots_in_epoch,
-                staked_nodes,
-            ),
-        };
-    }
-
     pub fn initRandom(
         allocator: std.mem.Allocator,
         /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
@@ -433,7 +433,7 @@ pub const BankFields = struct {
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
+        const stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries);
         errdefer stakes.deinit(allocator);
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
@@ -518,7 +518,7 @@ pub const BlockhashQueue = struct {
 
     pub const DEFAULT = BlockhashQueue.init(MAX_RECENT_BLOCKHASHES);
 
-    const MAX_RECENT_BLOCKHASHES = 300;
+    pub const MAX_RECENT_BLOCKHASHES = 300;
 
     pub fn init(max_age: usize) BlockhashQueue {
         return .{

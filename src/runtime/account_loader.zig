@@ -46,7 +46,7 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
 
         fn allocator(self: Self) std.mem.Allocator {
             return switch (kind) {
-                .AccountsDb => self.inner.accounts_db.allocator,
+                .AccountsDb => self.inner.allocator,
                 .Mocked => self.inner.allocator,
             };
         }
@@ -56,7 +56,7 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
             pubkey: *const Pubkey,
         ) sig.accounts_db.AccountsDB.GetAccountError!sig.core.Account {
             return switch (kind) {
-                .AccountsDb => try self.inner.accounts_db.getAccount(pubkey),
+                .AccountsDb => try self.inner.getAccountDeprecated(pubkey),
                 .Mocked => self.inner.accounts.get(pubkey.*) orelse return error.PubkeyNotInIndex,
             };
         }
@@ -115,6 +115,10 @@ pub const LoadedTransactionAccounts = struct {
 pub const CachedAccount = struct {
     pubkey: Pubkey,
     account: *AccountSharedData,
+
+    pub fn getAccount(self: *const CachedAccount) *const AccountSharedData {
+        return self.account;
+    }
 };
 
 /// Implements much of Agave's AccountLoader functionality. Owns the accounts it loads.

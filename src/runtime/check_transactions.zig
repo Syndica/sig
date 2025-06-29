@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
-const Ancestors = sig.core.status_cache.Ancestors;
+const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -32,7 +32,7 @@ pub fn checkStatusCache(
     msg_hash: *const Hash,
     recent_blockhash: *const Hash,
     ancestors: *const Ancestors,
-    status_cache: *const sig.core.StatusCache,
+    status_cache: *sig.core.StatusCache,
 ) ?TransactionError {
     if (status_cache.getStatus(&msg_hash.data, recent_blockhash, ancestors) != null)
         return .AlreadyProcessed;
@@ -424,7 +424,7 @@ test checkStatusCache {
     var ancestors = Ancestors{};
     defer ancestors.deinit(allocator);
 
-    var status_cache = sig.core.StatusCache.default();
+    var status_cache = sig.core.StatusCache.DEFAULT;
     defer status_cache.deinit(allocator);
 
     const msg_hash = Hash.generateSha256("msg hash");

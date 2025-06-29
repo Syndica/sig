@@ -9,7 +9,7 @@ const vm = sig.vm;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
-const EpochStakes = sig.core.stake.EpochStakes;
+const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
 
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -106,7 +106,7 @@ pub fn createTransactionContext(
     errdefer feature_set.deinit(allocator);
 
     // Create EpochStakes
-    const epoch_stakes = try allocator.create(EpochStakes);
+    const epoch_stakes = try allocator.create(VersionedEpochStake.Current);
     epoch_stakes.* = try createEpochStakes(allocator, params.epoch_stakes);
 
     // Create SysvarCache
@@ -207,8 +207,8 @@ pub fn deinitTransactionContext(
 pub fn createEpochStakes(
     allocator: std.mem.Allocator,
     params: []const ExecuteContextsParams.EpochStakeParam,
-) !EpochStakes {
-    var self: EpochStakes = .{
+) !VersionedEpochStake.Current {
+    var self: VersionedEpochStake.Current = .{
         .stakes = .{
             .vote_accounts = .{
                 .accounts = .{},
@@ -228,11 +228,14 @@ pub fn createEpochStakes(
     for (params) |param| {
         self.total_stake += param.stake;
         try self.stakes.delegations.put(allocator, param.pubkey, .{
-            .voter_pubkey = param.pubkey,
-            .stake = param.stake,
-            .activation_epoch = 0,
-            .deactivation_epoch = 0,
-            .deprecated_warmup_cooldown_rate = 0.0,
+            .delegation = .{
+                .voter_pubkey = param.pubkey,
+                .stake = param.stake,
+                .activation_epoch = 0,
+                .deactivation_epoch = 0,
+                .deprecated_warmup_cooldown_rate = 0.0,
+            },
+            .credits_observed = 0,
         });
     }
 
