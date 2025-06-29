@@ -482,14 +482,16 @@ fn testGetStakeHistory(filled: bool) !void {
         sysvar.StakeHistory.MAX_ENTRIES,
     ) = .{};
     for (1..epochs) |epoch| {
-        try entries.append(.{ .epoch = epoch, .stake = .{
+        try entries.append(.{
+            .epoch = epoch,
             .effective = epoch * 2,
             .activating = epoch * 3,
             .deactivating = epoch * 5,
-        } });
+        });
     }
 
-    const src_history = sysvar.StakeHistory.initWithEntries(entries.constSlice());
+    const src_history = try sysvar.StakeHistory.initWithEntries(allocator, entries.constSlice());
+    defer src_history.deinit(allocator);
 
     {
         const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.STORAGE_SIZE);
@@ -532,11 +534,12 @@ fn testGetStakeHistory(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
+    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.StakeHistory.Entry,
-        obj_parsed.entries.constSlice(),
-        src_history.entries.constSlice(),
+        obj_parsed.entries.items,
+        src_history.entries.items,
     );
 }
 
