@@ -1011,10 +1011,10 @@ test "executeAdvanceNonceAccount" {
     defer allocator.free(final_nonce_state_bytes);
 
     // Create Sysvar Recent Blockhashes
-    const recent_blockhashes: RecentBlockhashes = try .initWithSingleEntry(allocator, .{
+    const recent_blockhashes: RecentBlockhashes = try .initWithEntries(allocator, &.{.{
         .blockhash = Hash.initRandom(prng.random()),
         .lamports_per_signature = 0,
-    });
+    }});
     defer recent_blockhashes.deinit(allocator);
 
     const account_0_key = Pubkey.initRandom(prng.random());
@@ -1191,10 +1191,10 @@ test "executeInitializeNonceAccount" {
     defer allocator.free(nonce_state_bytes);
 
     // Create Sysvar Recent Blockhashes
-    const recent_blockhashes: RecentBlockhashes = try .initWithSingleEntry(allocator, .{
+    const recent_blockhashes: RecentBlockhashes = try .initWithEntries(allocator, &.{.{
         .blockhash = Hash.initRandom(prng.random()),
         .lamports_per_signature = 0,
-    });
+    }});
     defer recent_blockhashes.deinit(allocator);
     const rent = Rent.DEFAULT;
 
