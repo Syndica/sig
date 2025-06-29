@@ -5,7 +5,6 @@ pub const blockhash_queue = @import("blockhash_queue.zig");
 pub const entry = @import("entry.zig");
 pub const epoch_context = @import("epoch_context.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
-pub const fee_calculator = @import("fee_calculator.zig");
 pub const genesis_config = @import("genesis_config.zig");
 pub const hard_forks = @import("hard_forks.zig");
 pub const hash = @import("hash.zig");
