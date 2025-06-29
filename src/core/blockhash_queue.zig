@@ -1,4 +1,3 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
 
@@ -6,6 +5,7 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 
+/// Why is this a 'Queue'?
 /// Analogous to [BlockhashQueue](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L32)
 pub const BlockhashQueue = struct {
     /// index of the last hash registered
@@ -39,9 +39,59 @@ pub const BlockhashQueue = struct {
         };
     }
 
+    pub fn initRandom(
+        allocator: Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) Allocator.Error!BlockhashQueue {
+        var self = BlockhashQueue.DEFAULT;
+        var timestamp: u64 = @intCast(std.time.milliTimestamp());
+
+        for (0..max_list_entries) |_| {
+            const hash = Hash.initRandom(random);
+
+            self.last_hash_index += 1;
+
+            if (self.hash_infos.count() >= self.max_age) try self.purge(allocator);
+
+            try self.hash_infos.put(allocator, hash, .{
+                .index = self.last_hash_index,
+                .timestamp = timestamp,
+                .lamports_per_signature = random.intRangeAtMost(u64, 4000, 6000),
+            });
+
+            self.last_hash = hash;
+
+            timestamp += random.intRangeAtMost(u64, 1, 1_000_000);
+        }
+
+        return self;
+    }
+
+    pub fn initWithSingleEntry(
+        allocator: Allocator,
+        hash: Hash,
+        lamports_per_signature: u64,
+    ) Allocator.Error!BlockhashQueue {
+        return .{
+            .last_hash = hash,
+            .max_age = 0,
+            .hash_infos = try .init(
+                allocator,
+                &.{hash},
+                &.{.{
+                    .index = 0,
+                    .timestamp = 0,
+                    .lamports_per_signature = lamports_per_signature,
+                }},
+            ),
+            .last_hash_index = 0,
+        };
+    }
+
     pub fn deinit(self: BlockhashQueue, allocator: Allocator) void {
-        var infos = self.hash_infos;
-        infos.deinit(allocator);
+        var ages = self.hash_infos;
+        ages.deinit(allocator);
     }
 
     pub fn clone(
@@ -96,7 +146,7 @@ pub const BlockhashQueue = struct {
     ) Allocator.Error!void {
         self.last_hash_index += 1;
 
-        if (self.hash_infos.count() >= self.max_age) try self.purge();
+        if (self.hash_infos.count() >= self.max_age) try self.purge(allocator);
 
         try self.hash_infos.put(allocator, hash, .{
             .index = self.last_hash_index,
@@ -116,68 +166,17 @@ pub const BlockhashQueue = struct {
         return last_hash_index - hash_index <= @as(u64, max_age);
     }
 
-    fn purge(self: *BlockhashQueue) Allocator.Error!void {
-        std.debug.assert(self.hash_infos.count() <= MAX_RECENT_BLOCKHASHES + 1);
-        var keys = [_]Hash{Hash.ZEROES} ** (MAX_RECENT_BLOCKHASHES + 1);
-        @memcpy(keys[0..self.hash_infos.count()], self.hash_infos.keys());
-        for (keys[0..self.hash_infos.count()]) |key| {
+    fn purge(self: *BlockhashQueue, allocator: Allocator) Allocator.Error!void {
+        // NOTE: Is there a way to do this without allocation? orderedRemove would invalidate the
+        // slice we are iterating over so and I can't see another obvious approach.
+        const keys = try allocator.dupe(Hash, self.hash_infos.keys());
+        defer allocator.free(keys);
+
+        for (keys) |key| {
             const hash_info = self.hash_infos.get(key) orelse unreachable;
             if (isHashIndexValid(self.last_hash_index, self.max_age, hash_info.index)) continue;
             _ = self.hash_infos.swapRemove(key);
         }
-    }
-
-    pub fn initRandom(
-        allocator: Allocator,
-        random: std.Random,
-        max_list_entries: usize,
-    ) Allocator.Error!BlockhashQueue {
-        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test only when possible.
-        // if (!builtin.is_test) @compileError("only for testing");
-        var self = BlockhashQueue.DEFAULT;
-        var timestamp: u64 = @intCast(std.time.milliTimestamp());
-
-        for (0..max_list_entries) |_| {
-            const hash = Hash.initRandom(random);
-
-            self.last_hash_index += 1;
-
-            if (self.hash_infos.count() >= self.max_age) try self.purge();
-
-            try self.hash_infos.put(allocator, hash, .{
-                .index = self.last_hash_index,
-                .timestamp = timestamp,
-                .lamports_per_signature = random.intRangeAtMost(u64, 4000, 6000),
-            });
-
-            self.last_hash = hash;
-
-            timestamp += random.intRangeAtMost(u64, 1, 1_000_000);
-        }
-
-        return self;
-    }
-
-    pub fn initWithSingleEntry(
-        allocator: Allocator,
-        hash: Hash,
-        lamports_per_signature: u64,
-    ) Allocator.Error!BlockhashQueue {
-        if (!builtin.is_test) @compileError("only for testing");
-        return .{
-            .last_hash = hash,
-            .max_age = 0,
-            .hash_infos = try .init(
-                allocator,
-                &.{hash},
-                &.{.{
-                    .index = 0,
-                    .timestamp = 0,
-                    .lamports_per_signature = lamports_per_signature,
-                }},
-            ),
-            .last_hash_index = 0,
-        };
     }
 };
 
@@ -234,6 +233,10 @@ test "queue init blockhash" {
 
     try std.testing.expectEqual(last_hash, queue.last_hash.?);
     try std.testing.expect(queue.isHashValidForAge(last_hash, 0));
+}
+
+test "get recent blockhashes" {
+    // TODO: Implement this test
 }
 
 test "len" {

@@ -12,9 +12,7 @@ const Pubkey = sig.core.Pubkey;
 /// The first entry holds the most recent blockhash.
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/recent_blockhashes.rs#L99
 pub const RecentBlockhashes = struct {
-    /// A list of entries ordered by descending block height. The first
-    /// entry holds the most recent blockhash.
-    entries: std.BoundedArray(Entry, MAX_ENTRIES),
+    entries: std.ArrayListUnmanaged(Entry),
 
     pub const Entry = extern struct {
         blockhash: Hash,
@@ -23,21 +21,21 @@ pub const RecentBlockhashes = struct {
 
     pub const ID: Pubkey = .parse("SysvarRecentB1ockHashes11111111111111111111");
 
-    pub const DEFAULT: RecentBlockhashes = .{ .entries = .{} };
-
     pub const MAX_ENTRIES: u64 = 150;
 
     pub const SIZE_OF: u64 = 6_008;
 
-    pub fn initWithSingleEntry(entry: Entry) RecentBlockhashes {
-        var self = RecentBlockhashes.DEFAULT;
-        self.entries.appendAssumeCapacity(entry);
-        return self;
+    pub fn default(allocator: Allocator) Allocator.Error!RecentBlockhashes {
+        return .{
+            .entries = try std.ArrayListUnmanaged(Entry).initCapacity(
+                allocator,
+                MAX_ENTRIES,
+            ),
+        };
     }
 
-    pub fn last(self: RecentBlockhashes) ?Entry {
-        if (self.entries.len == 0) return null;
-        return self.entries.slice()[self.entries.len - 1];
+    pub fn deinit(self: RecentBlockhashes, allocator: Allocator) void {
+        allocator.free(self.entries.allocatedSlice());
     }
 
     pub fn isEmpty(self: RecentBlockhashes) bool {
@@ -83,26 +81,10 @@ pub const RecentBlockhashes = struct {
         return self;
     }
 
-    pub fn initWithEntries(
-        allocator: Allocator,
-        entries: []const Entry,
-    ) Allocator.Error!RecentBlockhashes {
-        if (!builtin.is_test) @compileError("only for tests");
-        std.debug.assert(entries.len <= MAX_ENTRIES);
+    pub fn initWithSingleEntry(allocator: Allocator, entry: Entry) Allocator.Error!RecentBlockhashes {
+        if (!builtin.is_test) @compileError("only available in test mode");
         var self = try RecentBlockhashes.default(allocator);
-        for (entries) |entry| self.entries.appendAssumeCapacity(entry);
-        return self;
-    }
-
-    pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!RecentBlockhashes {
-        if (!builtin.is_test) @compileError("only for tests");
-        var self = try RecentBlockhashes.default(allocator);
-        for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
-            self.entries.appendAssumeCapacity(.{
-                .blockhash = Hash.initRandom(random),
-                .lamports_per_signature = random.int(u64),
-            });
-        }
+        self.entries.appendAssumeCapacity(entry);
         return self;
     }
 };
