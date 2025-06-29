@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 const Ancestors = sig.core.Ancestors;
-const BlockhashQueue = sig.core.bank.BlockhashQueue;
+const BlockhashQueue = sig.core.BlockhashQueue;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const AccountMeta = sig.core.instruction.InstructionAccount;
@@ -55,7 +55,7 @@ pub fn checkAge(
     max_age: u64,
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
-) error{OutOfMemory}!TransactionResult(?CopiedAccount) {
+) TransactionResult(?CachedAccount) {
     if (blockhash_queue.getHashInfoIfValid(transaction.recent_blockhash, max_age) != null) {
         return .{ .ok = null };
     }

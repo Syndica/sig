@@ -1011,10 +1011,11 @@ test "executeAdvanceNonceAccount" {
     defer allocator.free(final_nonce_state_bytes);
 
     // Create Sysvar Recent Blockhashes
-    const recent_blockhashes: RecentBlockhashes = .initWithSingleEntry(.{
+    const recent_blockhashes: RecentBlockhashes = try .initWithSingleEntry(allocator, .{
         .blockhash = Hash.initRandom(prng.random()),
-        .fee_calculator = .{ .lamports_per_signature = 0 }, // Irrelevant
+        .lamports_per_signature = 0,
     });
+    defer recent_blockhashes.deinit(allocator);
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
@@ -1088,7 +1089,9 @@ test "executeWithdrawNonceAccount" {
     defer allocator.free(nonce_state_bytes);
 
     // Create Sysvars
-    const recent_blockhashes = RecentBlockhashes.DEFAULT;
+    const recent_blockhashes = try RecentBlockhashes.default(allocator);
+    defer recent_blockhashes.deinit(allocator);
+
     const rent = Rent.DEFAULT;
     const rent_minimum_balance = rent.minimumBalance(sig.bincode.sizeOf(nonce_state, .{}));
 
@@ -1181,10 +1184,11 @@ test "executeInitializeNonceAccount" {
     defer allocator.free(nonce_state_bytes);
 
     // Create Sysvar Recent Blockhashes
-    const recent_blockhashes: RecentBlockhashes = .initWithSingleEntry(.{
+    const recent_blockhashes: RecentBlockhashes = try .initWithSingleEntry(allocator, .{
         .blockhash = Hash.initRandom(prng.random()),
-        .fee_calculator = .{ .lamports_per_signature = 0 }, // Irrelevant
+        .lamports_per_signature = 0,
     });
+    defer recent_blockhashes.deinit(allocator);
     const rent = Rent.DEFAULT;
 
     const account_0_key = Pubkey.initRandom(prng.random());
