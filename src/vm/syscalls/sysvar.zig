@@ -482,12 +482,11 @@ fn testGetStakeHistory(filled: bool) !void {
         sysvar.StakeHistory.MAX_ENTRIES,
     ) = .{};
     for (1..epochs) |epoch| {
-        try entries.append(.{
-            .epoch = epoch,
+        try entries.append(.{ .epoch = epoch, .stake = .{
             .effective = epoch * 2,
             .activating = epoch * 3,
             .deactivating = epoch * 5,
-        });
+        } });
     }
 
     const src_history = try sysvar.StakeHistory.initWithEntries(allocator, entries.constSlice());

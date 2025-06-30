@@ -9,7 +9,14 @@ const Slot = sig.core.Slot;
 pub const SlotHashes = struct {
     inner: std.ArrayListUnmanaged(Entry),
 
-    pub const Entry = struct { slot: Slot, hash: Hash };
+    pub const Entry = struct {
+        slot: Slot,
+        hash: Hash,
+
+        pub fn lessThan(_: void, a: Entry, b: Entry) bool {
+            return b.slot < a.slot; // Sort by descending slot
+        }
+    };
 
     pub const ID =
         Pubkey.parseBase58String("SysvarS1otHashes111111111111111111111111111") catch unreachable;
@@ -39,11 +46,7 @@ pub const SlotHashes = struct {
         std.debug.assert(entries.len <= MAX_ENTRIES);
         var self = try SlotHashes.default(allocator);
         try self.inner.appendSlice(allocator, entries);
-        std.sort.heap(Entry, self.inner.items, {}, struct {
-            fn lessThan(_: void, a: Entry, b: Entry) bool {
-                return a.slot >= b.slot;
-            }
-        }.lessThan);
+        std.sort.heap(Entry, self.inner.items, {}, Entry.lessThan);
         return self;
     }
 
