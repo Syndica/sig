@@ -45,7 +45,10 @@ pub const StakeHistory = struct {
         return self.entries.items.len == 0;
     }
 
-    pub fn initWithEntries(allocator: Allocator, entries: []const Entry) Allocator.Error!StakeHistory {
+    pub fn initWithEntries(
+        allocator: Allocator,
+        entries: []const Entry,
+    ) Allocator.Error!StakeHistory {
         if (!builtin.is_test) @compileError("only available in test mode");
         std.debug.assert(entries.len <= MAX_ENTRIES);
         var self = try StakeHistory.default(allocator);
