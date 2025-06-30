@@ -657,8 +657,8 @@ fn translateAccounts(
         defer callee_account.release();
 
         const account_key = blk: {
-            const account_meta = ic.tc.getAccountAtIndex(meta.index_in_transaction) 
-                orelse return InstructionError.NotEnoughAccountKeys;
+            const account_meta = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
+                return InstructionError.NotEnoughAccountKeys;
             break :blk account_meta.pubkey;
         };
 

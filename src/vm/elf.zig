@@ -118,16 +118,18 @@ pub const Elf = struct {
             }
 
             // Validate section headers appear only once.
-            var section_checks: [3]struct{ name: []const u8, seen: bool } = .{
+            var section_checks: [3]struct { name: []const u8, seen: bool } = .{
                 .{ .name = ".symtab", .seen = false },
                 .{ .name = ".strtab", .seen = false },
                 .{ .name = ".dynstr", .seen = false },
             };
 
-            const name_shdr: elf.Elf64_Shdr =
-                if (header.e_shstrndx == elf.SHN_UNDEF) return error.NoSectionNameStringTable
-                else if (header.e_shstrndx >= shdrs.len) return error.OutOfBounds
-                else shdrs[header.e_shstrndx];
+            const name_shdr: elf.Elf64_Shdr = if (header.e_shstrndx == elf.SHN_UNDEF)
+                return error.NoSectionNameStringTable
+            else if (header.e_shstrndx >= shdrs.len)
+                return error.OutOfBounds
+            else
+                shdrs[header.e_shstrndx];
 
             if (name_shdr.sh_type != elf.SHT_STRTAB) {
                 return error.InvalidSectionHeader;
@@ -141,7 +143,7 @@ pub const Elf = struct {
                 const end = for (start..name_buf.len) |i| {
                     if (name_buf[i] == 0) break i;
                 } else return error.StringTooLong;
-                
+
                 const section_name = name_buf[start..end];
                 for (&section_checks) |*sc| {
                     if (std.mem.eql(u8, sc.name, section_name)) {
@@ -979,7 +981,7 @@ pub const Elf = struct {
             return error.NoTextSection;
 
         // Double check text_section bounds
-        const text_section_vaddr = 
+        const text_section_vaddr =
             if (sbpf_version.enableElfVaddr() and text_section.sh_addr >= memory.RODATA_START)
                 text_section.sh_addr
             else
@@ -992,8 +994,7 @@ pub const Elf = struct {
         if (config.reject_broken_elfs and
             !sbpf_version.enableElfVaddr() and
             text_section.sh_addr != text_section.sh_offset or
-            text_section_vaddr_end > memory.STACK_START
-        ) return error.ValueOutOfBounds;
+            text_section_vaddr_end > memory.STACK_START) return error.ValueOutOfBounds;
 
         var function_registry: Registry(u64) = .{};
         errdefer function_registry.deinit(allocator);
