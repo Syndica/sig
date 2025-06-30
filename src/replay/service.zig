@@ -786,19 +786,12 @@ fn getClusterConfirmedHashFromState(
     maybe_bank_frozen_hash: ?sig.core.Hash,
 ) ?ClusterConfirmedHash {
     const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
-    // If the bank hasn't been frozen yet, then we haven't duplicate confirmed a local version
-    // this slot through replay yet.
-    const is_local_replay_duplicate_confirmed = if (maybe_bank_frozen_hash) |bank_frozen_hash|
-        fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = bank_frozen_hash }) orelse false
-    else
-        false;
-
     if (getDuplicateConfirmedHash(
         logger,
+        fork_choice,
         slot,
         duplicate_confirmed_hash,
         maybe_bank_frozen_hash,
-        is_local_replay_duplicate_confirmed,
     )) |hash| return .{
         .kind = .duplicate_confirmed,
         .hash = hash,
@@ -818,66 +811,57 @@ fn getDuplicateConfirmedHashFromState(
     maybe_bank_frozen_hash: ?sig.core.Hash,
 ) ?sig.core.Hash {
     const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
-    // If the bank hasn't been frozen yet, then we haven't duplicate confirmed a local version
-    // this slot through replay yet.
-    const is_local_replay_duplicate_confirmed = if (maybe_bank_frozen_hash) |bank_frozen_hash|
-        fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = bank_frozen_hash }) orelse false
-    else
-        false;
-
     return getDuplicateConfirmedHash(
         logger,
+        fork_choice,
         slot,
         duplicate_confirmed_hash,
         maybe_bank_frozen_hash,
-        is_local_replay_duplicate_confirmed,
     );
 }
 
 /// Finds the duplicate confirmed hash for a slot.
 ///
-/// 1) If `is_local_replay_duplicate_confirmed`, return Some(local frozen hash)
-/// 2) If we have a `duplicate_confirmed_hash`, return Some(duplicate_confirmed_hash)
-/// 3) Else return None
-///
-/// Assumes that if `is_local_replay_duplicate_confirmed`, `bank_frozen_hash` is not None
+/// 1) If `maybe_bank_frozen_hash != null and isDuplicateConfirmed(maybe_bank_frozen_hash.?)`, `return maybe_bank_frozen_hash.?`
+/// 2) If `maybe_duplicate_confirmed_hash != null`, `return maybe_duplicate_confirmed_hash.?`
+/// 3) Else return null
 fn getDuplicateConfirmedHash(
     logger: sig.trace.Logger,
+    fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
     slot: sig.core.Slot,
     maybe_duplicate_confirmed_hash: ?sig.core.Hash,
     maybe_bank_frozen_hash: ?sig.core.Hash,
-    is_local_replay_duplicate_confirmed: bool,
 ) ?sig.core.Hash {
-    // the following code is simply ported in order to match the logic of the equivalent match statement
-    // TODO: maybe simplify all of this if possible?
+    const maybe_local_duplicate_confirmed_hash: ?sig.core.Hash = blk: {
+        const bank_frozen_hash = maybe_bank_frozen_hash orelse break :blk null;
 
-    const maybe_local_duplicate_confirmed_hash = if (is_local_replay_duplicate_confirmed) blk: {
-        // If local replay has duplicate_confirmed this slot, this slot must have
-        // descendants with votes for this slot, hence this slot must be
-        // frozen.
-        break :blk maybe_bank_frozen_hash.?;
-    } else null;
+        // If the bank hasn't been frozen yet, then we haven't duplicate
+        // confirmed a local version this slot through replay yet.
+        const is_local_replay_duplicate_confirmed = fork_choice.isDuplicateConfirmed(&.{
+            .slot = slot,
+            .hash = bank_frozen_hash,
+        }) orelse false;
 
-    if (maybe_local_duplicate_confirmed_hash) |local_duplicate_confirmed_hash| {
-        if (maybe_duplicate_confirmed_hash) |duplicate_confirmed_hash| {
-            if (!local_duplicate_confirmed_hash.eql(duplicate_confirmed_hash)) {
-                logger.err().logf(
-                    "For slot {}, the gossip duplicate confirmed hash {}, is not equal" ++
-                        "to the confirmed hash we replayed: {}",
-                    .{ slot, duplicate_confirmed_hash, local_duplicate_confirmed_hash },
-                );
-            }
-            return local_duplicate_confirmed_hash;
+        break :blk if (is_local_replay_duplicate_confirmed)
+            bank_frozen_hash
+        else
+            null;
+    };
+
+    const local_duplicate_confirmed_hash = maybe_local_duplicate_confirmed_hash orelse
+        return maybe_duplicate_confirmed_hash;
+    if (maybe_duplicate_confirmed_hash) |duplicate_confirmed_hash| {
+        if (!local_duplicate_confirmed_hash.eql(duplicate_confirmed_hash)) {
+            logger.err().logf(
+                "For slot {}, the gossip duplicate confirmed hash {}, is not equal" ++
+                    "to the confirmed hash we replayed: {}",
+                .{ slot, duplicate_confirmed_hash, local_duplicate_confirmed_hash },
+            );
         }
+        return local_duplicate_confirmed_hash;
     }
-
-    if (maybe_local_duplicate_confirmed_hash) |bank_frozen_hash| {
-        std.debug.assert(maybe_duplicate_confirmed_hash == null);
-        return bank_frozen_hash;
-    }
-
-    std.debug.assert(maybe_local_duplicate_confirmed_hash == null);
-    return maybe_duplicate_confirmed_hash;
+    const bank_frozen_hash = local_duplicate_confirmed_hash;
+    return bank_frozen_hash;
 }
 
 /// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L848
