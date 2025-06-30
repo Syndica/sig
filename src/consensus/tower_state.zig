@@ -10,16 +10,28 @@ pub const TowerVoteState = struct {
     root_slot: ?Slot = null,
     votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
 
-    pub fn fromAccount(account: *const VoteAccount) !TowerVoteState {
-        var acc = account.*;
-        // TODO should voteState not require a const pointer? It should be a read and not mutate things?
-        const vote_state = try acc.voteState();
+    pub fn fromAccount(allocator: std.mem.Allocator, account: *const VoteAccount) !TowerVoteState {
+        const vote_state = account.vote_state;
+        var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
+            allocator,
+            vote_state.votes.items.len,
+        );
+        for (vote_state.votes.items) |landed| {
+            try lockouts.append(
+                allocator,
+                Lockout{
+                    .slot = landed.lockout.slot,
+                    .confirmation_count = landed.lockout.confirmation_count,
+                },
+            );
+        }
+
         return .{
             .root_slot = vote_state.root_slot,
             .votes = try std.BoundedArray(
                 Lockout,
                 MAX_LOCKOUT_HISTORY,
-            ).fromSlice(vote_state.votes.?.allocatedSlice()),
+            ).fromSlice(try lockouts.toOwnedSlice(allocator)),
         };
     }
 

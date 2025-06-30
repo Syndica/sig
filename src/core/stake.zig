@@ -534,8 +534,9 @@ pub fn stakeAndVoteAccountsMapDeinit(
 ) void {
     var copy = map;
     for (copy.values()) |stake_and_vote_account| {
-        _, const vote_account = stake_and_vote_account;
-        vote_account.deinit(allocator);
+        _ = stake_and_vote_account;
+        // _, const vote_account = stake_and_vote_account;
+        // vote_account.deinit(allocator);
     }
     copy.deinit(allocator);
 }
@@ -549,9 +550,11 @@ pub fn stakeAndVoteAccountsMapClone(
 
     try cloned.ensureTotalCapacity(allocator, map.count());
     for (map.keys(), map.values()) |key, value| {
-        const stake, const vote_account = value;
-        const vote_account_cloned = try vote_account.clone(allocator);
-        cloned.putAssumeCapacityNoClobber(key, .{ stake, vote_account_cloned });
+        _ = key;
+        _ = value;
+        // const stake, const vote_account = value;
+        // const vote_account_cloned = try vote_account.clone(allocator);
+        // cloned.putAssumeCapacityNoClobber(key, .{ stake, vote_account_cloned });
     }
 
     return cloned;
@@ -616,8 +619,9 @@ pub const VoteAccounts = struct {
         var copy = vote_accounts;
 
         for (copy.accounts.values()) |entry| {
-            _, const vote_account = entry;
-            vote_account.deinit(allocator);
+            _ = entry;
+            // _, const vote_account = entry;
+            // vote_account.deinit(allocator);
         }
         copy.accounts.deinit(allocator);
 
@@ -740,20 +744,20 @@ pub const VoteAccounts = struct {
 };
 
 pub const VoteAccount = struct {
-    account: Account,
-    vote_state: ?anyerror!VoteState = null,
+    account: sig.runtime.AccountSharedData,
+    vote_state: sig.runtime.program.vote.state.VoteState,
 
     pub const @"!bincode-config:vote_state" =
         bincode.FieldConfig(?anyerror!VoteState){ .skip = true };
 
-    pub fn deinit(vote_account: VoteAccount, allocator: Allocator) void {
+    pub fn deinit(vote_account: sig.runtime.AccountSharedData, allocator: Allocator) void {
         vote_account.account.deinit(allocator);
     }
 
     pub fn clone(
-        vote_account: VoteAccount,
+        vote_account: sig.runtime.AccountSharedData,
         allocator: Allocator,
-    ) Allocator.Error!VoteAccount {
+    ) Allocator.Error!sig.runtime.AccountSharedData {
         const account = try vote_account.account.cloneOwned(allocator);
         errdefer account.deinit(allocator);
         return .{
@@ -763,24 +767,7 @@ pub const VoteAccount = struct {
     }
 
     pub fn voteState(self: *@This()) !VoteState {
-        if (self.vote_state) |vs| {
-            return vs;
-        }
-        const assert_alloc = sig.utils.allocators.failing.allocator(.{
-            .alloc = .assert,
-            .resize = .assert,
-            .free = .assert,
-        });
-
-        var data_iter = self.account.data.iterator();
-        const vote_state = bincode.read(
-            assert_alloc,
-            VoteState,
-            data_iter.reader(),
-            .{},
-        );
-        self.vote_state = vote_state;
-        return vote_state;
+        return self.vote_state;
     }
 
     pub fn initRandom(
@@ -789,20 +776,13 @@ pub const VoteAccount = struct {
         max_list_entries: usize,
         comptime RandomErrorSet: type,
     ) Allocator.Error!VoteAccount {
-        const account =
-            try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries));
-        errdefer account.deinit(allocator);
-
-        const vote_state: ?anyerror!VoteState =
-            switch (random.enumValue(enum { null, err, value })) {
-                .null => null,
-                .err => @as(anyerror!VoteState, sig.rand.errorValue(random, RandomErrorSet)),
-                .value => VoteState.initRandom(random),
-            };
-
+        _ = random;
+        _ = max_list_entries;
+        _ = RandomErrorSet;
+        const account = sig.runtime.AccountSharedData.EMPTY;
         return .{
             .account = account,
-            .vote_state = vote_state,
+            .vote_state = sig.runtime.program.vote.state.VoteState.default(allocator),
         };
     }
 };

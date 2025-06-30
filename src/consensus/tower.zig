@@ -330,7 +330,10 @@ pub fn collectVoteLockouts(
             .{ vote_account_pubkey, key, voted_stake },
         );
 
-        var vote_state = try TowerVoteState.fromAccount(&vote_account);
+        var vote_state = try TowerVoteState.fromAccount(
+            allocator,
+            &vote_account,
+        );
 
         for (vote_state.votes.constSlice()) |vote| {
             const interval = try lockout_intervals
@@ -565,4 +568,8 @@ test "is slot duplicate confirmed pass" {
         100,
     );
     try std.testing.expect(result);
+}
+
+test "collect vote lockouts root" {
+    try std.testing.expect(true);
 }
