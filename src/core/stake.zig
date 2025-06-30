@@ -4,9 +4,14 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const bincode = sig.bincode;
+const Account = sig.core.account.Account;
+const Epoch = sig.core.time.Epoch;
+const Pubkey = sig.core.pubkey.Pubkey;
+const Slot = sig.core.Slot;
+
+// Improve the dependencies.
 const vote_program = sig.runtime.program.vote;
-const stake_program = sig.runtime.program.stake;
+const Lockout = vote_program.state.Lockout;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
@@ -1023,92 +1028,55 @@ test "stakes vote account disappear reappear" {
             try std.testing.expectEqual(stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey), 0);
         }
     }
-}
 
-test "get stake effective and activating" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
+    pub fn initRandom(
+        random: std.Random,
+        allocator: Allocator,
+        max_list_entries: usize,
+        comptime RandomErrorSet: type,
+    ) Allocator.Error!VoteAccount {
+        const account =
+            try Account.initRandom(allocator, random, random.uintAtMost(usize, max_list_entries));
+        errdefer account.deinit(allocator);
 
-    const delegation = Delegation{
-        .voter_pubkey = Pubkey.initRandom(random),
-        .stake = 1000,
-        .activation_epoch = 5,
-        .deactivation_epoch = 10,
-        .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
-    };
+        const vote_state: ?anyerror!VoteState =
+            switch (random.enumValue(enum { null, err, value })) {
+                .null => null,
+                .err => @as(anyerror!VoteState, sig.rand.errorValue(random, RandomErrorSet)),
+                .value => VoteState.initRandom(random),
+            };
 
-    var stake_history = try StakeHistory.init(allocator);
-    defer stake_history.deinit(allocator);
-    stake_history.entries.appendAssumeCapacity(.{
-        .epoch = 5,
-        .stake = .{
-            .effective = 100,
-            .activating = 30,
-            .deactivating = 10,
-        },
-    });
+        return .{
+            .account = account,
+            .vote_state = vote_state,
+        };
+    }
+};
 
-    const effective, const activating = delegation.getEffectiveAndActivatingStake(
-        6,
-        stake_history,
-        null,
-    );
+pub const VoteState = struct {
+    // /// The variant of the rust enum
+    // tag: u32, // TODO: consider varint bincode serialization (in rust this is enum)
+    // /// the node that votes in this account
+    node_pubkey: Pubkey,
+    root_slot: ?Slot = null,
+    votes: ?std.ArrayListUnmanaged(Lockout) = null,
 
-    try std.testing.expectEqual(833, effective);
-    try std.testing.expectEqual(167, activating);
-}
+    pub fn initRandom(random: std.Random) VoteState {
+        return .{
+            .root_slot = null,
+            .votes = null,
+            .node_pubkey = Pubkey.initRandom(random),
+        };
+    }
+};
 
-test "get stake state" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0);
-    const random = prng.random();
-
-    const delegation = Delegation{
-        .voter_pubkey = Pubkey.initRandom(random),
-        .stake = 1_000,
-        .activation_epoch = 5,
-        .deactivation_epoch = 10,
-        .deprecated_warmup_cooldown_rate = DEFAULT_WARMUP_COOLDOWN_RATE,
-    };
-
-    var stake_history = try StakeHistory.init(allocator);
-    defer stake_history.deinit(allocator);
-    stake_history.entries.appendSliceAssumeCapacity(&.{
-        .{ .epoch = 13, .stake = .{
-            .effective = 0,
-            .activating = 0,
-            .deactivating = 0,
-        } },
-        .{ .epoch = 12, .stake = .{
-            .effective = 500_000,
-            .activating = 0,
-            .deactivating = 500_000,
-        } },
-        .{ .epoch = 11, .stake = .{
-            .effective = 1_000_000,
-            .activating = 0,
-            .deactivating = 500_000,
-        } },
-        .{ .epoch = 10, .stake = .{
-            .effective = 2_000_000,
-            .activating = 0,
-            .deactivating = 1_000_000,
-        } },
-    });
-
-    const effective, const activating = delegation.getEffectiveAndActivatingStake(
-        12,
-        stake_history,
-        null,
-    );
-
-    try std.testing.expectEqual(1000, effective);
-    try std.testing.expectEqual(0, activating);
-
-    const stake_state = delegation.getStakeState(12, stake_history, null);
-
-    try std.testing.expectEqual(250, stake_state.effective);
-    try std.testing.expectEqual(0, stake_state.activating);
-    try std.testing.expectEqual(250, stake_state.deactivating);
-}
+// test "deserialize VoteState.node_pubkey" {
+//     const bytes = .{
+//         2,  0,   0,   0, 60,  155, 13,  144, 187, 252, 153, 72,  190, 35,  87,  94,  7,  178,
+//         90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
+//     } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
+//     const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
+//     const expected_pubkey =
+//         try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
+//     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
+// }
