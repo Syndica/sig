@@ -4,10 +4,24 @@ const sig = @import("../sig.zig");
 const Slot = sig.core.Slot;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
+const VoteAccount = sig.core.stake.VoteAccount;
 
 pub const TowerVoteState = struct {
-    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
     root_slot: ?Slot = null,
+    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
+
+    pub fn fromAccount(account: *const VoteAccount) !TowerVoteState {
+        var acc = account.*;
+        // TODO should voteState not require a const pointer? It should be a read and not mutate things?
+        const vote_state = try acc.voteState();
+        return .{
+            .root_slot = vote_state.root_slot,
+            .votes = try std.BoundedArray(
+                Lockout,
+                MAX_LOCKOUT_HISTORY,
+            ).fromSlice(vote_state.votes.?.allocatedSlice()),
+        };
+    }
 
     pub fn lastLockout(self: *const TowerVoteState) ?Lockout {
         if (self.votes.len == 0) return null;
