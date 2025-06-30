@@ -51,9 +51,11 @@ pub const ReplayDependencies = struct {
     root_slot_state: sig.core.SlotState,
 };
 
+pub const Logger = sig.trace.ScopedLogger("replay");
+
 const ReplayState = struct {
     allocator: Allocator,
-    logger: sig.trace.ScopedLogger("replay"),
+    logger: Logger,
     thread_pool: *ThreadPool,
     slot_leaders: SlotLeaders,
     slot_tracker: *SlotTracker,
@@ -135,7 +137,7 @@ fn advanceReplay(state: *ReplayState) !void {
 
     _ = try replay.execution.replayActiveSlots(&state.execution);
 
-    replay.edge_cases.handleEdgeCases();
+    _ = &replay.edge_cases.processEdgeCases;
 
     processConsensus();
 

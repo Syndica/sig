@@ -9,16 +9,134 @@ const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlo
 const LatestValidatorVotesForFrozenSlots =
     sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
-pub fn handleEdgeCases() void {
-    _ = &processAncestorHashesDuplicateSlots; // TODO:
+const ProcessEdgeCaseTimings = struct {
+    ancestor_hashes_duplicate_slots: sig.time.Duration,
+    duplicate_confirmed_slots: sig.time.Duration,
+    unfrozen_gossip_verified_vote_hashes: sig.time.Duration,
+    popular_pruned_forks: sig.time.Duration,
+    duplicate_slots: sig.time.Duration,
+};
 
-    _ = &processDuplicateConfirmedSlots; // TODO:
+pub fn processEdgeCases(
+    allocator: std.mem.Allocator,
+    logger: replay.service.Logger,
+    params: struct {
+        my_pubkey: sig.core.Pubkey,
+        tpu_has_bank: bool,
 
-    _ = &processGossipVerifiedVoteHashes; // TODO:
+        bank_forks_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
+        progress: *const sig.consensus.ProgressMap,
+        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+        blockstore: *sig.ledger.LedgerResultWriter,
 
-    _ = &processPopularPrunedForks; // TODO:
+        ancestor_duplicate_slots_receiver: *sig.sync.Channel(AncestorDuplicateSlotToRepair),
+        duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
+        gossip_verified_vote_hash_receiver: *sig.sync.Channel(GossipVerifiedVoteHash),
+        popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
+        duplicate_slots_receiver: *sig.sync.Channel(sig.core.Slot),
+        ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 
-    _ = &processDuplicateSlots; // TODO:
+        duplicate_confirmed_slots: *DuplicateConfirmedSlots,
+        epoch_slots_frozen_slots: *EpochSlotsFrozenSlots,
+        duplicate_slots_to_repair: *DuplicateSlotsToRepair,
+        purge_repair_slot_counter: *PurgeRepairSlotCounters,
+        unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
+        latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenSlots,
+        duplicate_slots_tracker: *DuplicateSlots,
+    },
+) !ProcessEdgeCaseTimings {
+    var timer = try sig.time.Timer.start();
+
+    // Process cluster-agreed versions of duplicate slots for which we potentially
+    // have the wrong version. Our version was dead or pruned.
+    // Signalled by ancestor_hashes_service.
+    timer.reset();
+    try processAncestorHashesDuplicateSlots(
+        allocator,
+        logger,
+        params.my_pubkey,
+        params.ancestor_duplicate_slots_receiver,
+        params.duplicate_confirmed_slots,
+        params.epoch_slots_frozen_slots,
+        params.progress,
+        params.fork_choice,
+        params.bank_forks_rwmux,
+        params.duplicate_slots_to_repair,
+    );
+    const ancestor_hashes_duplicate_slots_time = timer.lap();
+
+    // Check for any newly duplicate confirmed slots detected from gossip / replay
+    // Note: since this is tracked using both gossip & replay votes, stake is not
+    // rolled up from descendants.
+    timer.reset();
+    try processDuplicateConfirmedSlots(
+        allocator,
+        logger,
+        params.duplicate_confirmed_slots_receiver,
+        params.blockstore,
+        params.duplicate_confirmed_slots,
+        params.bank_forks_rwmux,
+        params.progress,
+        params.fork_choice,
+        params.duplicate_slots_to_repair,
+        params.ancestor_hashes_replay_update_sender,
+        params.purge_repair_slot_counter,
+    );
+    const duplicate_confirmed_slots_time = timer.lap();
+
+    // Ingest any new verified votes from gossip. Important for fork choice
+    // and switching proofs because these may be votes that haven't yet been
+    // included in a block, so we may not have yet observed these votes just
+    // by replaying blocks.
+    timer.reset();
+    try processGossipVerifiedVoteHashes(
+        allocator,
+        params.gossip_verified_vote_hash_receiver,
+        params.unfrozen_gossip_verified_vote_hashes,
+        params.fork_choice,
+        params.latest_validator_votes_for_frozen_banks,
+    );
+    while (params.gossip_verified_vote_hash_receiver.tryReceive()) |_| {
+        // TODO: what's the point of draining this here exactly? Remove this TODO after
+        // figuring out the reason and documenting it here.
+    }
+    const unfrozen_gossip_verified_vote_hashes_time = timer.lap();
+
+    // Check for "popular" (52+% stake aggregated across versions/descendants) forks
+    // that are pruned, which would not be detected by normal means.
+    // Signalled by `repair_service`.
+    timer.reset();
+    try processPopularPrunedForks(
+        logger,
+        params.popular_pruned_forks_receiver,
+        params.bank_forks_rwmux,
+        params.ancestor_hashes_replay_update_sender,
+    );
+    const popular_pruned_forks_time = timer.lap();
+
+    // Check to remove any duplicated slots from fork choice
+    timer.reset();
+    if (!params.tpu_has_bank) {
+        try processDuplicateSlots(
+            allocator,
+            logger,
+            params.duplicate_slots_receiver,
+            params.duplicate_slots_tracker,
+            params.duplicate_confirmed_slots,
+            params.bank_forks_rwmux,
+            params.progress,
+            params.fork_choice,
+        );
+    }
+    const duplicate_slots_time = timer.lap();
+
+    return .{
+        .ancestor_hashes_duplicate_slots = ancestor_hashes_duplicate_slots_time,
+        .duplicate_confirmed_slots = duplicate_confirmed_slots_time,
+        .unfrozen_gossip_verified_vote_hashes = unfrozen_gossip_verified_vote_hashes_time,
+        .popular_pruned_forks = popular_pruned_forks_time,
+        .duplicate_slots = duplicate_slots_time,
+    };
 }
 
 const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(
@@ -95,7 +213,7 @@ pub const ClusterConfirmedHash = struct {
     ///
     /// AKA: `getClusterConfirmedHashFromState` in agave.
     fn fromState(
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
@@ -150,7 +268,7 @@ const SlotFrozenState = struct {
     is_slot_duplicate: bool,
 
     pub fn fromState(
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         frozen_hash: sig.core.Hash,
         duplicate_slots_tracker: *const DuplicateSlots,
@@ -183,7 +301,7 @@ pub const DeadState = struct {
     is_slot_duplicate: bool,
 
     pub fn fromState(
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         duplicate_slots_tracker: *const DuplicateSlots,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
@@ -209,7 +327,7 @@ pub const DuplicateState = struct {
     slot_status: SlotStatus,
 
     pub fn fromState(
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
@@ -239,7 +357,7 @@ pub const EpochSlotsFrozenState = struct {
     is_popular_pruned: bool,
 
     pub fn fromState(
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         epoch_slots_frozen_hash: sig.core.Hash,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
@@ -266,7 +384,7 @@ pub const EpochSlotsFrozenState = struct {
 /// Analogous to [process_ancestor_hashes_duplicate_slots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1627)
 fn processAncestorHashesDuplicateSlots(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: replay.service.Logger,
     pubkey: sig.core.Pubkey,
     ancestor_duplicate_slots_receiver: *sig.sync.Channel(AncestorDuplicateSlotToRepair),
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
@@ -336,7 +454,7 @@ fn processAncestorHashesDuplicateSlots(
 /// Analogous to [process_duplicate_confirmed_slots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1866)
 fn processDuplicateConfirmedSlots(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: replay.service.Logger,
     duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
     blockstore: *sig.ledger.LedgerResultWriter,
     duplicate_confirmed_slots: *DuplicateConfirmedSlots,
@@ -493,7 +611,7 @@ fn processGossipVerifiedVoteHashes(
 
 /// Analogous to [process_popular_pruned_forks](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1828)
 fn processPopularPrunedForks(
-    logger: sig.trace.Logger,
+    logger: replay.service.Logger,
     popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
     slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
@@ -536,7 +654,7 @@ fn processPopularPrunedForks(
 /// Analogous to [process_duplicate_slots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1938)
 fn processDuplicateSlots(
     allocator: std.mem.Allocator,
-    logger: sig.trace.Logger,
+    logger: replay.service.Logger,
     duplicate_slots_receiver: *sig.sync.Channel(sig.core.Slot),
     duplicate_slots_tracker: *DuplicateSlots,
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
@@ -596,7 +714,7 @@ fn processDuplicateSlots(
 /// NOTE: the agave version of this is always called the same way, so the duplicated logic has been
 /// deduplicated into this function, which is why it is not quite the same.
 fn getDuplicateConfirmedHash(
-    logger: sig.trace.Logger,
+    logger: replay.service.Logger,
     fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
     slot: sig.core.Slot,
     maybe_duplicate_confirmed_hash: ?sig.core.Hash,
@@ -639,7 +757,7 @@ const check_slot_agrees_with_cluster = struct {
     /// aka `BankFrozen` in agave.
     fn slotFrozen(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
         blockstore: *sig.ledger.LedgerResultWriter,
@@ -751,7 +869,7 @@ const check_slot_agrees_with_cluster = struct {
 
     fn duplicateConfirmed(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
         blockstore: *sig.ledger.LedgerResultWriter,
@@ -853,7 +971,7 @@ const check_slot_agrees_with_cluster = struct {
 
     fn dead(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
@@ -914,7 +1032,7 @@ const check_slot_agrees_with_cluster = struct {
 
     fn duplicate(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
         duplicate_slots_tracker: *DuplicateSlots,
@@ -971,7 +1089,7 @@ const check_slot_agrees_with_cluster = struct {
 
     fn epochSlotsFrozen(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
@@ -1139,7 +1257,7 @@ const state_change = struct {
     ///
     /// AKA: `ResultingStateChange::BankFrozen` in agave.
     fn maybeUpdateConfirmedAndNotDupeFrozenHash(
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         confirmed_non_dupe_frozen_hash: *ConfirmedNonDupeFrozenHash,
         frozen_slot: u64,
@@ -1223,7 +1341,7 @@ const TestData = struct {
 
     fn init(
         allocator: std.mem.Allocator,
-        logger: sig.trace.Logger,
+        logger: replay.service.Logger,
         random: std.Random,
     ) !TestData {
         const SlotInfo = struct {
@@ -1293,10 +1411,11 @@ const TestData = struct {
         var slot_tracker: sig.replay.trackers.SlotTracker = .init(0);
         errdefer slot_tracker.deinit(allocator);
 
-        var fork_choice: sig.consensus.HeaviestSubtreeForkChoice = try .init(allocator, logger, .{
-            .slot = 0,
-            .hash = slot_infos[0].hash,
-        });
+        var fork_choice: sig.consensus.HeaviestSubtreeForkChoice =
+            try .init(allocator, logger.unscoped(), .{
+                .slot = 0,
+                .hash = slot_infos[0].hash,
+            });
         errdefer fork_choice.deinit();
 
         var progress: ProgressMap = .INIT;
@@ -1382,7 +1501,7 @@ const TestLedgerRwState = struct {
 
 fn testLedgerRw(
     comptime src_loc: std.builtin.SourceLocation,
-    logger: sig.trace.Logger,
+    logger: replay.service.Logger,
     state: *TestLedgerRwState,
 ) !struct {
     sig.ledger.BlockstoreDB,
@@ -1394,7 +1513,7 @@ fn testLedgerRw(
 
     const reader: sig.ledger.BlockstoreReader = try .init(
         std.testing.allocator,
-        logger,
+        logger.unscoped(),
         ledger_db,
         &state.registry,
         &state.lowest_cleanup_slot,
@@ -1402,7 +1521,7 @@ fn testLedgerRw(
     );
     const writer: sig.ledger.LedgerResultWriter = try .init(
         std.testing.allocator,
-        logger,
+        logger.unscoped(),
         ledger_db,
         &state.registry,
         &state.lowest_cleanup_slot,
