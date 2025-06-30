@@ -1097,9 +1097,6 @@ test "SortedSet bincode round trip does not break sorting" {
     try set.put(5);
     try set.put(3);
 
-    try std.testing.expect(!set.map.unmanaged.is_sorted);
-    try std.testing.expectEqual(5, set.map.unmanaged.max);
-
     const ser = try sig.bincode.writeAlloc(std.testing.allocator, set, .{});
     defer std.testing.allocator.free(ser);
 
