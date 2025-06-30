@@ -117,8 +117,38 @@ pub const Elf = struct {
                 if (offset > bytes.len) return error.OutOfBounds;
             }
 
-            if (header.e_shstrndx != elf.SHN_UNDEF and shdrs.len <= header.e_shstrndx) {
-                return error.OutOfBounds;
+            // Validate section headers appear only once.
+            var section_checks: [3]struct{ name: []const u8, seen: bool } = .{
+                .{ .name = ".symtab", .seen = false },
+                .{ .name = ".strtab", .seen = false },
+                .{ .name = ".dynstr", .seen = false },
+            };
+
+            const name_shdr: elf.Elf64_Shdr =
+                if (header.e_shstrndx == elf.SHN_UNDEF) return error.NoSectionNameStringTable
+                else if (header.e_shstrndx >= shdrs.len) return error.OutOfBounds
+                else shdrs[header.e_shstrndx];
+
+            if (name_shdr.sh_type != elf.SHT_STRTAB) {
+                return error.InvalidSectionHeader;
+            }
+
+            const name_buf = try safeSlice(bytes, name_shdr.sh_offset, name_shdr.sh_size);
+            for (shdrs) |shdr| {
+                const start = shdr.sh_name;
+                if (start >= name_buf.len) return error.OutOfBounds;
+
+                const end = for (start..name_buf.len) |i| {
+                    if (name_buf[i] == 0) break i;
+                } else return error.StringTooLong;
+                
+                const section_name = name_buf[start..end];
+                for (&section_checks) |*sc| {
+                    if (std.mem.eql(u8, sc.name, section_name)) {
+                        if (sc.seen) return error.InvalidSectionHeader;
+                        sc.seen = true;
+                    }
+                }
             }
 
             return .{
