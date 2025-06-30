@@ -31,29 +31,71 @@ const assert = std.debug.assert;
 /// executing them with the SVM.
 pub fn processBatch(
     allocator: Allocator,
-    svm_slot: *SvmSlot,
+    svm_params: SvmSlot.Params,
     committer: Committer,
     transactions: []const ResolvedTransaction,
     exit: *std.atomic.Value(bool),
 ) !?TransactionError {
+    // var rng = std.Random.DefaultPrng.init(@truncate(@as(u128, @bitCast(std.time.nanoTimestamp()))));
+    const thread_id = std.time.nanoTimestamp();
+
+    std.debug.print("{} - checkpoint 1\n", .{thread_id});
     const results = try allocator.alloc(struct { Hash, ProcessedTransaction }, transactions.len);
     defer allocator.free(results);
 
+    std.debug.print("{} - checkpoint 1.5\n", .{thread_id});
+    var svm_slot = try SvmSlot.init(allocator, transactions, svm_params);
+    defer svm_slot.deinit(allocator);
+
+    std.debug.print("{} - batch size: {}\n", .{ thread_id, transactions.len });
     for (transactions, 0..) |transaction, i| {
         if (exit.load(.monotonic)) {
             return null;
         }
+        std.debug.print("{} - checkpoint 2\n", .{thread_id});
         const hash = transaction.transaction.verifyAndHashMessage() catch return .SignatureFailure;
+        std.debug.print("{} - checkpoint 3\n", .{thread_id});
         const runtime_transaction = transaction.toRuntimeTransaction(hash);
 
-        switch (try executeTransaction(allocator, svm_slot, &runtime_transaction)) {
+        errdefer std.debug.print("{} - SVM FAILED!!!\n", .{thread_id});
+        switch (try executeTransaction(allocator, &svm_slot, &runtime_transaction)) {
             .ok => |result| results[i] = .{ hash, result },
             .err => |err| return err,
         }
+        std.debug.print("{} - SVM COMPLETED TRANSACTION {}\n", .{ thread_id, i });
+    }
+    for (results) |result| {
+        std.debug.print("{} - transaction result: {any}\n", .{ thread_id, result });
+
+        switch (result[1]) {
+            .executed => |exec| {
+                std.debug.print(
+                    \\.err = {},
+                    \\.log_collector = {},
+                    \\.instruction_trace = {},
+                    \\.return_data = {},
+                    \\.compute_meter = {},
+                    \\.accounts_data_len_delta = {},
+                    \\
+                , .{
+                    exec.executed_transaction.err,
+                    exec.executed_transaction.log_collector,
+                    exec.executed_transaction.instruction_trace,
+                    exec.executed_transaction.return_data,
+                    exec.executed_transaction.compute_meter,
+                    exec.executed_transaction.accounts_data_len_delta,
+                });
+            },
+            else => {
+                std.debug.print("unprintable result\n", .{});
+            },
+        }
     }
 
-    try committer.commitTransactions(allocator, svm_slot.params.slot, transactions, results);
+    std.debug.print("{} - checkpoint 4\n", .{thread_id});
+    try committer.commitTransactions(allocator, svm_slot.params.slot, transactions, results, thread_id);
 
+    std.debug.print("{} - BATCH FINISHED PROCESSING\n", .{thread_id});
     return null;
 }
 
@@ -86,8 +128,7 @@ pub const TransactionScheduler = struct {
     exit: std.atomic.Value(bool),
     /// if non-null, a failure was already recorded and will be returned for every poll
     failure: ?replay.confirm_slot.ConfirmSlotError,
-
-    svm_state: ?SvmSlot,
+    svm_params: SvmSlot.Params,
 
     const BatchResult = struct { batch_index: usize, maybe_err: ?TransactionError };
 
@@ -96,6 +137,7 @@ pub const TransactionScheduler = struct {
         committer: Committer,
         batch_capacity: usize,
         thread_pool: *ThreadPool,
+        svm_params: SvmSlot.Params,
     ) !TransactionScheduler {
         var batches = try std.ArrayListUnmanaged(ResolvedBatch)
             .initCapacity(allocator, batch_capacity);
@@ -119,7 +161,7 @@ pub const TransactionScheduler = struct {
             .batches_finished = 0,
             .exit = std.atomic.Value(bool).init(false),
             .failure = null,
-            .svm_state = null,
+            .svm_params = svm_params,
         };
     }
 
@@ -194,7 +236,7 @@ pub const TransactionScheduler = struct {
             assert(try self.thread_pool.trySchedule(self.allocator, .{
                 .allocator = self.allocator,
                 .committer = self.committer,
-                .svm_slot = &self.svm_state.?,
+                .svm_slot = self.svm_params,
                 .batch_index = self.batches_started,
                 .transactions = batch.transactions,
                 .results = &self.results,
@@ -208,7 +250,7 @@ pub const TransactionScheduler = struct {
 
 const ProcessBatchTask = struct {
     allocator: Allocator,
-    svm_slot: *SvmSlot,
+    svm_slot: SvmSlot.Params,
     committer: Committer,
     batch_index: usize,
     transactions: []const ResolvedTransaction,
@@ -216,13 +258,19 @@ const ProcessBatchTask = struct {
     exit: *std.atomic.Value(bool),
 
     pub fn run(self: *ProcessBatchTask) !void {
-        const result = try processBatch(
+        std.debug.print("starting to process a batch\n", .{});
+        errdefer std.debug.print("PROCESS BATCH FAILED!!!\n", .{});
+        const result_result = processBatch(
             self.allocator,
             self.svm_slot,
             self.committer,
             self.transactions,
             self.exit,
         );
+        if (result_result) |_| {} else |err| {
+            std.debug.print("process batch error: {}\n", .{err});
+        }
+        const result = try result_result;
 
         if (result != null) self.exit.store(true, .monotonic);
         try self.results.send(.{ .batch_index = self.batch_index, .maybe_err = result });
@@ -238,7 +286,7 @@ test "TransactionScheduler: happy path" {
 
     var thread_pool = ThreadPool.init(.{});
     // TODO fix undefined
-    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool);
+    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool, undefined);
     defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);
@@ -282,7 +330,7 @@ test "TransactionScheduler: failed account locks" {
 
     var thread_pool = ThreadPool.init(.{});
     // TODO fix undefined
-    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool);
+    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool, undefined);
     defer scheduler.deinit();
 
     const tx = try Transaction.initRandom(allocator, rng.random());
@@ -312,7 +360,7 @@ test "TransactionScheduler: signature verification failure" {
 
     var thread_pool = ThreadPool.init(.{});
     // TODO fix undefined
-    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool);
+    var scheduler = try TransactionScheduler.initCapacity(allocator, undefined, 10, &thread_pool, undefined);
     defer scheduler.deinit();
 
     var tx_arena = std.heap.ArenaAllocator.init(allocator);

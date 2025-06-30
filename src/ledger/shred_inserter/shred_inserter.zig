@@ -197,6 +197,12 @@ pub const ShredInserter = struct {
         is_repaired: []const bool,
         options: Options,
     ) !Result {
+        for (shreds) |shred| {
+            if (shred.commonHeader().slot == 342616612) {
+                std.debug.print("got shred for my slot: {}\n", .{shred.commonHeader().index});
+            }
+        }
+
         const timestamp = sig.time.Instant.now();
         ///////////////////////////
         // check inputs for validity and edge cases
@@ -866,6 +872,8 @@ pub const ShredInserter = struct {
     ) !ArrayList(CompletedDataSetInfo) {
         const slot = shred.common.slot;
         const index_u32 = shred.common.index;
+        if (slot == 342616612)
+            std.debug.print("inserting data shred: {}\n", .{index_u32});
         const index: u64 = @intCast(index_u32);
 
         const new_consecutive = if (slot_meta.consecutive_received_from_0 == index) blk: {
@@ -1087,6 +1095,7 @@ fn updateSlotMeta(
         slot_meta.last_index = @intCast(index);
     }
     return try updateCompletedDataIndexes(
+        slot_meta.slot == 342616612,
         allocator,
         is_last_in_slot or is_last_in_data,
         index,
@@ -1100,6 +1109,7 @@ fn updateSlotMeta(
 /// for that completed data set.
 /// update_completed_data_indexes
 fn updateCompletedDataIndexes(
+    log: bool,
     allocator: Allocator,
     is_last_in_data: bool,
     new_shred_index: u32,
@@ -1117,6 +1127,7 @@ fn updateCompletedDataIndexes(
     // `new_shred_index` is data complete, so need to insert here into the
     // `completed_data_indexes`
     if (is_last_in_data) {
+        if (log) std.debug.print("putting completed shred index: {}\n", .{new_shred_index});
         try completed_data_indexes.put(new_shred_index);
         try shred_indices.append(new_shred_index + 1);
     }

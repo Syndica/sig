@@ -143,6 +143,27 @@ pub const SlotMeta = struct {
     }
 };
 
+test "drewtest" {
+    const allocator = std.testing.allocator;
+    var slot_meta = SlotMeta.init(allocator, 11, 10);
+    defer slot_meta.deinit();
+    try slot_meta.completed_data_indexes.put(10);
+    try slot_meta.completed_data_indexes.put(30);
+    try slot_meta.completed_data_indexes.put(1234);
+
+    slot_meta.consecutive_received_from_0 = 135;
+
+    const bytes = try sig.bincode.writeAlloc(allocator, slot_meta, .{});
+    defer allocator.free(bytes);
+
+    var des = try sig.bincode.readFromSlice(allocator, SlotMeta, bytes, .{});
+    defer des.deinit();
+    std.debug.print("count: {}\n", .{des.completed_data_indexes.count()});
+    for (des.completed_data_indexes.items()) |xx| {
+        std.debug.print("index: {}\n", .{xx});
+    }
+}
+
 /// Flags to indicate whether a slot is a descendant of a slot on the main fork
 pub const ConnectedFlags = BitFlags(enum(u8) {
     // A slot S should be considered to be connected if:

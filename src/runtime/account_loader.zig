@@ -54,9 +54,11 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
         fn getAccount(
             self: Self,
             pubkey: *const Pubkey,
+            ancestors: *const sig.core.Ancestors,
         ) sig.accounts_db.AccountsDB.GetAccountError!sig.core.Account {
             return switch (kind) {
-                .AccountsDb => try self.inner.getAccountDeprecated(pubkey),
+                .AccountsDb => try self.inner.getAccountWithAncestors(pubkey, ancestors) orelse
+                    return error.PubkeyNotInIndex,
                 .Mocked => self.inner.accounts.get(pubkey.*) orelse return error.PubkeyNotInIndex,
             };
         }
@@ -65,8 +67,9 @@ fn AccountsDb(comptime kind: AccountsDbKind) type {
             self: Self,
             data_allocator: std.mem.Allocator,
             pubkey: *const Pubkey,
+            ancestors: *const sig.core.Ancestors,
         ) error{ OutOfMemory, GetAccountFailedUnexpectedly }!?AccountSharedData {
-            const account: sig.core.Account = self.getAccount(pubkey) catch |err| switch (err) {
+            const account: sig.core.Account = self.getAccount(pubkey, ancestors) catch |err| switch (err) {
                 error.PubkeyNotInIndex => return null,
                 error.OutOfMemory => return error.OutOfMemory,
                 error.FileIdNotFound,
@@ -148,6 +151,7 @@ pub const BatchAccountCache = struct {
         allocator: std.mem.Allocator,
         accountsdb: accountsdb_kind.T(),
         transactions: []const RuntimeTransaction,
+        ancestors: *const sig.core.Ancestors,
     ) !BatchAccountCache {
         const accounts_db = AccountsDb(accountsdb_kind){ .inner = accountsdb };
 
@@ -185,6 +189,7 @@ pub const BatchAccountCache = struct {
                     if (try accounts_db.getAccountSharedData(
                         allocator,
                         &account_key,
+                        ancestors,
                     )) |acc| {
                         map.putAssumeCapacityNoClobber(account_key, acc);
                         break :blk acc;
@@ -233,6 +238,7 @@ pub const BatchAccountCache = struct {
                     const owner_account = try accounts_db.getAccountSharedData(
                         allocator,
                         program_owner_key,
+                        ancestors,
                     ) orelse {
                         // default account ~= account missing
                         // every account which a load is attempted on should have an entry
@@ -650,6 +656,7 @@ test "loadTransactionAccounts empty transaction" {
         allocator,
         accountsdb,
         &.{},
+        &.{ .ancestors = .empty },
     );
     defer batch_account_cache.deinit(allocator);
 
@@ -682,6 +689,7 @@ test "loadTransactionAccounts sysvar instruction" {
         allocator,
         accountsdb,
         &.{},
+        &.{ .ancestors = .empty },
     );
     defer batch_account_cache.deinit(allocator);
 
@@ -835,6 +843,7 @@ test "load accounts rent paid" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -935,6 +944,7 @@ test "loadAccount allocations" {
                 alloc,
                 accountsdb,
                 &.{tx},
+                &.{ .ancestors = .empty },
             );
             defer batch_account_cache.deinit(alloc);
 
@@ -985,6 +995,7 @@ test "load tx too large" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1084,6 +1095,7 @@ test "dont double count program owner account data size" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1118,6 +1130,7 @@ test "load, create new account" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1177,6 +1190,7 @@ test "invalid program owner owner" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1226,6 +1240,7 @@ test "missing program owner account" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 
@@ -1267,6 +1282,7 @@ test "deallocate account" {
         allocator,
         accountsdb,
         &.{tx},
+        &.{ .ancestors = .empty },
     );
     defer account_cache.deinit(allocator);
 

@@ -87,23 +87,28 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     for (active_slots) |slot| {
         state.logger.info().logf("replaying slot: {}", .{slot});
         const result = try replaySlot(state, slot);
+        state.logger.info().logf("slot replay now running... {}", .{slot});
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
+        state.logger.info().logf("appended result for slot {}", .{slot});
     }
     var processed_a_slot = false;
     for (slot_statuses.items) |slot_status| {
         // NOTE: currently this just awaits the futures and discards the
         // results. this will change once we call the svm and process the
         // results of execution.
-        _, const status = slot_status;
+        const slot, const status = slot_status;
         if (status == .confirm) {
             // NOTE: agave does this a bit differently, it indicates that a slot
             // was *finished*, not just processed partially.
             processed_a_slot = true;
+            state.logger.info().logf("awaiting confirmation for slot {}", .{slot});
+            errdefer state.logger.info().logf("error awaiting slot {}", .{slot});
             while (try status.confirm.poll() == .pending) {
                 // TODO: consider futex-based wait like ResetEvent
                 std.time.sleep(std.time.ns_per_ms);
             }
+            state.logger.info().logf("confirmed slot {}", .{slot});
         }
     }
 
@@ -195,41 +200,46 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     // out more usages of this struct.
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
 
-    const entries, const num_shreds, const slot_is_full =
-        try state.blockstore_reader.getSlotEntriesWithShredInfo(
-            state.allocator,
-            slot,
-            confirmation_progress.num_shreds,
-            false,
-        );
-    errdefer {
-        for (entries) |entry| entry.deinit(state.allocator);
-        state.allocator.free(entries);
-    }
-    state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
+    const entries, const slot_is_full, const blockhash_queue = blk: {
+        const entries, const num_shreds, const slot_is_full =
+            try state.blockstore_reader.getSlotEntriesWithShredInfo(
+                state.allocator,
+                slot,
+                confirmation_progress.num_shreds,
+                false,
+            );
+        errdefer {
+            for (entries) |entry| entry.deinit(state.allocator);
+            state.allocator.free(entries);
+        }
+        state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
 
-    if (entries.len == 0) {
-        for (entries) |entry| entry.deinit(state.allocator);
-        state.allocator.free(entries);
-        return .empty;
-    }
+        if (entries.len == 0) {
+            for (entries) |entry| entry.deinit(state.allocator);
+            state.allocator.free(entries);
+            return .empty;
+        }
 
-    confirmation_progress.num_shreds += num_shreds;
-    confirmation_progress.num_entries += entries.len;
-    for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
+        confirmation_progress.num_shreds += num_shreds;
+        confirmation_progress.num_entries += entries.len;
+        for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
 
-    const blockhash_queue = bhq: {
-        var bhq = slot_info.state.blockhash_queue.read();
-        defer bhq.unlock();
-        break :bhq try bhq.get().clone(state.allocator);
+        const blockhash_queue = bhq: {
+            var bhq = slot_info.state.blockhash_queue.read();
+            defer bhq.unlock();
+            break :bhq try bhq.get().clone(state.allocator);
+        };
+        errdefer blockhash_queue.deinit(state.allocator);
+
+        break :blk .{ entries, slot_is_full, blockhash_queue };
     };
-    errdefer blockhash_queue.deinit(state.allocator);
 
     const svm_params = SvmSlot.Params{
         .slot = slot,
         .max_age = sig.core.bank.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = blockhash_queue,
+        .accounts_db = state.accounts_db,
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = .{ .active = slot_info.constants.feature_set },
         .rent_collector = &epoch_info.rent_collector,
@@ -261,4 +271,22 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
             .tick_hash_count = &confirmation_progress.tick_hash_count,
         },
     ) };
+}
+
+/// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
+fn freezeSlot(
+    accounts_db: *AccountsDB,
+    constants: *const sig.core.SlotConstants,
+    state: *const sig.core.SlotState,
+) void {
+    _ = accounts_db; // autofix
+    _ = constants; // autofix
+    const hash = state.hash.write();
+    defer hash.unlock();
+
+    if (hash.get() != null) return; // already frozen
+
+    // TODO: collect rent
+
+    hash.mut().* = .ZEROES; // TODO: calculate from accountsdb
 }

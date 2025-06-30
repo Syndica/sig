@@ -1467,7 +1467,7 @@ pub const AccountsDB = struct {
         return .{ file, file_id };
     }
 
-    const GetFileFromRefError = GetAccountInFileError ||
+    pub const GetFileFromRefError = GetAccountInFileError ||
         std.mem.Allocator.Error ||
         error{SlotNotFound};
 
@@ -1886,7 +1886,6 @@ pub const AccountsDB = struct {
             try dead_accounts.putNoClobber(account_file.slot, accounts_dead_count);
         }
     }
-
     /// writes one account to storage
     /// intended for use from runtime
     pub fn putAccount(
@@ -1895,6 +1894,7 @@ pub const AccountsDB = struct {
         pubkey: Pubkey,
         account: sig.runtime.AccountSharedData,
     ) !void {
+        std.debug.print("checkpoint A", .{});
         const duplicated = Account{
             .data = .{
                 .owned_allocation = try self.allocator.dupe(u8, account.data),
@@ -1909,6 +1909,7 @@ pub const AccountsDB = struct {
             if (!inserted_duplicate) duplicated.deinit(self.allocator);
         }
 
+        std.debug.print("checkpoint B", .{});
         if (self.geyser_writer) |geyser_writer| {
             const data_versioned = sig.geyser.core.VersionedAccountPayload{
                 .AccountPayloadV1 = .{
@@ -1920,6 +1921,7 @@ pub const AccountsDB = struct {
             try geyser_writer.writePayloadToPipe(data_versioned);
         }
 
+        std.debug.print("checkpoint C", .{});
         {
             const bhs, var bhs_lg = try self.getOrInitBankHashStats(slot);
             defer bhs_lg.unlock();
@@ -1930,6 +1932,7 @@ pub const AccountsDB = struct {
             });
         }
 
+        std.debug.print("checkpoint D", .{});
         {
             const unrooted_accounts, var unrooted_accounts_lg =
                 self.unrooted_accounts.writeWithLock();
@@ -1945,6 +1948,7 @@ pub const AccountsDB = struct {
             inserted_duplicate = true;
         }
 
+        std.debug.print("checkpoint E", .{});
         // prealloc the ref map space
         {
             const shard_map_rw = self.account_index.pubkey_ref_map.getShard(&pubkey);
@@ -1954,17 +1958,20 @@ pub const AccountsDB = struct {
             try shard_map.ensureTotalCapacity(1 + shard_map.count());
         }
 
+        std.debug.print("checkpoint F", .{});
         // update index
         var accounts_dead_count: u64 = 0;
         const reference_buf, const global_ref_index = try self.account_index
             .reference_manager.allocOrExpand(1);
 
+        std.debug.print("checkpoint G", .{});
         reference_buf[0] = AccountRef{
             .pubkey = pubkey,
             .slot = slot,
             .location = .{ .UnrootedMap = .{ .index = 0 } },
         };
 
+        std.debug.print("checkpoint H", .{});
         const was_inserted = self.account_index
             .indexRefIfNotDuplicateSlotAssumeCapacity(
             &reference_buf[0],
@@ -1980,6 +1987,7 @@ pub const AccountsDB = struct {
 
         std.debug.assert(self.account_index.exists(&pubkey, slot));
 
+        std.debug.print("checkpoint I", .{});
         // track the slot's references
         {
             const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
@@ -1987,6 +1995,7 @@ pub const AccountsDB = struct {
             try slot_ref_map.putNoClobber(slot, reference_buf);
         }
 
+        std.debug.print("checkpoint J", .{});
         if (accounts_dead_count != 0) {
             const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_lg.unlock();
