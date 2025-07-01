@@ -1029,9 +1029,9 @@ pub const ShredVariant = struct {
     }
 };
 
-pub const ShredVariantConfig = blk: {
+pub const ShredVariantConfig: bincode.FieldConfig(ShredVariant) = blk: {
     const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, _: bincode.Params) !void {
+        pub fn serialize(writer: anytype, data: ShredVariant, _: bincode.Params) !void {
             return writer.writeByte(try ShredVariant.toByte(data));
         }
 
@@ -1039,10 +1039,10 @@ pub const ShredVariantConfig = blk: {
             return try ShredVariant.fromByte(try reader.readByte());
         }
 
-        pub fn free(_: std.mem.Allocator, _: anytype) void {}
+        pub fn free(_: std.mem.Allocator, _: ShredVariant) void {}
     };
 
-    break :blk bincode.FieldConfig(ShredVariant){
+    break :blk .{
         .serializer = S.serialize,
         .deserializer = S.deserialize,
         .free = S.free,
