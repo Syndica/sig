@@ -20,6 +20,7 @@ const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const ProgressMap = sig.consensus.ProgressMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
+const VoteAccount = sig.core.stake.VoteAccount;
 
 const SWITCH_FORK_THRESHOLD: f64 = 0.38;
 const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
@@ -56,6 +57,11 @@ const ComputedBankState = struct {
     // keyed by end of the range
     lockout_intervals: LockoutIntervals,
     my_latest_landed_vote: ?Slot,
+
+    pub fn deinit(self: *ComputedBankState, allocator: std.mem.Allocator) void {
+        self.voted_stakes.deinit(allocator);
+        self.lockout_intervals.deinit(allocator);
+    }
 };
 
 pub const ThresholdDecision = union(enum) {
@@ -305,10 +311,8 @@ pub fn collectVoteLockouts(
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
 ) !ComputedBankState {
     var vote_slots = SortedSet(Slot).init(allocator);
-    defer vote_slots.deinit();
 
     var voted_stakes = std.AutoHashMapUnmanaged(Slot, Stake).empty;
-    defer voted_stakes.deinit(allocator);
 
     var total_stake: u64 = 0;
 
@@ -571,5 +575,167 @@ test "is slot duplicate confirmed pass" {
 }
 
 test "collect vote lockouts root" {
-    try std.testing.expect(true);
+    // const allocator = std.testing.allocator;
+    const allocator = std.heap.c_allocator;
+    var prng = std.Random.DefaultPrng.init(19);
+    const random = prng.random();
+    const votes = try allocator.alloc(u64, MAX_LOCKOUT_HISTORY);
+    for (votes, 0..) |*slot, i| {
+        slot.* = @as(u64, i);
+    }
+    defer allocator.free(votes);
+
+    var accounts = try genStakes(
+        allocator,
+        random,
+        &[_]struct { u64, []u64 }{ .{ 1, votes }, .{ 1, votes } },
+    );
+    defer {
+        for (accounts.values()) |value| {
+            allocator.free(value[1].account.data);
+            value[1].vote_state.deinit();
+        }
+        accounts.deinit(allocator);
+    }
+
+    const account_latest_votes =
+        try allocator.alloc(
+            struct { Pubkey, sig.core.hash.SlotAndHash },
+            accounts.count(),
+        );
+    defer allocator.free(account_latest_votes);
+
+    for (accounts.keys(), 0..) |key, i| {
+        account_latest_votes[i] =
+            .{
+                key,
+                sig.core.hash.SlotAndHash{
+                    .slot = (MAX_LOCKOUT_HISTORY - 1),
+                    .hash = sig.core.hash.Hash.ZEROES,
+                },
+            };
+    }
+
+    var replay_tower = try sig.consensus.replay_tower.createTestReplayTower(
+        0,
+        0.67,
+    );
+    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    defer {
+        var it = ancestors.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+        }
+        ancestors.deinit(allocator);
+    }
+
+    for (0..(MAX_LOCKOUT_HISTORY + 1)) |i| {
+        _ = try replay_tower.recordBankVote(
+            allocator,
+            i,
+            sig.core.hash.Hash.initRandom(random),
+        );
+        var slots = SortedSet(Slot).init(allocator);
+        for (0..i) |j| {
+            try slots.put(j);
+        }
+        try ancestors.put(allocator, i, slots);
+    }
+    const root = Lockout{
+        .slot = 0,
+        .confirmation_count = MAX_LOCKOUT_HISTORY,
+    };
+    const expected_bank_stake = 2;
+    const expected_total_stake = 2;
+
+    try std.testing.expectEqual(
+        0,
+        replay_tower.tower.vote_state.root_slot,
+    );
+    var latest_votes = LatestValidatorVotesForFrozenBanks.empty;
+    var progres_map = ProgressMap.INIT;
+    defer progres_map.deinit(allocator);
+    for (accounts.values()) |account| {
+        var progress = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+        progress.fork_stats.bank_hash = sig.core.hash.Hash.ZEROES;
+        try progres_map.map.put(
+            allocator,
+            account[1].vote_state.lastVotedSlot().?,
+            progress,
+        );
+    }
+
+    var computed_banks = try collectVoteLockouts(
+        allocator,
+        .noop,
+        &Pubkey.initRandom(random),
+        MAX_LOCKOUT_HISTORY,
+        &accounts,
+        &ancestors,
+        &progres_map,
+        &latest_votes,
+    );
+    defer computed_banks.deinit(allocator);
+
+    for (0..MAX_LOCKOUT_HISTORY) |i| {
+        try std.testing.expectEqual(2, computed_banks.voted_stakes.get(i).?);
+    }
+
+    try std.testing.expectEqual(expected_bank_stake, computed_banks.fork_stake);
+    try std.testing.expectEqual(expected_total_stake, computed_banks.total_stake);
+
+    const new_votes =
+        try latest_votes.takeVotesDirtySet(allocator, root.slot);
+
+    try std.testing.expectEqualSlices(
+        struct { Pubkey, sig.core.hash.SlotAndHash },
+        account_latest_votes,
+        new_votes.items,
+    );
+}
+
+fn genStakes(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    stakes: []const struct { u64, []u64 },
+) !StakeAndVoteAccountsMap {
+    var map = StakeAndVoteAccountsMap.empty;
+
+    for (stakes) |stake| {
+        const lamports = stake[0];
+        const votes = stake[1];
+
+        var account = sig.runtime.AccountSharedData.NEW;
+        account.lamports = lamports;
+        const data = try allocator.alloc(u8, VoteState.MAX_VOTE_STATE_SIZE);
+        account.data = data;
+        account.owner = sig.runtime.program.vote.ID;
+        var vote_state = try sig.runtime.program.vote.state.createTestVoteState(
+            allocator,
+            Pubkey.ZEROES,
+            null,
+            Pubkey.ZEROES,
+            0,
+        );
+        for (votes) |slot| {
+            try sig.runtime.program.vote.state.processSlotVoteUnchecked(
+                &vote_state,
+                slot,
+            );
+        }
+        _ = try sig.bincode.writeToSlice(
+            account.data,
+            VoteStateVersions{ .current = vote_state },
+            .{},
+        );
+        try map.put(
+            allocator,
+            Pubkey.initRandom(random),
+            .{
+                lamports,
+                VoteAccount{ .account = account, .vote_state = vote_state },
+            },
+        );
+    }
+    return map;
 }
