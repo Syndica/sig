@@ -13,6 +13,18 @@ pub const StakeHistory = struct {
 
     pub const Entry = struct {
         epoch: Epoch,
+        stake: ClusterStake,
+
+        pub fn sortCmp(_: void, a: Entry, b: Entry) bool {
+            return b.epoch < a.epoch; // Sort by descending epoch
+        }
+
+        pub fn searchCmp(epoch: u64, b: Entry) std.math.Order {
+            return std.math.order(b.epoch, epoch);
+        }
+    };
+
+    pub const ClusterStake = struct {
         /// Effective stake at this epoch
         effective: u64,
         /// Sum of portion of stakes not fully warmed up
@@ -45,6 +57,15 @@ pub const StakeHistory = struct {
         return self.entries.items.len == 0;
     }
 
+    pub fn getEntry(self: StakeHistory, epoch: Epoch) ?Entry {
+        return if (std.sort.binarySearch(
+            Entry,
+            self.entries.items,
+            epoch,
+            Entry.searchCmp,
+        )) |index| self.entries.items[index] else null;
+    }
+
     pub fn initWithEntries(
         allocator: Allocator,
         entries: []const Entry,
@@ -52,7 +73,21 @@ pub const StakeHistory = struct {
         if (!builtin.is_test) @compileError("only available in test mode");
         std.debug.assert(entries.len <= MAX_ENTRIES);
         var self = try StakeHistory.default(allocator);
-        for (entries) |entry| self.entries.appendAssumeCapacity(entry);
+        self.entries.appendSliceAssumeCapacity(entries);
+        std.sort.heap(Entry, self.entries.items, {}, Entry.sortCmp);
+        return self;
+    }
+
+    pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!StakeHistory {
+        if (!builtin.is_test) @compileError("only available in test mode");
+        var self = try StakeHistory.default(allocator);
+        for (0..random.intRangeAtMost(Epoch, 1, 1_000)) |epoch|
+            self.entries.appendAssumeCapacity(.{ .epoch = epoch, .stake = .{
+                .effective = random.int(u64),
+                .activating = random.int(u64),
+                .deactivating = random.int(u64),
+            } });
+        std.sort.heap(Entry, self.entries.items, {}, Entry.sortCmp);
         return self;
     }
 };

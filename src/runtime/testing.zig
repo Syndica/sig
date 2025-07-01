@@ -421,19 +421,11 @@ pub fn expectTransactionContextEqual(
     // if (expected.maybe_log_collector != actual.maybe_log_collector)
     //     return error.MaybeLogCollectorMismatch;
 
-    // TODO: implement eqls for SysvarCache
-    // if (expected.sysvar_cache != actual.sysvar_cache)
-    //     return error.SysvarCacheMismatch;
-
     if (expected.prev_lamports_per_signature != actual.prev_lamports_per_signature)
         return error.LamportsPerSignatureMismatch;
 
     if (!expected.prev_blockhash.eql(actual.prev_blockhash))
         return error.LastBlockhashMismatch;
-
-    // TODO: implement eqls for FeatureSet
-    // if (expected.feature_set != actual.feature_set)
-    //     return error.FeatureSetMismatch;
 
     try expectTransactionReturnDataEqual(expected.return_data, actual.return_data);
 }

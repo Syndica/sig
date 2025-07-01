@@ -1,3 +1,5 @@
+const builtin = @import("builtin");
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -14,4 +16,9 @@ pub const Fees = extern struct {
     };
 
     pub const SIZE_OF: u64 = @sizeOf(Fees);
+
+    pub fn initRandom(random: std.Random) Fees {
+        if (!builtin.is_test) @compileError("only for testing");
+        return .{ .lamports_per_signature = random.int(u64) };
+    }
 };

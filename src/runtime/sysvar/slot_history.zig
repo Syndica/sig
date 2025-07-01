@@ -2,6 +2,8 @@
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
+const Allocator = std.mem.Allocator;
+
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
@@ -24,7 +26,7 @@ pub const SlotHistory = struct {
 
     pub const SIZE_OF: u64 = 131_097;
 
-    pub fn default(allocator: std.mem.Allocator) !SlotHistory {
+    pub fn default(allocator: Allocator) Allocator.Error!SlotHistory {
         var bits = try DynamicArrayBitSet(u64).initEmpty(allocator, MAX_ENTRIES);
         bits.set(0);
         return .{
@@ -33,7 +35,7 @@ pub const SlotHistory = struct {
         };
     }
 
-    pub fn deinit(self: SlotHistory, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: SlotHistory, allocator: Allocator) void {
         self.bits.deinit(allocator);
     }
 
@@ -73,5 +75,13 @@ pub const SlotHistory = struct {
 
     pub fn oldest(self: *const SlotHistory) Slot {
         return self.next_slot -| MAX_ENTRIES;
+    }
+
+    pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!SlotHistory {
+        var self = try SlotHistory.default(allocator);
+        for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
+            self.add(random.intRangeAtMost(Slot, 0, 1_000));
+        }
+        return self;
     }
 };
