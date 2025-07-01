@@ -123,13 +123,13 @@ pub fn fillMissingEntries(
     }
 
     if (sysvar_cache.fees_obj == null) {
-        if (getSysvarAndDataFromAccount(
+        if (getSysvarFromAccount(
             allocator,
             accounts_db,
             ancestors,
             Fees,
-        )) |sysvar_and_data| {
-            sysvar_cache.fees_obj = sysvar_and_data.sysvar;
+        )) |fees| {
+            sysvar_cache.fees_obj = fees;
         }
     }
 
@@ -430,6 +430,7 @@ fn updateSysvarAccount(
     comptime Sysvar: type,
     sysvar: Sysvar,
 ) Allocator.Error!void {
+    // TODO: handle errors directly
     const old_account = accounts_db.getAccountWithAncestors(
         &Sysvar.ID,
         ancestors,
@@ -462,14 +463,18 @@ fn createSysvarAccount(
     sysvar: Sysvar,
     old_account: ?*const Account,
 ) Allocator.Error!AccountSharedData {
-    const sysvar_data = try allocator.alloc(u8, @max(
-        Sysvar.SIZE_OF,
-        bincode.sizeOf(sysvar, .{}),
-    ));
+    // This should NEVER happen, dynamiclly sized sysvars manage there max size.
+    if (bincode.sizeOf(sysvar, .{}) > Sysvar.SIZE_OF)
+        std.debug.panic("sysvar data size exceeds maximum allowed size: sysvar={s}, size={}", .{
+            @typeName(Sysvar),
+            bincode.sizeOf(sysvar, .{}),
+        });
+
+    const sysvar_data = try allocator.alloc(u8, Sysvar.SIZE_OF);
     errdefer allocator.free(sysvar_data);
     @memset(sysvar_data, 0);
 
-    // writeToSlice may return a 'NoSpaceLeft' error, but the above allocation ensures
+    // writeToSlice may return a 'NoSpaceLeft' error. The above allocation ensures
     // that there is enough space for serialisation.
     _ = bincode.writeToSlice(sysvar_data, sysvar, .{}) catch unreachable;
 
@@ -637,6 +642,7 @@ test createSysvarAccount {
         RecentBlockhashes,
         SlotHistory,
     }) |Sysvar| {
+        // TODO: errdefer log for sysvar type
         // Required since default
         const default = if (@hasDecl(Sysvar, "default"))
             try Sysvar.default(allocator)
@@ -741,29 +747,28 @@ test fillMissingEntries {
 
     // Check all sysvar accounts are correct
     try std.testing.expectEqualSlices(u8, expected.clock.?, actual.clock.?);
-    // TODO: uncomment once we can insert to accounts db
-    // try std.testing.expectEqualSlices(u8, expected.epoch_schedule.?, actual.epoch_schedule.?);
-    // try std.testing.expectEqualSlices(u8, expected.epoch_rewards.?, actual.epoch_rewards.?);
-    // try std.testing.expectEqualSlices(u8, expected.rent.?, actual.rent.?);
-    // try std.testing.expectEqualSlices(u8, expected.last_restart_slot.?, actual.last_restart_slot.?);
-    // try std.testing.expectEqualSlices(u8, expected.slot_hashes.?, actual.slot_hashes.?);
-    // try std.testing.expectEqualSlices(
-    //     SlotHashes.Entry,
-    //     expected.slot_hashes_obj.?.entries.items,
-    //     actual.slot_hashes_obj.?.entries.items,
-    // );
-    // try std.testing.expectEqualSlices(u8, expected.stake_history.?, actual.stake_history.?);
-    // try std.testing.expectEqualSlices(
-    //     StakeHistory.Entry,
-    //     expected.stake_history_obj.?.entries.items,
-    //     actual.stake_history_obj.?.entries.items,
-    // );
-    // try std.testing.expectEqual(expected.fees_obj, actual.fees_obj);
-    // try std.testing.expectEqualSlices(
-    //     RecentBlockhashes.Entry,
-    //     expected.recent_blockhashes_obj.?.entries.items,
-    //     actual.recent_blockhashes_obj.?.entries.items,
-    // );
+    try std.testing.expectEqualSlices(u8, expected.epoch_schedule.?, actual.epoch_schedule.?);
+    try std.testing.expectEqualSlices(u8, expected.epoch_rewards.?, actual.epoch_rewards.?);
+    try std.testing.expectEqualSlices(u8, expected.rent.?, actual.rent.?);
+    try std.testing.expectEqualSlices(u8, expected.last_restart_slot.?, actual.last_restart_slot.?);
+    try std.testing.expectEqualSlices(u8, expected.slot_hashes.?, actual.slot_hashes.?);
+    try std.testing.expectEqualSlices(
+        SlotHashes.Entry,
+        expected.slot_hashes_obj.?.entries.items,
+        actual.slot_hashes_obj.?.entries.items,
+    );
+    try std.testing.expectEqualSlices(u8, expected.stake_history.?, actual.stake_history.?);
+    try std.testing.expectEqualSlices(
+        StakeHistory.Entry,
+        expected.stake_history_obj.?.entries.items,
+        actual.stake_history_obj.?.entries.items,
+    );
+    try std.testing.expectEqual(expected.fees_obj, actual.fees_obj);
+    try std.testing.expectEqualSlices(
+        RecentBlockhashes.Entry,
+        expected.recent_blockhashes_obj.?.entries.items,
+        actual.recent_blockhashes_obj.?.entries.items,
+    );
 }
 
 fn initRandomSysvarCache(allocator: Allocator, random: std.Random) !SysvarCache {
@@ -781,14 +786,14 @@ fn initRandomSysvarCache(allocator: Allocator, random: std.Random) !SysvarCache 
     const recent_blockhashes = try RecentBlockhashes.initRandom(allocator, random);
 
     return .{
-        .clock = try bincode.writeAlloc(allocator, clock, .{}),
-        .epoch_schedule = try bincode.writeAlloc(allocator, epoch_schedule, .{}),
-        .epoch_rewards = try bincode.writeAlloc(allocator, epoch_rewards, .{}),
-        .rent = try bincode.writeAlloc(allocator, rent, .{}),
-        .last_restart_slot = try bincode.writeAlloc(allocator, last_restart_slot, .{}),
-        .slot_hashes = try bincode.writeAlloc(allocator, slot_hashes, .{}),
+        .clock = try sysvars.serialize(allocator, clock),
+        .epoch_schedule = try sysvars.serialize(allocator, epoch_schedule),
+        .epoch_rewards = try sysvars.serialize(allocator, epoch_rewards),
+        .rent = try sysvars.serialize(allocator, rent),
+        .last_restart_slot = try sysvars.serialize(allocator, last_restart_slot),
+        .slot_hashes = try sysvars.serialize(allocator, slot_hashes),
         .slot_hashes_obj = slot_hashes,
-        .stake_history = try bincode.writeAlloc(allocator, stake_history, .{}),
+        .stake_history = try sysvars.serialize(allocator, stake_history),
         .stake_history_obj = stake_history,
         .fees_obj = fees,
         .recent_blockhashes_obj = recent_blockhashes,
@@ -803,16 +808,25 @@ fn insertSysvarCacheAccounts(
     slot: Slot,
     inherit_from_old_account: bool,
 ) !void {
+    var sysvar_accounts = std.MultiArrayList(struct {
+        pubkey: Pubkey,
+        account: Account,
+    }){};
+    defer {
+        for (sysvar_accounts.slice().items(.account)) |acc| acc.deinit(allocator);
+        sysvar_accounts.deinit(allocator);
+    }
+
     inline for (.{
         Clock,
-        // EpochSchedule,
-        // EpochRewards,
-        // Rent,
-        // LastRestartSlot,
-        // SlotHashes,
-        // StakeHistory,
-        // Fees,
-        // RecentBlockhashes,
+        EpochSchedule,
+        EpochRewards,
+        Rent,
+        LastRestartSlot,
+        SlotHashes,
+        StakeHistory,
+        Fees,
+        RecentBlockhashes,
     }) |Sysvar| {
         const old_account = if (inherit_from_old_account)
             accounts_db.getAccount(&Sysvar.ID) catch null
@@ -827,8 +841,19 @@ fn insertSysvarCacheAccounts(
             try sysvar_cache.get(Sysvar),
             if (old_account) |*acc| acc else null,
         );
-        defer allocator.free(account.data);
 
-        try accounts_db.putAccount(slot, Sysvar.ID, account);
+        try sysvar_accounts.append(allocator, .{ .pubkey = Sysvar.ID, .account = .{
+            .lamports = account.lamports,
+            .data = .initAllocatedOwned(account.data),
+            .owner = account.owner,
+            .executable = account.executable,
+            .rent_epoch = account.rent_epoch,
+        } });
     }
+
+    try accounts_db.putAccountSlice(
+        sysvar_accounts.slice().items(.account),
+        sysvar_accounts.slice().items(.pubkey),
+        slot,
+    );
 }
