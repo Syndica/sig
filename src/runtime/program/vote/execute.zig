@@ -3766,10 +3766,10 @@ test "vote_program: vote state update" {
     const slot_hashes = try SlotHashes.initWithEntries(
         allocator,
         &.{
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
             .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -3905,10 +3905,10 @@ test "vote_program: vote state update switch" {
     const slot_hashes = try SlotHashes.initWithEntries(
         allocator,
         &.{
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
             .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -4045,10 +4045,10 @@ test "vote_program: compact vote state update" {
     const slot_hashes = try SlotHashes.initWithEntries(
         allocator,
         &.{
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
             .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -4184,10 +4184,10 @@ test "vote_program: compact vote state update switch" {
     const slot_hashes = try SlotHashes.initWithEntries(
         allocator,
         &.{
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
             .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -4325,10 +4325,10 @@ test "vote_program: tower sync" {
     const slot_hashes = try SlotHashes.initWithEntries(
         allocator,
         &.{
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
             .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -4471,10 +4471,10 @@ test "vote_program: tower sync switch" {
     const slot_hashes = try SlotHashes.initWithEntries(
         allocator,
         &.{
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
             .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
