@@ -482,16 +482,15 @@ fn testGetStakeHistory(filled: bool) !void {
         sysvar.StakeHistory.MAX_ENTRIES,
     ) = .{};
     for (1..epochs) |epoch| {
-        try entries.append(.{
-            .epoch = epoch,
+        try entries.append(.{ .epoch = epoch, .stake = .{
             .effective = epoch * 2,
             .activating = epoch * 3,
             .deactivating = epoch * 5,
-        });
+        } });
     }
 
     const src_history = try sysvar.StakeHistory.initWithEntries(allocator, entries.constSlice());
-    defer src_history.deinit(allocator);
+    // deinitialised by transaction context
 
     {
         const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.SIZE_OF);
@@ -568,8 +567,8 @@ fn testGetSlotHashes(filled: bool) !void {
         try entries.append(.{ .slot = slot, .hash = result });
     }
 
-    const src_hashes = try sysvar.SlotHashes.defaultWithEntries(allocator, entries.constSlice());
-    defer src_hashes.deinit(allocator);
+    const src_hashes = try sysvar.SlotHashes.initWithEntries(allocator, entries.constSlice());
+    // deinitialised by transaction context
 
     {
         const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.SIZE_OF);
@@ -616,7 +615,7 @@ fn testGetSlotHashes(filled: bool) !void {
 
     try std.testing.expectEqualSlices(
         sysvar.SlotHashes.Entry,
-        obj_parsed.inner.items,
-        src_hashes.inner.items,
+        obj_parsed.entries.items,
+        src_hashes.entries.items,
     );
 }

@@ -1011,11 +1011,11 @@ test "executeAdvanceNonceAccount" {
     defer allocator.free(final_nonce_state_bytes);
 
     // Create Sysvar Recent Blockhashes
+    // Deinitialized by the syvar cache in the created transaction context
     const recent_blockhashes: RecentBlockhashes = try .initWithEntries(allocator, &.{.{
         .blockhash = Hash.initRandom(prng.random()),
         .lamports_per_signature = 0,
     }});
-    defer recent_blockhashes.deinit(allocator);
 
     const account_0_key = Pubkey.initRandom(prng.random());
 
@@ -1061,9 +1061,6 @@ test "executeAdvanceNonceAccount" {
             },
             .prev_blockhash = prev_blockhash,
             .prev_lamports_per_signature = lamports_per_signature,
-            .sysvar_cache = .{
-                .recent_blockhashes = recent_blockhashes,
-            },
         },
         .{},
     );
@@ -1093,7 +1090,6 @@ test "executeWithdrawNonceAccount" {
 
     // Create Sysvars
     const recent_blockhashes = try RecentBlockhashes.default(allocator);
-    defer recent_blockhashes.deinit(allocator);
 
     const rent = Rent.DEFAULT;
     const rent_minimum_balance = rent.minimumBalance(sig.bincode.sizeOf(nonce_state, .{}));
@@ -1148,10 +1144,6 @@ test "executeWithdrawNonceAccount" {
                 .{ .pubkey = nonce_authority },
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
-            .sysvar_cache = .{
-                .recent_blockhashes = recent_blockhashes,
-                .rent = rent,
-            },
         },
         .{},
     );
@@ -1195,7 +1187,6 @@ test "executeInitializeNonceAccount" {
         .blockhash = Hash.initRandom(prng.random()),
         .lamports_per_signature = 0,
     }});
-    defer recent_blockhashes.deinit(allocator);
     const rent = Rent.DEFAULT;
 
     const account_0_key = Pubkey.initRandom(prng.random());
@@ -1245,10 +1236,6 @@ test "executeInitializeNonceAccount" {
             },
             .prev_lamports_per_signature = lamports_per_signature,
             .prev_blockhash = prev_blockhash,
-            .sysvar_cache = .{
-                .recent_blockhashes = recent_blockhashes,
-                .rent = rent,
-            },
         },
         .{},
     );

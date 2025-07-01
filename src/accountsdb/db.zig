@@ -3127,7 +3127,7 @@ pub fn unpackSnapshotFilePair(
     }
 }
 
-fn loadTestAccountsDB(
+pub fn loadTestAccountsDB(
     allocator: std.mem.Allocator,
     use_disk: bool,
     n_threads: u32,

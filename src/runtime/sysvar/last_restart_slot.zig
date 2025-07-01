@@ -1,3 +1,5 @@
+const builtin = @import("builtin");
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -16,4 +18,9 @@ pub const LastRestartSlot = extern struct {
     };
 
     pub const SIZE_OF: u64 = @sizeOf(LastRestartSlot);
+
+    pub fn initRandom(random: std.Random) LastRestartSlot {
+        if (!builtin.is_test) @compileError("only for testing");
+        return .{ .last_restart_slot = random.int(Slot) };
+    }
 };
