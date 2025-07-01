@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Account = sig.core.account.Account;
+// const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
 const Slot = sig.core.Slot;
