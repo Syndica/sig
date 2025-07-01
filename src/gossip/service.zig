@@ -58,7 +58,6 @@ const SocketThread = sig.net.SocketThread;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
-const getWallclockMs = sig.time.getWallclockMs;
 const deinitMux = sig.sync.mux.deinitMux;
 
 const PACKET_DATA_SIZE = Packet.DATA_SIZE;
@@ -696,7 +695,7 @@ pub const GossipService = struct {
                     },
                     .PruneMessage => |*prune| {
                         const prune_data = prune[1];
-                        const now = getWallclockMs();
+                        const now = sig.time.clock.now();
                         const prune_wallclock = prune_data.wallclock;
 
                         const too_old = prune_wallclock < now -| PRUNE_MSG_TIMEOUT.asMillis();
@@ -868,7 +867,7 @@ pub const GossipService = struct {
             defer gossip_table_lock.unlock();
 
             var x_timer = sig.time.Timer.start() catch unreachable;
-            const now = getWallclockMs();
+            const now = sig.time.clock.now();
             const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
                 self.logger.err().logf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
                 break :err_blk 0;
@@ -913,7 +912,7 @@ pub const GossipService = struct {
             if (pull_req_timer.read().asNanos() > PULL_REQUEST_RATE.asNanos()) pull_blk: {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
-                const now = getWallclockMs();
+                const now = sig.time.clock.now();
                 const pull_req_packets = self.buildPullRequests(
                     random,
                     pull_request.MAX_BLOOM_SIZE,
@@ -930,7 +929,7 @@ pub const GossipService = struct {
             }
 
             // new push msgs
-            try self.drainPushQueueToGossipTable(getWallclockMs());
+            try self.drainPushQueueToGossipTable(sig.time.clock.now());
             const maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
                 self.logger.err().logf(
                     "failed to generate push messages: {any}\n{any}",
@@ -949,7 +948,7 @@ pub const GossipService = struct {
             // trim data
             if (trim_memory_timer.read().asNanos() > TABLE_TRIM_RATE.asNanos()) {
                 defer trim_memory_timer.reset();
-                try self.trimMemory(getWallclockMs());
+                try self.trimMemory(sig.time.clock.now());
             }
 
             // initialize cluster data from gossip values
@@ -1019,7 +1018,7 @@ pub const GossipService = struct {
     }
 
     pub fn rotateActiveSet(self: *Self, random: std.Random) !void {
-        const now = getWallclockMs();
+        const now = sig.time.clock.now();
         var buf: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
         const gossip_peers = try self.getThreadSafeGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
 
@@ -1120,7 +1119,7 @@ pub const GossipService = struct {
                 return packet_batch;
             }
 
-            const now = getWallclockMs();
+            const now = sig.time.clock.now();
 
             var n_values_sent: u64 = 0;
             var n_values_timeout: u64 = 0;
@@ -1356,7 +1355,7 @@ pub const GossipService = struct {
                 self.allocator,
                 self.gossip_table,
                 self.filter,
-                getWallclockMs(),
+                sig.time.clock.now(),
                 @as(usize, @max(output_limit, 0)),
             ) catch return;
             defer response_gossip_values.deinit();
@@ -1396,7 +1395,7 @@ pub const GossipService = struct {
             var gossip_table, var lock = self.gossip_table_rw.writeWithLock();
             defer lock.unlock();
 
-            const now = getWallclockMs();
+            const now = sig.time.clock.now();
             for (pull_requests) |*req| {
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
                 const result = gossip_table.insert(req.value, now) catch {
@@ -1502,7 +1501,7 @@ pub const GossipService = struct {
         self: *Self,
         pong_messages: *const ArrayList(PongMessage),
     ) void {
-        const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
+        const now = sig.time.clock.sample();
 
         var ping_cache_lock = self.ping_cache_rw.write();
         defer ping_cache_lock.unlock();
@@ -1557,7 +1556,7 @@ pub const GossipService = struct {
             return;
         }
 
-        const now = getWallclockMs();
+        const now = sig.time.clock.now();
         var failed_insert_ptrs = ArrayList(*const SignedGossipData).init(self.allocator);
         defer failed_insert_ptrs.deinit();
 
@@ -1707,7 +1706,7 @@ pub const GossipService = struct {
             var gossip_table, var gossip_table_lg = self.gossip_table_rw.writeWithLock();
             defer gossip_table_lg.unlock();
 
-            const now = getWallclockMs();
+            const now = sig.time.clock.now();
             for (batch_push_messages.items) |*push_message| {
                 // Filtered values are freed
                 const full_len = push_message.gossip_values.len;
@@ -1801,7 +1800,7 @@ pub const GossipService = struct {
         }
 
         // build prune packets
-        const now = getWallclockMs();
+        const now = sig.time.clock.now();
         var timer = try sig.time.Timer.start();
         defer {
             const elapsed = timer.read().asMillis();
@@ -2345,7 +2344,7 @@ test "handle pong messages" {
         const ping_cache_ptr_ptr, var ping_cache_lg = gossip_service.ping_cache_rw.writeWithLock();
         defer ping_cache_lg.unlock();
 
-        const now = try std.time.Instant.now();
+        const now = sig.time.clock.sample();
         const ping = ping_cache_ptr_ptr.*.maybePing(now, pubkey_and_addr, &keypair);
         break :blk ping.?;
     };
@@ -2371,7 +2370,7 @@ test "handle pong messages" {
         const ping_cache_ptr_ptr, var ping_cache_lg = gossip_service.ping_cache_rw.writeWithLock();
         defer ping_cache_lg.unlock();
 
-        const now = try std.time.Instant.now();
+        const now = sig.time.clock.sample();
         const r = ping_cache_ptr_ptr.*.check(now, pubkey_and_addr, &keypair);
         std.debug.assert(r.passes_ping_check);
     }
@@ -2429,7 +2428,7 @@ test "build messages startup and shutdown" {
         var value = try SignedGossipData.randomWithIndex(random, &rand_keypair, 0); // contact info
         // make gossip valid
         value.data.LegacyContactInfo.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000);
-        _ = try lg.mut().insert(value, getWallclockMs());
+        _ = try lg.mut().insert(value, sig.time.clock.now());
         try peers.append(value.data.LegacyContactInfo);
         // set the pong status as OK so they included in active set
         ping_cache._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
@@ -2471,7 +2470,7 @@ test "handling prune messages" {
     for (0..10) |_| {
         var rand_keypair = KeyPair.generate();
         const value = try SignedGossipData.randomWithIndex(prng.random(), &rand_keypair, 0); // contact info
-        _ = try lg.mut().insert(value, getWallclockMs());
+        _ = try lg.mut().insert(value, sig.time.clock.now());
         try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
     lg.unlock();
@@ -2496,7 +2495,7 @@ test "handling prune messages" {
         .destination = gossip_service.my_pubkey,
         .prunes = &prunes,
         .signature = undefined,
-        .wallclock = getWallclockMs(),
+        .wallclock = sig.time.clock.now(),
     };
     try prune_data.sign(&my_keypair);
 
@@ -2710,7 +2709,7 @@ test "handle pull request" {
             count += 1;
             for (0..10) |_| {
                 var value = try SignedGossipData.randomWithIndex(prng.random(), &(KeyPair.generate()), 0);
-                _ = try gossip_table.insert(value, getWallclockMs());
+                _ = try gossip_table.insert(value, sig.time.clock.now());
 
                 // make sure well get a response from the request
                 const metadata = gossip_table.getMetadata(value.label()).?;
@@ -2828,7 +2827,7 @@ test "test build prune messages and handle push messages" {
         .LegacyContactInfo = send_contact_info,
     });
     var lg = gossip_service.gossip_table_rw.write();
-    _ = try lg.mut().insert(ci_value, getWallclockMs());
+    _ = try lg.mut().insert(ci_value, sig.time.clock.now());
     lg.unlock();
 
     var msgs = ArrayList(GossipService.PushMessage).init(allocator);
@@ -2912,7 +2911,7 @@ fn testBuildPullRequests(
     }
 
     // insert peers to send msgs to
-    const now = getWallclockMs();
+    const now = sig.time.clock.now();
     {
         var ping_lock = gossip_service.ping_cache_rw.write();
         var lg = gossip_service.gossip_table_rw.write();
@@ -2978,7 +2977,7 @@ test "test build push messages" {
     for (0..10) |_| {
         var keypair = KeyPair.generate();
         const value = try SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
-        _ = try lg.mut().insert(value, getWallclockMs());
+        _ = try lg.mut().insert(value, sig.time.clock.now());
         try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
     lg.unlock();
@@ -3000,7 +2999,7 @@ test "test build push messages" {
         try push_queue.queue.append(value);
         pqlg.unlock();
     }
-    try gossip_service.drainPushQueueToGossipTable(getWallclockMs());
+    try gossip_service.drainPushQueueToGossipTable(sig.time.clock.now());
 
     var clg = gossip_service.gossip_table_rw.read();
     try std.testing.expect(clg.get().len() == 11);
@@ -3056,7 +3055,7 @@ test "test large push messages" {
         for (0..2_000) |_| {
             var keypair = KeyPair.generate();
             const value = try SignedGossipData.randomWithIndex(prng.random(), &keypair, 0); // contact info
-            _ = try lock_guard.mut().insert(value, getWallclockMs());
+            _ = try lock_guard.mut().insert(value, sig.time.clock.now());
             try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
         }
     }
@@ -3530,7 +3529,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             .ContactInfo = contact_info_recv,
         });
 
-        const now = getWallclockMs();
+        const now = sig.time.clock.now();
         var prng = std.Random.DefaultPrng.init(19);
         const random = prng.random();
 

@@ -12,7 +12,7 @@ const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Duration = sig.time.Duration;
-const Instant = sig.time.Instant;
+const Instant = std.time.Instant;
 const GossipTable = sig.gossip.GossipTable;
 const WeightedShuffle = sig.rand.WeightedShuffle(u64);
 const ChaChaRng = sig.rand.ChaChaRng(20);
@@ -35,7 +35,8 @@ pub const TurbineTreeCache = struct {
         turbine_tree: *TurbineTree,
 
         pub fn alive(self: *const Entry, ttl: Duration) bool {
-            return self.created.elapsed().asNanos() < ttl.asNanos();
+            const now = sig.time.clock.sample();
+            return now.since(self.created) < ttl.asNanos();
         }
     };
 
@@ -68,7 +69,7 @@ pub const TurbineTreeCache = struct {
 
     pub fn put(self: *TurbineTreeCache, epoch: Epoch, turbine_tree: *TurbineTree) !void {
         try self.cache.put(epoch, .{
-            .created = Instant.now(),
+            .created = sig.time.clock.sample(),
             .turbine_tree = turbine_tree.acquireUnsafe(),
         });
 

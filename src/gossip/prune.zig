@@ -9,8 +9,6 @@ const DefaultPrng = std.Random.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 
-const getWallclockMs = sig.time.getWallclockMs;
-
 const PACKET_DATA_SIZE = sig.net.Packet.DATA_SIZE;
 pub const PRUNE_DATA_PREFIX: []const u8 = "\xffSOLANA_PRUNE_DATA";
 
@@ -61,7 +59,7 @@ pub const PruneData = struct {
             .prunes = &[0]Pubkey{},
             .signature = Signature.ZEROES,
             .destination = Pubkey.initRandom(random),
-            .wallclock = getWallclockMs(),
+            .wallclock = sig.time.clock.now(),
         };
         try self.sign(keypair);
 
