@@ -556,15 +556,10 @@ pub fn SortedMapUnmanagedCustom(
         inner: Inner,
         max: ?K,
         is_sorted: bool,
+
         const SortedMapSelf = @This();
 
         const Inner = std.ArrayHashMapUnmanaged(K, V, config.Context, config.store_hash);
-
-        pub const @"!bincode-config": sig.bincode.FieldConfig(SortedMapSelf) = .{
-            .deserializer = bincodeDeserialize,
-            .serializer = bincodeSerialize,
-            .free = bincodeFree,
-        };
 
         pub const empty: SortedMapSelf = .{
             .inner = .empty,
@@ -781,28 +776,6 @@ pub fn SortedMapUnmanagedCustom(
                 }
             }{ .items = self.inner.entries.slice() });
             self.is_sorted = true;
-        }
-
-        fn bincodeDeserialize(
-            allocator: std.mem.Allocator,
-            reader: anytype,
-            params: sig.bincode.Params,
-        ) !SortedMapSelf {
-            var result: SortedMapSelf = .empty;
-            result.inner = try sig.bincode.read(allocator, Inner, reader, params);
-            return result;
-        }
-
-        fn bincodeSerialize(
-            writer: anytype,
-            data: SortedMapSelf,
-            params: sig.bincode.Params,
-        ) !void {
-            try sig.bincode.write(writer, data.inner, params);
-        }
-
-        fn bincodeFree(allocator: std.mem.Allocator, data: anytype) void {
-            data.deinit(allocator);
         }
     };
 }
@@ -1115,6 +1088,24 @@ test SortedSet {
     for (set.items(), 0..) |key, i| {
         try expect(key == i);
     }
+}
+
+test "SortedSet bincode round trip does not break sorting" {
+    var set = SortedSet(u8).init(std.testing.allocator);
+    defer set.deinit();
+
+    try set.put(5);
+    try set.put(3);
+
+    const ser = try sig.bincode.writeAlloc(std.testing.allocator, set, .{});
+    defer std.testing.allocator.free(ser);
+
+    var des = try sig.bincode.readFromSlice(std.testing.allocator, SortedSet(u8), ser, .{});
+    defer des.deinit();
+
+    const items = des.items();
+    try std.testing.expectEqual(3, items[0]);
+    try std.testing.expectEqual(5, items[1]);
 }
 
 test "SortedSet range" {
