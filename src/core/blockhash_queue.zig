@@ -6,7 +6,6 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 
-/// Why is this a 'Queue'?
 /// Analogous to [BlockhashQueue](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L32)
 pub const BlockhashQueue = struct {
     /// index of the last hash registered
@@ -41,8 +40,8 @@ pub const BlockhashQueue = struct {
     }
 
     pub fn deinit(self: BlockhashQueue, allocator: Allocator) void {
-        var ages = self.hash_infos;
-        ages.deinit(allocator);
+        var infos = self.hash_infos;
+        infos.deinit(allocator);
     }
 
     pub fn clone(
@@ -97,7 +96,7 @@ pub const BlockhashQueue = struct {
     ) Allocator.Error!void {
         self.last_hash_index += 1;
 
-        if (self.hash_infos.count() >= self.max_age) try self.purge(allocator);
+        if (self.hash_infos.count() >= self.max_age) try self.purge();
 
         try self.hash_infos.put(allocator, hash, .{
             .index = self.last_hash_index,
@@ -117,13 +116,11 @@ pub const BlockhashQueue = struct {
         return last_hash_index - hash_index <= @as(u64, max_age);
     }
 
-    fn purge(self: *BlockhashQueue, allocator: Allocator) Allocator.Error!void {
-        // NOTE: Is there a way to do this without allocation? orderedRemove would invalidate the
-        // slice we are iterating over so and I can't see another obvious approach.
-        const keys = try allocator.dupe(Hash, self.hash_infos.keys());
-        defer allocator.free(keys);
-
-        for (keys) |key| {
+    fn purge(self: *BlockhashQueue) Allocator.Error!void {
+        std.debug.assert(self.hash_infos.count() <= MAX_RECENT_BLOCKHASHES + 1);
+        var keys = [_]Hash{Hash.ZEROES} ** (MAX_RECENT_BLOCKHASHES + 1);
+        @memcpy(keys[0..self.hash_infos.count()], self.hash_infos.keys());
+        for (keys[0..self.hash_infos.count()]) |key| {
             const hash_info = self.hash_infos.get(key) orelse unreachable;
             if (isHashIndexValid(self.last_hash_index, self.max_age, hash_info.index)) continue;
             _ = self.hash_infos.swapRemove(key);
@@ -145,7 +142,7 @@ pub const BlockhashQueue = struct {
 
             self.last_hash_index += 1;
 
-            if (self.hash_infos.count() >= self.max_age) try self.purge(allocator);
+            if (self.hash_infos.count() >= self.max_age) try self.purge();
 
             try self.hash_infos.put(allocator, hash, .{
                 .index = self.last_hash_index,
@@ -237,10 +234,6 @@ test "queue init blockhash" {
 
     try std.testing.expectEqual(last_hash, queue.last_hash.?);
     try std.testing.expect(queue.isHashValidForAge(last_hash, 0));
-}
-
-test "get recent blockhashes" {
-    // TODO: Implement this test
 }
 
 test "len" {
