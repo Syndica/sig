@@ -140,7 +140,7 @@ pub const Elf = struct {
                 const start = shdr.sh_name;
                 if (start >= name_buf.len) return error.OutOfBounds;
 
-                const end = for (start..name_buf.len) |i| {
+                const end = for (start..@min(start +| 16, name_buf.len)) |i| {
                     if (name_buf[i] == 0) break i;
                 } else return error.StringTooLong;
 
