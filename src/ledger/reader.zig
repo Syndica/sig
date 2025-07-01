@@ -1029,6 +1029,16 @@ pub const BlockstoreReader = struct {
         const completed_ranges, const maybe_slot_meta =
             try self.getCompletedRanges(slot, start_index);
         defer completed_ranges.deinit();
+        self.logger.info().logf("DEBUG:\n\n{any}\n{any}", .{ maybe_slot_meta, completed_ranges.items });
+        if (maybe_slot_meta) |sm| {
+            self.logger.info().logf("DEBUG: consecutive: {}\n", .{sm.consecutive_received_from_0});
+            self.logger.info().logf("DEBUG: got completed: {any}", .{sm.completed_data_indexes.count()});
+            // var slotmeta = sm;
+            // for (slotmeta.completed_data_indexes.items()) |key| {
+            //     _ = key; // autofix
+            //     // std.debug.print("completed index: {}\n", .{key}); -- for some reason this prints garbage
+            // }
+        }
 
         // Check if the slot is dead *after* fetching completed ranges to avoid a race
         // where a slot is marked dead by another thread before the completed range query finishes.

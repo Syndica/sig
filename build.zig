@@ -201,6 +201,7 @@ pub fn build(b: *Build) void {
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports,
+            .error_tracing = true,
         }),
         .sanitize_thread = config.enable_tsan,
         .use_llvm = config.use_llvm,
