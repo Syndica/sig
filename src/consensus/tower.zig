@@ -60,6 +60,9 @@ const ComputedBankState = struct {
 
     pub fn deinit(self: *ComputedBankState, allocator: std.mem.Allocator) void {
         self.voted_stakes.deinit(allocator);
+        for (self.lockout_intervals.values()) |value| {
+            value.deinit();
+        }
         self.lockout_intervals.deinit(allocator);
     }
 };
@@ -311,6 +314,7 @@ pub fn collectVoteLockouts(
     latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
 ) !ComputedBankState {
     var vote_slots = SortedSet(Slot).init(allocator);
+    defer vote_slots.deinit();
 
     var voted_stakes = std.AutoHashMapUnmanaged(Slot, Stake).empty;
 
@@ -319,6 +323,8 @@ pub fn collectVoteLockouts(
     // Tree of intervals of lockouts of the form [slot, slot + slot.lockout],
     // keyed by end of the range
     var lockout_intervals = LockoutIntervals.empty;
+    errdefer lockout_intervals.deinit(allocator);
+
     var my_latest_landed_vote: ?Slot = null;
 
     for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
@@ -575,8 +581,7 @@ test "is slot duplicate confirmed pass" {
 }
 
 test "collect vote lockouts root" {
-    // const allocator = std.testing.allocator;
-    const allocator = std.heap.c_allocator;
+    const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(19);
     const random = prng.random();
     const votes = try allocator.alloc(u64, MAX_LOCKOUT_HISTORY);
@@ -620,6 +625,8 @@ test "collect vote lockouts root" {
         0,
         0.67,
     );
+    defer replay_tower.deinit(allocator);
+
     var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
     defer {
         var it = ancestors.iterator();
@@ -653,15 +660,20 @@ test "collect vote lockouts root" {
         replay_tower.tower.vote_state.root_slot,
     );
     var latest_votes = LatestValidatorVotesForFrozenBanks.empty;
+    defer latest_votes.deinit(allocator);
+
     var progres_map = ProgressMap.INIT;
     defer progres_map.deinit(allocator);
+
+    var fork_progress = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+    errdefer fork_progress.deinit(allocator);
+    fork_progress.fork_stats.bank_hash = sig.core.hash.Hash.ZEROES;
+
     for (accounts.values()) |account| {
-        var progress = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
-        progress.fork_stats.bank_hash = sig.core.hash.Hash.ZEROES;
         try progres_map.map.put(
             allocator,
             account[1].vote_state.lastVotedSlot().?,
-            progress,
+            fork_progress,
         );
     }
 
@@ -684,8 +696,9 @@ test "collect vote lockouts root" {
     try std.testing.expectEqual(expected_bank_stake, computed_banks.fork_stake);
     try std.testing.expectEqual(expected_total_stake, computed_banks.total_stake);
 
-    const new_votes =
+    var new_votes =
         try latest_votes.takeVotesDirtySet(allocator, root.slot);
+    defer new_votes.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         struct { Pubkey, sig.core.hash.SlotAndHash },
