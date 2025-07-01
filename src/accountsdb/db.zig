@@ -1141,6 +1141,39 @@ pub const AccountsDB = struct {
         };
     }
 
+    pub fn deltaHash(
+        self: *const AccountsDB,
+        allocator: Allocator,
+        slot: Slot,
+    ) void {
+        const hashes = try self.slotAccountHashes(allocator, slot);
+        _ = hashes; // autofix
+        // TODO
+    }
+
+    /// Returns the hash of every account that was modified in the slot.
+    ///
+    /// Analogous to [get_pubkey_hash_for_slot](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/accounts-db/src/accounts_db.rs#L6871)
+    fn slotAccountHashes(
+        self: *const AccountsDB,
+        allocator: Allocator,
+        slot: Slot,
+    ) ![]const struct { Pubkey, Hash } {
+        const slot_ref_map = self.account_index.slot_reference_map.read();
+        defer slot_ref_map.unlock();
+
+        const slot_references = slot_ref_map.get().get(slot) orelse return &.{};
+
+        const pubkey_hashes = try allocator.alloc(struct { Pubkey, Hash }, slot_references.len);
+
+        for (slot_references, pubkey_hashes) |account_ref, pubkey_hash| {
+            const account = try self.getAccountFromRef(account_ref);
+            pubkey_hash.* = .{ account_ref.pubkey, account.hash(account_ref.pubkey) };
+        }
+
+        return pubkey_hashes;
+    }
+
     pub const ValidateLoadFromSnapshotParams = struct {
         /// used to verify the full snapshot.
         full_slot: Slot,
