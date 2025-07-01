@@ -108,6 +108,18 @@ pub const RecentBlockhashes = struct {
         }
         return self;
     }
+
+    pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!RecentBlockhashes {
+        if (!builtin.is_test) @compileError("only for tests");
+        var self = try RecentBlockhashes.default(allocator);
+        for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
+            self.entries.appendAssumeCapacity(.{
+                .blockhash = Hash.initRandom(random),
+                .lamports_per_signature = random.int(u64),
+            });
+        }
+        return self;
+    }
 };
 
 test "from blockhash queue" {
