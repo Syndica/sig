@@ -41,14 +41,6 @@ pub const Rent = extern struct {
 
     pub const SIZE_OF: u64 = @sizeOf(Rent);
 
-    pub fn initRandom(random: std.Random) Rent {
-        return .{
-            .lamports_per_byte_year = random.int(u64),
-            .exemption_threshold = random.float(f64),
-            .burn_percent = random.uintAtMost(u8, 100),
-        };
-    }
-
     pub fn minimumBalance(self: Rent, data_len: usize) u64 {
         const bytes: u64 = @intCast(data_len);
         const lamports_per_year: f64 = @floatFromInt(

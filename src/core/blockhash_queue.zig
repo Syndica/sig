@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
 
@@ -36,56 +37,6 @@ pub const BlockhashQueue = struct {
             .last_hash = null,
             .hash_infos = .{},
             .max_age = max_age,
-        };
-    }
-
-    pub fn initRandom(
-        allocator: Allocator,
-        random: std.Random,
-        max_list_entries: usize,
-    ) Allocator.Error!BlockhashQueue {
-        var self = BlockhashQueue.DEFAULT;
-        var timestamp: u64 = @intCast(std.time.milliTimestamp());
-
-        for (0..max_list_entries) |_| {
-            const hash = Hash.initRandom(random);
-
-            self.last_hash_index += 1;
-
-            if (self.hash_infos.count() >= self.max_age) try self.purge(allocator);
-
-            try self.hash_infos.put(allocator, hash, .{
-                .index = self.last_hash_index,
-                .timestamp = timestamp,
-                .lamports_per_signature = random.intRangeAtMost(u64, 4000, 6000),
-            });
-
-            self.last_hash = hash;
-
-            timestamp += random.intRangeAtMost(u64, 1, 1_000_000);
-        }
-
-        return self;
-    }
-
-    pub fn initWithSingleEntry(
-        allocator: Allocator,
-        hash: Hash,
-        lamports_per_signature: u64,
-    ) Allocator.Error!BlockhashQueue {
-        return .{
-            .last_hash = hash,
-            .max_age = 0,
-            .hash_infos = try .init(
-                allocator,
-                &.{hash},
-                &.{.{
-                    .index = 0,
-                    .timestamp = 0,
-                    .lamports_per_signature = lamports_per_signature,
-                }},
-            ),
-            .last_hash_index = 0,
         };
     }
 
@@ -177,6 +128,59 @@ pub const BlockhashQueue = struct {
             if (isHashIndexValid(self.last_hash_index, self.max_age, hash_info.index)) continue;
             _ = self.hash_infos.swapRemove(key);
         }
+    }
+
+    pub fn initRandom(
+        allocator: Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) Allocator.Error!BlockhashQueue {
+        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test only when possible.
+        // if (!builtin.is_test) @compileError("only for testing");
+        var self = BlockhashQueue.DEFAULT;
+        var timestamp: u64 = @intCast(std.time.milliTimestamp());
+
+        for (0..max_list_entries) |_| {
+            const hash = Hash.initRandom(random);
+
+            self.last_hash_index += 1;
+
+            if (self.hash_infos.count() >= self.max_age) try self.purge(allocator);
+
+            try self.hash_infos.put(allocator, hash, .{
+                .index = self.last_hash_index,
+                .timestamp = timestamp,
+                .lamports_per_signature = random.intRangeAtMost(u64, 4000, 6000),
+            });
+
+            self.last_hash = hash;
+
+            timestamp += random.intRangeAtMost(u64, 1, 1_000_000);
+        }
+
+        return self;
+    }
+
+    pub fn initWithSingleEntry(
+        allocator: Allocator,
+        hash: Hash,
+        lamports_per_signature: u64,
+    ) Allocator.Error!BlockhashQueue {
+        if (!builtin.is_test) @compileError("only for testing");
+        return .{
+            .last_hash = hash,
+            .max_age = 0,
+            .hash_infos = try .init(
+                allocator,
+                &.{hash},
+                &.{.{
+                    .index = 0,
+                    .timestamp = 0,
+                    .lamports_per_signature = lamports_per_signature,
+                }},
+            ),
+            .last_hash_index = 0,
+        };
     }
 };
 

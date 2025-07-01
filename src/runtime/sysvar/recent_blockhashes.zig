@@ -85,72 +85,16 @@ pub const RecentBlockhashes = struct {
         allocator: Allocator,
         entries: []const Entry,
     ) Allocator.Error!RecentBlockhashes {
-        if (!builtin.is_test) @compileError("only available in test mode");
+        if (!builtin.is_test) @compileError("only for tests");
         std.debug.assert(entries.len <= MAX_ENTRIES);
         var self = try RecentBlockhashes.default(allocator);
         for (entries) |entry| self.entries.appendAssumeCapacity(entry);
         return self;
     }
 
-    // pub fn getFirst(self: *const RecentBlockhashes) ?Entry {
-    //     if (self.entries.len == 0) return null;
-    //     return self.entries.buffer[0];
-    // }
-
-    pub fn fromBlockhashQueue(
-        allocator: Allocator,
-        queue: *const BlockhashQueue,
-    ) Allocator.Error!RecentBlockhashes {
-        const IndexAndEntry = struct {
-            index: u64,
-            entry: Entry,
-
-            pub fn compareFn(_: void, a: @This(), b: @This()) bool {
-                return a.index > b.index;
-            }
-        };
-
-        var entries = try std.ArrayListUnmanaged(IndexAndEntry).initCapacity(
-            allocator,
-            queue.hash_infos.count(),
-        );
-        defer entries.deinit(allocator);
-
-        for (queue.hash_infos.keys(), queue.hash_infos.values()) |hash, info| {
-            entries.appendAssumeCapacity(.{
-                .index = info.index,
-                .entry = .{
-                    .blockhash = hash,
-                    .lamports_per_signature = info.lamports_per_signature,
-                },
-            });
-        }
-
-        std.sort.heap(IndexAndEntry, entries.items, {}, IndexAndEntry.compareFn);
-
-        var self = try RecentBlockhashes.init(allocator);
-        errdefer self.deinit(allocator);
-
-        const num_entries = @min(entries.items.len, MAX_ENTRIES);
-        for (entries.items[0..num_entries]) |entry| self.entries.appendAssumeCapacity(entry.entry);
-
-        return self;
-    }
-
-    pub fn initWithEntries(
-        allocator: Allocator,
-        entries: []const Entry,
-    ) Allocator.Error!RecentBlockhashes {
-        if (!builtin.is_test) @compileError("only for tests");
-        std.debug.assert(entries.len <= MAX_ENTRIES);
-        var self = try RecentBlockhashes.init(allocator);
-        self.entries.appendSliceAssumeCapacity(entries);
-        return self;
-    }
-
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
-        var self = try RecentBlockhashes.init(allocator);
+        var self = try RecentBlockhashes.default(allocator);
         for (0..random.intRangeAtMost(u64, 1, MAX_ENTRIES)) |_| {
             self.entries.appendAssumeCapacity(.{
                 .blockhash = Hash.initRandom(random),

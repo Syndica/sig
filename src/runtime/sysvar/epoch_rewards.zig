@@ -49,4 +49,17 @@ pub const EpochRewards = extern struct {
     };
 
     pub const SIZE_OF: u64 = @sizeOf(EpochRewards);
+
+    pub fn initRandom(random: std.Random) EpochRewards {
+        if (!builtin.is_test) @compileError("only for testing");
+        return .{
+            .distribution_starting_block_height = random.int(u64),
+            .num_partitions = random.int(u64),
+            .parent_blockhash = Hash.initRandom(random),
+            .total_points = random.int(u128),
+            .total_rewards = random.int(u64),
+            .distributed_rewards = random.int(u64),
+            .active = random.boolean(),
+        };
+    }
 };
