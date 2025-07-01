@@ -127,7 +127,7 @@ test getSysvar {
             .first_normal_slot = 4,
         });
         const fees = fill(false, sysvar.Fees{
-            .fee_calculator = .{ .lamports_per_signature = 1 },
+            .lamports_per_signature = 1,
         });
         const rent = fill(false, sysvar.Rent{
             .lamports_per_byte_year = 1,
@@ -291,7 +291,7 @@ test getSysvar {
         const obj_addr = 0x100000000;
 
         var clean_obj = src.fill(true, obj); // has bytes/padding zeroed.
-        clean_obj.fee_calculator = src.fees.fee_calculator;
+        clean_obj = src.fees;
 
         var memory_map = try MemoryMap.init(
             allocator,
@@ -479,22 +479,18 @@ fn testGetStakeHistory(filled: bool) !void {
 
     var entries: std.BoundedArray(
         sysvar.StakeHistory.Entry,
-        sysvar.StakeHistory.MAX_ENTRIES + 1,
+        sysvar.StakeHistory.MAX_ENTRIES,
     ) = .{};
     for (1..epochs) |epoch| {
-        try entries.append(.{
-            epoch,
-            .{
-                .effective = epoch * 2,
-                .activating = epoch * 3,
-                .deactivating = epoch * 5,
-            },
-        });
+        try entries.append(.{ .epoch = epoch, .stake = .{
+            .effective = epoch * 2,
+            .activating = epoch * 3,
+            .deactivating = epoch * 5,
+        } });
     }
 
-    const src_history = sysvar.StakeHistory{
-        .entries = entries.constSlice(),
-    };
+    const src_history = try sysvar.StakeHistory.initWithEntries(allocator, entries.constSlice());
+    // deinitialised by transaction context
 
     {
         const src_history_buf = try allocator.alloc(u8, sysvar.StakeHistory.SIZE_OF);
@@ -537,12 +533,12 @@ fn testGetStakeHistory(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.StakeHistory, &buffer, .{});
-    defer allocator.free(obj_parsed.entries);
+    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.StakeHistory.Entry,
-        obj_parsed.entries,
-        src_history.entries,
+        obj_parsed.entries.items,
+        src_history.entries.items,
     );
 }
 
@@ -561,16 +557,18 @@ fn testGetSlotHashes(filled: bool) !void {
     else
         sysvar.SlotHashes.MAX_ENTRIES / 2;
 
-    var entries: std.BoundedArray(sysvar.SlotHashes.Entry, sysvar.SlotHashes.MAX_ENTRIES + 1) = .{};
+    var entries: std.BoundedArray(
+        sysvar.SlotHashes.Entry,
+        sysvar.SlotHashes.MAX_ENTRIES,
+    ) = .{};
     for (1..slots) |slot| {
         var result: Hash = undefined;
         std.crypto.hash.sha2.Sha256.hash(std.mem.asBytes(&@as(u64, slot)), &result.data, .{});
-        try entries.append(.{ slot, result });
+        try entries.append(.{ .slot = slot, .hash = result });
     }
 
-    const src_hashes = sysvar.SlotHashes{
-        .entries = entries.constSlice(),
-    };
+    const src_hashes = try sysvar.SlotHashes.initWithEntries(allocator, entries.constSlice());
+    // deinitialised by transaction context
 
     {
         const src_hashes_buf = try allocator.alloc(u8, sysvar.SlotHashes.SIZE_OF);
@@ -613,11 +611,11 @@ fn testGetSlotHashes(filled: bool) !void {
     });
 
     const obj_parsed = try bincode.readFromSlice(allocator, sysvar.SlotHashes, &buffer, .{});
-    defer allocator.free(obj_parsed.entries);
+    defer obj_parsed.deinit(allocator);
 
     try std.testing.expectEqualSlices(
         sysvar.SlotHashes.Entry,
-        obj_parsed.entries,
-        src_hashes.entries,
+        obj_parsed.entries.items,
+        src_hashes.entries.items,
     );
 }

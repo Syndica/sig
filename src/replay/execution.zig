@@ -236,7 +236,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
     const svm_params = SvmSlot.Params{
         .slot = slot,
-        .max_age = sig.core.bank.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
+        .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = blockhash_queue,
         .accounts_db = state.accounts_db,

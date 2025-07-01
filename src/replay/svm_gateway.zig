@@ -7,7 +7,7 @@ const vm = sig.vm;
 const Allocator = std.mem.Allocator;
 
 const Ancestors = sig.core.Ancestors;
-const BlockhashQueue = sig.core.bank.BlockhashQueue;
+const BlockhashQueue = sig.core.BlockhashQueue;
 const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const StatusCache = sig.core.StatusCache;
@@ -150,11 +150,10 @@ pub const SvmSlot = struct {
             return error.MissingLastBlockhash;
 
         const last_blockhash_info = self.params.blockhash_queue
-            .getHashInfoIfValid(&last_blockhash, self.params.max_age) orelse
+            .getHashInfoIfValid(last_blockhash, self.params.max_age) orelse
             return error.MissingLastBlockhashInfo;
 
-        const last_lamports_per_signature =
-            last_blockhash_info.fee_calculator.lamports_per_signature;
+        const last_lamports_per_signature = last_blockhash_info.lamports_per_signature;
 
         return .{
             .ancestors = self.params.ancestors,

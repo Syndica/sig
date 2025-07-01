@@ -11,6 +11,7 @@ const snapgen = sig.accounts_db.snapshots.generate;
 
 const BenchTimeUnit = @import("../benchmarks.zig").BenchTimeUnit;
 
+const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
@@ -3179,7 +3180,7 @@ pub fn unpackSnapshotFilePair(
     }
 }
 
-fn loadTestAccountsDB(
+pub fn loadTestAccountsDB(
     allocator: std.mem.Allocator,
     use_disk: bool,
     n_threads: u32,
