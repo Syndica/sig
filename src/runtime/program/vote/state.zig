@@ -5051,7 +5051,6 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
 }
 
 pub fn processSlotVoteUnchecked(
-    allocator: std.mem.Allocator,
     vote_state: *VoteState,
     slot: Slot,
 ) !void {
