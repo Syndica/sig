@@ -54,8 +54,6 @@ pub fn processBatch(
             .err => |err| return err,
         }
     }
-    try committer.commitTransactions(allocator, svm_slot.params.slot, transactions, results, thread_id);
-
     try committer.commitTransactions(allocator, svm_slot.params.slot, transactions, results);
 
     return null;
