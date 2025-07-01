@@ -153,7 +153,8 @@ pub const BatchAccountCache = struct {
         const max_map_entries = total_account_keys: {
             var n: usize = 0;
             for (transactions) |tx| n += tx.accounts.len;
-            for (transactions) |tx| n += tx.instruction_infos.len; // for instr program owner accounts
+            // for getting program owner accounts and ProgramData accounts
+            for (transactions) |tx| n += tx.instruction_infos.len * 2;
             break :total_account_keys n;
         };
 
@@ -213,9 +214,7 @@ pub const BatchAccountCache = struct {
             var tx_loaded_account_data_len: u32 = 0;
 
             for (tx.instruction_infos) |instr| {
-                const program_key = tx.accounts.items(
-                    .pubkey,
-                )[instr.program_meta.index_in_transaction];
+                const program_key = instr.program_meta.pubkey;
                 if (program_key.equals(&runtime.ids.NATIVE_LOADER_ID)) continue;
                 const program_account = map.get(program_key) orelse
                     unreachable; // safe: we loaded all accounts in the previous loop
@@ -249,6 +248,43 @@ pub const BatchAccountCache = struct {
                     continue :next_tx; // tx will fail - accounts data too large
 
                 try validated_loaders.put(program_owner_key.*, {});
+            }
+        }
+
+        // load v3 loader's ProgramData accounts.
+        for (transactions) |tx| {
+            for (tx.instruction_infos) |instr| {
+                const program_key = tx.accounts.items(
+                    .pubkey,
+                )[instr.program_meta.index_in_transaction];
+
+                const program_account = map.get(program_key) orelse
+                    unreachable; // safe: we loaded all accounts in the previous loop
+
+                if (!program_account.owner.equals(&runtime.program.bpf_loader.v3.ID)) continue;
+
+                const program_state = sig.bincode.readFromSlice(
+                    allocator,
+                    runtime.program.bpf_loader.v3.State,
+                    program_account.data,
+                    .{},
+                ) catch continue;
+                defer sig.bincode.free(allocator, program_state);
+
+                if (program_state != .program) continue;
+                const program_data_address = program_state.program.programdata_address;
+
+                const program_data_account = try accounts_db.getAccountSharedData(
+                    allocator,
+                    &program_data_address,
+                ) orelse continue;
+
+                const entry = map.getOrPutAssumeCapacity(program_data_address);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = program_data_account;
+                } else {
+                    accounts_db.allocator().free(program_data_account.data);
+                }
             }
         }
 
@@ -1284,4 +1320,89 @@ test "deallocate account" {
     try std.testing.expectEqual(1, loaded_accounts.accounts.len);
     try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.data.len);
     try std.testing.expectEqual(0, loaded_accounts.accounts.slice()[0].account.lamports);
+}
+
+test "load v3 program" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+    var accountsdb = MockedAccountsDb{ .allocator = allocator };
+    defer accountsdb.deinit();
+    const env = newTestingEnv();
+
+    const pk_v3_program = Pubkey.initRandom(random);
+    const pk_programdata = Pubkey.initRandom(random);
+
+    const v3_program = runtime.program.bpf_loader.v3.State{
+        .program = .{
+            .programdata_address = pk_programdata,
+        },
+    };
+
+    var v3_program_buf = std.ArrayList(u8).init(allocator);
+    defer v3_program_buf.deinit();
+
+    try sig.bincode.write(v3_program_buf.writer(), v3_program, .{});
+
+    try accountsdb.accounts.put(allocator, runtime.program.bpf_loader.v3.ID, .{
+        .data = .{ .unowned_allocation = "v3 loader" },
+        .executable = true,
+        .owner = runtime.ids.NATIVE_LOADER_ID,
+        .lamports = 1,
+        .rent_epoch = 0,
+    });
+
+    try accountsdb.accounts.put(allocator, pk_v3_program, .{
+        .data = .{ .unowned_allocation = v3_program_buf.items },
+        .executable = true,
+        .owner = runtime.program.bpf_loader.v3.ID,
+        .lamports = 1,
+        .rent_epoch = 0,
+    });
+
+    try accountsdb.accounts.put(allocator, pk_programdata, .{
+        .data = .{ .unowned_allocation = "program data!" },
+        .executable = true,
+        .owner = Pubkey.ZEROES,
+        .lamports = 1,
+        .rent_epoch = 0,
+    });
+
+    var tx = try emptyTxWithKeys(allocator, &.{pk_v3_program});
+    defer tx.accounts.deinit(allocator);
+
+    tx.instruction_infos = &.{
+        .{
+            .program_meta = .{ .pubkey = pk_v3_program, .index_in_transaction = 0 },
+            .account_metas = .{},
+            .instruction_data = "",
+            .initial_account_lamports = 0,
+        },
+    };
+
+    var account_cache = try BatchAccountCache.initFromAccountsDb(
+        .Mocked,
+        allocator,
+        accountsdb,
+        &.{tx},
+    );
+    defer account_cache.deinit(allocator);
+
+    const loaded_accounts = try account_cache.loadTransactionAccountsInner(
+        allocator,
+        &tx,
+        &env.rent_collector,
+        &env.feature_set,
+        &env.compute_budget_limits,
+    );
+
+    // only v3 program returned (in account keys)
+    try std.testing.expectEqual(1, loaded_accounts.accounts.len);
+    try std.testing.expectEqual(pk_v3_program, loaded_accounts.accounts.slice()[0].pubkey);
+
+    // v3 program + its owner (v3 loader) + v3 programdata
+    try std.testing.expectEqual(3, account_cache.account_cache.count());
+    try std.testing.expect(account_cache.account_cache.contains(pk_v3_program));
+    try std.testing.expect(account_cache.account_cache.contains(pk_programdata));
+    try std.testing.expect(account_cache.account_cache.contains(runtime.program.bpf_loader.v3.ID));
 }
