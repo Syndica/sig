@@ -4956,7 +4956,7 @@ test "state.VoteState.checkAndFilterProposedVoteState slot hashes mismatch" {
     try std.testing.expectEqual(VoteError.slot_hash_mismatch, maybe_error);
 }
 
-fn processSlotVoteUnchecked(
+pub fn processSlotVoteUnchecked(
     vote_state: *VoteState,
     slot: Slot,
 ) !void {
