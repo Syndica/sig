@@ -1497,3 +1497,20 @@ test "SHT_DYNAMIC fallback" {
     );
     defer parsed.deinit(allocator);
 }
+
+test "add all symbols during relocate" {
+    const allocator = std.testing.allocator;
+    const input_file = try std.fs.cwd().openFile(
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+        .{},
+    );
+    const bytes = try input_file.readToEndAlloc(allocator, sbpf.MAX_FILE_SIZE);
+    defer allocator.free(bytes);
+
+    var loader: Registry(Syscall) = .{};
+    var parsed = try Elf.parse(allocator, bytes, &loader, .{
+        .maximum_version = .v0, // parseLenient
+        .enable_symbol_and_section_labels = true, // all symbols in registry codepath.
+    });
+    defer parsed.deinit(allocator);
+}
