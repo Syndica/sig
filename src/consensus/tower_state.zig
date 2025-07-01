@@ -26,12 +26,15 @@ pub const TowerVoteState = struct {
             );
         }
 
+        const owned_slice = try lockouts.toOwnedSlice(allocator);
+        defer allocator.free(owned_slice);
+
         return .{
             .root_slot = vote_state.root_slot,
             .votes = try std.BoundedArray(
                 Lockout,
                 MAX_LOCKOUT_HISTORY,
-            ).fromSlice(try lockouts.toOwnedSlice(allocator)),
+            ).fromSlice(owned_slice),
         };
     }
 
