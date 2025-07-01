@@ -117,6 +117,19 @@ pub const Elf = struct {
                 if (offset > bytes.len) return error.OutOfBounds;
             }
 
+            // Section header for the string table
+            const headers: Headers = .{
+                .bytes = bytes,
+                .header = header,
+                .shdrs = shdrs,
+                .phdrs = phdrs,
+            };
+
+            try headers.parseSections();
+            return headers;
+        }
+
+        fn parseSections(self: Headers) !void {
             // Validate section headers appear only once.
             var section_checks: [3]struct { name: []const u8, seen: bool } = .{
                 .{ .name = ".symtab", .seen = false },
@@ -124,47 +137,31 @@ pub const Elf = struct {
                 .{ .name = ".dynstr", .seen = false },
             };
 
-            const name_shdr: elf.Elf64_Shdr = if (header.e_shstrndx == elf.SHN_UNDEF)
+            const names_shdr: elf.Elf64_Shdr = if (self.header.e_shstrndx == elf.SHN_UNDEF)
                 return error.NoSectionNameStringTable
-            else if (header.e_shstrndx >= shdrs.len)
+            else if (self.header.e_shstrndx >= self.shdrs.len)
                 return error.OutOfBounds
             else
-                shdrs[header.e_shstrndx];
+                self.shdrs[self.header.e_shstrndx];
 
-            if (name_shdr.sh_type != elf.SHT_STRTAB) {
-                return error.InvalidSectionHeader;
-            }
-
-            const name_buf = try safeSlice(bytes, name_shdr.sh_offset, name_shdr.sh_size);
-            for (shdrs) |shdr| {
-                const start = shdr.sh_name;
-                if (start >= name_buf.len) return error.OutOfBounds;
-
-                const end = for (start..@min(start +| 16, name_buf.len)) |i| {
-                    if (name_buf[i] == 0) break i;
-                } else return error.StringTooLong;
-
-                const section_name = name_buf[start..end];
-                for (&section_checks) |*sc| {
-                    if (std.mem.eql(u8, sc.name, section_name)) {
-                        if (sc.seen) return error.InvalidSectionHeader;
-                        sc.seen = true;
+            for (self.shdrs) |shdr| {
+                const name = try self.shdrString(names_shdr, shdr.sh_name, 16);
+                for (&section_checks) |*check| {
+                    if (std.mem.eql(u8, check.name, name)) {
+                        if (check.seen) return error.InvalidSectionHeader;
+                        check.seen = true;
                     }
                 }
             }
-
-            return .{
-                .bytes = bytes,
-                .header = header,
-                .shdrs = shdrs,
-                .phdrs = phdrs,
-            };
         }
 
         /// Returns the byte contents of the `index`nth section.
         pub fn shdrSlice(self: Headers, index: u64) ![]const u8 {
             if (index >= self.shdrs.len) return error.OutOfBounds;
-            const shdr = self.shdrs[index];
+            return self.shdrBytes(self.shdrs[index]);
+        }
+
+        fn shdrBytes(self: Headers, shdr: elf.Elf64_Shdr) ![]const u8 {
             if (shdr.sh_type == elf.SHT_NOBITS) return &.{};
             const sh_offset = shdr.sh_offset;
             const sh_size = shdr.sh_size;
@@ -180,14 +177,11 @@ pub const Elf = struct {
             return try safeSlice(self.bytes, p_offset, p_filesz);
         }
 
-        /// Returns a string stored in the `shdr` string table, starting at `offset`.
-        ///
-        /// Note that String table entries are stored null-terminated.
-        fn getStringInShdr(self: Headers, shdr: u32, offset: u32) ![:0]const u8 {
-            const strtab = try self.shdrSlice(shdr);
-            assert(offset < strtab.len);
-            const ptr: [*:0]const u8 = @ptrCast(strtab.ptr + offset);
-            return std.mem.sliceTo(ptr, 0);
+        /// Returns a string from an STRTAB section given an offset and max string length.
+        fn shdrString(self: Headers, shdr: elf.Elf64_Shdr, offset: u32, limit: u8) ![:0]const u8 {
+            if (shdr.sh_type != elf.SHT_STRTAB) return error.InvalidSectionHeader;
+            const slice = try self.shdrBytes(shdr);
+            return try safeString(slice, offset, limit);
         }
 
         /// Finds the first program header to match the `p_type` provided.
@@ -212,7 +206,7 @@ pub const Elf = struct {
 
     /// Contains data which is parsed from the headers.
     const Data = struct {
-        strtab: []const u8,
+        strtab: ?[]const u8,
         dynamic_table: DynamicTable,
         relocations_table: []align(1) const elf.Elf64_Rel,
         symbol_table: []align(1) const elf.Elf64_Sym,
@@ -220,14 +214,12 @@ pub const Elf = struct {
         const DynamicTable = [elf.DT_NUM]elf.Elf64_Xword;
 
         fn parse(headers: Headers) !Data {
-            const strtab = try headers.shdrSlice(headers.header.e_shstrndx);
-            for (headers.shdrs) |shdr| {
-                // Check that none of the section names are longer than the string table containing them.
-                if (shdr.sh_name >= strtab.len) return error.InvalidOffset;
-            }
+            const strtab: ?[]const u8 = if (headers.header.e_shstrndx != elf.SHN_UNDEF)
+                try headers.shdrSlice(headers.header.e_shstrndx)
+            else
+                null;
 
             const dynamic_table = try parseDynamic(headers);
-
             const relocations_table, const symbol_table = if (dynamic_table) |table| blk: {
                 const relocations_table = try parseDynamicRelocations(headers, table);
                 const symbol_table = try parseDynamicSymbolTable(headers, table);
@@ -382,7 +374,7 @@ pub const Elf = struct {
             for (headers.shdrs, 0..) |shdr, i| {
                 // If the name of the section isn't in the list of
                 // valid read-only sections, just skip it.
-                const name = self.getString(shdr.sh_name);
+                const name = self.getSectionName(shdr.sh_name) catch continue;
                 for (ro_names) |ro_name| {
                     if (std.mem.eql(u8, ro_name, name)) break;
                 } else continue;
@@ -724,19 +716,45 @@ pub const Elf = struct {
                     else => return error.UnknownRelocation,
                 }
             }
+
+            if (config.enable_symbol_and_section_labels) {
+                const symbol_names_shdr = self.getShdrByName(headers, ".strtab") orelse
+                    return error.NoStringTable;
+
+                // Register all known function names from the symbol table.
+                for (self.symbol_table) |sym| {
+                    if (sym.st_info & 0xef != 0x02) continue;
+                    if (sym.st_value < text_section.sh_addr or
+                        sym.st_value >= text_section.sh_addr + text_section.sh_size)
+                    {
+                        return error.ValueOutOfBounds;
+                    }
+
+                    const target_pc = (sym.st_value -| text_section.sh_addr) / 8;
+                    const symbol_name = headers.shdrString(symbol_names_shdr, sym.st_name, 64) catch
+                        return error.UnknownSymbol;
+
+                    _ = try function_registry.registerHashedLegacy(
+                        allocator,
+                        loader,
+                        !version.enableStaticSyscalls(),
+                        symbol_name,
+                        @intCast(target_pc),
+                    );
+                }
+            }
         }
 
-        /// Returns the string for a given index into the string table.
-        fn getString(self: Data, off: u32) [:0]const u8 {
-            assert(off < self.strtab.len);
-            const ptr: [*:0]const u8 = @ptrCast(self.strtab.ptr + off);
-            return std.mem.sliceTo(ptr, 0);
+        /// Returns the string for a given shdr.sh_name offset into the string table.
+        fn getSectionName(self: Data, offset: u32) ![:0]const u8 {
+            const strtab = self.strtab orelse return error.NoSectionNameStringTable;
+            return try safeString(strtab, offset, 16);
         }
 
         /// Returns the index of the section with the name provided.
         fn getShdrIndexByName(self: Data, headers: Headers, name: []const u8) ?u32 {
             for (headers.shdrs, 0..) |shdr, i| {
-                const shdr_name = self.getString(shdr.sh_name);
+                const shdr_name = self.getSectionName(shdr.sh_name) catch continue;
                 if (std.mem.eql(u8, shdr_name, name)) {
                     return @intCast(i);
                 }
@@ -897,12 +915,12 @@ pub const Elf = struct {
             }
         }
 
-        const maybe_strtab: ?u32 = if (config.enable_symbol_and_section_labels) blk: {
-            for (headers.shdrs, 0..) |shdr, i| {
-                const name = data.getString(shdr.sh_name);
+        const maybe_symbols_shdr = if (config.enable_symbol_and_section_labels) blk: {
+            const strtab = data.strtab orelse return error.NoSectionNamesStringTable;
+            for (headers.shdrs) |shdr| {
+                const name = try safeString(strtab, shdr.sh_name, 64);
                 if (std.mem.eql(u8, name, ".dynstr")) {
-                    if (shdr.sh_type != elf.SHT_STRTAB) return error.InvalidStringTable;
-                    break :blk @intCast(i);
+                    break :blk shdr;
                 }
             }
             break :blk null;
@@ -938,7 +956,11 @@ pub const Elf = struct {
             if (!inRangeOfPhdrVm(bytecode_hdr, symbol.st_value)) return error.OutOfBounds;
 
             const name = if (config.enable_symbol_and_section_labels)
-                try headers.getStringInShdr(maybe_strtab.?, symbol.st_name)
+                try headers.shdrString(
+                    maybe_symbols_shdr orelse return error.NoStringTable,
+                    symbol.st_name,
+                    0xff,
+                )
             else
                 &.{};
 
@@ -1116,12 +1138,14 @@ pub const Elf = struct {
         {
             var count: u32 = 0;
             for (headers.shdrs) |shdr| {
-                if (std.mem.eql(u8, data.getString(shdr.sh_name), ".text")) {
-                    count += 1;
+                if (data.getSectionName(shdr.sh_name) catch null) |name| {
+                    if (std.mem.eql(u8, name, ".text")) {
+                        count +|= 1;
+                    }
                 }
             }
             if (count != 1) {
-                return error.WrongNumberOfTextSections;
+                return error.NotOneTextSection;
             }
         }
 
@@ -1129,7 +1153,7 @@ pub const Elf = struct {
         // ".bss", and ".data" sections that are writable ".data.rel" is
         // allowed though.
         for (headers.shdrs) |shdr| {
-            const name = data.getString(shdr.sh_name);
+            const name = data.getSectionName(shdr.sh_name) catch continue;
             if (std.mem.startsWith(u8, name, ".bss")) {
                 return error.WritableSectionsNotSupported;
             }
@@ -1194,6 +1218,13 @@ pub const Elf = struct {
         const end = std.math.add(usize, start, len) catch return error.OutOfBounds;
         if (end > base.len) return error.OutOfBounds;
         return base[start..][0..len];
+    }
+
+    fn safeString(bytes: []const u8, offset: usize, limit: usize) ![:0]const u8 {
+        if (offset >= bytes.len) return error.OutOfBounds;
+        const slice = bytes[offset..][0..@min(bytes.len - offset, limit)];
+        const end = std.mem.indexOfScalar(u8, slice, 0) orelse return error.StringTooLong;
+        return @ptrCast(slice[0..end]);
     }
 
     /// The function is guarnteed to succeed, since `parse` already checks that
@@ -1409,20 +1440,22 @@ test "owned ro sections with sh offset" {
     };
     const bytes: [512]u8 = .{0} ** 512;
 
-    var rodata = newSection(20, 10, 6);
+    var rodata = newSection(20, 10, 7);
     rodata.sh_offset = 30;
     const headers: Elf.Headers = .{
         .bytes = &bytes,
         .header = undefined, // unused in our test
         .phdrs = &.{},
         .shdrs = &.{
-            newSection(10, 10, 0),
+            newSection(10, 10, 1),
             rodata,
         },
     };
 
     const data: Elf.Data = .{
-        .strtab = ".text\x00" ++ ".rodata",
+        // NOTE: string table bytes must start and end with null terminator.
+        // https://refspecs.linuxbase.org/elf/gabi4+/ch4.strtab.html
+        .strtab = "\x00.text\x00" ++ ".rodata\x00",
         .relocations_table = &.{},
         .dynamic_table = .{0} ** elf.DT_NUM,
         .symbol_table = &.{},
