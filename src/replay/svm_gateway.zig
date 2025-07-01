@@ -45,7 +45,8 @@ pub fn executeTransaction(
     );
 }
 
-/// State that needs to be initialized once per slot for the SVM
+// TODO: rename this struct
+/// State that needs to be initialized once per batch for the SVM
 ///
 /// This is intended for read-only use across multiple threads simultaneously.
 pub const SvmSlot = struct {
@@ -57,7 +58,9 @@ pub const SvmSlot = struct {
         sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
-        accounts: BatchAccountCache, // TODO figure out how to share this safely across threads
+        // TODO figure out how to share this safely across threads so this
+        // struct doesn't need to be created once per batch
+        accounts: BatchAccountCache,
         programs: ProgramMap,
     },
 
@@ -67,8 +70,11 @@ pub const SvmSlot = struct {
         max_age: u64,
         lamports_per_signature: u64,
 
-        /// Owned
+        /// Owned by this struct: Params
         blockhash_queue: BlockhashQueue,
+
+        /// used to initialize the batch account cache and program map
+        accounts_db: *AccountsDB,
 
         // Borrowed values to pass by reference into the SVM.
         ancestors: *const Ancestors,
@@ -80,30 +86,27 @@ pub const SvmSlot = struct {
 
     pub fn init(
         allocator: Allocator,
-        accounts_db: *AccountsDB,
-        batches: []const ResolvedBatch,
-        total_transactions: usize,
+        batch: []const replay.resolve_lookup.ResolvedTransaction,
         params: Params,
     ) !SvmSlot {
         // these transactions have the incorrect hash but are otherwise valid.
         // they're all being grouped together just for the account loader. the hash
         // is not actually used by the account loader, so it doesn't matter.
         //
-        // TODO: minimize dependencies fo BatchAccountCache so it doesn't require
+        // TODO: minimize dependencies of BatchAccountCache so it doesn't require
         // the transaction hash.
-        var unhashed_transactions_for_account_loader =
-            try std.ArrayListUnmanaged(RuntimeTransaction)
-                .initCapacity(allocator, total_transactions);
-        defer unhashed_transactions_for_account_loader.deinit(allocator);
-        for (batches) |batch| for (batch.transactions) |tx| {
-            const runtime_tx = tx.toRuntimeTransaction(.ZEROES);
-            unhashed_transactions_for_account_loader.appendAssumeCapacity(runtime_tx);
-        };
+        const unhashed_transactions_for_account_loader =
+            try allocator.alloc(RuntimeTransaction, batch.len);
+        defer allocator.free(unhashed_transactions_for_account_loader);
+        for (batch, unhashed_transactions_for_account_loader) |tx, *unhashed| {
+            unhashed.* = tx.toRuntimeTransaction(.ZEROES);
+        }
         const accounts = try BatchAccountCache.initFromAccountsDb(
             .AccountsDb,
             allocator,
-            accounts_db,
-            unhashed_transactions_for_account_loader.items,
+            params.accounts_db,
+            unhashed_transactions_for_account_loader,
+            params.ancestors,
         );
 
         const budget = ComputeBudget.default(1_400_000); // TODO should this be dynamic?
@@ -136,7 +139,9 @@ pub const SvmSlot = struct {
     }
 
     pub fn deinit(self: *const SvmSlot, allocator: Allocator) void {
-        self.params.blockhash_queue.deinit(allocator);
+        _ = self; // autofix
+        _ = allocator; // autofix
+        // self.params.blockhash_queue.deinit(allocator); // TODO fix leak
         // TODO self.state
     }
 

@@ -188,17 +188,14 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
                             continue;
                         },
                         // not able to recycle anything, so we break to expand the capacity
-                        error.AllocFailed => break,
+                        error.AllocFailed, error.AllocTooBig => break,
                         else => return err,
                     }
                 };
             }
 
             // if allocation failed, then expand the capacity and try again
-            try self.expandCapacityUnsafe(@max(
-                config.min_split_size,
-                n,
-            ));
+            try self.expandCapacityUnsafe(@max(config.min_split_size, n));
             return self.allocUnsafe(n);
         }
 

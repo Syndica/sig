@@ -48,7 +48,7 @@ pub fn confirmSlot(
     verify_ticks_params: VerifyTicksParams,
 ) !*ConfirmSlotFuture {
     logger.info().log("confirming slot");
-    const future = try ConfirmSlotFuture.create(allocator, thread_pool, committer, entries);
+    const future = try ConfirmSlotFuture.create(allocator, thread_pool, committer, entries, svm_params);
     errdefer future.destroy(allocator);
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
@@ -57,7 +57,7 @@ pub fn confirmSlot(
     }
 
     try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
-    try scheduleTransactionBatches(allocator, &future.scheduler, accounts_db, entries, svm_params);
+    try scheduleTransactionBatches(allocator, &future.scheduler, accounts_db, entries);
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
 
@@ -92,7 +92,6 @@ fn scheduleTransactionBatches(
     scheduler: *TransactionScheduler,
     accounts_db: *AccountsDB,
     entries: []const Entry,
-    svm_params: SvmSlot.Params,
 ) !void {
     var total_transactions: usize = 0;
     for (entries) |entry| {
@@ -103,15 +102,6 @@ fn scheduleTransactionBatches(
 
         scheduler.addBatchAssumeCapacity(batch);
     }
-
-    // TODO: cleaner way of adding this
-    scheduler.svm_state = try SvmSlot.init(
-        allocator,
-        accounts_db,
-        scheduler.batches.items,
-        total_transactions,
-        svm_params,
-    );
 }
 
 pub const ConfirmSlotStatus = union(enum) {
@@ -142,9 +132,10 @@ pub const ConfirmSlotFuture = struct {
         thread_pool: *ThreadPool,
         committer: Committer,
         entries: []const Entry,
+        svm_params: SvmSlot.Params,
     ) !*ConfirmSlotFuture {
         var scheduler = try TransactionScheduler
-            .initCapacity(allocator, committer, entries.len, thread_pool);
+            .initCapacity(allocator, committer, entries.len, thread_pool, svm_params);
         errdefer scheduler.deinit();
 
         const poh_verifier = try HomogeneousThreadPool(PohTask)

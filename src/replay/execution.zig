@@ -95,7 +95,7 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         // NOTE: currently this just awaits the futures and discards the
         // results. this will change once we call the svm and process the
         // results of execution.
-        _, const status = slot_status;
+        const slot, const status = slot_status;
         if (status == .confirm) {
             // NOTE: agave does this a bit differently, it indicates that a slot
             // was *finished*, not just processed partially.
@@ -104,6 +104,11 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
                 // TODO: consider futex-based wait like ResetEvent
                 std.time.sleep(std.time.ns_per_ms);
             }
+            state.logger.info().logf("confirmed slot {}", .{slot});
+        }
+        const slot_info = state.slot_tracker.get(slot) orelse unreachable;
+        if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
+            try freezeSlot(state.accounts_db, slot, slot_info.state);
         }
     }
 
@@ -195,41 +200,46 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     // out more usages of this struct.
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
 
-    const entries, const num_shreds, const slot_is_full =
-        try state.blockstore_reader.getSlotEntriesWithShredInfo(
-            state.allocator,
-            slot,
-            confirmation_progress.num_shreds,
-            false,
-        );
-    errdefer {
-        for (entries) |entry| entry.deinit(state.allocator);
-        state.allocator.free(entries);
-    }
-    state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
+    const entries, const slot_is_full, const blockhash_queue = blk: {
+        const entries, const num_shreds, const slot_is_full =
+            try state.blockstore_reader.getSlotEntriesWithShredInfo(
+                state.allocator,
+                slot,
+                confirmation_progress.num_shreds,
+                false,
+            );
+        errdefer {
+            for (entries) |entry| entry.deinit(state.allocator);
+            state.allocator.free(entries);
+        }
+        state.logger.info().logf("got {} entries for slot {}", .{ entries.len, slot });
 
-    if (entries.len == 0) {
-        for (entries) |entry| entry.deinit(state.allocator);
-        state.allocator.free(entries);
-        return .empty;
-    }
+        if (entries.len == 0) {
+            for (entries) |entry| entry.deinit(state.allocator);
+            state.allocator.free(entries);
+            return .empty;
+        }
 
-    confirmation_progress.num_shreds += num_shreds;
-    confirmation_progress.num_entries += entries.len;
-    for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
+        confirmation_progress.num_shreds += num_shreds;
+        confirmation_progress.num_entries += entries.len;
+        for (entries) |e| confirmation_progress.num_txs += e.transactions.len;
 
-    const blockhash_queue = bhq: {
-        var bhq = slot_info.state.blockhash_queue.read();
-        defer bhq.unlock();
-        break :bhq try bhq.get().clone(state.allocator);
+        const blockhash_queue = bhq: {
+            var bhq = slot_info.state.blockhash_queue.read();
+            defer bhq.unlock();
+            break :bhq try bhq.get().clone(state.allocator);
+        };
+        errdefer blockhash_queue.deinit(state.allocator);
+
+        break :blk .{ entries, slot_is_full, blockhash_queue };
     };
-    errdefer blockhash_queue.deinit(state.allocator);
 
     const svm_params = SvmSlot.Params{
         .slot = slot,
         .max_age = sig.core.bank.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
         .lamports_per_signature = slot_info.constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = blockhash_queue,
+        .accounts_db = state.accounts_db,
         .ancestors = &slot_info.constants.ancestors,
         .feature_set = .{ .active = slot_info.constants.feature_set },
         .rent_collector = &epoch_info.rent_collector,
@@ -243,6 +253,21 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .status_cache = &state.status_cache,
     };
 
+    const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{
+        .tick_height = slot_info.state.tickHeight(),
+        .max_tick_height = slot_info.constants.max_tick_height,
+        .hashes_per_tick = epoch_info.hashes_per_tick,
+        .slot = slot,
+        .slot_is_full = slot_is_full,
+        .tick_hash_count = &confirmation_progress.tick_hash_count,
+    };
+
+    var num_ticks: u64 = 0;
+    for (entries) |entry| {
+        if (entry.isTick()) num_ticks += 1;
+    }
+    _ = slot_info.state.tick_height.fetchAdd(num_ticks, .monotonic);
+
     return .{ .confirm = try confirmSlot(
         state.allocator,
         .from(state.logger),
@@ -252,13 +277,29 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         confirmation_progress.last_entry,
         svm_params,
         committer,
-        .{
-            .tick_height = slot_info.state.tickHeight(),
-            .max_tick_height = slot_info.constants.max_tick_height,
-            .hashes_per_tick = epoch_info.hashes_per_tick,
-            .slot = slot,
-            .slot_is_full = slot_is_full,
-            .tick_hash_count = &confirmation_progress.tick_hash_count,
-        },
+        verify_ticks_params,
     ) };
+}
+
+/// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
+fn freezeSlot(
+    accounts_db: *AccountsDB,
+    slot: Slot,
+    state: *sig.core.SlotState,
+) !void {
+    var slot_hash = state.hash.write();
+    defer slot_hash.unlock();
+
+    if (slot_hash.get().* != null) return; // already frozen
+
+    // TODO: update sysvars and collect rent
+
+    std.debug.print("hashing slot: {}\n", .{slot});
+    const hash, _ = try accounts_db.computeAccountHashesAndLamports(
+        .{ .FullAccountHash = .{ .max_slot = slot } },
+    );
+    slot_hash.mut().* = hash;
+    std.debug.print("slot hashed: {} - {}\n", .{ slot, hash });
+
+    // TODO: lthash
 }
