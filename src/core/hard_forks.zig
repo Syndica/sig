@@ -7,31 +7,50 @@ const Slot = @import("time.zig").Slot;
 pub const HardForks = struct {
     entries: std.ArrayListUnmanaged(HardFork) = .{},
 
-    pub const Fork = extern struct {
+    pub const HardFork = extern struct {
         slot: Slot,
         count: u64,
-
-        pub fn sortCmp(_: void, a: Fork, b: Fork) bool {
-            return a.slot < b.slot; // Sort by ascending slot
-        }
-    };
-
-    pub fn deinit(self: HardForks, allocator: std.mem.Allocator) void {
-        allocator.free(self.forks.allocatedSlice());
-    }
-
-    pub fn clone(
-        self: HardForks,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!HardForks {
-        return .{ .forks = try self.forks.clone(allocator) };
-    }
 
         pub fn sortCmp(_: void, a: HardFork, b: HardFork) bool {
             return a.slot < b.slot; // Sort by ascending slot
         }
 
-        std.mem.sort(Fork, self.forks.items, {}, Fork.sortCmp);
+        pub fn searchCmp(slot: Slot, b: HardFork) std.math.Order {
+            return std.math.order(slot, b.slot);
+        }
+    };
+
+    pub fn deinit(self: HardForks, allocator: Allocator) void {
+        allocator.free(self.entries.allocatedSlice());
+    }
+
+    pub fn clone(
+        self: HardForks,
+        allocator: Allocator,
+    ) Allocator.Error!HardForks {
+        return .{ .entries = try self.entries.clone(allocator) };
+    }
+
+    pub fn register(self: *HardForks, allocator: Allocator, new_slot: Slot) !void {
+        if (std.sort.binarySearch(
+            HardFork,
+            self.entries.items,
+            new_slot,
+            HardFork.searchCmp,
+        )) |index| {
+            self.entries.items[index] = .{
+                .slot = new_slot,
+                .count = self.entries.items[index].count +| 1,
+            };
+        } else {
+            const index = std.sort.lowerBound(
+                HardFork,
+                self.entries.items,
+                new_slot,
+                HardFork.searchCmp,
+            );
+            try self.entries.insert(allocator, index, .{ .slot = new_slot, .count = 1 });
+        }
     }
 
     pub fn getHashData(self: *const HardForks, slot: Slot, parent_slot: Slot) ?[8]u8 {
@@ -51,12 +70,12 @@ pub const HardForks = struct {
 
     pub fn initRandom(
         random: std.Random,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         max_list_entries: usize,
-    ) std.mem.Allocator.Error!HardForks {
+    ) Allocator.Error!HardForks {
         const hard_forks_len = random.uintAtMost(usize, max_list_entries);
 
-        var self = try std.ArrayListUnmanaged(Fork).initCapacity(
+        var self = try std.ArrayListUnmanaged(HardFork).initCapacity(
             allocator,
             hard_forks_len,
         );
@@ -67,9 +86,9 @@ pub const HardForks = struct {
             .count = random.int(usize),
         });
 
-        std.sort.heap(Fork, self.items, {}, Fork.sortCmp);
+        std.sort.heap(HardFork, self.items, {}, HardFork.sortCmp);
 
-        return .{ .forks = self };
+        return .{ .entries = self };
     }
 };
 
