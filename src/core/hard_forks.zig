@@ -4,7 +4,25 @@ const Slot = @import("time.zig").Slot;
 pub const HardForks = struct {
     forks: std.ArrayListUnmanaged(Fork) = .{},
 
-    pub const Fork = extern struct { slot: Slot, count: u64 };
+    pub const Fork = extern struct {
+        slot: Slot,
+        count: u64,
+
+        pub fn sortCmp(_: void, a: Fork, b: Fork) bool {
+            return a.slot < b.slot; // Sort by ascending slot
+        }
+    };
+
+    pub fn deinit(self: HardForks, allocator: std.mem.Allocator) void {
+        allocator.free(self.forks.allocatedSlice());
+    }
+
+    pub fn clone(
+        self: HardForks,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!HardForks {
+        return .{ .forks = try self.forks.clone(allocator) };
+    }
 
     pub fn register(self: *HardForks, allocator: std.mem.Allocator, new_slot: Slot) !void {
         const maybe_index: ?u64 = for (self.forks.items, 0..) |hard_fork, index| {
@@ -20,15 +38,7 @@ pub const HardForks = struct {
             try self.forks.append(allocator, .{ .slot = new_slot, .count = 1 });
         }
 
-        std.mem.sort(Fork, self.forks.items, {}, lessThan);
-    }
-
-    fn lessThan(_: void, a: Fork, b: Fork) bool {
-        return a.slot < b.slot;
-    }
-
-    pub fn deinit(self: *HardForks, allocator: std.mem.Allocator) void {
-        self.forks.deinit(allocator);
+        std.mem.sort(Fork, self.forks.items, {}, Fork.sortCmp);
     }
 
     pub fn getHashData(self: *const HardForks, slot: Slot, parent_slot: Slot) ?[8]u8 {
@@ -44,6 +54,29 @@ pub const HardForks = struct {
         } else {
             return null;
         }
+    }
+
+    pub fn initRandom(
+        random: std.Random,
+        allocator: std.mem.Allocator,
+        max_list_entries: usize,
+    ) std.mem.Allocator.Error!HardForks {
+        const hard_forks_len = random.uintAtMost(usize, max_list_entries);
+
+        var self = try std.ArrayListUnmanaged(Fork).initCapacity(
+            allocator,
+            hard_forks_len,
+        );
+        errdefer allocator.free(self);
+
+        for (0..hard_forks_len) |_| self.appendAssumeCapacity(.{
+            .slot = random.int(Slot),
+            .count = random.int(usize),
+        });
+
+        std.sort.heap(Fork, self.items, {}, Fork.sortCmp);
+
+        return .{ .forks = self };
     }
 };
 
