@@ -29,16 +29,31 @@ pub const SlotTracker = struct {
         state: SlotState,
     };
 
-    const Reference = struct {
+    pub const Reference = struct {
         constants: *const SlotConstants,
         state: *SlotState,
     };
 
+    /// NOTE: use `initWithRoot` to initialize with the root's element initialized.
     pub fn init(root_slot: Slot) SlotTracker {
         return .{
             .slots = .empty,
             .root = root_slot,
         };
+    }
+
+    pub fn initWithRoot(
+        allocator: std.mem.Allocator,
+        root_slot: Slot,
+        constants: SlotConstants,
+        state: SlotState,
+    ) std.mem.Allocator.Error!SlotTracker {
+        var self: SlotTracker = .{
+            .root = root_slot,
+            .slots = .empty,
+        };
+        try self.put(allocator, root_slot, constants, state);
+        return self;
     }
 
     pub fn deinit(self: SlotTracker, allocator: Allocator) void {
@@ -53,7 +68,7 @@ pub const SlotTracker = struct {
         slot: Slot,
         constants: SlotConstants,
         state: SlotState,
-    ) !void {
+    ) std.mem.Allocator.Error!void {
         try self.slots.ensureUnusedCapacity(allocator, 1);
         const elem = try allocator.create(Element);
         elem.* = .{ .constants = constants, .state = state };
@@ -66,6 +81,10 @@ pub const SlotTracker = struct {
             .constants = &elem.constants,
             .state = &elem.state,
         };
+    }
+
+    pub fn getRoot(self: *const SlotTracker) Reference {
+        return self.get(self.root).?; // root slot's bank must exist
     }
 
     pub fn contains(self: *const SlotTracker, slot: Slot) bool {
@@ -143,8 +162,15 @@ pub const SlotTracker = struct {
 };
 
 pub const EpochTracker = struct {
-    epochs: std.AutoArrayHashMapUnmanaged(Epoch, EpochConstants) = .{},
+    epochs: std.AutoArrayHashMapUnmanaged(Epoch, EpochConstants),
     schedule: EpochSchedule,
+
+    pub fn init(schedule: EpochSchedule) EpochTracker {
+        return .{
+            .epochs = .empty,
+            .schedule = schedule,
+        };
+    }
 
     pub fn deinit(self: EpochTracker, allocator: Allocator) void {
         var epochs = self.epochs;

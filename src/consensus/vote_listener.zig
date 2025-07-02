@@ -12,49 +12,63 @@ const TransactionMessage = sig.core.transaction.Message;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VoteTracker = sig.consensus.VoteTracker;
 
+const SlotTracker = sig.replay.trackers.SlotTracker;
+const EpochTracker = sig.replay.trackers.EpochTracker;
+
 pub const BankForksStub = struct {
-    root_slot: Slot,
-    banks: std.AutoArrayHashMapUnmanaged(Slot, BankStub),
+    slot_tracker: SlotTracker,
+    epoch_tracker: EpochTracker,
 
     pub fn deinit(self: BankForksStub, allocator: std.mem.Allocator) void {
-        var copy = self;
-        for (self.banks.values()) |bank| {
-            bank.deinit(allocator);
-        }
-        copy.banks.deinit(allocator);
+        self.slot_tracker.deinit(allocator);
+        self.epoch_tracker.deinit(allocator);
     }
 
     pub fn init(
         allocator: std.mem.Allocator,
+        epoch_schedule: sig.core.EpochSchedule,
         root: struct {
             slot: Slot,
-            /// Gets cloned.
-            bank: BankStub,
+            constants: sig.core.SlotConstants,
+            state: sig.core.SlotState,
+            epoch_constants: sig.core.EpochConstants,
         },
     ) std.mem.Allocator.Error!BankForksStub {
         var self: BankForksStub = .{
-            .root_slot = root.slot,
-            .banks = .{},
+            .slot_tracker = try .initWithRoot(allocator, root.slot, root.constants, root.state),
+            .epoch_tracker = .{
+                .schedule = epoch_schedule,
+                .epochs = .{},
+            },
         };
         errdefer self.deinit(allocator);
 
-        try self.banks.ensureUnusedCapacity(allocator, 1);
-        self.banks.putAssumeCapacity(self.root_slot, try root.bank.clone(allocator));
+        try self.epoch_tracker.epochs.ensureUnusedCapacity(allocator, 1);
+        self.epoch_tracker.epochs.putAssumeCapacity(
+            epoch_schedule.getEpoch(root.slot),
+            try root.epoch_constants.clone(allocator),
+        );
 
         return self;
     }
 
     pub fn getBank(self: *const BankForksStub, slot: Slot) ?BankStub {
-        return self.banks.get(slot);
+        const st_elem = self.slot_tracker.get(slot) orelse return null;
+        const et_elem = self.epoch_tracker.getForSlot(slot);
+        return .{
+            .slot = slot,
+            .st_elem = st_elem,
+            .et_elem = et_elem,
+        };
     }
 
     pub fn rootBank(self: *const BankForksStub) BankStub {
-        return self.banks.get(self.root_slot).?; // root slot's bank must exist
+        return self.getBank(self.slot_tracker.root).?; // root slot's bank must exist
     }
 
     pub fn bankHash(self: *const BankForksStub, slot: Slot) ?Hash {
         const bank = self.getBank(slot) orelse return null;
-        return bank.hash;
+        return bank.st_elem.state.hash.readCopy();
     }
 
     pub fn bankHashOrNullIfFrozen(self: *const BankForksStub, slot: Slot) ?Hash {
@@ -65,69 +79,8 @@ pub const BankForksStub = struct {
 
     pub const BankStub = struct {
         slot: Slot,
-        /// If this is Hash.ZEROES, it means the bank isn't frozen.
-        hash: Hash,
-        ancestors: sig.core.status_cache.Ancestors,
-        epoch_schedule: sig.core.EpochSchedule,
-        epoch_stakes: sig.core.stake.EpochStakeMap,
-
-        pub fn deinit(self: BankStub, allocator: std.mem.Allocator) void {
-            var copy = self;
-            copy.ancestors.deinit(allocator);
-            sig.core.stake.epochStakeMapDeinit(copy.epoch_stakes, allocator);
-        }
-
-        pub fn init(
-            allocator: std.mem.Allocator,
-            params: struct {
-                slot: Slot,
-                hash: Hash,
-                ancestors: sig.core.status_cache.Ancestors,
-                epoch_schedule: sig.core.EpochSchedule,
-                epoch_stakes: sig.core.stake.EpochStakeMap,
-            },
-        ) std.mem.Allocator.Error!BankStub {
-            var ancestors = try params.ancestors.clone(allocator);
-            errdefer ancestors.deinit(allocator);
-
-            var epoch_stakes =
-                try sig.core.stake.epochStakeMapClone(params.epoch_stakes, allocator);
-            errdefer sig.core.stake.epochStakeMapDeinit(epoch_stakes, allocator);
-
-            const slot_epoch = params.epoch_schedule.getEpoch(params.slot);
-            const gop = try epoch_stakes.getOrPut(allocator, slot_epoch);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = try sig.core.stake.EpochStakes.initEmpty(allocator);
-            }
-
-            return .{
-                .slot = params.slot,
-                .hash = params.hash,
-                .ancestors = ancestors,
-                .epoch_schedule = params.epoch_schedule,
-                .epoch_stakes = epoch_stakes,
-            };
-        }
-
-        pub fn clone(
-            self: BankStub,
-            allocator: std.mem.Allocator,
-        ) std.mem.Allocator.Error!BankStub {
-            var ancestors = try self.ancestors.clone(allocator);
-            errdefer ancestors.deinit(allocator);
-
-            const epoch_stakes =
-                try sig.core.stake.epochStakeMapClone(self.epoch_stakes, allocator);
-            errdefer sig.core.stake.epochStakeMapDeinit(epoch_stakes, allocator);
-
-            return .{
-                .slot = self.slot,
-                .hash = self.hash,
-                .ancestors = ancestors,
-                .epoch_schedule = self.epoch_schedule,
-                .epoch_stakes = epoch_stakes,
-            };
-        }
+        st_elem: SlotTracker.Reference,
+        et_elem: ?sig.core.EpochConstants,
     };
 };
 
@@ -256,20 +209,10 @@ fn recvLoop(
         const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
         defer bank_forks_lg.unlock();
 
-        const root_bank = bank_forks.rootBank();
-        const epoch_schedule = root_bank.epoch_schedule;
-
         for (unverified_votes) |vote_tx| {
-            switch (try verifyVoteTransaction(allocator, vote_tx, .{
-                .root_bank = root_bank,
-                .epoch_schedule = epoch_schedule,
-            })) {
-                .verified => {
-                    try verified_vote_transactions_sender.send(vote_tx);
-                },
-                .unverified => {
-                    vote_tx.deinit(allocator);
-                },
+            switch (try verifyVoteTransaction(allocator, vote_tx, &bank_forks.epoch_tracker)) {
+                .verified => try verified_vote_transactions_sender.send(vote_tx),
+                .unverified => vote_tx.deinit(allocator),
             }
         }
     }
@@ -314,16 +257,9 @@ fn getVoteTransactionsAfterCursor(
 fn verifyVoteTransaction(
     allocator: std.mem.Allocator,
     vote_tx: Transaction,
-    bank_forks: struct {
-        /// Should be `bank_forks.rootBank()`
-        root_bank: BankForksStub.BankStub,
-        /// Should be `bank_forks.rootBank().epoch_schedule`
-        epoch_schedule: sig.core.EpochSchedule,
-    },
+    /// Should be associated with the root bank.
+    epoch_tracker: *const EpochTracker,
 ) std.mem.Allocator.Error!enum { verified, unverified } {
-    const root_bank = bank_forks.root_bank;
-    const epoch_schedule = bank_forks.epoch_schedule;
-
     vote_tx.verify() catch return .unverified;
     const parsed_vote =
         try vote_parser.parseVoteTransaction(allocator, vote_tx) orelse return .unverified;
@@ -333,10 +269,9 @@ fn verifyVoteTransaction(
     const vote = parsed_vote.vote;
 
     const slot = vote.lastVotedSlot() orelse return .unverified;
-    const epoch = epoch_schedule.getEpoch(slot);
     const authorized_voter: Pubkey = blk: {
-        const epoch_stakes = root_bank.epoch_stakes.get(epoch) orelse return .unverified;
-        const epoch_authorized_voters = &epoch_stakes.epoch_authorized_voters;
+        const epoch_consts = epoch_tracker.getForSlot(slot) orelse return .unverified;
+        const epoch_authorized_voters = &epoch_consts.stakes.epoch_authorized_voters;
         break :blk epoch_authorized_voters.get(vote_account_key) orelse return .unverified;
     };
 
@@ -398,10 +333,10 @@ fn processVotesLoop(
     var vote_processing_time = VoteProcessingTiming.ZEROES;
 
     while (exit.shouldRun()) {
-        const root_bank = blk: {
+        const root_bank_slot, const root_bank = blk: {
             const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
             defer bank_forks_lg.unlock();
-            break :blk bank_forks.rootBank();
+            break :blk .{ bank_forks.slot_tracker.root, bank_forks.rootBank() };
         };
 
         if (last_process_root.elapsed().asMillis() > DEFAULT_MS_PER_SLOT) {
@@ -417,7 +352,7 @@ fn processVotesLoop(
                     &unrooted_optimistic_slots,
                 );
             }
-            vote_tracker.progressWithNewRootBank(allocator, root_bank.slot);
+            vote_tracker.progressWithNewRootBank(allocator, root_bank_slot);
             last_process_root = sig.time.Instant.now();
         }
 
@@ -647,8 +582,7 @@ fn filterAndConfirmWithNewVotes(
         const voted_slot_updates = &w_slot_tracker.voted_slot_updates.?;
 
         var gossip_only_stake: u64 = 0;
-        const epoch = root_bank.epoch_schedule.getEpoch(slot);
-        const epoch_stakes = root_bank.epoch_stakes.getPtr(epoch);
+        const epoch_stakes = if (root_bank.et_elem) |*et_elem| &et_elem.stakes else null;
 
         try voted.ensureUnusedCapacity(allocator, slot_diff.map.count());
         try voted_slot_updates.ensureUnusedCapacity(allocator, slot_diff.map.count());
@@ -891,8 +825,12 @@ fn trackNewVotesAndNotifyConfirmations(
         if (slot <= root) continue;
 
         // if we don't have stake information, ignore it
-        const epoch = root_bank.epoch_schedule.getEpoch(slot);
-        const epoch_stakes = root_bank.epoch_stakes.get(epoch) orelse continue;
+        const epoch_stakes = blk: {
+            const bank_forks, var bank_forks_lg = bank_forks_rw.readWithLock();
+            defer bank_forks_lg.unlock();
+            const et_elem = bank_forks.epoch_tracker.getForSlot(slot) orelse continue;
+            break :blk et_elem.stakes;
+        };
 
         // We always track the last vote slot for optimistic confirmation. If we have replayed
         // the same version of last vote slot that is being voted on, then we also track the
@@ -1426,23 +1364,13 @@ test "vote_parser.parseVoteTransaction" {
 
 test verifyVoteTransaction {
     const allocator = std.testing.allocator;
-    const epoch_schedule = sig.core.EpochSchedule.DEFAULT;
-    const root_bank = try BankForksStub.BankStub.init(allocator, .{
-        .slot = 0,
-        .hash = Hash.ZEROES,
-        .ancestors = .{},
-        .epoch_schedule = epoch_schedule,
-        .epoch_stakes = .{},
-    });
-    defer root_bank.deinit(allocator);
-    try std.testing.expectEqual(.unverified, verifyVoteTransaction(
-        allocator,
-        Transaction.EMPTY,
-        .{
-            .epoch_schedule = epoch_schedule,
-            .root_bank = root_bank,
-        },
-    ));
+    var epoch_tracker: EpochTracker = .init(.DEFAULT);
+    defer epoch_tracker.deinit(allocator);
+
+    try std.testing.expectEqual(
+        .unverified,
+        verifyVoteTransaction(allocator, .EMPTY, &epoch_tracker),
+    );
 }
 
 test VoteListener {
@@ -1451,7 +1379,7 @@ test VoteListener {
     var prng = std.Random.DefaultPrng.init(123);
     const random = prng.random();
 
-    const node_keypair = try sig.identity.KeyPair.generateDeterministic(@splat(1));
+    const node_keypair: sig.identity.KeyPair = try .generateDeterministic(@splat(1));
 
     const tracker_templates = [_]struct { Slot, sig.identity.KeyPair, Hash }{
         .{ 2, try .generateDeterministic(@splat(2)), .initRandom(random) },
@@ -1464,25 +1392,34 @@ test VoteListener {
     const root_slot: Slot = 0;
 
     var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
-        var bank = try BankForksStub.BankStub.init(allocator, .{
-            .slot = root_slot,
-            .hash = Hash.ZEROES,
-            .ancestors = .{},
-            .epoch_schedule = sig.core.epoch_schedule.EpochSchedule.DEFAULT,
-            .epoch_stakes = .{},
-        });
-        defer bank.deinit(allocator);
-
-        const epoch_stakes = bank.epoch_stakes.getPtr(root_slot).?;
+        var stakes: sig.core.stake.EpochStakes = try .initEmpty(allocator);
+        defer stakes.deinit(allocator);
         for (tracker_templates) |template| {
             _, const vote_kp, _ = template;
             const vote_key: Pubkey = .fromPublicKey(&vote_kp.public_key);
-            try epoch_stakes.epoch_authorized_voters.put(allocator, vote_key, vote_key);
+            try stakes.epoch_authorized_voters.put(allocator, vote_key, vote_key);
         }
 
-        break :blk try BankForksStub.init(allocator, .{
+        break :blk try .init(allocator, .DEFAULT, .{
             .slot = root_slot,
-            .bank = bank,
+            .constants = .{
+                .parent_slot = 0,
+                .parent_hash = .ZEROES,
+                .block_height = 1,
+                .collector_id = .ZEROES,
+                .max_tick_height = 1,
+                .fee_rate_governor = .DEFAULT,
+                .epoch_reward_status = .inactive,
+            },
+            .state = .GENESIS,
+            .epoch_constants = .{
+                .hashes_per_tick = 1,
+                .ticks_per_slot = 1,
+                .ns_per_slot = 1,
+                .genesis_creation_time = 1,
+                .slots_per_year = 1,
+                .stakes = stakes,
+            },
         });
     });
     defer {
