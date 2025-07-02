@@ -44,12 +44,12 @@ pub const ConsensusDependencies = struct {
     fork_choice: *ForkChoice,
     blockstore_reader: *BlockstoreReader,
     ledger_result_writer: *LedgerResultWriter,
-    ancestors: std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
-    descendants: std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
+    ancestors: *const std.AutoHashMapUnmanaged(u64, SortedSet(u64)),
+    descendants: *const std.AutoArrayHashMapUnmanaged(u64, SortedSet(u64)),
     vote_account: Pubkey,
-    slot_history: SlotHistory,
+    slot_history: *const SlotHistory,
     epoch_stakes: EpochStakeMap,
-    latest_validator_votes_for_frozen_banks: LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
 };
 
 pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
@@ -75,13 +75,13 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
         heaviest_slot,
         if (heaviest_slot_on_same_voted_fork) |h| h.slot else null,
         heaviest_epoch,
-        &deps.ancestors,
-        &deps.descendants,
+        deps.ancestors,
+        deps.descendants,
         deps.progress_map,
-        &deps.latest_validator_votes_for_frozen_banks,
+        deps.latest_validator_votes_for_frozen_banks,
         deps.fork_choice,
         deps.epoch_stakes,
-        &deps.slot_history,
+        deps.slot_history,
     );
     const maybe_voted_slot = vote_and_reset_forks.vote_slot;
     const maybe_reset_slot = vote_and_reset_forks.reset_slot;
