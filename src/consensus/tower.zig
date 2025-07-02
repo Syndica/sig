@@ -95,7 +95,7 @@ pub const Tower = struct {
         fork_root: Slot,
         accounts_db: *AccountsDB,
     ) !void {
-        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch {
+        const vote_account = accounts_db.getAccountDeprecated(vote_account_pubkey) catch {
             self.initializeRoot(fork_root);
             return;
         };
@@ -431,7 +431,7 @@ pub fn lastVotedSlotInBank(
     accounts_db: *AccountsDB,
     vote_account_pubkey: *const Pubkey,
 ) ?Slot {
-    const vote_account = accounts_db.getAccount(vote_account_pubkey) catch return null;
+    const vote_account = accounts_db.getAccountDeprecated(vote_account_pubkey) catch return null;
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,

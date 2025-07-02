@@ -17,7 +17,7 @@ const FeatureSet = sig.runtime.FeatureSet;
 const Hash = sig.core.Hash;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
-const EpochStakes = sig.core.stake.EpochStakes;
+const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
 const SysvarCache = sig.runtime.SysvarCache;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
@@ -46,7 +46,7 @@ pub fn main() !void {
     const bytes = try input_file.readToEndAlloc(gpa, sbpf.MAX_FILE_SIZE);
     defer gpa.free(bytes);
 
-    const epoch_stakes = try EpochStakes.initEmpty(gpa);
+    const epoch_stakes = try VersionedEpochStake.Current.initEmpty(gpa);
     defer epoch_stakes.deinit(gpa);
 
     var tc: TransactionContext = .{

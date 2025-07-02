@@ -3577,7 +3577,7 @@ const TestFixture = struct {
         );
         epoch_stakes.total_stake = 1000;
         epoch_stakes.stakes.deinit(allocator);
-        epoch_stakes.stakes = try Stakes(.delegation).initRandom(
+        epoch_stakes.stakes = try Stakes(sig.core.stake.Delegation).initRandom(
             allocator,
             random,
             1,
