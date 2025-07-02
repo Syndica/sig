@@ -1,3 +1,5 @@
+const builtin = @import("builtin");
+const std = @import("std");
 const sig = @import("../../sig.zig");
 
 const Pubkey = sig.core.Pubkey;
@@ -36,4 +38,17 @@ pub const Clock = extern struct {
         .leader_schedule_epoch = 0,
         .unix_timestamp = 0,
     };
+
+    pub const SIZE_OF: u64 = @sizeOf(Clock);
+
+    pub fn initRandom(random: std.Random) Clock {
+        if (!builtin.is_test) @compileError("only for testing");
+        return Clock{
+            .slot = random.int(Slot),
+            .epoch_start_timestamp = random.int(i64),
+            .epoch = random.int(Epoch),
+            .leader_schedule_epoch = random.int(Epoch),
+            .unix_timestamp = random.int(i64),
+        };
+    }
 };
