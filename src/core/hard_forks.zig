@@ -1,49 +1,60 @@
 const std = @import("std");
+
+const Allocator = std.mem.Allocator;
 const Slot = @import("time.zig").Slot;
 
 pub const HardForks = struct {
-    forks: std.ArrayListUnmanaged(Fork) = .{},
+    entries: std.ArrayListUnmanaged(HardFork) = .{},
 
-    pub const Fork = extern struct {
+    pub const HardFork = extern struct {
         slot: Slot,
         count: u64,
 
-        pub fn sortCmp(_: void, a: Fork, b: Fork) bool {
+        pub fn sortCmp(_: void, a: HardFork, b: HardFork) bool {
             return a.slot < b.slot; // Sort by ascending slot
+        }
+
+        pub fn searchCmp(slot: Slot, b: HardFork) std.math.Order {
+            return std.math.order(slot, b.slot);
         }
     };
 
-    pub fn deinit(self: HardForks, allocator: std.mem.Allocator) void {
-        allocator.free(self.forks.allocatedSlice());
+    pub fn deinit(self: HardForks, allocator: Allocator) void {
+        allocator.free(self.entries.allocatedSlice());
     }
 
     pub fn clone(
         self: HardForks,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!HardForks {
-        return .{ .forks = try self.forks.clone(allocator) };
+        allocator: Allocator,
+    ) Allocator.Error!HardForks {
+        return .{ .entries = try self.entries.clone(allocator) };
     }
 
-    pub fn register(self: *HardForks, allocator: std.mem.Allocator, new_slot: Slot) !void {
-        const maybe_index: ?u64 = for (self.forks.items, 0..) |hard_fork, index| {
-            if (hard_fork.slot == new_slot) break index;
-        } else null;
-
-        if (maybe_index) |index| {
-            self.forks.items[index] = .{
+    pub fn register(self: *HardForks, allocator: Allocator, new_slot: Slot) !void {
+        if (std.sort.binarySearch(
+            HardFork,
+            self.entries.items,
+            new_slot,
+            HardFork.searchCmp,
+        )) |index| {
+            self.entries.items[index] = .{
                 .slot = new_slot,
-                .count = self.forks.items[index].count +| 1,
+                .count = self.entries.items[index].count +| 1,
             };
         } else {
-            try self.forks.append(allocator, .{ .slot = new_slot, .count = 1 });
+            const index = std.sort.lowerBound(
+                HardFork,
+                self.entries.items,
+                new_slot,
+                HardFork.searchCmp,
+            );
+            try self.entries.insert(allocator, index, .{ .slot = new_slot, .count = 1 });
         }
-
-        std.mem.sort(Fork, self.forks.items, {}, Fork.sortCmp);
     }
 
     pub fn getHashData(self: *const HardForks, slot: Slot, parent_slot: Slot) ?[8]u8 {
         var fork_count: u64 = 0;
-        for (self.forks.items) |hard_fork| {
+        for (self.entries.items) |hard_fork| {
             if (parent_slot < hard_fork.slot and slot >= hard_fork.slot) {
                 fork_count += hard_fork.count;
             }
@@ -58,12 +69,12 @@ pub const HardForks = struct {
 
     pub fn initRandom(
         random: std.Random,
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         max_list_entries: usize,
-    ) std.mem.Allocator.Error!HardForks {
+    ) Allocator.Error!HardForks {
         const hard_forks_len = random.uintAtMost(usize, max_list_entries);
 
-        var self = try std.ArrayListUnmanaged(Fork).initCapacity(
+        var self = try std.ArrayListUnmanaged(HardFork).initCapacity(
             allocator,
             hard_forks_len,
         );
@@ -74,9 +85,9 @@ pub const HardForks = struct {
             .count = random.int(usize),
         });
 
-        std.sort.heap(Fork, self.items, {}, Fork.sortCmp);
+        std.sort.heap(HardFork, self.items, {}, HardFork.sortCmp);
 
-        return .{ .forks = self };
+        return .{ .entries = self };
     }
 };
 
@@ -89,10 +100,10 @@ test HardForks {
     try hard_forks.register(allocator, 10);
     try hard_forks.register(allocator, 20);
 
-    try std.testing.expectEqual(10, hard_forks.forks.items[0].slot);
-    try std.testing.expectEqual(1, hard_forks.forks.items[1].count);
-    try std.testing.expectEqual(20, hard_forks.forks.items[1].slot);
-    try std.testing.expectEqual(1, hard_forks.forks.items[1].count);
+    try std.testing.expectEqual(10, hard_forks.entries.items[0].slot);
+    try std.testing.expectEqual(1, hard_forks.entries.items[1].count);
+    try std.testing.expectEqual(20, hard_forks.entries.items[1].slot);
+    try std.testing.expectEqual(1, hard_forks.entries.items[1].count);
 
     try std.testing.expectEqual(null, hard_forks.getHashData(9, 0));
 
