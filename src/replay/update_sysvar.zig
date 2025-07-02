@@ -192,7 +192,7 @@ pub fn updateLastRestartSlot(
     if (!feature_set.active.contains(features.LAST_RESTART_SLOT_SYSVAR)) return;
 
     const new_last_restart_slot = blk: {
-        const iter = std.mem.reverseIterator(hard_forks.forks.items);
+        const iter = std.mem.reverseIterator(hard_forks.entries.items);
         while (iter.next()) |hf| if (hf.slot <= slot) break :blk hf.slot;
         break :blk 0;
     };
