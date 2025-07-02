@@ -64,9 +64,10 @@ pub fn processConsensus(maybe_deps: ?ConsensusDependencies) !void {
 
     const heaviest_epoch: Epoch = deps.epoch_tracker.schedule.getEpoch(heaviest_slot);
 
+    const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
-        .last_refresh_time = sig.time.Instant.now(),
-        .last_print_time = sig.time.Instant.now(),
+        .last_refresh_time = now,
+        .last_print_time = now,
     };
 
     const vote_and_reset_forks = try deps.replay_tower.selectVoteAndResetForks(
@@ -456,9 +457,10 @@ test "maybeRefreshLastVote - no heaviest slot on same fork" {
     );
     defer replay_tower.deinit(std.testing.allocator);
 
+    const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
-        .last_refresh_time = sig.time.Instant.now(),
-        .last_print_time = sig.time.Instant.now(),
+        .last_refresh_time = now,
+        .last_print_time = now,
     };
 
     const result = sig.replay.consensus.maybeRefreshLastVote(
@@ -489,9 +491,10 @@ test "maybeRefreshLastVote - no landed vote" {
     );
     defer replay_tower.deinit(std.testing.allocator);
 
+    const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
-        .last_refresh_time = sig.time.Instant.now(),
-        .last_print_time = sig.time.Instant.now(),
+        .last_refresh_time = now,
+        .last_print_time = now,
     };
 
     // not vote in progress map.
@@ -566,9 +569,11 @@ test "maybeRefreshLastVote - latest landed vote newer than last vote" {
             .block_id = Hash.ZEROES,
         },
     };
+
+    const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
-        .last_refresh_time = sig.time.Instant.now(),
-        .last_print_time = sig.time.Instant.now(),
+        .last_refresh_time = now,
+        .last_print_time = now,
     };
 
     const result = sig.replay.consensus.maybeRefreshLastVote(
@@ -644,9 +649,10 @@ test "maybeRefreshLastVote - non voting validator" {
 
     replay_tower.last_vote_tx_blockhash = .non_voting;
 
+    const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
-        .last_refresh_time = sig.time.Instant.now(),
-        .last_print_time = sig.time.Instant.now(),
+        .last_refresh_time = now,
+        .last_print_time = now,
     };
 
     const result = sig.replay.consensus.maybeRefreshLastVote(
@@ -722,9 +728,10 @@ test "maybeRefreshLastVote - hotspare validator" {
 
     replay_tower.last_vote_tx_blockhash = .hot_spare;
 
+    const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
-        .last_refresh_time = sig.time.Instant.now(),
-        .last_print_time = sig.time.Instant.now(),
+        .last_refresh_time = now,
+        .last_print_time = now,
     };
 
     const result = sig.replay.consensus.maybeRefreshLastVote(
@@ -800,12 +807,13 @@ test "maybeRefreshLastVote - refresh interval not elapsed" {
 
     replay_tower.last_vote_tx_blockhash = .{ .blockhash = Hash.ZEROES };
 
+    const now = sig.time.Instant.now();
     var last_vote_refresh_time: LastVoteRefreshTime = .{
         // Will last_vote_refresh_time.last_refresh_time.elapsed().asMillis() as zero
         // thereby satisfying the test condition of that value being
         // less than MAX_VOTE_REFRESH_INTERVAL_MILLIS
-        .last_refresh_time = sig.time.Instant.now(),
-        .last_print_time = sig.time.Instant.now(),
+        .last_refresh_time = now,
+        .last_print_time = now,
     };
 
     const result = sig.replay.consensus.maybeRefreshLastVote(
