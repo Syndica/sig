@@ -38,6 +38,7 @@ pub const Committer = struct {
         slot: Slot,
         transactions: []const ResolvedTransaction,
         tx_results: []const struct { Hash, ProcessedTransaction },
+        thread_id: i128,
     ) !void {
         // TODO: update stakes cache
 
@@ -48,6 +49,7 @@ pub const Committer = struct {
         var signature_count: usize = 0;
         var rent_collected: u64 = 0;
 
+        std.debug.print("{} - checkpoint a\n", .{thread_id});
         for (transactions, tx_results) |transaction, result| {
             const message_hash, const tx_result = result;
             signature_count += transaction.transaction.signatures.len;
@@ -60,6 +62,7 @@ pub const Committer = struct {
                     gop.value_ptr.* = account.getAccount().*;
                 },
             }
+            std.debug.print("{} - checkpoint b\n", .{thread_id});
 
             switch (tx_result) {
                 .executed => |exec| rent_collected += exec.loaded_accounts.rent_collected,
@@ -71,14 +74,24 @@ pub const Committer = struct {
             try self.status_cache.insert(allocator, rng.random(), recent_blockhash, &message_hash.data, slot);
             try self.status_cache.insert(allocator, rng.random(), recent_blockhash, &signature.data, slot);
             // TODO: we'll need to store the actual status at some point, probably for rpc.
+            std.debug.print("{} - checkpoint c\n", .{thread_id});
         }
 
         _ = self.slot_state.transaction_count.fetchAdd(tx_results.len, .monotonic);
         _ = self.slot_state.signature_count.fetchAdd(signature_count, .monotonic);
         _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
+        std.debug.print("{} - checkpoint d\n", .{thread_id});
         for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
-            try self.accounts_db.putAccount(slot, pubkey, account);
+            _ = pubkey; // autofix
+            _ = account; // autofix
+            // const result = self.accounts_db.putAccount(slot, pubkey, account);
+            // if (result) |_| {} else |err| {
+            //     std.debug.print("putAccount FAIL: {}", .{err});
+            //     return err;
+            // }
+            std.debug.print("{} - checkpoint e\n", .{thread_id});
         }
+        std.debug.print("{} - checkpoint f\n", .{thread_id});
     }
 };

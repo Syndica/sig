@@ -87,8 +87,10 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
     for (active_slots) |slot| {
         state.logger.info().logf("replaying slot: {}", .{slot});
         const result = try replaySlot(state, slot);
+        state.logger.info().logf("slot replay now running... {}", .{slot});
         errdefer result.deinit(state.allocator);
         try slot_statuses.append(state.allocator, .{ slot, result });
+        state.logger.info().logf("appended result for slot {}", .{slot});
     }
     var processed_a_slot = false;
     for (slot_statuses.items) |slot_status| {
@@ -100,6 +102,8 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
             // NOTE: agave does this a bit differently, it indicates that a slot
             // was *finished*, not just processed partially.
             processed_a_slot = true;
+            state.logger.info().logf("awaiting confirmation for slot {}", .{slot});
+            errdefer state.logger.info().logf("error awaiting slot {}", .{slot});
             while (try status.confirm.poll() == .pending) {
                 // TODO: consider futex-based wait like ResetEvent
                 std.time.sleep(std.time.ns_per_ms);
@@ -287,19 +291,19 @@ fn freezeSlot(
     slot: Slot,
     state: *sig.core.SlotState,
 ) !void {
+    _ = accounts_db; // autofix
     var slot_hash = state.hash.write();
     defer slot_hash.unlock();
 
     if (slot_hash.get().* != null) return; // already frozen
 
+    std.debug.print("freezing slot: {}\n", .{slot});
+
     // TODO: update sysvars and collect rent
 
-    std.debug.print("hashing slot: {}\n", .{slot});
-    const hash, _ = try accounts_db.computeAccountHashesAndLamports(
-        .{ .FullAccountHash = .{ .max_slot = slot } },
-    );
-    slot_hash.mut().* = hash;
-    std.debug.print("slot hashed: {} - {}\n", .{ slot, hash });
-
-    // TODO: lthash
+    // const hash, _ = try accounts_db.computeAccountHashesAndLamports(
+    //     .{ .FullAccountHash = .{ .max_slot = slot } },
+    // );
+    slot_hash.mut().* = .ZEROES; // TODO: lthash
+    // std.debug.print("slot hashed: {} - \n", .{ slot,  });
 }

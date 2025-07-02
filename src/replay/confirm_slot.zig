@@ -50,16 +50,22 @@ pub fn confirmSlot(
     logger.info().log("confirming slot");
     const future = try ConfirmSlotFuture.create(allocator, thread_pool, committer, entries, svm_params);
     errdefer future.destroy(allocator);
+    logger.info().log("future created");
 
     if (verifyTicks(logger, entries, verify_ticks_params)) |block_error| {
         future.status = .{ .err = .{ .invalid_block = block_error } };
+        logger.info().log("ticks FAILED");
         return future;
     }
+    logger.info().log("ticks verified");
 
     try startPohVerify(allocator, &future.poh_verifier, last_entry, entries);
+    logger.info().log("poh start");
     try scheduleTransactionBatches(allocator, &future.scheduler, accounts_db, entries);
+    logger.info().log("batches scheduled");
 
     _ = try future.poll(); // starts batch execution. poll result is cached inside future
+    logger.info().log("batches LAUNCHED");
 
     return future;
 }
@@ -202,6 +208,7 @@ const PohTask = struct {
     entries: []const Entry,
 
     pub fn run(self: *PohTask) !void {
+        errdefer std.debug.print("POH FAILED!!!\n", .{});
         if (!try core.entry.verifyPoh(self.entries, self.allocator, null, self.initial_hash)) {
             return error.PohVerifyFailed;
         }
