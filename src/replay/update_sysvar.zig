@@ -747,7 +747,7 @@ test fillMissingEntries {
 
     // Check all sysvar accounts are correct
     try std.testing.expectEqualSlices(u8, expected.clock.?, actual.clock.?);
-    // try std.testing.expectEqualSlices(u8, expected.epoch_schedule.?, actual.epoch_schedule.?);
+    try std.testing.expectEqualSlices(u8, expected.epoch_schedule.?, actual.epoch_schedule.?);
     try std.testing.expectEqualSlices(u8, expected.epoch_rewards.?, actual.epoch_rewards.?);
     try std.testing.expectEqualSlices(u8, expected.rent.?, actual.rent.?);
     try std.testing.expectEqualSlices(u8, expected.last_restart_slot.?, actual.last_restart_slot.?);
