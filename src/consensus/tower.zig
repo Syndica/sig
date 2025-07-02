@@ -707,6 +707,101 @@ test "collect vote lockouts root" {
     );
 }
 
+test "collect vote lockouts sums" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(42);
+    const random = prng.random();
+
+    // two accounts voting for slot 0 with 1 token staked
+    var votes = [_]u64{0};
+
+    var accounts = try genStakes(
+        allocator,
+        random,
+        &[_]struct { u64, []u64 }{ .{ 1, &votes }, .{ 1, &votes } },
+    );
+    defer {
+        for (accounts.values()) |value| {
+            allocator.free(value[1].account.data);
+            value[1].vote_state.deinit();
+        }
+        accounts.deinit(allocator);
+    }
+
+    const account_latest_votes = try allocator.alloc(
+        struct { Pubkey, sig.core.hash.SlotAndHash },
+        accounts.count(),
+    );
+    defer allocator.free(account_latest_votes);
+
+    for (accounts.keys(), 0..) |key, i| {
+        account_latest_votes[i] =
+            .{
+                key,
+                sig.core.hash.SlotAndHash{
+                    .slot = 0,
+                    .hash = sig.core.hash.Hash.ZEROES,
+                },
+            };
+    }
+
+    // ancestors: slot 1 has ancestor 0, slot 0 has no ancestors
+    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    defer {
+        var it = ancestors.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+        }
+        ancestors.deinit(allocator);
+    }
+    const set0 = SortedSet(Slot).init(allocator);
+    var set1 = SortedSet(Slot).init(allocator);
+    try set1.put(0);
+    try ancestors.put(allocator, 0, set0);
+    try ancestors.put(allocator, 1, set1);
+
+    var latest_votes = LatestValidatorVotesForFrozenBanks.empty;
+    defer latest_votes.deinit(allocator);
+
+    var progres_map = ProgressMap.INIT;
+    defer progres_map.deinit(allocator);
+
+    var fork_progress = try sig.consensus.progress_map.ForkProgress.zeroes(allocator);
+    errdefer fork_progress.deinit(allocator);
+    fork_progress.fork_stats.bank_hash = sig.core.hash.Hash.ZEROES;
+
+    for (accounts.values()) |account| {
+        try progres_map.map.put(
+            allocator,
+            account[1].vote_state.lastVotedSlot().?,
+            fork_progress,
+        );
+    }
+
+    var computed_banks = try collectVoteLockouts(
+        allocator,
+        .noop,
+        &Pubkey.ZEROES,
+        1,
+        &accounts,
+        &ancestors,
+        &progres_map,
+        &latest_votes,
+    );
+    defer computed_banks.deinit(allocator);
+
+    try std.testing.expectEqual(2, computed_banks.voted_stakes.get(0).?);
+    try std.testing.expectEqual(2, computed_banks.total_stake);
+
+    var new_votes = try latest_votes.takeVotesDirtySet(allocator, 0);
+    defer new_votes.deinit(allocator);
+    try std.testing.expectEqualSlices(
+        struct { Pubkey, sig.core.hash.SlotAndHash },
+        account_latest_votes,
+        new_votes.items,
+    );
+}
+
 fn genStakes(
     allocator: std.mem.Allocator,
     random: std.Random,
