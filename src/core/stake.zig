@@ -74,8 +74,9 @@ pub const EpochStakes = struct {
     epoch_authorized_voters: EpochAuthorizedVoters,
 
     /// Creates an empty `EpochStakes` with a single stake history entry at epoch 0.
-    pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes {
-        var history: EpochAndStakeHistory = .{};
+    pub fn initEmpty(allocator: std.mem.Allocator) std.mem.Allocator.Error!EpochStakes {
+        var history: EpochAndStakeHistory = .empty;
+        errdefer history.deinit(allocator);
         try history.append(allocator, .{
             .epoch = 0,
             .history_entry = .{
@@ -90,7 +91,7 @@ pub const EpochStakes = struct {
                 .epoch = 0,
                 .history = history,
                 .vote_accounts = .{
-                    .accounts = .{},
+                    .accounts = .empty,
                     .staked_nodes = null,
                 },
                 .delegations = .{},
