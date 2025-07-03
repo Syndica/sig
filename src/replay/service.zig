@@ -442,13 +442,13 @@ fn processAncestorHashesDuplicateSlots(
     epoch_slots_frozen_slots: *EpochSlotsFrozenSlots,
     progress: *const sig.consensus.ProgressMap,
     fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
-    bank_forks_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
+    slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
 ) !void {
     const root = root: {
-        const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
-        defer bank_forks_lg.unlock();
-        break :root bank_forks.root;
+        const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
+        defer slot_tracker_lg.unlock();
+        break :root slot_tracker.root;
     };
 
     while (ancestor_duplicate_slots_receiver.tryReceive()) |ancestor_dupe_slot_to_repair| {
@@ -466,10 +466,10 @@ fn processAncestorHashesDuplicateSlots(
 
         const bank_status: BankStatus = status: {
             if (progress.isDead(epoch_slots_frozen_slot) orelse false) break :status .dead;
-            const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
-            defer bank_forks_lg.unlock();
+            const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
+            defer slot_tracker_lg.unlock();
             break :status .fromHash(
-                if (bank_forks.slots.get(epoch_slots_frozen_slot)) |bank|
+                if (slot_tracker.slots.get(epoch_slots_frozen_slot)) |bank|
                     bank.state.hash.readCopy()
                 else
                     null,
@@ -509,7 +509,7 @@ fn processDuplicateConfirmedSlots(
     duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
     blockstore: *sig.ledger.LedgerResultWriter,
     duplicate_confirmed_slots: *DuplicateConfirmedSlots,
-    bank_forks_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
+    slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
     progress: *const sig.consensus.ProgressMap,
     fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
@@ -517,9 +517,9 @@ fn processDuplicateConfirmedSlots(
     purge_repair_slot_counter: *PurgeRepairSlotCounter,
 ) !void {
     const root = root: {
-        const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
-        defer bank_forks_lg.unlock();
-        break :root bank_forks.root;
+        const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
+        defer slot_tracker_lg.unlock();
+        break :root slot_tracker.root;
     };
     while (duplicate_confirmed_slots_receiver.tryReceive()) |new_duplicate_confirmed_slot| {
         const confirmed_slot, const duplicate_confirmed_hash = new_duplicate_confirmed_slot;
@@ -545,10 +545,10 @@ fn processDuplicateConfirmedSlots(
             .duplicate_confirmed_hash = duplicate_confirmed_hash,
             .bank_status = status: {
                 if (progress.isDead(confirmed_slot) orelse false) break :status .dead;
-                const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
-                defer bank_forks_lg.unlock();
+                const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
+                defer slot_tracker_lg.unlock();
                 break :status .fromHash(
-                    bank_forks.get(confirmed_slot).?.state.hash.readCopy(),
+                    slot_tracker.get(confirmed_slot).?.state.hash.readCopy(),
                 );
             },
         };
@@ -658,13 +658,13 @@ fn processGossipVerifiedVoteHashes(
 fn processPopularPrunedForks(
     logger: sig.trace.Logger,
     popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
-    bank_forks_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
+    slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) void {
     const root = root: {
-        const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
-        defer bank_forks_lg.unlock();
-        break :root bank_forks.root;
+        const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
+        defer slot_tracker_lg.unlock();
+        break :root slot_tracker.root;
     };
     while (popular_pruned_forks_receiver.tryReceive()) |new_popular_pruned_slot| {
         if (new_popular_pruned_slot <= root) {
@@ -687,7 +687,7 @@ fn processDuplicateSlots(
     duplicate_slots_receiver: *sig.sync.Channel(sig.core.Slot),
     duplicate_slots_tracker: *DuplicateSlotsTracker,
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-    bank_forks_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
+    slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
     progress: *const sig.consensus.ProgressMap,
     fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
 ) !void {
@@ -700,18 +700,18 @@ fn processDuplicateSlots(
     }
 
     const root_slot, const bank_hashes = blk: {
-        const r_bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
-        defer bank_forks_lg.unlock();
+        const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
+        defer slot_tracker_lg.unlock();
 
         var bank_hashes: std.BoundedArray(?sig.core.Hash, MAX_BATCH_SIZE) = .{};
         for (new_duplicate_slots.constSlice()) |duplicate_slot| {
             bank_hashes.appendAssumeCapacity(hash: {
-                const bf_elem = r_bank_forks.slots.get(duplicate_slot) orelse break :hash null;
+                const bf_elem = slot_tracker.slots.get(duplicate_slot) orelse break :hash null;
                 break :hash bf_elem.state.hash.readCopy();
             });
         }
 
-        break :blk .{ r_bank_forks.root, bank_hashes };
+        break :blk .{ slot_tracker.root, bank_hashes };
     };
     for (new_duplicate_slots.constSlice(), bank_hashes.constSlice()) |duplicate_slot, bank_hash| {
         // WindowService should only send the signal once per slot
@@ -1537,8 +1537,8 @@ const TestData = struct {
             }),
         };
 
-        var bank_forks: sig.replay.trackers.SlotTracker = .init(0);
-        errdefer bank_forks.deinit(allocator);
+        var slot_tracker: sig.replay.trackers.SlotTracker = .init(0);
+        errdefer slot_tracker.deinit(allocator);
 
         var fork_choice: sig.consensus.HeaviestSubtreeForkChoice = try .init(allocator, logger, .{
             .slot = 0,
@@ -1565,7 +1565,7 @@ const TestData = struct {
             );
 
             const parent_slot = slot_info.parent_slot orelse (slot_info.slot -| 1);
-            try bank_forks.put(
+            try slot_tracker.put(
                 allocator,
                 slot_info.slot,
                 .{
@@ -1601,7 +1601,7 @@ const TestData = struct {
         for (descendants.values()) |*slot_set| slot_set.sort();
 
         return .{
-            .slot_tracker = bank_forks,
+            .slot_tracker = slot_tracker,
             .heaviest_subtree_fork_choice = fork_choice,
             .descendants = descendants,
             .progress = progress,
@@ -1672,14 +1672,14 @@ test "apply state changes" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = test_data.slot_tracker;
+    const slot_tracker = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const descendants = test_data.descendants;
 
     // MarkSlotDuplicate should mark progress map and remove
     // the slot from fork choice
-    const duplicate_slot = bank_forks.root + 1;
-    const duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+    const duplicate_slot = slot_tracker.root + 1;
+    const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
     try state_change.markSlotDuplicate(
         duplicate_slot,
         heaviest_subtree_fork_choice,
@@ -1698,7 +1698,7 @@ test "apply state changes" {
                 duplicate_slot,
                 heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
                     .slot = child_slot,
-                    .hash = bank_forks.slots.get(child_slot).?.state.hash.readCopy().?,
+                    .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
                 }).?,
             );
         }
@@ -1736,7 +1736,7 @@ test "apply state changes bank frozen" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = test_data.slot_tracker;
+    const slot_tracker = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
 
     var ledger_state: TestLedgerRwState = .init();
@@ -1746,8 +1746,8 @@ test "apply state changes bank frozen" {
         try testLedgerRw(@src(), .noop, &ledger_state);
     defer ledger.deinit();
 
-    const duplicate_slot = bank_forks.root + 1;
-    const duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+    const duplicate_slot = slot_tracker.root + 1;
+    const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
 
     // Simulate ReplayStage freezing a Bank with the given hash.
     // BankFrozen should mark it down in Blockstore.
@@ -1772,9 +1772,9 @@ test "apply state changes bank frozen" {
     // version in blockstore.
     const new_bank_hash: sig.core.Hash = .initRandom(random);
     const root_slot_hash: sig.core.hash.SlotAndHash = rsh: {
-        const root_bank = bank_forks.get(bank_forks.root).?;
+        const root_bank = slot_tracker.get(slot_tracker.root).?;
         break :rsh .{
-            .slot = bank_forks.root,
+            .slot = slot_tracker.root,
             .hash = root_bank.state.hash.readCopy().?,
         };
     };
@@ -1809,7 +1809,7 @@ test "apply state changes duplicate confirmed matches frozen" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = test_data.slot_tracker;
+    const slot_tracker = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const descendants = &test_data.descendants;
 
@@ -1820,8 +1820,8 @@ test "apply state changes duplicate confirmed matches frozen" {
         try testLedgerRw(@src(), .noop, &ledger_state);
     defer ledger.deinit();
 
-    const duplicate_slot = bank_forks.root + 1;
-    const our_duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+    const duplicate_slot = slot_tracker.root + 1;
+    const our_duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
 
     var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
     defer duplicate_slots_to_repair.deinit(allocator);
@@ -1866,7 +1866,7 @@ test "apply state changes duplicate confirmed matches frozen" {
                 null,
                 heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
                     .slot = child_slot,
-                    .hash = bank_forks.slots.get(child_slot).?.state.hash.readCopy().?,
+                    .hash = slot_tracker.slots.get(child_slot).?.state.hash.readCopy().?,
                 }),
             );
         }
@@ -1890,7 +1890,7 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = test_data.slot_tracker;
+    const slot_tracker = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const descendants = &test_data.descendants;
 
@@ -1907,8 +1907,8 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
     var purge_repair_slot_counter: PurgeRepairSlotCounter = .empty;
     defer purge_repair_slot_counter.deinit(allocator);
 
-    const duplicate_slot = bank_forks.root + 1;
-    const our_duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+    const duplicate_slot = slot_tracker.root + 1;
+    const our_duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
 
     // Setup and check the state that is about to change.
     try duplicate_slots_to_repair.put(allocator, duplicate_slot, .initRandom(random));
@@ -1955,7 +1955,7 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
                 null,
                 heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
                     .slot = child_slot,
-                    .hash = bank_forks.get(child_slot).?.state.hash.readCopy().?,
+                    .hash = slot_tracker.get(child_slot).?.state.hash.readCopy().?,
                 }),
             );
         }
@@ -1980,7 +1980,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = test_data.slot_tracker;
+    const slot_tracker = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
@@ -2026,7 +2026,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
     try std.testing.expect(duplicate_slots_tracker.contains(duplicate_slot));
     // Nothing should be applied yet to fork choice, since bank was not yet frozen
     for (2..3 + 1) |slot| {
-        const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
+        const slot_hash = slot_tracker.get(slot).?.state.hash.readCopy().?;
         try std.testing.expectEqual(null, heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
             .slot = slot,
             .hash = slot_hash,
@@ -2034,7 +2034,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
     }
 
     // Now freeze the bank
-    const frozen_duplicate_slot_hash = bank_forks.get(duplicate_slot).?.state.hash.readCopy().?;
+    const frozen_duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
     const bank_frozen_state: BankFrozenState = .fromState(
         .noop,
         duplicate_slot,
@@ -2065,7 +2065,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
 
     // The ancestor of the duplicate slot should be the best slot now
     const duplicate_ancestor, const duplicate_parent_hash = blk: {
-        const bank_consts = bank_forks.get(duplicate_slot).?.constants;
+        const bank_consts = slot_tracker.get(duplicate_slot).?.constants;
         break :blk .{ bank_consts.parent_slot, bank_consts.parent_hash };
     };
     try std.testing.expectEqual(
@@ -2091,7 +2091,7 @@ test "state ancestor confirmed descendant duplicate" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = test_data.slot_tracker;
+    const slot_tracker = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
@@ -2102,7 +2102,7 @@ test "state ancestor confirmed descendant duplicate" {
         try testLedgerRw(@src(), .noop, &ledger_state);
     defer ledger.deinit();
 
-    const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
+    const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
@@ -2119,7 +2119,7 @@ test "state ancestor confirmed descendant duplicate" {
     defer duplicate_confirmed_slots.deinit(allocator);
 
     // Mark slot 2 as duplicate confirmed
-    const slot2_hash = bank_forks.get(2).?.state.hash.readCopy().?;
+    const slot2_hash = slot_tracker.get(2).?.state.hash.readCopy().?;
     try duplicate_confirmed_slots.put(allocator, 2, slot2_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot2_hash,
@@ -2156,7 +2156,7 @@ test "state ancestor confirmed descendant duplicate" {
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
     for (0..2 + 1) |slot| {
-        const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
+        const slot_hash = slot_tracker.get(slot).?.state.hash.readCopy().?;
         try std.testing.expectEqual(
             true,
             heaviest_subtree_fork_choice.isDuplicateConfirmed(&.{
@@ -2196,7 +2196,7 @@ test "state ancestor confirmed descendant duplicate" {
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
     );
     for (0..3 + 1) |slot| {
-        const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
+        const slot_hash = slot_tracker.get(slot).?.state.hash.readCopy().?;
         if (slot <= 2) {
             try std.testing.expectEqual(
                 true,
@@ -2240,7 +2240,7 @@ test "state ancestor duplicate descendant confirmed" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = test_data.slot_tracker;
+    const slot_tracker = test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
@@ -2251,7 +2251,7 @@ test "state ancestor duplicate descendant confirmed" {
         try testLedgerRw(@src(), .noop, &ledger_state);
     defer ledger.deinit();
 
-    const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
+    const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
@@ -2268,7 +2268,7 @@ test "state ancestor duplicate descendant confirmed" {
     defer purge_repair_slot_counter.deinit(allocator);
 
     // Mark 2 as duplicate
-    const slot2_hash = bank_forks.get(2).?.state.hash.readCopy().?;
+    const slot2_hash = slot_tracker.get(2).?.state.hash.readCopy().?;
     const duplicate_state: DuplicateState = .fromState(
         .noop,
         2,
@@ -2290,7 +2290,7 @@ test "state ancestor duplicate descendant confirmed" {
     );
     try std.testing.expect(duplicate_slots_tracker.contains(2));
     for (2..3 + 1) |slot| {
-        const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
+        const slot_hash = slot_tracker.get(slot).?.state.hash.readCopy().?;
         try std.testing.expectEqual(
             2,
             heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
@@ -2300,7 +2300,7 @@ test "state ancestor duplicate descendant confirmed" {
         );
     }
 
-    const slot1_hash = bank_forks.get(1).?.state.hash.readCopy().?;
+    const slot1_hash = slot_tracker.get(1).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 1, .hash = slot1_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
@@ -2329,7 +2329,7 @@ test "state ancestor duplicate descendant confirmed" {
         );
     }
     for (0..3 + 1) |slot| {
-        const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
+        const slot_hash = slot_tracker.get(slot).?.state.hash.readCopy().?;
         try std.testing.expectEqual(
             true,
             heaviest_subtree_fork_choice.isDuplicateConfirmed(&.{
@@ -2352,13 +2352,13 @@ test "state ancestor duplicate descendant confirmed" {
 }
 
 fn verifyAllSlotsDuplicateConfirmed(
-    bank_forks: *sig.replay.trackers.SlotTracker,
+    slot_tracker: *sig.replay.trackers.SlotTracker,
     heaviest_subtree_fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
     upper_bound: Slot,
     expected_is_duplicate_confirmed: bool,
 ) !void {
     for (0..upper_bound) |slot| {
-        const slot_hash = bank_forks.get(slot).?.state.hash.readCopy().?;
+        const slot_hash = slot_tracker.get(slot).?.state.hash.readCopy().?;
         const expected_is_duplicate_confirmed_or_slot0 =
             expected_is_duplicate_confirmed or
             // root is always duplicate confirmed
@@ -2389,7 +2389,7 @@ test "state descendant confirmed ancestor duplicate" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = &test_data.slot_tracker;
+    const slot_tracker = &test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
@@ -2400,7 +2400,7 @@ test "state descendant confirmed ancestor duplicate" {
         try testLedgerRw(@src(), .noop, &ledger_state);
     defer ledger.deinit();
 
-    const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
+    const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
@@ -2444,7 +2444,7 @@ test "state descendant confirmed ancestor duplicate" {
         &purge_repair_slot_counter,
         duplicate_confirmed_state,
     );
-    try verifyAllSlotsDuplicateConfirmed(bank_forks, heaviest_subtree_fork_choice, 3, true);
+    try verifyAllSlotsDuplicateConfirmed(slot_tracker, heaviest_subtree_fork_choice, 3, true);
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
@@ -2453,7 +2453,7 @@ test "state descendant confirmed ancestor duplicate" {
     // Mark ancestor 1 as duplicate, fork choice should be unaffected since
     // slot 1 was duplicate confirmed by the confirmation on its
     // descendant, 3.
-    const slot1_hash = bank_forks.get(1).?.state.hash.readCopy().?;
+    const slot1_hash = slot_tracker.get(1).?.state.hash.readCopy().?;
     const duplicate_state: DuplicateState = .fromState(
         .noop,
         1,
@@ -2471,7 +2471,7 @@ test "state descendant confirmed ancestor duplicate" {
         duplicate_state,
     );
     try std.testing.expect(duplicate_slots_tracker.contains(1));
-    try verifyAllSlotsDuplicateConfirmed(bank_forks, heaviest_subtree_fork_choice, 3, true);
+    try verifyAllSlotsDuplicateConfirmed(slot_tracker, heaviest_subtree_fork_choice, 3, true);
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
@@ -2487,7 +2487,7 @@ test "duplicate confirmed and epoch slots frozen" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = &test_data.slot_tracker;
+    const slot_tracker = &test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
@@ -2498,7 +2498,7 @@ test "duplicate confirmed and epoch slots frozen" {
         try testLedgerRw(@src(), .noop, &ledger_state);
     defer ledger.deinit();
 
-    const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
+    const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
@@ -2547,7 +2547,7 @@ test "duplicate confirmed and epoch slots frozen" {
         epoch_slots_frozen_state,
     );
     try verifyAllSlotsDuplicateConfirmed(
-        bank_forks,
+        slot_tracker,
         heaviest_subtree_fork_choice,
         3,
         expected_is_duplicate_confirmed,
@@ -2578,7 +2578,7 @@ test "duplicate confirmed and epoch slots frozen" {
         epoch_slots_frozen_slots.get(3),
     );
     try verifyAllSlotsDuplicateConfirmed(
-        bank_forks,
+        slot_tracker,
         heaviest_subtree_fork_choice,
         3,
         expected_is_duplicate_confirmed,
@@ -2598,7 +2598,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     var test_data: TestData = try .init(allocator, .noop, random);
     defer test_data.deinit(allocator);
 
-    const bank_forks = &test_data.slot_tracker;
+    const slot_tracker = &test_data.slot_tracker;
     const heaviest_subtree_fork_choice = &test_data.heaviest_subtree_fork_choice;
     const progress = &test_data.progress;
 
@@ -2609,7 +2609,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
         try testLedgerRw(@src(), .noop, &ledger_state);
     defer ledger.deinit();
 
-    const slot3_hash = bank_forks.get(3).?.state.hash.readCopy().?;
+    const slot3_hash = slot_tracker.get(3).?.state.hash.readCopy().?;
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = 3, .hash = slot3_hash },
         heaviest_subtree_fork_choice.heaviestOverallSlot(),
@@ -2662,7 +2662,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     );
     try std.testing.expectEqual(mismatched_hash, duplicate_slots_to_repair.get(3).?);
     try verifyAllSlotsDuplicateConfirmed(
-        bank_forks,
+        slot_tracker,
         heaviest_subtree_fork_choice,
         3,
         expected_is_duplicate_confirmed,
@@ -2693,7 +2693,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     try std.testing.expectEqual(0, duplicate_slots_to_repair.count());
     try std.testing.expectEqual(mismatched_hash, epoch_slots_frozen_slots.get(3).?);
     try verifyAllSlotsDuplicateConfirmed(
-        bank_forks,
+        slot_tracker,
         heaviest_subtree_fork_choice,
         3,
         expected_is_duplicate_confirmed,
