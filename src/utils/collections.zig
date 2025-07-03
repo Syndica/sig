@@ -572,6 +572,18 @@ pub fn SortedMapUnmanagedCustom(
             self_mut.inner.deinit(allocator);
         }
 
+        pub fn init(
+            allocator: std.mem.Allocator,
+            keys_init: []const K,
+            values_init: []const V,
+        ) std.mem.Allocator.Error!SortedMapSelf {
+            var result: SortedMapSelf = .empty;
+            errdefer result.deinit(allocator);
+            try result.inner.reinit(allocator, keys_init, values_init);
+            result.sort();
+            return result;
+        }
+
         pub fn clone(
             self: SortedMapSelf,
             allocator: std.mem.Allocator,
@@ -648,6 +660,23 @@ pub fn SortedMapUnmanagedCustom(
             } else {
                 self.is_sorted = false;
             }
+        }
+
+        /// Inserts a new `Entry` into the hash map, returning the previous one, if any.
+        pub fn fetchPut(
+            self: *SortedMapSelf,
+            allocator: Allocator,
+            key: K,
+            value: V,
+        ) std.mem.Allocator.Error!?Inner.KV {
+            const gop = try self.getOrPut(allocator, key);
+            const result: ?Inner.KV = if (!gop.found_existing) null else .{
+                .key = gop.key_ptr.*,
+                .value = gop.value_ptr.*,
+            };
+            gop.key_ptr.* = key;
+            gop.value_ptr.* = value;
+            return result;
         }
 
         pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
