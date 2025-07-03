@@ -8,11 +8,11 @@ const Allocator = std.mem.Allocator;
 // const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
-const Slot = sig.core.Slot;
+// const Slot = sig.core.Slot;
 
 // Improve the dependencies.
 const vote_program = sig.runtime.program.vote;
-const Lockout = vote_program.state.Lockout;
+// const Lockout = vote_program.state.Lockout;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
