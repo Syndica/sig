@@ -20,7 +20,7 @@ const EpochTracker = replay.trackers.EpochTracker;
 
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
-const LatestValidatorVotesForFrozenBanks =
+const LatestValidatorVotesForFrozenSlots =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
 
 /// Number of threads to use in replay's thread pool
@@ -295,13 +295,13 @@ pub const ClusterConfirmedHash = struct {
     };
 };
 
-pub const BankStatus = union(enum) {
+pub const SlotStatus = union(enum) {
     frozen: sig.core.Hash,
     dead,
     unprocessed,
 
     /// Returns `.frozen` or `.unprocessed`.
-    pub fn fromHash(maybe_hash: ?sig.core.Hash) BankStatus {
+    pub fn fromHash(maybe_hash: ?sig.core.Hash) SlotStatus {
         if (maybe_hash) |hash| {
             return .{ .frozen = hash };
         } else {
@@ -309,7 +309,7 @@ pub const BankStatus = union(enum) {
         }
     }
 
-    fn bankHash(self: BankStatus) ?sig.core.Hash {
+    fn slotHash(self: SlotStatus) ?sig.core.Hash {
         return switch (self) {
             .frozen => |hash| hash,
             .dead => null,
@@ -318,7 +318,7 @@ pub const BankStatus = union(enum) {
     }
 };
 
-const BankFrozenState = struct {
+const SlotFrozenState = struct {
     frozen_hash: sig.core.Hash,
     cluster_confirmed_hash: ?ClusterConfirmedHash,
     is_slot_duplicate: bool,
@@ -331,7 +331,7 @@ const BankFrozenState = struct {
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
-    ) BankFrozenState {
+    ) SlotFrozenState {
         const cluster_confirmed_hash = getClusterConfirmedHashFromState(
             logger,
             slot,
@@ -351,7 +351,7 @@ const BankFrozenState = struct {
 
 pub const DuplicateConfirmedState = struct {
     duplicate_confirmed_hash: sig.core.Hash,
-    bank_status: BankStatus,
+    slot_status: SlotStatus,
 };
 
 pub const DeadState = struct {
@@ -375,14 +375,14 @@ pub const DeadState = struct {
 
 pub const DuplicateState = struct {
     duplicate_confirmed_hash: ?sig.core.Hash,
-    bank_status: BankStatus,
+    slot_status: SlotStatus,
 
     pub fn fromState(
         logger: sig.trace.Logger,
         slot: sig.core.Slot,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
-        bank_status: BankStatus,
+        slot_status: SlotStatus,
     ) DuplicateState {
         // We can only skip marking duplicate if this slot has already been
         // duplicate confirmed, any weaker confirmation levels are not sufficient
@@ -392,11 +392,11 @@ pub const DuplicateState = struct {
             slot,
             duplicate_confirmed_slots,
             fork_choice,
-            bank_status.bankHash(),
+            slot_status.slotHash(),
         );
         return .{
             .duplicate_confirmed_hash = duplicate_confirmed_hash,
-            .bank_status = bank_status,
+            .slot_status = slot_status,
         };
     }
 };
@@ -404,7 +404,7 @@ pub const DuplicateState = struct {
 pub const EpochSlotsFrozenState = struct {
     epoch_slots_frozen_hash: sig.core.Hash,
     duplicate_confirmed_hash: ?sig.core.Hash,
-    bank_status: BankStatus,
+    slot_status: SlotStatus,
     is_popular_pruned: bool,
 
     pub fn fromState(
@@ -413,7 +413,7 @@ pub const EpochSlotsFrozenState = struct {
         epoch_slots_frozen_hash: sig.core.Hash,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
-        bank_status: BankStatus,
+        slot_status: SlotStatus,
         is_popular_pruned: bool,
     ) EpochSlotsFrozenState {
         const duplicate_confirmed_hash = getDuplicateConfirmedHashFromState(
@@ -421,12 +421,12 @@ pub const EpochSlotsFrozenState = struct {
             slot,
             duplicate_confirmed_slots,
             fork_choice,
-            bank_status.bankHash(),
+            slot_status.slotHash(),
         );
         return .{
             .epoch_slots_frozen_hash = epoch_slots_frozen_hash,
             .duplicate_confirmed_hash = duplicate_confirmed_hash,
-            .bank_status = bank_status,
+            .slot_status = slot_status,
             .is_popular_pruned = is_popular_pruned,
         };
     }
@@ -464,13 +464,13 @@ fn processAncestorHashesDuplicateSlots(
                 "dead", slot_to_repair },
         );
 
-        const bank_status: BankStatus = status: {
+        const slot_status: SlotStatus = status: {
             if (progress.isDead(epoch_slots_frozen_slot) orelse false) break :status .dead;
             const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
             defer slot_tracker_lg.unlock();
             break :status .fromHash(
-                if (slot_tracker.slots.get(epoch_slots_frozen_slot)) |bank|
-                    bank.state.hash.readCopy()
+                if (slot_tracker.slots.get(epoch_slots_frozen_slot)) |slot_info|
+                    slot_info.state.hash.readCopy()
                 else
                     null,
             );
@@ -482,7 +482,7 @@ fn processAncestorHashesDuplicateSlots(
             epoch_slots_frozen_hash,
             duplicate_confirmed_slots,
             fork_choice,
-            bank_status,
+            slot_status,
             request_type == .popular_pruned,
         );
         try check_slot_agrees_with_cluster.epochSlotsFrozen(
@@ -543,7 +543,7 @@ fn processDuplicateConfirmedSlots(
 
         const duplicate_confirmed_state: DuplicateConfirmedState = .{
             .duplicate_confirmed_hash = duplicate_confirmed_hash,
-            .bank_status = status: {
+            .slot_status = status: {
                 if (progress.isDead(confirmed_slot) orelse false) break :status .dead;
                 const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
                 defer slot_tracker_lg.unlock();
@@ -573,8 +573,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
     const HashToVotesMap = std.AutoArrayHashMapUnmanaged(sig.core.Hash, VoteList);
     const VoteList = std.ArrayListUnmanaged(sig.core.Pubkey);
 
-    /// Update `latest_validator_votes_for_frozen_banks` if gossip has seen a newer vote
-    /// for a frozen bank.
+    /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a newer vote for a frozen slot.
     pub fn addVote(
         self: *UnfrozenGossipVerifiedVoteHashes,
         allocator: std.mem.Allocator,
@@ -582,12 +581,12 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
         vote_slot: sig.core.Slot,
         hash: sig.core.Hash,
         is_frozen: bool,
-        latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
+        latest_validator_votes_for_frozen_slots: *LatestValidatorVotesForFrozenSlots,
     ) !void {
-        // If this is a frozen bank, then we need to update the `latest_validator_votes_for_frozen_banks`
+        // If this is a frozen slot, then we need to update the `latest_validator_votes_for_frozen_slots`
         const frozen_hash = if (is_frozen) hash else null;
         const was_added, const maybe_latest_frozen_vote_slot =
-            latest_validator_votes_for_frozen_banks.checkAddVote(
+            latest_validator_votes_for_frozen_slots.checkAddVote(
                 pubkey,
                 vote_slot,
                 frozen_hash,
@@ -634,7 +633,7 @@ fn processGossipVerifiedVoteHashes(
     gossip_verified_vote_hash_receiver: *sig.sync.Channel(GossipVerifiedVoteHash),
     unfrozen_gossip_verified_vote_hashes: *UnfrozenGossipVerifiedVoteHashes,
     heaviest_subtree_fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
-    latest_validator_votes_for_frozen_banks: *LatestValidatorVotesForFrozenBanks,
+    latest_validator_votes_for_frozen_slots: *LatestValidatorVotesForFrozenSlots,
 ) !void {
     while (gossip_verified_vote_hash_receiver.tryReceive()) |pubkey_slot_hash| {
         const pubkey, const slot, const hash = pubkey_slot_hash;
@@ -649,7 +648,7 @@ fn processGossipVerifiedVoteHashes(
             slot,
             hash,
             is_frozen,
-            latest_validator_votes_for_frozen_banks,
+            latest_validator_votes_for_frozen_slots,
         );
     }
 }
@@ -699,28 +698,28 @@ fn processDuplicateSlots(
         new_duplicate_slots.appendAssumeCapacity(new_duplicate_slot);
     }
 
-    const root_slot, const bank_hashes = blk: {
+    const root_slot, const slots_hashes = blk: {
         const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
         defer slot_tracker_lg.unlock();
 
-        var bank_hashes: std.BoundedArray(?sig.core.Hash, MAX_BATCH_SIZE) = .{};
+        var slots_hashes: std.BoundedArray(?sig.core.Hash, MAX_BATCH_SIZE) = .{};
         for (new_duplicate_slots.constSlice()) |duplicate_slot| {
-            bank_hashes.appendAssumeCapacity(hash: {
+            slots_hashes.appendAssumeCapacity(hash: {
                 const bf_elem = slot_tracker.slots.get(duplicate_slot) orelse break :hash null;
                 break :hash bf_elem.state.hash.readCopy();
             });
         }
 
-        break :blk .{ slot_tracker.root, bank_hashes };
+        break :blk .{ slot_tracker.root, slots_hashes };
     };
-    for (new_duplicate_slots.constSlice(), bank_hashes.constSlice()) |duplicate_slot, bank_hash| {
+    for (new_duplicate_slots.constSlice(), slots_hashes.constSlice()) |duplicate_slot, slot_hash| {
         // WindowService should only send the signal once per slot
         const duplicate_state: DuplicateState = .fromState(
             logger,
             duplicate_slot,
             duplicate_confirmed_slots,
             fork_choice,
-            if (progress.isDead(duplicate_slot) orelse false) .dead else .fromHash(bank_hash),
+            if (progress.isDead(duplicate_slot) orelse false) .dead else .fromHash(slot_hash),
         );
         try check_slot_agrees_with_cluster.duplicate(
             allocator,
@@ -748,7 +747,7 @@ fn getClusterConfirmedHashFromState(
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
     epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
-    maybe_bank_frozen_hash: ?sig.core.Hash,
+    maybe_slot_frozen_hash: ?sig.core.Hash,
 ) ?ClusterConfirmedHash {
     const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
     if (getDuplicateConfirmedHash(
@@ -756,7 +755,7 @@ fn getClusterConfirmedHashFromState(
         fork_choice,
         slot,
         duplicate_confirmed_hash,
-        maybe_bank_frozen_hash,
+        maybe_slot_frozen_hash,
     )) |hash| return .{
         .kind = .duplicate_confirmed,
         .hash = hash,
@@ -773,7 +772,7 @@ fn getDuplicateConfirmedHashFromState(
     slot: sig.core.Slot,
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
     fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
-    maybe_bank_frozen_hash: ?sig.core.Hash,
+    maybe_slot_frozen_hash: ?sig.core.Hash,
 ) ?sig.core.Hash {
     const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
     return getDuplicateConfirmedHash(
@@ -781,13 +780,13 @@ fn getDuplicateConfirmedHashFromState(
         fork_choice,
         slot,
         duplicate_confirmed_hash,
-        maybe_bank_frozen_hash,
+        maybe_slot_frozen_hash,
     );
 }
 
 /// Finds the duplicate confirmed hash for a slot.
 ///
-/// 1) If `maybe_bank_frozen_hash != null and isDuplicateConfirmed(maybe_bank_frozen_hash.?)`, `return maybe_bank_frozen_hash.?`
+/// 1) If `maybe_slot_frozen_hash != null and isDuplicateConfirmed(maybe_slot_frozen_hash.?)`, `return maybe_slot_frozen_hash.?`
 /// 2) If `maybe_duplicate_confirmed_hash != null`, `return maybe_duplicate_confirmed_hash.?`
 /// 3) Else return null
 fn getDuplicateConfirmedHash(
@@ -795,20 +794,20 @@ fn getDuplicateConfirmedHash(
     fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
     slot: sig.core.Slot,
     maybe_duplicate_confirmed_hash: ?sig.core.Hash,
-    maybe_bank_frozen_hash: ?sig.core.Hash,
+    maybe_slot_frozen_hash: ?sig.core.Hash,
 ) ?sig.core.Hash {
     const maybe_local_duplicate_confirmed_hash: ?sig.core.Hash = blk: {
-        const bank_frozen_hash = maybe_bank_frozen_hash orelse break :blk null;
+        const slot_frozen_hash = maybe_slot_frozen_hash orelse break :blk null;
 
-        // If the bank hasn't been frozen yet, then we haven't duplicate
+        // If the slot hasn't been frozen yet, then we haven't duplicate
         // confirmed a local version this slot through replay yet.
         const is_local_replay_duplicate_confirmed = fork_choice.isDuplicateConfirmed(&.{
             .slot = slot,
-            .hash = bank_frozen_hash,
+            .hash = slot_frozen_hash,
         }) orelse false;
 
         break :blk if (is_local_replay_duplicate_confirmed)
-            bank_frozen_hash
+            slot_frozen_hash
         else
             null;
     };
@@ -825,13 +824,14 @@ fn getDuplicateConfirmedHash(
         }
         return local_duplicate_confirmed_hash;
     }
-    const bank_frozen_hash = local_duplicate_confirmed_hash;
-    return bank_frozen_hash;
+    const slot_frozen_hash = local_duplicate_confirmed_hash;
+    return slot_frozen_hash;
 }
 
 /// AUDIT: https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L848
 const check_slot_agrees_with_cluster = struct {
-    fn bankFrozen(
+    /// aka `BankFrozen` in agave.
+    fn slotFrozen(
         allocator: std.mem.Allocator,
         logger: sig.trace.Logger,
         slot: sig.core.Slot,
@@ -840,25 +840,25 @@ const check_slot_agrees_with_cluster = struct {
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         purge_repair_slot_counter: *PurgeRepairSlotCounter,
-        bank_frozen_state: BankFrozenState,
+        slot_frozen_state: SlotFrozenState,
     ) !void {
         logger.info().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {}",
-            .{ slot, root, bank_frozen_state },
+            .{ slot, root, slot_frozen_state },
         );
 
         if (slot <= root) {
             return;
         }
 
-        const frozen_hash = bank_frozen_state.frozen_hash;
-        const maybe_cluster_confirmed_hash = bank_frozen_state.cluster_confirmed_hash;
-        const is_slot_duplicate = bank_frozen_state.is_slot_duplicate;
+        const frozen_hash = slot_frozen_state.frozen_hash;
+        const maybe_cluster_confirmed_hash = slot_frozen_state.cluster_confirmed_hash;
+        const is_slot_duplicate = slot_frozen_state.is_slot_duplicate;
 
-        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_dupe_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
 
-        state_change.bankFrozen(
+        state_change.slotFrozen(
             slot,
             fork_choice,
             &not_dupe_confirmed_frozen_hash,
@@ -958,14 +958,13 @@ const check_slot_agrees_with_cluster = struct {
             return;
         }
 
-        const bank_status = duplicate_confirmed_state.bank_status;
+        const slot_status = duplicate_confirmed_state.slot_status;
         const duplicate_confirmed_hash = duplicate_confirmed_state.duplicate_confirmed_hash;
 
         // Avoid duplicate work from multiple of the same DuplicateConfirmed signal. This can
         // happen if we get duplicate confirmed from gossip and from local replay.
-        // if let Some(bank_hash) = bank_status.bank_hash() {
-        if (bank_status.bankHash()) |bank_hash| {
-            if (fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = bank_hash }) == true) {
+        if (slot_status.slotHash()) |hash| {
+            if (fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = hash }) == true) {
                 return;
             }
         }
@@ -990,10 +989,10 @@ const check_slot_agrees_with_cluster = struct {
         //     ),
         // );
 
-        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_dupe_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
 
-        switch (bank_status) {
+        switch (slot_status) {
             // No action to be taken yet
             .unprocessed => {},
 
@@ -1138,7 +1137,7 @@ const check_slot_agrees_with_cluster = struct {
             return;
         }
 
-        // Needs to happen before the bank_frozen_hash.is_none() check below to account for duplicate
+        // Needs to happen before the slot_frozen_hash == null check below to account for duplicate
         // signals arriving before the bank is constructed in replay.
         if (try duplicate_slots_tracker.fetchPut(allocator, slot, {})) |_| {
             // If this slot has already been processed before, return
@@ -1167,10 +1166,10 @@ const check_slot_agrees_with_cluster = struct {
         //     ),
         // );
 
-        const bank_status = duplicate_state.bank_status;
+        const slot_status = duplicate_state.slot_status;
         const duplicate_confirmed_hash = duplicate_state.duplicate_confirmed_hash;
 
-        switch (bank_status) {
+        switch (slot_status) {
             .dead, .frozen => {},
             // No action to be taken yet
             .unprocessed => return,
@@ -1183,8 +1182,8 @@ const check_slot_agrees_with_cluster = struct {
         if (duplicate_confirmed_hash == null) {
             // If we have not yet seen any version of the slot duplicate confirmed, then mark
             // the slot as duplicate
-            if (bank_status.bankHash()) |bank_hash| {
-                try state_change.markSlotDuplicate(slot, fork_choice, bank_hash);
+            if (slot_status.slotHash()) |slot_hash| {
+                try state_change.markSlotDuplicate(slot, fork_choice, slot_hash);
             }
         }
     }
@@ -1208,7 +1207,7 @@ const check_slot_agrees_with_cluster = struct {
             return;
         }
 
-        const bank_status = epoch_slots_frozen_state.bank_status;
+        const slot_status = epoch_slots_frozen_state.slot_status;
         const epoch_slots_frozen_hash = epoch_slots_frozen_state.epoch_slots_frozen_hash;
         const maybe_duplicate_confirmed_hash = epoch_slots_frozen_state.duplicate_confirmed_hash;
         const is_popular_pruned = epoch_slots_frozen_state.is_popular_pruned;
@@ -1225,7 +1224,7 @@ const check_slot_agrees_with_cluster = struct {
             }
         }
 
-        switch (bank_status) {
+        switch (slot_status) {
             .unprocessed => {
                 // If we have the slot pruned then it will never be replayed
                 if (!is_popular_pruned) {
@@ -1238,16 +1237,16 @@ const check_slot_agrees_with_cluster = struct {
         // If `slot` has already been duplicate confirmed, `epoch_slots_frozen` becomes redundant as
         // one of the following triggers would have already processed `slot`:
         //
-        // 1) If the bank was replayed and then duplicate confirmed through turbine/gossip, the
-        //    corresponding `SlotStateUpdate::DuplicateConfirmed`
+        // 1) If the slot was replayed and then duplicate confirmed through turbine/gossip, the
+        //    corresponding 'duplicate confirmed'.
         // 2) If the slot was first duplicate confirmed through gossip and then replayed, the
-        //    corresponding `SlotStateUpdate::BankFrozen` or `SlotStateUpdate::Dead`
+        //    corresponding 'slot frozen' or 'dead'.
         //
         // However if `slot` was first duplicate confirmed through gossip and then pruned before
         // we got a chance to replay, there was no trigger that would have processed `slot`.
-        // The original `SlotStateUpdate::DuplicateConfirmed` is a no-op when the bank has not been
-        // replayed yet, and unlike 2) there is no upcoming `SlotStateUpdate::BankFrozen` or
-        // `SlotStateUpdate::Dead`, as `slot` is pruned and will not be replayed.
+        // The original `SlotStateUpdate::DuplicateConfirmed` is a no-op when the slot has not been
+        // replayed yet, and unlike 2) there is no upcoming 'slot frozen' or 'dead', as `slot`
+        // is pruned and will not be replayed.
         //
         // Thus if we have a duplicate confirmation, but `slot` is pruned, we continue
         // processing it as `epoch_slots_frozen`.
@@ -1264,9 +1263,9 @@ const check_slot_agrees_with_cluster = struct {
             }
         }
 
-        switch (bank_status) {
-            .frozen => |bank_frozen_hash| {
-                if (bank_frozen_hash.eql(epoch_slots_frozen_hash)) {
+        switch (slot_status) {
+            .frozen => |slot_frozen_hash| {
+                if (slot_frozen_hash.eql(epoch_slots_frozen_hash)) {
                     // Matches, nothing to do
                     return;
                 } else {
@@ -1274,11 +1273,11 @@ const check_slot_agrees_with_cluster = struct {
                     logger.warn().logf(
                         "EpochSlots sample returned slot {} with hash {}, " ++
                             "but our version has hash {}",
-                        .{ slot, epoch_slots_frozen_hash, bank_frozen_hash },
+                        .{ slot, epoch_slots_frozen_hash, slot_frozen_hash },
                     );
                     if (!is_popular_pruned) {
                         // If the slot is not already pruned notify fork choice to mark as invalid
-                        try state_change.markSlotDuplicate(slot, fork_choice, bank_frozen_hash);
+                        try state_change.markSlotDuplicate(slot, fork_choice, slot_frozen_hash);
                     }
                 }
             },
@@ -1291,7 +1290,7 @@ const check_slot_agrees_with_cluster = struct {
                 );
             },
             .unprocessed => {
-                // If the bank was not popular pruned, we would never have made it here, as the bank is
+                // If the slot was not popular pruned, we would never have made it here, as the slot is
                 // yet to be replayed
                 std.debug.assert(is_popular_pruned);
                 // The cluster sample found the troublesome slot which caused this fork to be pruned
@@ -1368,26 +1367,27 @@ const state_change = struct {
         }
     };
 
-    fn bankFrozen(
+    /// aka `BankFrozen` in agave.
+    fn slotFrozen(
         slot: u64,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         not_dupe_confirmed_frozen_hash: *NotDupeConfirmedFrozenHash,
-        bank_frozen_hash: sig.core.Hash,
+        slot_frozen_hash: sig.core.Hash,
     ) void {
         const is_duplicate_confirmed =
-            fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = bank_frozen_hash }) orelse
-            std.debug.panic("frozen bank must exist in fork choice", .{});
+            fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = slot_frozen_hash }) orelse
+            std.debug.panic("frozen slot must exist in fork choice", .{});
         if (!is_duplicate_confirmed) {
-            not_dupe_confirmed_frozen_hash.update(bank_frozen_hash);
+            not_dupe_confirmed_frozen_hash.update(slot_frozen_hash);
         }
     }
 
     fn markSlotDuplicate(
         slot: u64,
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
-        bank_frozen_hash: sig.core.Hash,
+        slot_frozen_hash: sig.core.Hash,
     ) !void {
-        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = bank_frozen_hash });
+        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = slot_frozen_hash });
     }
 
     fn repairDuplicateConfirmedVersion(
@@ -1406,15 +1406,15 @@ const state_change = struct {
         blockstore: *sig.ledger.LedgerResultWriter,
         purge_repair_slot_counter: *PurgeRepairSlotCounter,
         not_dupe_confirmed_frozen_hash: *NotDupeConfirmedFrozenHash,
-        bank_frozen_hash: sig.core.Hash,
+        slot_frozen_hash: sig.core.Hash,
     ) !void {
         not_dupe_confirmed_frozen_hash.update(null);
         // When we detect that our frozen slot matches the cluster version (note this
-        // will catch both bank frozen first -> confirmation, or confirmation first ->
-        // bank frozen), mark all the newly duplicate confirmed slots in blockstore
+        // will catch both slot frozen first -> confirmation, or confirmation first ->
+        // slot frozen), mark all the newly duplicate confirmed slots in blockstore
         const new_duplicate_confirmed_slot_hashes = try fork_choice.markForkValidCandidate(&.{
             .slot = slot,
-            .hash = bank_frozen_hash,
+            .hash = slot_frozen_hash,
         });
         defer new_duplicate_confirmed_slot_hashes.deinit();
 
@@ -1727,7 +1727,7 @@ test "apply state changes" {
     );
 }
 
-test "apply state changes bank frozen" {
+test "apply state changes slot frozen" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(7353);
@@ -1749,14 +1749,14 @@ test "apply state changes bank frozen" {
     const duplicate_slot = slot_tracker.root + 1;
     const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
 
-    // Simulate ReplayStage freezing a Bank with the given hash.
-    // BankFrozen should mark it down in Blockstore.
+    // Simulate ReplayStage freezing a Slot with the given hash.
+    // 'slot frozen' should mark it down in Blockstore.
     try std.testing.expectEqual(null, ledger_reader.getBankHash(duplicate_slot));
 
     {
-        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
-        state_change.bankFrozen(
+        state_change.slotFrozen(
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &not_duplicate_confirmed_frozen_hash,
@@ -1768,35 +1768,35 @@ test "apply state changes bank frozen" {
     try std.testing.expectEqual(duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
     try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 
-    // If we freeze another version of the bank, it should overwrite the first
+    // If we freeze another version of the slot, it should overwrite the first
     // version in blockstore.
-    const new_bank_hash: sig.core.Hash = .initRandom(random);
+    const new_slot_hash: sig.core.Hash = .initRandom(random);
     const root_slot_hash: sig.core.hash.SlotAndHash = rsh: {
-        const root_bank = slot_tracker.get(slot_tracker.root).?;
+        const root_slot_info = slot_tracker.get(slot_tracker.root).?;
         break :rsh .{
             .slot = slot_tracker.root,
-            .hash = root_bank.state.hash.readCopy().?,
+            .hash = root_slot_info.state.hash.readCopy().?,
         };
     };
     try heaviest_subtree_fork_choice.addNewLeafSlot(
         .{
             .slot = duplicate_slot,
-            .hash = new_bank_hash,
+            .hash = new_slot_hash,
         },
         root_slot_hash,
     );
     {
-        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
-        state_change.bankFrozen(
+        state_change.slotFrozen(
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &not_duplicate_confirmed_frozen_hash,
-            new_bank_hash,
+            new_slot_hash,
         );
         try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
     }
-    try std.testing.expectEqual(new_bank_hash, ledger_reader.getBankHash(duplicate_slot));
+    try std.testing.expectEqual(new_slot_hash, ledger_reader.getBankHash(duplicate_slot));
     try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 }
 
@@ -1842,7 +1842,7 @@ test "apply state changes duplicate confirmed matches frozen" {
     // 3) Clear the slot from `purge_repair_slot_counter`
     // 3) Set the status to duplicate confirmed in Blockstore
     {
-        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
         try state_change.duplicateConfirmedSlotMatchesCluster(
             duplicate_slot,
@@ -1881,7 +1881,7 @@ test "apply state changes duplicate confirmed matches frozen" {
     try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 }
 
-test "apply state changes bank frozen and duplicate confirmed matches frozen" {
+test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(7353);
@@ -1923,7 +1923,7 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
     // 3) Clear the slot from `purge_repair_slot_counter`
     // 3) Set the status to duplicate confirmed in Blockstore
     {
-        // Handle cases where the bank is frozen, but not duplicate confirmed yet.
+        // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
 
         try state_change.duplicateConfirmedSlotMatchesCluster(
@@ -1936,7 +1936,7 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
             our_duplicate_slot_hash,
         );
 
-        state_change.bankFrozen(
+        state_change.slotFrozen(
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &not_duplicate_confirmed_frozen_hash,
@@ -1971,7 +1971,7 @@ test "apply state changes bank frozen and duplicate confirmed matches frozen" {
     try std.testing.expectEqual(true, ledger_reader.isDuplicateConfirmed(duplicate_slot));
 }
 
-fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
+fn testStateDuplicateThenSlotFrozen(initial_slot_hash: ?sig.core.Hash) !void {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(7353);
@@ -1991,9 +1991,9 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
         try testLedgerRw(@src(), .noop, &ledger_state);
     defer ledger.deinit();
 
-    // Setup a duplicate slot state transition with the initial bank state of the duplicate slot
-    // determined by `initial_bank_hash`, which can be:
-    // 1) A default hash (unfrozen bank),
+    // Setup a duplicate slot state transition with the initial slot state of the duplicate slot
+    // determined by `initial_slot_hash`, which can be:
+    // 1) A default hash (unfrozen slot),
     // 2) None (a slot that hasn't even started replay yet).
     const root: Slot = 0;
 
@@ -2012,7 +2012,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
         duplicate_slot,
         &duplicate_confirmed_slots,
         heaviest_subtree_fork_choice,
-        if (progress.isDead(duplicate_slot) orelse false) .dead else .fromHash(initial_bank_hash),
+        if (progress.isDead(duplicate_slot) orelse false) .dead else .fromHash(initial_slot_hash),
     );
     try check_slot_agrees_with_cluster.duplicate(
         allocator,
@@ -2024,7 +2024,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
         duplicate_state,
     );
     try std.testing.expect(duplicate_slots_tracker.contains(duplicate_slot));
-    // Nothing should be applied yet to fork choice, since bank was not yet frozen
+    // Nothing should be applied yet to fork choice, since slot was not yet frozen
     for (2..3 + 1) |slot| {
         const slot_hash = slot_tracker.get(slot).?.state.hash.readCopy().?;
         try std.testing.expectEqual(null, heaviest_subtree_fork_choice.latestInvalidAncestor(&.{
@@ -2033,9 +2033,9 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
         }));
     }
 
-    // Now freeze the bank
+    // Now freeze the slot
     const frozen_duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
-    const bank_frozen_state: BankFrozenState = .fromState(
+    const slot_frozen_state: SlotFrozenState = .fromState(
         .noop,
         duplicate_slot,
         frozen_duplicate_slot_hash,
@@ -2044,7 +2044,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
         heaviest_subtree_fork_choice,
         &epoch_slots_frozen_slots,
     );
-    try check_slot_agrees_with_cluster.bankFrozen(
+    try check_slot_agrees_with_cluster.slotFrozen(
         allocator,
         .noop,
         duplicate_slot,
@@ -2053,7 +2053,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
         heaviest_subtree_fork_choice,
         &duplicate_slots_to_repair,
         &purge_repair_slot_counter,
-        bank_frozen_state,
+        slot_frozen_state,
     );
 
     // Progress map should have the correct updates, fork choice should mark duplicate
@@ -2065,8 +2065,8 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
 
     // The ancestor of the duplicate slot should be the best slot now
     const duplicate_ancestor, const duplicate_parent_hash = blk: {
-        const bank_consts = slot_tracker.get(duplicate_slot).?.constants;
-        break :blk .{ bank_consts.parent_slot, bank_consts.parent_hash };
+        const slot_consts = slot_tracker.get(duplicate_slot).?.constants;
+        break :blk .{ slot_consts.parent_slot, slot_consts.parent_hash };
     };
     try std.testing.expectEqual(
         sig.core.hash.SlotAndHash{ .slot = duplicate_ancestor, .hash = duplicate_parent_hash },
@@ -2074,12 +2074,12 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
     );
 }
 
-test "state unfrozen bank duplicate then bank frozen" {
-    try testStateDuplicateThenBankFrozen(.ZEROES);
+test "state unfrozen slot duplicate then slot frozen" {
+    try testStateDuplicateThenSlotFrozen(.ZEROES);
 }
 
-test "state unreplayed bank duplicate then bank frozen" {
-    try testStateDuplicateThenBankFrozen(null);
+test "state unreplayed slot duplicate then slot frozen" {
+    try testStateDuplicateThenSlotFrozen(null);
 }
 
 test "state ancestor confirmed descendant duplicate" {
@@ -2123,7 +2123,7 @@ test "state ancestor confirmed descendant duplicate" {
     try duplicate_confirmed_slots.put(allocator, 2, slot2_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot2_hash,
-        .bank_status = if (progress.isDead(2) orelse false) .dead else .fromHash(slot2_hash),
+        .slot_status = if (progress.isDead(2) orelse false) .dead else .fromHash(slot2_hash),
     };
     var ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate) =
         try .init(allocator);
@@ -2310,7 +2310,7 @@ test "state ancestor duplicate descendant confirmed" {
     try duplicate_confirmed_slots.put(allocator, 3, slot3_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
-        .bank_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
+        .slot_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
     };
     {
         var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
@@ -2427,7 +2427,7 @@ test "state descendant confirmed ancestor duplicate" {
     try duplicate_confirmed_slots.put(allocator, 3, slot3_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
-        .bank_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
+        .slot_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
     };
     var ancestor_hashes_replay_update_sender: sig.sync.Channel(AncestorHashesReplayUpdate) =
         try .init(allocator);
@@ -2559,7 +2559,7 @@ test "duplicate confirmed and epoch slots frozen" {
     expected_is_duplicate_confirmed = true;
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
-        .bank_status = if (progress.isDead(2) orelse false) .dead else .fromHash(slot3_hash),
+        .slot_status = if (progress.isDead(2) orelse false) .dead else .fromHash(slot3_hash),
     };
     try check_slot_agrees_with_cluster.duplicateConfirmed(
         allocator,
@@ -2676,7 +2676,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     expected_is_duplicate_confirmed = true;
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
-        .bank_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
+        .slot_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
     };
     try check_slot_agrees_with_cluster.duplicateConfirmed(
         allocator,
