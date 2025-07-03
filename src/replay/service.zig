@@ -796,35 +796,34 @@ fn getDuplicateConfirmedHash(
     maybe_duplicate_confirmed_hash: ?sig.core.Hash,
     maybe_slot_frozen_hash: ?sig.core.Hash,
 ) ?sig.core.Hash {
-    const maybe_local_duplicate_confirmed_hash: ?sig.core.Hash = blk: {
-        const slot_frozen_hash = maybe_slot_frozen_hash orelse break :blk null;
+    const slot_frozen_hash =
+        maybe_slot_frozen_hash orelse
+        return maybe_duplicate_confirmed_hash;
 
-        // If the slot hasn't been frozen yet, then we haven't duplicate
-        // confirmed a local version this slot through replay yet.
-        const is_local_replay_duplicate_confirmed = fork_choice.isDuplicateConfirmed(&.{
+    // If the slot hasn't been frozen yet, then we haven't duplicate
+    // confirmed a local version this slot through replay yet.
+    const is_local_replay_duplicate_confirmed =
+        fork_choice.isDuplicateConfirmed(&.{
             .slot = slot,
             .hash = slot_frozen_hash,
         }) orelse false;
 
-        break :blk if (is_local_replay_duplicate_confirmed)
-            slot_frozen_hash
-        else
-            null;
-    };
-
-    const local_duplicate_confirmed_hash = maybe_local_duplicate_confirmed_hash orelse
+    if (!is_local_replay_duplicate_confirmed) {
         return maybe_duplicate_confirmed_hash;
+    } else {
+        // slot_frozen_hash is local, duplicate, and confirmed
+    }
+
     if (maybe_duplicate_confirmed_hash) |duplicate_confirmed_hash| {
-        if (!local_duplicate_confirmed_hash.eql(duplicate_confirmed_hash)) {
+        if (!slot_frozen_hash.eql(duplicate_confirmed_hash)) {
             logger.err().logf(
                 "For slot {}, the gossip duplicate confirmed hash {}, is not equal" ++
                     "to the confirmed hash we replayed: {}",
-                .{ slot, duplicate_confirmed_hash, local_duplicate_confirmed_hash },
+                .{ slot, duplicate_confirmed_hash, slot_frozen_hash },
             );
         }
-        return local_duplicate_confirmed_hash;
     }
-    const slot_frozen_hash = local_duplicate_confirmed_hash;
+
     return slot_frozen_hash;
 }
 
