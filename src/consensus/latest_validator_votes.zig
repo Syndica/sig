@@ -155,7 +155,7 @@ pub const LatestValidatorVotes = struct {
         self: *LatestValidatorVotes,
         allocator: std.mem.Allocator,
         root: Slot,
-    ) !std.ArrayListUnmanaged(struct { Pubkey, SlotAndHash }) {
+    ) ![]const struct { Pubkey, SlotAndHash } {
         var result = std.ArrayListUnmanaged(
             struct { Pubkey, SlotAndHash },
         ).empty;
@@ -180,7 +180,7 @@ pub const LatestValidatorVotes = struct {
             entry.hashes.deinit(allocator);
         }
         self.fork_choice_dirty_set.clearAndFree(allocator);
-        return result;
+        return result.toOwnedSlice(allocator);
     }
 
     pub fn maxGossipFrozenVotes(self: *const LatestValidatorVotes) *const LatestVotes {
@@ -554,21 +554,23 @@ fn runFrozenBanksTakeVotesDirtySet(allocator: std.mem.Allocator, is_replay: bool
         );
         defer expected_dirty_set.deinit();
 
-        var votes_dirty_set_output =
+        const votes_dirty_set_output =
             try latest_validator_votes.takeVotesDirtySet(allocator, root);
-        defer votes_dirty_set_output.deinit(allocator);
+        defer allocator.free(votes_dirty_set_output);
 
         sortPubkeySlotAndHash(expected_dirty_set.items);
-        sortPubkeySlotAndHash(votes_dirty_set_output.items);
+        const mutable = try allocator.dupe(struct { Pubkey, SlotAndHash }, votes_dirty_set_output);
+        defer allocator.free(mutable);
+        sortPubkeySlotAndHash(mutable);
 
         try std.testing.expectEqualSlices(
             struct { Pubkey, SlotAndHash },
             expected_dirty_set.items,
-            votes_dirty_set_output.items,
+            mutable,
         );
-        var result = try latest_validator_votes.takeVotesDirtySet(allocator, 0);
-        defer result.deinit(allocator);
-        try std.testing.expect(result.items.len == 0);
+        const result = try latest_validator_votes.takeVotesDirtySet(allocator, 0);
+        defer allocator.free(result);
+        try std.testing.expect(result.len == 0);
     }
 
     // Test case 2: Taking all the dirty votes >= num_validators - 1 will only return the last vote
@@ -592,24 +594,25 @@ fn runFrozenBanksTakeVotesDirtySet(allocator: std.mem.Allocator, is_replay: bool
         const start = if (dirty_set.items.len >= 2) dirty_set.items.len - 2 else 0;
         try expected_dirty_set.appendSlice(dirty_set.items[start..]);
 
-        var votes_dirty_set_output =
+        const votes_dirty_set_output =
             try latest_validator_votes.takeVotesDirtySet(allocator, root);
+        defer allocator.free(votes_dirty_set_output);
 
-        defer votes_dirty_set_output.deinit(allocator);
+        const mutable = try allocator.dupe(struct { Pubkey, SlotAndHash }, votes_dirty_set_output);
+        defer allocator.free(mutable);
 
-        sortPubkeySlotAndHash(votes_dirty_set_output.items);
+        sortPubkeySlotAndHash(mutable);
         sortPubkeySlotAndHash(expected_dirty_set.items);
 
         try std.testing.expectEqualSlices(
             struct { Pubkey, SlotAndHash },
-            votes_dirty_set_output.items,
+            mutable,
             expected_dirty_set.items,
         );
 
-        var result =
+        const result =
             try latest_validator_votes.takeVotesDirtySet(allocator, 0);
-        defer result.deinit(allocator);
-        try std.testing.expect(result.items.len == 0);
+        try std.testing.expect(result.len == 0);
     }
 }
 
@@ -704,10 +707,9 @@ test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
         );
         try std.testing.expectEqual(null, latest_vote);
 
-        var votes_dirty_set_output =
+        const votes_dirty_set_output =
             try latest_validator_votes.takeVotesDirtySet(allocator, 0);
-        defer votes_dirty_set_output.deinit(allocator);
-        try std.testing.expectEqual(0, votes_dirty_set_output.items.len);
+        try std.testing.expectEqual(0, votes_dirty_set_output.len);
     }
 
     // Next simulate vote from replay
@@ -748,10 +750,10 @@ test "latest_validator_votes_for_frozen_banks_add_replay_and_gossip_vote" {
         try std.testing.expectEqual(latest_vote.?.hashes[0], frozen_hash);
     }
     {
-        var result = try latest_validator_votes.takeVotesDirtySet(allocator, 0);
-        defer result.deinit(allocator);
-        try std.testing.expectEqual(result.items[0][0], vote_pubkey);
-        try std.testing.expectEqual(result.items[0][1].slot, vote_slot);
-        try std.testing.expectEqual(result.items[0][1].hash, frozen_hash);
+        const result = try latest_validator_votes.takeVotesDirtySet(allocator, 0);
+        defer allocator.free(result);
+        try std.testing.expectEqual(result[0][0], vote_pubkey);
+        try std.testing.expectEqual(result[0][1].slot, vote_slot);
+        try std.testing.expectEqual(result[0][1].hash, frozen_hash);
     }
 }
