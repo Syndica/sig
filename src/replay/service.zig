@@ -300,37 +300,10 @@ pub const BankStatus = union(enum) {
     dead,
     unprocessed,
 
-    pub const Init = union(enum) {
-        is_dead,
-        hash: ?sig.core.Hash,
-    };
-
-    /// Instead of taking two callbacks `is_dead` and `get_hash`,
-    /// just re-construct the logic more simply at the callsite:
-    /// ```zig
-    /// const bank_status: BankStatus = .init(if (is_dead()) .is_dead else .{ .hash = get_hash() });
-    /// ```
-    /// The agave equivalent being:
-    /// ```rust
-    /// const bank_status = BankStatus::init(|| is_dead(), || get_hash());
-    /// ```
-    /// With the `is_dead` and `get_hash` often being passed as callback parameters
-    /// to higher level functions, which are then used internally to construct the BankStatus.
-    pub fn init(param: Init) BankStatus {
-        return switch (param) {
-            .is_dead => .dead,
-            .hash => |maybe_hash| .fromHash(maybe_hash),
-        };
-    }
-
     /// Returns `.frozen` or `.unprocessed`.
     pub fn fromHash(maybe_hash: ?sig.core.Hash) BankStatus {
         if (maybe_hash) |hash| {
-            if (hash.eql(.ZEROES)) {
-                return .unprocessed;
-            } else {
-                return .{ .frozen = hash };
-            }
+            return .{ .frozen = hash };
         } else {
             return .unprocessed;
         }
@@ -491,19 +464,17 @@ fn processAncestorHashesDuplicateSlots(
                 "dead", slot_to_repair },
         );
 
-        const bank_status: BankStatus = .init(
-            if (progress.isDead(epoch_slots_frozen_slot) orelse false)
-                .is_dead
-            else
-                .{ .hash = hash: {
-                    const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
-                    defer bank_forks_lg.unlock();
-
-                    const bank = bank_forks.slots.get(epoch_slots_frozen_slot) orelse
-                        break :hash null;
-                    break :hash bank.state.hash.readCopy();
-                } },
-        );
+        const bank_status: BankStatus = status: {
+            if (progress.isDead(epoch_slots_frozen_slot) orelse false) break :status .dead;
+            const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
+            defer bank_forks_lg.unlock();
+            break :status .fromHash(
+                if (bank_forks.slots.get(epoch_slots_frozen_slot)) |bank|
+                    bank.state.hash.readCopy()
+                else
+                    null,
+            );
+        };
 
         const epoch_slots_frozen_state: EpochSlotsFrozenState = .fromState(
             logger,
@@ -572,17 +543,14 @@ fn processDuplicateConfirmedSlots(
 
         const duplicate_confirmed_state: DuplicateConfirmedState = .{
             .duplicate_confirmed_hash = duplicate_confirmed_hash,
-            .bank_status = .init(
-                if (progress.isDead(confirmed_slot) orelse false)
-                    .is_dead
-                else
-                    .{ .hash = hash: {
-                        const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
-                        defer bank_forks_lg.unlock();
-                        const bf_elem = bank_forks.get(confirmed_slot).?;
-                        break :hash bf_elem.state.hash.readCopy();
-                    } },
-            ),
+            .bank_status = status: {
+                if (progress.isDead(confirmed_slot) orelse false) break :status .dead;
+                const bank_forks, var bank_forks_lg = bank_forks_rwmux.readWithLock();
+                defer bank_forks_lg.unlock();
+                break :status .fromHash(
+                    bank_forks.get(confirmed_slot).?.state.hash.readCopy(),
+                );
+            },
         };
         try check_slot_agrees_with_cluster.duplicateConfirmed(
             allocator,
@@ -752,10 +720,7 @@ fn processDuplicateSlots(
             duplicate_slot,
             duplicate_confirmed_slots,
             fork_choice,
-            .init(if (progress.isDead(duplicate_slot) orelse false)
-                .is_dead
-            else
-                .{ .hash = bank_hash }),
+            if (progress.isDead(duplicate_slot) orelse false) .dead else .fromHash(bank_hash),
         );
         try check_slot_agrees_with_cluster.duplicate(
             allocator,
@@ -2047,10 +2012,7 @@ fn testStateDuplicateThenBankFrozen(initial_bank_hash: ?sig.core.Hash) !void {
         duplicate_slot,
         &duplicate_confirmed_slots,
         heaviest_subtree_fork_choice,
-        .init(if (progress.isDead(duplicate_slot) orelse false)
-            .is_dead
-        else
-            .{ .hash = initial_bank_hash }),
+        if (progress.isDead(duplicate_slot) orelse false) .dead else .fromHash(initial_bank_hash),
     );
     try check_slot_agrees_with_cluster.duplicate(
         allocator,
@@ -2161,10 +2123,7 @@ test "state ancestor confirmed descendant duplicate" {
     try duplicate_confirmed_slots.put(allocator, 2, slot2_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot2_hash,
-        .bank_status = .init(if (progress.isDead(2) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot2_hash }),
+        .bank_status = if (progress.isDead(2) orelse false) .dead else .fromHash(slot2_hash),
     };
     var ancestor_hashes_replay_update_channel: sig.sync.Channel(AncestorHashesReplayUpdate) =
         try .init(allocator);
@@ -2220,10 +2179,7 @@ test "state ancestor confirmed descendant duplicate" {
         3,
         &duplicate_confirmed_slots,
         heaviest_subtree_fork_choice,
-        .init(if (progress.isDead(3) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot3_hash }),
+        if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
     );
     try check_slot_agrees_with_cluster.duplicate(
         allocator,
@@ -2318,10 +2274,7 @@ test "state ancestor duplicate descendant confirmed" {
         2,
         &duplicate_confirmed_slots,
         heaviest_subtree_fork_choice,
-        .init(if (progress.isDead(2) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot2_hash }),
+        if (progress.isDead(2) orelse false) .dead else .fromHash(slot2_hash),
     );
     var ancestor_hashes_replay_update_sender: sig.sync.Channel(AncestorHashesReplayUpdate) =
         try .init(allocator);
@@ -2357,10 +2310,7 @@ test "state ancestor duplicate descendant confirmed" {
     try duplicate_confirmed_slots.put(allocator, 3, slot3_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
-        .bank_status = .init(if (progress.isDead(3) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot3_hash }),
+        .bank_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
     };
     {
         var duplicate_slots_to_repair: DuplicateSlotsToRepair = .empty;
@@ -2477,10 +2427,7 @@ test "state descendant confirmed ancestor duplicate" {
     try duplicate_confirmed_slots.put(allocator, 3, slot3_hash);
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
-        .bank_status = .init(if (progress.isDead(3) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot3_hash }),
+        .bank_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
     };
     var ancestor_hashes_replay_update_sender: sig.sync.Channel(AncestorHashesReplayUpdate) =
         try .init(allocator);
@@ -2512,10 +2459,7 @@ test "state descendant confirmed ancestor duplicate" {
         1,
         &duplicate_confirmed_slots,
         heaviest_subtree_fork_choice,
-        .init(if (progress.isDead(1) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot1_hash }),
+        if (progress.isDead(1) orelse false) .dead else .fromHash(slot1_hash),
     );
     try check_slot_agrees_with_cluster.duplicate(
         allocator,
@@ -2586,10 +2530,7 @@ test "duplicate confirmed and epoch slots frozen" {
         slot3_hash,
         &duplicate_confirmed_slots,
         heaviest_subtree_fork_choice,
-        .init(if (progress.isDead(3) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot3_hash }),
+        if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
         false,
     );
     var ancestor_hashes_replay_update_sender: sig.sync.Channel(AncestorHashesReplayUpdate) =
@@ -2618,10 +2559,7 @@ test "duplicate confirmed and epoch slots frozen" {
     expected_is_duplicate_confirmed = true;
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
-        .bank_status = .init(if (progress.isDead(2) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot3_hash }),
+        .bank_status = if (progress.isDead(2) orelse false) .dead else .fromHash(slot3_hash),
     };
     try check_slot_agrees_with_cluster.duplicateConfirmed(
         allocator,
@@ -2705,7 +2643,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
         mismatched_hash,
         &duplicate_confirmed_slots,
         heaviest_subtree_fork_choice,
-        .init(if (progress.isDead(3) orelse false) .is_dead else .{ .hash = slot3_hash }),
+        if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
         false,
     );
 
@@ -2738,13 +2676,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
     expected_is_duplicate_confirmed = true;
     const duplicate_confirmed_state: DuplicateConfirmedState = .{
         .duplicate_confirmed_hash = slot3_hash,
-        .bank_status = .init(if (progress.isDead(3) orelse false)
-            .is_dead
-        else
-            .{ .hash = slot3_hash }),
-
-        // || progress.is_dead(3).unwrap_or(false),
-        // || Some(slot3_hash),
+        .bank_status = if (progress.isDead(3) orelse false) .dead else .fromHash(slot3_hash),
     };
     try check_slot_agrees_with_cluster.duplicateConfirmed(
         allocator,
