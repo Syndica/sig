@@ -2,8 +2,10 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 
 const account_loader = sig.runtime.account_loader;
+const program_loader = sig.runtime.program_loader;
 const executor = sig.runtime.executor;
 const compute_budget_program = sig.runtime.program.compute_budget;
+const vm = sig.vm;
 
 const Ancestors = sig.core.status_cache.Ancestors;
 const BlockhashQueue = sig.core.bank.BlockhashQueue;
@@ -28,6 +30,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionContextAccount = sig.runtime.TransactionContextAccount;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const AccountMeta = sig.core.instruction.InstructionAccount;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 const ComputeBudgetLimits = compute_budget_program.ComputeBudgetLimits;
@@ -67,7 +70,10 @@ pub const TransactionExecutionEnvironment = struct {
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
     epoch_stakes: *const EpochStakes,
+    vm_environment: *const vm.Environment,
+    next_vm_environment: ?*const vm.Environment,
 
+    slot: u64,
     max_age: u64,
     last_blockhash: Hash,
     next_durable_nonce: Hash,
@@ -192,6 +198,13 @@ pub fn loadAndExecuteTransactions(
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
 ) error{OutOfMemory}![]TransactionResult(ProcessedTransaction) {
+    const program_map = try program_loader.loadPrograms(
+        allocator,
+        &batch_account_cache.account_cache,
+        environment.vm_environment,
+        environment.slot,
+    );
+
     const transaction_results = try allocator.alloc(
         TransactionResult(ProcessedTransaction),
         transactions.len,
@@ -203,6 +216,7 @@ pub fn loadAndExecuteTransactions(
             batch_account_cache,
             environment,
             config,
+            &program_map,
         );
     }
     return transaction_results;
@@ -215,6 +229,7 @@ pub fn loadAndExecuteTransaction(
     batch_account_cache: *BatchAccountCache,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
+    program_map: *const ProgramMap,
 ) error{OutOfMemory}!TransactionResult(ProcessedTransaction) {
     const check_age_result = sig.runtime.check_transactions.checkAge(
         transaction,
@@ -291,6 +306,7 @@ pub fn loadAndExecuteTransaction(
         &compute_budget_limits,
         environment,
         config,
+        program_map,
     );
 
     return .{ .ok = .{
@@ -311,6 +327,7 @@ pub fn executeTransaction(
     compute_budget_limits: *const ComputeBudgetLimits,
     environment: *const TransactionExecutionEnvironment,
     config: *const TransactionExecutionConfig,
+    program_map: *const ProgramMap,
 ) error{OutOfMemory}!ExecutedTransaction {
     const compute_budget = compute_budget_limits.intoComputeBudget();
 
@@ -338,6 +355,9 @@ pub fn executeTransaction(
         .feature_set = environment.feature_set,
         .epoch_stakes = environment.epoch_stakes,
         .sysvar_cache = environment.sysvar_cache,
+        .vm_environment = environment.vm_environment,
+        .next_vm_environment = environment.next_vm_environment,
+        .program_map = program_map,
         .accounts = accounts,
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -404,6 +424,8 @@ test "loadAndExecuteTransactions: no transactions" {
     defer blockhash_queue.deinit(allocator);
     const epoch_stakes: EpochStakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
+    const vm_environment = vm.Environment{};
+    defer vm_environment.deinit(allocator);
 
     const environment: TransactionExecutionEnvironment = .{
         .ancestors = &ancestors,
@@ -413,7 +435,10 @@ test "loadAndExecuteTransactions: no transactions" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
+        .vm_environment = &vm_environment,
+        .next_vm_environment = null,
 
+        .slot = 0,
         .max_age = 0,
         .last_blockhash = Hash.ZEROES,
         .next_durable_nonce = Hash.ZEROES,
@@ -485,8 +510,11 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
             .status_cache = &StatusCache.default(),
             .sysvar_cache = &SysvarCache{},
             .rent_collector = &sig.core.rent_collector.defaultCollector(10),
+            .vm_environment = &vm.Environment{},
+            .next_vm_environment = null,
             .blockhash_queue = &blockhash_queue,
             .epoch_stakes = &epoch_stakes,
+            .slot = 0,
             .max_age = max_age,
             .last_blockhash = recent_blockhash,
             .next_durable_nonce = Hash.ZEROES,
@@ -653,6 +681,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .rent_collector = &rent_collector,
         .blockhash_queue = &blockhash_queue,
         .epoch_stakes = &epoch_stakes,
+        .vm_environment = &vm.Environment{},
+        .next_vm_environment = null,
+        .slot = 0,
         .max_age = 0,
         .last_blockhash = transaction.recent_blockhash,
         .next_durable_nonce = Hash.ZEROES,
@@ -672,6 +703,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         &account_cache,
         &environment,
         &config,
+        &ProgramMap{},
     );
 
     const processed_transaction = result.ok;

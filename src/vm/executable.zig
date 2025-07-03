@@ -3,11 +3,11 @@ const sig = @import("../sig.zig");
 
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;
-const syscalls = sig.vm.syscalls;
 
 const Elf = sig.vm.elf.Elf;
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
+const Syscall = sig.vm.syscalls.Syscall;
 
 pub const Executable = struct {
     bytes: []const u8,
@@ -45,7 +45,7 @@ pub const Executable = struct {
     pub fn fromBytes(
         allocator: std.mem.Allocator,
         source: []u8,
-        loader: *BuiltinProgram,
+        loader: *const Registry(Syscall),
         config: Config,
     ) !Executable {
         const elf = try Elf.parse(allocator, source, loader, config);
@@ -64,7 +64,7 @@ pub const Executable = struct {
         );
         // loader isn't owned by the executable, so it's fine for it to
         // die on the stack after the function returns
-        var loader: BuiltinProgram = .{};
+        var loader: Registry(Syscall) = .{};
         return fromTextBytes(
             allocator,
             std.mem.sliceAsBytes(instructions),
@@ -78,7 +78,7 @@ pub const Executable = struct {
     pub fn fromTextBytes(
         allocator: std.mem.Allocator,
         source: []const u8,
-        loader: *BuiltinProgram,
+        loader: *Registry(Syscall),
         registry: *Registry(u64),
         from_asm: bool,
         config: Config,
@@ -121,7 +121,7 @@ pub const Executable = struct {
 
     pub fn verify(
         self: *const Executable,
-        loader: *const BuiltinProgram,
+        loader: *const Registry(Syscall),
     ) !void {
         const version = self.version;
         const instructions = self.instructions;
@@ -357,7 +357,7 @@ pub const Executable = struct {
                 .@"return" => if (!version.enableStaticSyscalls())
                     return error.UnsupportedInstruction,
                 .exit_or_syscall => if (version.enableStaticSyscalls() and
-                    !loader.functions.map.contains(inst.imm))
+                    !loader.map.contains(inst.imm))
                 {
                     return error.InvalidSyscall;
                 },
@@ -856,7 +856,7 @@ pub fn Registry(T: type) type {
         pub fn registerHashedLegacy(
             self: *Self,
             allocator: std.mem.Allocator,
-            loader: *BuiltinProgram,
+            loader: *const Registry(Syscall),
             hash_symbol_name: bool,
             name: []const u8,
             value: T,
@@ -866,7 +866,7 @@ pub fn Registry(T: type) type {
             else
                 sbpf.hashSymbolName(&std.mem.toBytes(value));
             const key: u64 = if (hash_symbol_name) blk: {
-                if (loader.functions.lookupKey(hash) != null) {
+                if (loader.lookupKey(hash) != null) {
                     return error.SymbolHashCollision;
                 }
                 break :blk hash;
@@ -920,18 +920,6 @@ pub fn Registry(T: type) type {
         }
     };
 }
-
-pub const BuiltinProgram = struct {
-    functions: Registry(syscalls.Syscall) = .{},
-
-    pub fn deinit(
-        self: BuiltinProgram,
-        allocator: std.mem.Allocator,
-    ) void {
-        var copy = self;
-        copy.functions.deinit(allocator);
-    }
-};
 
 /// [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed8df53595afb8770531cf4ca938e449cf7/src/vm.rs#L52
 /// VM configuration settings

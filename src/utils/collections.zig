@@ -260,66 +260,277 @@ test "SplitUnionList: addOne, get, and swapRemove" {
     _ = list.swapRemove(.{ .tag = .one, .index = 0 });
 }
 
-/// A set that guarantees the contained items will be sorted whenever
-/// accessed through public methods like `items` and `range`.
-///
-/// Compatible with numbers, slices of numbers, and types that have an "order" method
+/// DEPRECATED: use the unmanaged variant instead
 pub fn SortedSet(comptime T: type) type {
     return SortedSetCustom(T, .{});
 }
 
-/// A set that guarantees the contained items will be sorted whenever
-/// accessed through public methods like `items` and `range`.
+/// DEPRECATED: use the unmanaged variant instead
 pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) type {
     return struct {
         map: SortedMapCustom(T, void, config),
+        const SortedSetSelf = @This();
 
-        const Self = @This();
-
-        pub fn init(allocator: Allocator) Self {
-            return .{ .map = SortedMapCustom(T, void, config).init(allocator) };
+        pub fn init(allocator: Allocator) SortedSetSelf {
+            return .{ .map = .init(allocator) };
         }
 
-        pub fn deinit(self: Self) void {
+        pub fn deinit(self: SortedSetSelf) void {
             self.map.deinit();
         }
 
-        pub fn clone(self: Self) !Self {
+        pub fn clone(self: SortedSetSelf) !SortedSetSelf {
             return .{ .map = try self.map.clone() };
         }
 
-        pub fn eql(self: *Self, other: *Self) bool {
+        pub fn eql(self: *SortedSetSelf, other: *SortedSetSelf) bool {
             return self.map.eql(&other.map);
         }
 
-        pub fn put(self: *Self, item: T) !void {
+        pub fn put(self: *SortedSetSelf, item: T) !void {
             try self.map.put(item, {});
         }
 
-        pub fn orderedRemove(self: *Self, item: T) bool {
+        pub fn orderedRemove(self: *SortedSetSelf, item: T) bool {
             return self.map.orderedRemove(item);
         }
 
-        pub fn contains(self: Self, item: T) bool {
+        pub fn contains(self: SortedSetSelf, item: T) bool {
             return self.map.contains(item);
         }
 
-        pub fn count(self: Self) usize {
+        pub fn count(self: SortedSetSelf) usize {
             return self.map.count();
         }
 
-        pub fn items(self: *Self) []const T {
+        pub fn items(self: *SortedSetSelf) []const T {
             return self.map.keys();
         }
 
         /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn range(self: *Self, start: ?T, end: ?T) []const T {
+        pub fn range(self: *SortedSetSelf, start: ?T, end: ?T) []const T {
             return self.map.range(start, end)[0];
         }
 
         /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn rangeCustom(self: *Self, start: ?Bound(T), end: ?Bound(T)) []const T {
+        pub fn rangeCustom(self: *SortedSetSelf, start: ?Bound(T), end: ?Bound(T)) []const T {
             return self.map.rangeCustom(start, end)[0];
+        }
+    };
+}
+
+/// A set that guarantees the contained items will be sorted whenever
+/// accessed through public methods like `items` and `range`.
+///
+/// Compatible with numbers, slices of numbers, and types that have an "order" method
+pub fn SortedSetUnmanaged(comptime T: type) type {
+    return SortedSetUnmanagedCustom(T, .{});
+}
+
+/// A set that guarantees the contained items will be sorted whenever
+/// accessed through public methods like `items` and `range`.
+pub fn SortedSetUnmanagedCustom(comptime T: type, comptime config: SortedMapConfig(T)) type {
+    return struct {
+        map: SortedMapUnmanagedCustom(T, void, config),
+        const SortedSetSelf = @This();
+
+        pub const empty: SortedSetSelf = .{
+            .map = .empty,
+        };
+
+        pub fn deinit(self: SortedSetSelf, allocator: std.mem.Allocator) void {
+            self.map.deinit(allocator);
+        }
+
+        pub fn clone(
+            self: SortedSetSelf,
+            allocator: std.mem.Allocator,
+        ) std.mem.Allocator.Error!SortedSetSelf {
+            return .{ .map = try self.map.clone(allocator) };
+        }
+
+        pub fn eql(self: *SortedSetSelf, other: *SortedSetSelf) bool {
+            return self.map.eql(&other.map);
+        }
+
+        pub fn put(
+            self: *SortedSetSelf,
+            allocator: std.mem.Allocator,
+            item: T,
+        ) std.mem.Allocator.Error!void {
+            try self.map.put(allocator, item, {});
+        }
+
+        pub fn orderedRemove(self: *SortedSetSelf, item: T) bool {
+            return self.map.orderedRemove(item);
+        }
+
+        pub fn contains(self: SortedSetSelf, item: T) bool {
+            return self.map.contains(item);
+        }
+
+        pub fn count(self: SortedSetSelf) usize {
+            return self.map.count();
+        }
+
+        pub fn items(self: *SortedSetSelf) []const T {
+            return self.map.keys();
+        }
+
+        /// subslice of items ranging from start (inclusive) to end (exclusive)
+        pub fn range(self: *SortedSetSelf, start: ?T, end: ?T) []const T {
+            return self.map.range(start, end)[0];
+        }
+
+        /// subslice of items ranging from start (inclusive) to end (exclusive)
+        pub fn rangeCustom(self: *SortedSetSelf, start: ?Bound(T), end: ?Bound(T)) []const T {
+            return self.map.rangeCustom(start, end)[0];
+        }
+    };
+}
+
+/// DEPRECATED: use the unmanaged variant instead
+pub fn SortedMap(comptime K: type, comptime V: type) type {
+    return SortedMapCustom(K, V, .{});
+}
+
+/// DEPRECATED: use the unmanaged variant instead
+pub fn SortedMapCustom(
+    comptime K: type,
+    comptime V: type,
+    comptime config: SortedMapConfig(K),
+) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        unmanaged: Unmanaged,
+        const SortedMapSelf = @This();
+
+        const Unmanaged = SortedMapUnmanagedCustom(K, V, config);
+
+        pub const @"!bincode-config": sig.bincode.FieldConfig(SortedMapSelf) = .{
+            .deserializer = bincodeDeserialize,
+            .serializer = bincodeSerialize,
+            .free = bincodeFree,
+        };
+
+        pub fn init(allocator: Allocator) SortedMapSelf {
+            return .{
+                .allocator = allocator,
+                .unmanaged = .empty,
+            };
+        }
+
+        pub fn deinit(self: SortedMapSelf) void {
+            var self_mut = self;
+            self_mut.unmanaged.deinit(self.allocator);
+        }
+
+        pub fn clone(self: SortedMapSelf) std.mem.Allocator.Error!SortedMapSelf {
+            return .{
+                .allocator = self.allocator,
+                .unmanaged = try self.unmanaged.clone(self.allocator),
+            };
+        }
+
+        pub fn eql(self: *SortedMapSelf, other: *SortedMapSelf) bool {
+            return self.unmanaged.eql(&other.unmanaged);
+        }
+
+        pub fn get(self: SortedMapSelf, key: K) ?V {
+            return self.unmanaged.get(key);
+        }
+
+        pub fn getEntry(self: SortedMapSelf, key: K) ?Unmanaged.Entry {
+            return self.unmanaged.getEntry(key);
+        }
+
+        pub fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Unmanaged.Inner.KV {
+            return self.unmanaged.fetchSwapRemove(key);
+        }
+
+        pub fn swapRemoveNoSort(self: *SortedMapSelf, key: K) bool {
+            return self.unmanaged.swapRemoveNoSort(key);
+        }
+
+        pub fn getOrPut(
+            self: *SortedMapSelf,
+            key: K,
+        ) std.mem.Allocator.Error!Unmanaged.Inner.GetOrPutResult {
+            return self.unmanaged.getOrPut(self.allocator, key);
+        }
+
+        pub fn put(self: *SortedMapSelf, key: K, value: V) std.mem.Allocator.Error!void {
+            try self.unmanaged.put(self.allocator, key, value);
+        }
+
+        pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
+            return self.unmanaged.orderedRemove(key);
+        }
+
+        pub fn contains(self: SortedMapSelf, key: K) bool {
+            return self.unmanaged.contains(key);
+        }
+
+        pub fn count(self: SortedMapSelf) usize {
+            return self.unmanaged.count();
+        }
+
+        pub fn keys(self: *SortedMapSelf) []const K {
+            return self.unmanaged.keys();
+        }
+
+        pub fn mutableKeys(self: *SortedMapSelf) []K {
+            return self.unmanaged.mutableKeys();
+        }
+
+        pub fn items(self: *SortedMapSelf) struct { []const K, []const V } {
+            return self.unmanaged.items();
+        }
+
+        pub fn iterator(self: *SortedMapSelf) Unmanaged.Inner.Iterator {
+            return self.unmanaged.iterator();
+        }
+
+        /// subslice of items ranging from start (inclusive) to end (exclusive)
+        pub fn range(self: *SortedMapSelf, start: ?K, end: ?K) struct { []const K, []const V } {
+            return self.unmanaged.range(start, end);
+        }
+
+        /// subslice of items ranging from start to end
+        pub fn rangeCustom(
+            self: *SortedMapSelf,
+            start_bound: ?Bound(K),
+            end_bound: ?Bound(K),
+        ) struct { []const K, []const V } {
+            return self.unmanaged.rangeCustom(start_bound, end_bound);
+        }
+
+        pub fn sort(self: *SortedMapSelf) void {
+            self.unmanaged.sort();
+        }
+
+        fn bincodeDeserialize(
+            allocator: std.mem.Allocator,
+            reader: anytype,
+            params: sig.bincode.Params,
+        ) !SortedMapSelf {
+            const unmanaged = try sig.bincode.read(allocator, Unmanaged, reader, params);
+            return .{
+                .allocator = allocator,
+                .unmanaged = unmanaged,
+            };
+        }
+
+        fn bincodeSerialize(
+            writer: anytype,
+            data: anytype,
+            params: sig.bincode.Params,
+        ) !void {
+            try sig.bincode.write(writer, data.unmanaged, params);
+        }
+
+        fn bincodeFree(_: std.mem.Allocator, data: anytype) void {
+            data.deinit();
         }
     };
 }
@@ -328,48 +539,51 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
 /// whenever accessed through public methods like `keys` and `range`.
 ///
 /// Compatible with numbers, slices of numbers, and types that have an "order" method
-pub fn SortedMap(comptime K: type, comptime V: type) type {
-    return SortedMapCustom(K, V, .{});
+pub fn SortedMapUnmanaged(comptime K: type, comptime V: type) type {
+    return SortedMapUnmanagedCustom(K, V, .{});
 }
 
 /// A map that guarantees the contained items will be sorted by key
 /// whenever accessed through public methods like `keys` and `range`.
 ///
 /// TODO consider reimplementing with something faster (e.g. binary tree)
-pub fn SortedMapCustom(
+pub fn SortedMapUnmanagedCustom(
     comptime K: type,
     comptime V: type,
     comptime config: SortedMapConfig(K),
 ) type {
     return struct {
         inner: Inner,
-        max: ?K = null,
-        is_sorted: bool = true,
+        max: ?K,
+        is_sorted: bool,
 
-        const Inner = std.ArrayHashMap(K, V, config.Context, config.store_hash);
+        const SortedMapSelf = @This();
 
-        const Self = @This();
+        const Inner = std.ArrayHashMapUnmanaged(K, V, config.Context, config.store_hash);
 
-        pub fn init(allocator: Allocator) Self {
-            return .{
-                .inner = Inner.init(allocator),
-            };
-        }
+        pub const empty: SortedMapSelf = .{
+            .inner = .empty,
+            .max = null,
+            .is_sorted = true,
+        };
 
-        pub fn deinit(self: Self) void {
+        pub fn deinit(self: SortedMapSelf, allocator: std.mem.Allocator) void {
             var self_mut = self;
-            self_mut.inner.deinit();
+            self_mut.inner.deinit(allocator);
         }
 
-        pub fn clone(self: Self) !Self {
+        pub fn clone(
+            self: SortedMapSelf,
+            allocator: std.mem.Allocator,
+        ) std.mem.Allocator.Error!SortedMapSelf {
             return .{
-                .inner = try self.inner.clone(),
+                .inner = try self.inner.clone(allocator),
                 .max = self.max,
                 .is_sorted = self.is_sorted,
             };
         }
 
-        pub fn eql(self: *Self, other: *Self) bool {
+        pub fn eql(self: *SortedMapSelf, other: *SortedMapSelf) bool {
             if (self.count() != other.count()) return false;
             self.sort();
             other.sort();
@@ -384,15 +598,15 @@ pub fn SortedMapCustom(
             return true;
         }
 
-        pub fn get(self: Self, key: K) ?V {
+        pub fn get(self: SortedMapSelf, key: K) ?V {
             return self.inner.get(key);
         }
 
-        pub fn getEntry(self: Self, key: K) ?Inner.Entry {
+        pub fn getEntry(self: SortedMapSelf, key: K) ?Inner.Entry {
             return self.inner.getEntry(key);
         }
 
-        pub fn fetchSwapRemove(self: *Self, key: K) ?Inner.KV {
+        pub fn fetchSwapRemove(self: *SortedMapSelf, key: K) ?Inner.KV {
             const item = self.inner.fetchSwapRemove(key);
             if (item != null and !self.resetMaxOnRemove(key)) {
                 self.is_sorted = false;
@@ -400,7 +614,7 @@ pub fn SortedMapCustom(
             return item;
         }
 
-        pub fn swapRemoveNoSort(self: *Self, key: K) bool {
+        pub fn swapRemoveNoSort(self: *SortedMapSelf, key: K) bool {
             const was_removed = self.inner.swapRemove(key);
             if (was_removed and !self.resetMaxOnRemove(key)) {
                 self.is_sorted = false;
@@ -408,8 +622,12 @@ pub fn SortedMapCustom(
             return was_removed;
         }
 
-        pub fn getOrPut(self: *Self, key: K) !std.AutoArrayHashMap(K, V).GetOrPutResult {
-            const result = try self.inner.getOrPut(key);
+        pub fn getOrPut(
+            self: *SortedMapSelf,
+            allocator: std.mem.Allocator,
+            key: K,
+        ) std.mem.Allocator.Error!Inner.GetOrPutResult {
+            const result = try self.inner.getOrPut(allocator, key);
             if (self.max == null or order(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
@@ -418,8 +636,13 @@ pub fn SortedMapCustom(
             return result;
         }
 
-        pub fn put(self: *Self, key: K, value: V) !void {
-            try self.inner.put(key, value);
+        pub fn put(
+            self: *SortedMapSelf,
+            allocator: std.mem.Allocator,
+            key: K,
+            value: V,
+        ) std.mem.Allocator.Error!void {
+            try self.inner.put(allocator, key, value);
             if (self.max == null or order(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
@@ -427,7 +650,7 @@ pub fn SortedMapCustom(
             }
         }
 
-        pub fn orderedRemove(self: *Self, key: K) bool {
+        pub fn orderedRemove(self: *SortedMapSelf, key: K) bool {
             const was_removed = self.inner.orderedRemove(key);
             if (was_removed) _ = self.resetMaxOnRemove(key);
             return was_removed;
@@ -435,7 +658,7 @@ pub fn SortedMapCustom(
 
         /// - returns whether the key was the prior max.
         /// - don't call this unless an item was definitely removed.
-        fn resetMaxOnRemove(self: *Self, removed_key: K) bool {
+        fn resetMaxOnRemove(self: *SortedMapSelf, removed_key: K) bool {
             std.debug.assert(self.max != null);
             if (self.count() == 0) {
                 self.max = null;
@@ -451,36 +674,36 @@ pub fn SortedMapCustom(
             }
         }
 
-        pub fn contains(self: Self, key: K) bool {
+        pub fn contains(self: SortedMapSelf, key: K) bool {
             return self.inner.contains(key);
         }
 
-        pub fn count(self: Self) usize {
+        pub fn count(self: SortedMapSelf) usize {
             return self.inner.count();
         }
 
-        pub fn keys(self: *Self) []const K {
+        pub fn keys(self: *SortedMapSelf) []const K {
             self.sort();
             return self.inner.keys();
         }
 
-        pub fn mutableKeys(self: *Self) []K {
+        pub fn mutableKeys(self: *SortedMapSelf) []K {
             self.sort();
             return self.inner.keys();
         }
 
-        pub fn items(self: *Self) struct { []const K, []const V } {
+        pub fn items(self: *SortedMapSelf) struct { []const K, []const V } {
             self.sort();
             return .{ self.inner.keys(), self.inner.values() };
         }
 
-        pub fn iterator(self: *Self) Inner.Iterator {
+        pub fn iterator(self: *SortedMapSelf) Inner.Iterator {
             self.sort();
             return self.inner.iterator();
         }
 
         /// subslice of items ranging from start (inclusive) to end (exclusive)
-        pub fn range(self: *Self, start: ?K, end: ?K) struct { []const K, []const V } {
+        pub fn range(self: *SortedMapSelf, start: ?K, end: ?K) struct { []const K, []const V } {
             return self.rangeCustom(
                 if (start) |b| .{ .inclusive = b } else null,
                 if (end) |b| .{ .exclusive = b } else null,
@@ -489,7 +712,7 @@ pub fn SortedMapCustom(
 
         /// subslice of items ranging from start to end
         pub fn rangeCustom(
-            self: *Self,
+            self: *SortedMapSelf,
             start_bound: ?Bound(K),
             end_bound: ?Bound(K),
         ) struct { []const K, []const V } {
@@ -544,14 +767,14 @@ pub fn SortedMapCustom(
             return .{ keys_, values_ };
         }
 
-        pub fn sort(self: *Self) void {
+        pub fn sort(self: *SortedMapSelf) void {
             if (self.is_sorted) return;
             self.inner.sort(struct {
-                items: std.MultiArrayList(Inner.Unmanaged.Data).Slice,
+                items: std.MultiArrayList(Inner.Data).Slice,
                 pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
                     return order(ctx.items.get(a_index).key, ctx.items.get(b_index).key) == .lt;
                 }
-            }{ .items = self.inner.unmanaged.entries.slice() });
+            }{ .items = self.inner.entries.slice() });
             self.is_sorted = true;
         }
     };
@@ -867,6 +1090,24 @@ test SortedSet {
     }
 }
 
+test "SortedSet bincode round trip does not break sorting" {
+    var set = SortedSet(u8).init(std.testing.allocator);
+    defer set.deinit();
+
+    try set.put(5);
+    try set.put(3);
+
+    const ser = try sig.bincode.writeAlloc(std.testing.allocator, set, .{});
+    defer std.testing.allocator.free(ser);
+
+    var des = try sig.bincode.readFromSlice(std.testing.allocator, SortedSet(u8), ser, .{});
+    defer des.deinit();
+
+    const items = des.items();
+    try std.testing.expectEqual(3, items[0]);
+    try std.testing.expectEqual(5, items[1]);
+}
+
 test "SortedSet range" {
     var set = SortedSet(u8).init(std.testing.allocator);
     defer set.deinit();
@@ -1126,16 +1367,16 @@ test "SortedMap" {
         try expectEqual(values[i], (i + 1) * 10);
     }
     // Check that the map is sorted
-    try expect(map.is_sorted);
+    try expect(map.unmanaged.is_sorted);
 
     // Remove a non terminal item with no sort.
     try expect(map.swapRemoveNoSort(3));
     try expect(!map.swapRemoveNoSort(3));
     try expect(map.swapRemoveNoSort(1));
 
-    try expect(!map.is_sorted);
+    try expect(!map.unmanaged.is_sorted);
     map.sort();
-    try expect(map.is_sorted);
+    try expect(map.unmanaged.is_sorted);
 }
 
 test "checkAllAllocationFailures in cloneMapAndValues" {
