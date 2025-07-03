@@ -10,6 +10,7 @@ const LatestValidatorVotesForFrozenBanks =
     sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
+const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -23,14 +24,13 @@ const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 
-const DUPLICATE_THRESHOLD = sig.consensus.unimplemented.DUPLICATE_THRESHOLD;
+const DUPLICATE_THRESHOLD = sig.replay.service.DUPLICATE_THRESHOLD;
 
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
 pub const Stake = u64;
 
 pub const VotedSlot = Slot;
-pub const VotedStakes = AutoHashMapUnmanaged(Slot, Stake);
 
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
@@ -508,7 +508,7 @@ pub fn isSlotDuplicateConfirmed(
 }
 
 test "is slot duplicate confirmed not enough stake failure" {
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -523,7 +523,7 @@ test "is slot duplicate confirmed not enough stake failure" {
 }
 
 test "is slot duplicate confirmed unknown slot" {
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
 
     const result = isSlotDuplicateConfirmed(
@@ -535,7 +535,7 @@ test "is slot duplicate confirmed unknown slot" {
 }
 
 test "is slot duplicate confirmed pass" {
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 

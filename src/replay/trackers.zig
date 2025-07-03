@@ -101,6 +101,28 @@ pub const SlotTracker = struct {
         }
         return frozen_slots;
     }
+
+    pub fn parents(
+        self: *const SlotTracker,
+        allocator: Allocator,
+        slot: Slot,
+    ) Allocator.Error![]const Slot {
+        var parents_list = std.ArrayListUnmanaged(Slot).empty;
+        errdefer parents_list.deinit(allocator);
+
+        // Parent list count cannot be more than the self.slots count.
+        try parents_list.ensureTotalCapacity(allocator, self.slots.count());
+
+        var current_slot = slot;
+        while (self.slots.get(current_slot)) |current| {
+            const parent_slot = current.constants.parent_slot;
+            parents_list.appendAssumeCapacity(parent_slot);
+
+            current_slot = parent_slot;
+        }
+
+        return try parents_list.toOwnedSlice(allocator);
+    }
 };
 
 pub const EpochTracker = struct {
