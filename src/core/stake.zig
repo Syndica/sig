@@ -1071,17 +1071,14 @@ pub const VoteAccount = struct {
 };
 
 pub const VoteState = struct {
-    // /// The variant of the rust enum
-    // tag: u32, // TODO: consider varint bincode serialization (in rust this is enum)
-    // /// the node that votes in this account
+    /// The variant of the rust enum
+    tag: u32, // TODO: consider varint bincode serialization (in rust this is enum)
+    /// the node that votes in this account
     node_pubkey: Pubkey,
-    root_slot: ?Slot = null,
-    votes: ?std.ArrayListUnmanaged(Lockout) = null,
 
     pub fn initRandom(random: std.Random) VoteState {
         return .{
-            .root_slot = null,
-            .votes = null,
+            .tag = 0, // must always be 0, since this is the enum tag
             .node_pubkey = Pubkey.initRandom(random),
         };
     }
