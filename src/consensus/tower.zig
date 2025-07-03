@@ -7,9 +7,8 @@ const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Hash = sig.core.Hash;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 const Lockout = sig.runtime.program.vote.state.Lockout;
-const LockoutIntervals = sig.consensus.unimplemented.LockoutIntervals;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -18,19 +17,30 @@ const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const Vote = sig.runtime.program.vote.state.Vote;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
-const VotedSlotAndPubkey = sig.consensus.unimplemented.VotedSlotAndPubkey;
 const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 
-const DUPLICATE_THRESHOLD = sig.consensus.unimplemented.DUPLICATE_THRESHOLD;
-
+const SWITCH_FORK_THRESHOLD: f64 = 0.38;
+const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
+pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
+pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
 pub const Stake = u64;
 
 pub const VotedSlot = Slot;
 pub const VotedStakes = AutoHashMapUnmanaged(Slot, Stake);
+
+const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
+pub const ExpirationSlot = Slot;
+/// TODO Should be improved.
+const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
+    ExpirationSlot,
+    std.ArrayList(VotedSlotAndPubkey),
+);
+pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
 
 const ComputedBankState = struct {
     /// Maps each validator (by their Pubkey) to the amount of stake they have voted
