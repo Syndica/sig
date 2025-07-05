@@ -124,7 +124,226 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
     };
 }
 
-pub const StakesType = enum {
+pub fn epochStakeMapClone(
+    epoch_stakes: EpochStakeMap,
+    allocator: Allocator,
+) Allocator.Error!EpochStakeMap {
+    var cloned: EpochStakeMap = .{};
+    errdefer epochStakeMapDeinit(cloned, allocator);
+    try cloned.ensureTotalCapacity(allocator, epoch_stakes.count());
+
+    for (epoch_stakes.keys(), epoch_stakes.values()) |key, value| {
+        const cloned_value = try value.clone(allocator);
+        cloned.putAssumeCapacityNoClobber(key, cloned_value);
+    }
+
+    return cloned;
+}
+
+pub fn epochStakeMapRandom(
+    random: std.Random,
+    allocator: Allocator,
+    min_list_entries: usize,
+    max_list_entries: usize,
+) Allocator.Error!EpochStakeMap {
+    var map: EpochStakeMap = .{};
+    errdefer epochStakeMapDeinit(map, allocator);
+
+    const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+    try map.ensureTotalCapacity(allocator, map_len);
+
+    for (0..map_len) |_| {
+        const value_ptr = while (true) {
+            const gop = map.getOrPutAssumeCapacity(random.int(Epoch));
+            if (gop.found_existing) continue;
+            break gop.value_ptr;
+        };
+        value_ptr.* = try EpochStakes.initRandom(allocator, random, max_list_entries);
+    }
+
+    return map;
+}
+
+/// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
+pub const EpochStakes = struct {
+    stakes: Stakes(.delegation),
+    total_stake: u64,
+    node_id_to_vote_accounts: NodeIdToVoteAccountsMap,
+    epoch_authorized_voters: EpochAuthorizedVoters,
+
+    /// Creates an empty `EpochStakes` with a single stake history entry at epoch 0.
+    pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes {
+        var history: EpochAndStakeHistory = .{};
+        try history.append(allocator, .{
+            .epoch = 0,
+            .history_entry = .{
+                .effective = 0,
+                .activating = 0,
+                .deactivating = 0,
+            },
+        });
+        return .{
+            .total_stake = 0,
+            .stakes = .{
+                .epoch = 0,
+                .history = history,
+                .vote_accounts = .{
+                    .accounts = .{},
+                    .staked_nodes = null,
+                },
+                .delegations = .{},
+                .unused = 0,
+            },
+            .node_id_to_vote_accounts = .{},
+            .epoch_authorized_voters = .{},
+        };
+    }
+
+    pub fn deinit(epoch_stakes: EpochStakes, allocator: Allocator) void {
+        epoch_stakes.stakes.deinit(allocator);
+        deinitMapAndValues(allocator, epoch_stakes.node_id_to_vote_accounts);
+
+        var epoch_authorized_voters = epoch_stakes.epoch_authorized_voters;
+        epoch_authorized_voters.deinit(allocator);
+    }
+
+    pub fn clone(
+        epoch_stakes: EpochStakes,
+        allocator: Allocator,
+    ) Allocator.Error!EpochStakes {
+        const stakes = try epoch_stakes.stakes.clone(allocator);
+        errdefer stakes.deinit(allocator);
+
+        const node_id_to_vote_accounts =
+            try cloneMapAndValues(allocator, epoch_stakes.node_id_to_vote_accounts);
+        errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts);
+
+        var epoch_authorized_voters = try epoch_stakes.epoch_authorized_voters.clone(allocator);
+        errdefer epoch_authorized_voters.deinit(allocator);
+
+        return .{
+            .stakes = stakes,
+            .total_stake = epoch_stakes.total_stake,
+            .node_id_to_vote_accounts = node_id_to_vote_accounts,
+            .epoch_authorized_voters = epoch_authorized_voters,
+        };
+    }
+
+    pub fn initRandom(
+        allocator: Allocator,
+        /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
+        /// for commentary on the runtime of this function.
+        random: std.Random,
+        max_list_entries: usize,
+    ) Allocator.Error!EpochStakes {
+        var result_stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
+        errdefer result_stakes.deinit(allocator);
+
+        const node_id_to_vote_accounts =
+            try nodeIdToVoteAccountsMapRandom(allocator, random, max_list_entries);
+        errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts);
+
+        var epoch_authorized_voters =
+            try epochAuthorizedVotersRandom(allocator, random, max_list_entries);
+        errdefer epoch_authorized_voters.deinit(allocator);
+
+        return .{
+            .stakes = result_stakes,
+            .total_stake = random.int(u64),
+            .node_id_to_vote_accounts = node_id_to_vote_accounts,
+            .epoch_authorized_voters = epoch_authorized_voters,
+        };
+    }
+};
+
+// NOTE: Comment from stakes enum in agave:
+//
+// For backward compatibility, we can only serialize and deserialize
+// Stakes<Delegation> in the old `epoch_stakes` bank snapshot field. However,
+// Stakes<StakeAccount> entries are added to the bank's epoch stakes hashmap
+// when crossing epoch boundaries and Stakes<Stake> entries are added when
+// starting up from bank snapshots that have the new epoch stakes field. By
+// using this enum, the cost of converting all entries to Stakes<Delegation> is
+// put off until serializing new snapshots. This helps avoid bogging down epoch
+// boundaries and startup with the conversion overhead.
+//
+// The only difference between the Stake and Delegation types is that the Stake type contains
+// a `credits_observed` field, why don't we just skip that in the serialization and use one type?
+//
+// The comes the question of the StakeAccount, which contains a StakeStateV2 and an AccountSharedData,
+// which is a little more complex. However, as agave notes these entries are added to the epoch stakes
+// on epoch boundaries from the stakes cache (I think... to confirm). It looks like the stakes cache may
+// not actually need to contain the complete StakesStateV2, so we could benefit from some simplification
+// there as well.
+//
+// To begin, lets take a look at the usage of EpochStakes in Agave.
+//
+// The Bank contains an 'epoch_stakes' field, which is a HashMap<Epoch, EpochStakes>.
+//    - `Bank::new_from_paths` - populates the epoch_stakes from epoch 0 to leader schedule epoch
+//    - `Bank::get_fields_to_serialize` - splits the epoch_stakes into EpochStakes and VersionedEpochStakes
+//    - `Bank::update_epoch_stakes` - removes old entries, creates and inserts a new entry using bank.stakes_cache.stakes()
+//    - a bunch of accessors methods
+
+//
+// pub struct EpochStakes {
+//     #[serde(with = "serde_stakes_to_delegation_format")]
+//     stakes: Arc<StakesEnum>,
+//     total_stake: u64,
+//     node_id_to_vote_accounts: Arc<HashMap<Pubkey, NodeVoteAccounts>>,
+//     epoch_authorized_voters: Arc<HashMap<Pubkey, Pubkey>>,
+//
+//     pub fn new(stakes: Arc<StakesEnum>, leader_schedule_epoch: Epoch) -> Self
+//     pub fn new_for_tests(vote_accounts_hash_map: VoteAccountsHashMap, leader_schedule_epoch: Epoch) -> Self
+//     pub fn stakes(&self) -> &StakesEnum
+//     pub fn total_stake(&self) -> u64
+//     pub fn set_total_stake(&mut self, total_stake: u64)
+//     pub fn node_id_to_vote_accounts(&self) -> &Arc<HashMap<Pubkey, NodeVoteAccounts>>
+//     pub fn node_id_to_stake(&self, node_id: &Pubkey) -> Option<u64>
+//     pub fn epoch_authorized_voters(&self) -> &Arc<HashMap<Pubkey, Pubkey>>
+//     pub fn vote_account_stake(&self, vote_account: &Pubkey) -> u64
+// }
+// pub struct NodeVoteAccounts {
+//     pub vote_accounts: Vec<Pubkey>,
+//     pub total_stake: u64,
+// }
+// pub enum StakesEnum {
+//     Accounts(Stakes<StakeAccount>),
+//     Delegations(Stakes<Delegation>),
+//     Stakes(Stakes<Stake>),
+// }
+// pub struct StakeAccount {
+//     account: AccountSharedData,
+//     stake_state: StakeStateV2,
+// }
+// pub struct Delegation {
+//     pub voter_pubkey: Pubkey,
+//     pub stake: u64,
+//     pub activation_epoch: Epoch,
+//     pub deactivation_epoch: Epoch,
+//     pub warmup_cooldown_rate: f64, // deprecated since 1.16.7
+// }
+// pub struct Stake {
+//     pub delegation: Delegation,
+//     pub credits_observed: u64,
+// }
+//
+// And also consider StakesCache
+//
+// pub(crate) struct StakesCache(RwLock<Stakes<StakeAccount>>);
+//
+// pub struct Stakes<T: Clone> {
+//     pub vote_accounts: VoteAccounts,
+//     pub stake_delegations: ImHashMap<Pubkey, T>,
+//     pub unused: u64,
+//     pub epoch: Epoch,
+//     pub stake_history: StakeHistory,
+// }
+//
+// Proposed Epoch Staked Nodes
+
+/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186).
+/// It differs in that its delegation element parameterization is narrowed to only accept the specific types we actually need to implement.
+pub fn Stakes(comptime delegation_type: enum {
     delegation,
     stake,
     account,

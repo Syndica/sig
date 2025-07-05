@@ -612,8 +612,7 @@ pub const VoteStateVersions = union(enum) {
     }
 
     pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
-        return VoteState.isCorrectSizeAndInitialized(data) or
-            VoteState1_14_11.isCorrectSizeAndInitialized(data);
+        return VoteState.isCorrectSizeAndInitialized(data) or VoteState1_14_11.isCorrectSizeAndInitialized(data);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
@@ -910,26 +909,6 @@ pub const VoteState = struct {
             .epoch_credits = try self.epoch_credits.clone(),
             .last_timestamp = self.last_timestamp,
         };
-    }
-
-    pub fn equals(self: *const VoteState, other: *const VoteState) bool {
-        if (self.votes.items.len != other.votes.items.len) return false;
-        for (self.votes.items, other.votes.items) |a, b|
-            if (!std.meta.eql(a, b)) return false;
-
-        if (!self.voters.equals(&other.voters)) return false;
-
-        if (!self.prior_voters.equals(other.prior_voters)) return false;
-
-        if (self.epoch_credits.items.len != other.epoch_credits.items.len) return false;
-        for (self.epoch_credits.items, other.epoch_credits.items) |a, b|
-            if (!std.meta.eql(a, b)) return false;
-
-        return self.node_pubkey.equals(&other.node_pubkey) and
-            self.withdrawer.equals(&other.withdrawer) and
-            self.commission == other.commission and
-            self.root_slot == other.root_slot and
-            std.meta.eql(self.last_timestamp, other.last_timestamp);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
