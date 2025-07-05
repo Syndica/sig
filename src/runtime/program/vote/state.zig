@@ -351,6 +351,10 @@ pub const AuthorizedVoters = struct {
         self.voters.deinit();
     }
 
+    pub fn clone(self: *const AuthorizedVoters) std.mem.Allocator.Error!AuthorizedVoters {
+        return .{ .voters = try self.voters.clone() };
+    }
+
     pub fn count(self: *const AuthorizedVoters) usize {
         return self.voters.count();
     }
@@ -576,6 +580,10 @@ pub const VoteStateVersions = union(enum) {
         }
     }
 
+    pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
+        return VoteState.isCorrectSizeAndInitialized(data) or VoteState1_14_11.isCorrectSizeAndInitialized(data);
+    }
+
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31
     pub fn convertToCurrent(self: VoteStateVersions, allocator: std.mem.Allocator) !VoteState {
         switch (self) {
@@ -721,6 +729,9 @@ pub const VoteState1_14_11 = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3731;
 
+    // Offset of VoteState1_4_11::prior_voters, for determining initialization status without deserialization
+    const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 82;
+
     pub fn init(
         allocator: std.mem.Allocator,
         node_pubkey: Pubkey,
@@ -752,6 +763,14 @@ pub const VoteState1_14_11 = struct {
         self.votes.deinit();
         self.voters.deinit();
         self.epoch_credits.deinit();
+    }
+
+    pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
+        return data.len == MAX_VOTE_STATE_SIZE and !std.mem.eql(
+            u8,
+            data[4 .. 4 + DEFAULT_PRIOR_VOTERS_OFFSET],
+            &([_]u8{0} ** DEFAULT_PRIOR_VOTERS_OFFSET),
+        );
     }
 };
 
@@ -790,6 +809,9 @@ pub const VoteState = struct {
     /// Upper limit on the size of the Vote State
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
+
+    // Offset of VoteState::prior_voters, for determining initialization status without deserialization
+    const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 114;
 
     pub fn default(allocator: std.mem.Allocator) VoteState {
         return .{
@@ -842,9 +864,35 @@ pub const VoteState = struct {
         self.epoch_credits.deinit();
     }
 
+    pub fn clone(self: VoteState) std.mem.Allocator.Error!VoteState {
+        const votes = try self.votes.clone();
+        errdefer votes.deinit();
+        const voters = try self.voters.clone();
+        errdefer voters.deinit();
+        return .{
+            .node_pubkey = self.node_pubkey,
+            .withdrawer = self.withdrawer,
+            .commission = self.commission,
+            .votes = votes,
+            .root_slot = self.root_slot,
+            .voters = voters,
+            .prior_voters = self.prior_voters,
+            .epoch_credits = try self.epoch_credits.clone(),
+            .last_timestamp = self.last_timestamp,
+        };
+    }
+
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
     pub fn isUninitialized(self: VoteState) bool {
         return self.voters.count() == 0;
+    }
+
+    pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
+        return data.len == MAX_VOTE_STATE_SIZE and !std.mem.eql(
+            u8,
+            data[4 .. 4 + DEFAULT_PRIOR_VOTERS_OFFSET],
+            &([_]u8{0} ** DEFAULT_PRIOR_VOTERS_OFFSET),
+        );
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
