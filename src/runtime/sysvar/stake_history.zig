@@ -46,6 +46,8 @@ pub const StakeHistory = struct {
 
     pub const SIZE_OF: u64 = 16_392;
 
+    pub const EMPTY: StakeHistory = .{ .entries = .{} };
+
     pub fn default(allocator: Allocator) Allocator.Error!StakeHistory {
         return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };
     }
