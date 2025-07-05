@@ -42,6 +42,16 @@ pub const AccountSharedData = struct {
         return std.mem.allEqual(u8, self.data, 0);
     }
 
+    pub fn clone(self: AccountSharedData, allocator: std.mem.Allocator) std.mem.Allocator.Error!AccountSharedData {
+        return .{
+            .lamports = self.lamports,
+            .data = try allocator.dupe(u8, self.data),
+            .owner = self.owner,
+            .executable = self.executable,
+            .rent_epoch = self.rent_epoch,
+        };
+    }
+
     /// Copy the old data into the new memory
     /// If the new size is less than the old size, truncate the data
     pub fn resize(
