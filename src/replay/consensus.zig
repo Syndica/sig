@@ -386,20 +386,11 @@ fn checkAndHandleNewRoot(
     //   - After setting a new root, prune the banks that are no longer on rooted paths self.prune_non_rooted(root, highest_super_majority_root);
 
     // Update the progress map.
-    var to_remove = try std.ArrayListUnmanaged(Slot).initCapacity(
-        allocator,
-        progress.map.count(),
-    );
-    defer to_remove.deinit(allocator);
-
+    // Remove entries from the progress map no longer in the slot tracker.
     for (progress.map.keys()) |progress_slot| {
         if (slot_tracker.get(progress_slot) == null) {
-            to_remove.appendAssumeCapacity(progress_slot);
+            _ = progress.map.swapRemove(progress_slot);
         }
-    }
-
-    for (to_remove.items) |key| {
-        _ = progress.map.swapRemove(key);
     }
 
     // Update forkchoice
