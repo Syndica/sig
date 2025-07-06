@@ -1872,6 +1872,138 @@ test "is slot duplicate confirmed pass" {
     try std.testing.expect(result);
 }
 
+test "check_vote_threshold_forks" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(19);
+    const random = prng.random();
+    // Create the ancestor relationships
+    var ancestors = std.AutoHashMapUnmanaged(u64, SortedSet(Slot)).empty;
+    defer {
+        var it = ancestors.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+        }
+        ancestors.deinit(allocator);
+    }
+
+    for (0..(VOTE_THRESHOLD_DEPTH + 2)) |i| {
+        var slot_parents = SortedSet(Slot).init(allocator);
+        for (0..i) |j| {
+            try slot_parents.put(j);
+        }
+        try ancestors.put(allocator, i, slot_parents);
+    }
+
+    // Create votes such that
+    // 1) 3/4 of the stake has voted on slot: VOTE_THRESHOLD_DEPTH - 2, lockout: 2
+    // 2) 1/4 of the stake has voted on slot: VOTE_THRESHOLD_DEPTH, lockout: 2^9
+    const total_stake: u64 = 4;
+    const threshold_size: f64 = 0.67;
+    const threshold_stake: u64 = @intFromFloat(@ceil(total_stake * threshold_size));
+    const tower_votes = try allocator.alloc(u64, VOTE_THRESHOLD_DEPTH);
+    defer {
+        allocator.free(tower_votes);
+    }
+    for (tower_votes, 0..) |*slot, i| {
+        slot.* = @as(u64, i);
+    }
+
+    var votes = [_]u64{VOTE_THRESHOLD_DEPTH - 2};
+    var accounts = try genStakes(
+        allocator,
+        random,
+        &[_]struct { u64, []u64 }{
+            .{ threshold_stake, &votes },
+            .{ total_stake - threshold_stake, tower_votes },
+        },
+    );
+    defer {
+        for (accounts.values()) |value| {
+            allocator.free(value[1].account.data);
+            value[1].vote_state.deinit();
+        }
+        accounts.deinit(allocator);
+    }
+
+    // Initialize tower
+    var replay_tower = try sig.consensus.replay_tower.createTestReplayTower(
+        VOTE_THRESHOLD_DEPTH,
+        threshold_size,
+    );
+    defer replay_tower.deinit(allocator);
+
+    {
+        // CASE 1: Record the first VOTE_THRESHOLD tower votes for fork 2. We want to
+        // evaluate a vote on slot VOTE_THRESHOLD_DEPTH. The nth most recent vote should be
+        // for slot 0, which is common to all account vote states, so we should pass the
+        // threshold check
+        const vote_to_evaluate = VOTE_THRESHOLD_DEPTH;
+        for (tower_votes) |vote| {
+            _ = try replay_tower.recordBankVote(
+                allocator,
+                vote,
+                Hash.ZEROES,
+            );
+        }
+
+        var progres_map = ProgressMap.INIT;
+        defer progres_map.deinit(allocator);
+
+        var latest_votes = LatestValidatorVotesForFrozenBanks.empty;
+
+        var computed_banks = try collectVoteLockouts(
+            allocator,
+            .noop,
+            &Pubkey.ZEROES,
+            vote_to_evaluate,
+            &accounts,
+            &ancestors,
+            &progres_map,
+            &latest_votes,
+        );
+        defer computed_banks.deinit(allocator);
+        const result = try replay_tower.checkVoteStakeThresholds(
+            std.testing.allocator,
+            vote_to_evaluate,
+            &computed_banks.voted_stakes,
+            computed_banks.total_stake,
+        );
+        std.testing.allocator.free(result);
+        try std.testing.expectEqual(0, result.len);
+    }
+
+    {
+        // CASE 2: Now we want to evaluate a vote for slot VOTE_THRESHOLD_DEPTH + 1. This slot
+        // will expire the vote in one of the vote accounts, so we should have insufficient
+        // stake to pass the threshold
+        var progres_map = ProgressMap.INIT;
+        defer progres_map.deinit(allocator);
+
+        var latest_votes = LatestValidatorVotesForFrozenBanks.empty;
+
+        const vote_to_evaluate = VOTE_THRESHOLD_DEPTH;
+        var computed_banks = try collectVoteLockouts(
+            allocator,
+            .noop,
+            &Pubkey.ZEROES,
+            vote_to_evaluate,
+            &accounts,
+            &ancestors,
+            &progres_map,
+            &latest_votes,
+        );
+        defer computed_banks.deinit(allocator);
+        const result = try replay_tower.checkVoteStakeThresholds(
+            std.testing.allocator,
+            vote_to_evaluate,
+            &computed_banks.voted_stakes,
+            computed_banks.total_stake,
+        );
+        std.testing.allocator.free(result);
+        try std.testing.expectEqual(0, result.len);
+    }
+}
+
 test "collect vote lockouts root" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(19);
