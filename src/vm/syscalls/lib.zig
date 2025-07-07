@@ -252,91 +252,95 @@ pub fn getProcessedSiblingInstruction(
         }
     } else null;
 
-    const info = maybe_info orelse {
-        registers.set(.r0, 0);
-        return;
-    };
-
-    const check_aligned = tc.getCheckAligned();
-    const header = try memory_map.translateType(
-        ProcessedSiblingInstruction,
-        .mutable,
-        meta_addr,
-        check_aligned,
-    );
-
-    if (header.data_len == info.instruction_data.len and
-        header.accounts_len == info.account_metas.len)
-    {
-        const program_id = try memory_map.translateType(
-            Pubkey,
+    if (maybe_info) |info| {
+        const check_aligned = tc.getCheckAligned();
+        const header = try memory_map.translateType(
+            ProcessedSiblingInstruction,
             .mutable,
-            program_id_addr,
+            meta_addr,
             check_aligned,
         );
-        const data = try memory_map.translateSlice(
-            u8,
-            .mutable,
-            data_addr,
-            header.data_len,
-            check_aligned,
-        );
-        const accounts = try memory_map.translateSlice(
-            AccountMeta,
-            .mutable,
-            accounts_addr,
-            header.accounts_len,
-            check_aligned,
-        );
-        if (memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-        ) or memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        ) or memops.isOverlapping(
-            @intFromPtr(header),
-            @sizeOf(ProcessedSiblingInstruction),
-            @intFromPtr(data.ptr),
-            data.len,
-        ) or memops.isOverlapping(
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-            @intFromPtr(data.ptr),
-            data.len,
-        ) or memops.isOverlapping(
-            @intFromPtr(program_id),
-            @sizeOf(Pubkey),
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        ) or memops.isOverlapping(
-            @intFromPtr(data.ptr),
-            data.len,
-            @intFromPtr(accounts.ptr),
-            accounts.len *| @sizeOf(AccountMeta),
-        )) {
-            return SyscallError.CopyOverlapping;
-        }
 
-        program_id.* = info.program_meta.pubkey;
-        @memcpy(data, info.instruction_data);
+        if (header.data_len == info.instruction_data.len and
+            header.accounts_len == info.account_metas.len)
+        {
+            const program_id = try memory_map.translateType(
+                Pubkey,
+                .mutable,
+                program_id_addr,
+                check_aligned,
+            );
+            const data = try memory_map.translateSlice(
+                u8,
+                .mutable,
+                data_addr,
+                header.data_len,
+                check_aligned,
+            );
+            const accounts = try memory_map.translateSlice(
+                AccountMeta,
+                .mutable,
+                accounts_addr,
+                header.accounts_len,
+                check_aligned,
+            );
+            if (memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+            ) or memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            ) or memops.isOverlapping(
+                @intFromPtr(header),
+                @sizeOf(ProcessedSiblingInstruction),
+                @intFromPtr(data.ptr),
+                data.len,
+            ) or memops.isOverlapping(
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+                @intFromPtr(data.ptr),
+                data.len,
+            ) or memops.isOverlapping(
+                @intFromPtr(program_id),
+                @sizeOf(Pubkey),
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            ) or memops.isOverlapping(
+                @intFromPtr(data.ptr),
+                data.len,
+                @intFromPtr(accounts.ptr),
+                accounts.len *| @sizeOf(AccountMeta),
+            )) {
+                return SyscallError.CopyOverlapping;
+            }
 
-        for (info.account_metas.slice(), 0..) |meta, i| {
-            accounts[i] = .{
-                .pubkey = meta.pubkey,
-                .is_signer = @intFromBool(meta.is_signer),
-                .is_writable = @intFromBool(meta.is_writable),
-            };
+            program_id.* = info.program_meta.pubkey;
+            @memcpy(data, info.instruction_data);
+
+            for (info.account_metas.slice(), 0..) |meta, i| {
+                const acc = tc.getAccountAtIndex(meta.index_in_transaction) orelse
+                    return InstructionError.NotEnoughAccountKeys;
+
+                accounts[i] = .{
+                    .pubkey = acc.pubkey,
+                    .is_signer = @intFromBool(meta.is_signer),
+                    .is_writable = @intFromBool(meta.is_writable),
+                };
+            }
         }
 
         header.data_len = info.instruction_data.len;
         header.accounts_len = info.account_metas.len;
         registers.set(.r0, 1);
+        return;
     }
+
+    registers.set(.r0, 0);
+    return;
 }
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
