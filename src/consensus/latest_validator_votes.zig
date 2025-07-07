@@ -55,6 +55,8 @@ pub const LatestValidatorVotes = struct {
     /// Returns whether the vote was actually added, and the latest voted frozen slot.
     /// The vote won't be added, and false will be returned for case when there are newer votes
     /// for this validator compared to the vote being inserted.
+    ///
+    /// Analogous to [check_add_vote](https://github.com/anza-xyz/agave/blob/fecc916333d376cbe2b1013c75f36b99bacae6c4/core/src/consensus/latest_validator_votes_for_frozen_banks.rs#L22)
     pub fn checkAddVote(
         self: *LatestValidatorVotes,
         allocator: std.mem.Allocator,
