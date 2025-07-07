@@ -359,17 +359,26 @@ pub const DeadState = struct {
     is_slot_duplicate: bool,
 
     pub fn fromState(
+        logger: sig.trace.Logger,
         slot: sig.core.Slot,
         duplicate_slots_tracker: *const DuplicateSlot,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     ) DeadState {
-        _ = slot; // autofix
-        _ = duplicate_slots_tracker; // autofix
-        _ = duplicate_confirmed_slots; // autofix
-        _ = fork_choice; // autofix
-        _ = epoch_slots_frozen_slots; // autofix
+        const cluster_confirmed_hash = getClusterConfirmedHashFromState(
+            logger,
+            slot,
+            duplicate_confirmed_slots,
+            epoch_slots_frozen_slots,
+            fork_choice,
+            null,
+        );
+        const is_slot_duplicate = duplicate_slots_tracker.contains(slot);
+        return .{
+            .cluster_confirmed_hash = cluster_confirmed_hash,
+            .is_slot_duplicate = is_slot_duplicate,
+        };
     }
 };
 
