@@ -64,88 +64,45 @@ pub const LatestValidatorVotes = struct {
         vote_slot: Slot,
         frozen_hash: Hash,
         is_replay_vote: bool,
-    ) !struct { bool, ?Slot } {
+    ) !struct { bool, Slot } {
         const vote_map = if (is_replay_vote)
             &self.max_replay_frozen_votes
         else
             &self.max_gossip_frozen_votes;
 
-        const maybe_pubkey_max_frozen_votes = vote_map.getEntry(vote_pubkey);
-        if (maybe_pubkey_max_frozen_votes) |occupied_entry| {
-            const latest_frozen_vote_slot = &occupied_entry.value_ptr.slot;
-            const latest_frozen_vote_hashes = &occupied_entry.value_ptr.hashes;
-            if (vote_slot > latest_frozen_vote_slot.*) {
-                latest_frozen_vote_hashes.deinit(allocator);
+        const max_frozen_vote = try vote_map.getOrPut(allocator, vote_pubkey);
+        errdefer if (!max_frozen_vote.found_existing) std.debug.assert(vote_map.swapRemove(vote_pubkey));
 
-                var hashes = std.ArrayListUnmanaged(Hash).empty;
-                errdefer hashes.deinit(allocator);
-
-                try hashes.append(allocator, frozen_hash);
-                if (is_replay_vote) {
-                    // Only record votes detected through replaying blocks,
-                    // because votes in gossip are not consistently observable
-                    // if the validator is replacing them.
-                    const hashes_cloned = try hashes.clone(allocator);
-
-                    // Clean up existing entry if it exists
-                    if (self.fork_choice_dirty_set.getEntry(vote_pubkey)) |existing_entry| {
-                        existing_entry.value_ptr.hashes.deinit(allocator);
-                    }
-
-                    try self.fork_choice_dirty_set.put(
-                        allocator,
-                        vote_pubkey,
-                        .{ .slot = vote_slot, .hashes = hashes_cloned },
-                    );
-                }
-                latest_frozen_vote_slot.* = vote_slot;
-                latest_frozen_vote_hashes.* = hashes;
-                return .{ true, vote_slot };
-            } else if (vote_slot == latest_frozen_vote_slot.* and !containsHash(
-                latest_frozen_vote_hashes.items,
-                frozen_hash,
-            )) {
-                if (is_replay_vote) {
-                    // Only record votes detected through replaying blocks,
-                    // because votes in gossip are not consistently observable
-                    // if the validator is replacing them.
-                    const dirty_frozen_hashes = try self.fork_choice_dirty_set.getOrPut(
-                        allocator,
-                        vote_pubkey,
-                    );
-                    if (!dirty_frozen_hashes.found_existing) {
-                        dirty_frozen_hashes.value_ptr.* = .{ .slot = 0, .hashes = .empty };
-                    }
-                    try dirty_frozen_hashes.value_ptr.hashes.append(allocator, frozen_hash);
-                }
-                try latest_frozen_vote_hashes.*.append(allocator, frozen_hash);
-                return .{ true, vote_slot };
-            } else {
-                // We have newer votes for this validator, we don't care about this vote
-                return .{ false, latest_frozen_vote_slot.* };
+        if (!max_frozen_vote.found_existing) {
+            max_frozen_vote.value_ptr.* = .{ .slot = vote_slot, .hashes = .empty };
+        } else if (vote_slot > max_frozen_vote.value_ptr.slot) {
+            // Clean up existing entry if it exists
+            max_frozen_vote.value_ptr.hashes.deinit(allocator);
+            max_frozen_vote.value_ptr.* = .{ .slot = vote_slot, .hashes = .empty };
+            if (self.fork_choice_dirty_set.getEntry(vote_pubkey)) |existing_entry| {
+                existing_entry.value_ptr.hashes.deinit(allocator);
+                existing_entry.value_ptr.* = .{ .slot = vote_slot, .hashes = .empty };
             }
-        } else {
-            var hashes = std.ArrayListUnmanaged(Hash).empty;
-            errdefer hashes.deinit(allocator);
+        } else if (vote_slot != max_frozen_vote.value_ptr.slot or
+            containsHash(max_frozen_vote.value_ptr.hashes.items, frozen_hash))
+        {
+            // We have newer votes for this validator, we don't care about this vote
+            return .{ false, max_frozen_vote.value_ptr.slot };
+        }
 
-            try hashes.append(allocator, frozen_hash);
-            try vote_map.put(
+        try max_frozen_vote.value_ptr.hashes.append(allocator, frozen_hash);
+        if (is_replay_vote) {
+            // Only record votes detected through replaying blocks,
+            // because votes in gossip are not consistently observable
+            // if the validator is replacing them.
+            const dirty_frozen_hash = try self.fork_choice_dirty_set.getOrPutValue(
                 allocator,
                 vote_pubkey,
-                .{ .slot = vote_slot, .hashes = hashes },
+                .{ .slot = vote_slot, .hashes = .empty },
             );
-            if (is_replay_vote) {
-                var hashes_cloned = try hashes.clone(allocator);
-                errdefer hashes_cloned.deinit(allocator);
-
-                try self.fork_choice_dirty_set.putNoClobber(
-                    allocator,
-                    vote_pubkey,
-                    .{ .slot = vote_slot, .hashes = hashes_cloned },
-                );
-            }
-            return .{ true, vote_slot };
+            try dirty_frozen_hash.value_ptr.hashes.append(allocator, frozen_hash);
         }
+        return .{ true, vote_slot };
     }
 
     pub fn takeVotesDirtySet(
