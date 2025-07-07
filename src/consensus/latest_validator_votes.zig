@@ -71,7 +71,8 @@ pub const LatestValidatorVotes = struct {
             &self.max_gossip_frozen_votes;
 
         const max_frozen_vote = try vote_map.getOrPut(allocator, vote_pubkey);
-        errdefer if (!max_frozen_vote.found_existing) std.debug.assert(vote_map.swapRemove(vote_pubkey));
+        errdefer if (!max_frozen_vote.found_existing)
+            std.debug.assert(vote_map.swapRemove(vote_pubkey));
 
         if (!max_frozen_vote.found_existing) {
             max_frozen_vote.value_ptr.* = .{ .slot = vote_slot, .hashes = .empty };
