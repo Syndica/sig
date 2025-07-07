@@ -668,7 +668,7 @@ fn processPopularPrunedForks(
     popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
     slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
-) void {
+) !void {
     const root = root: {
         const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
         defer slot_tracker_lg.unlock();
@@ -678,7 +678,7 @@ fn processPopularPrunedForks(
         if (new_popular_pruned_slot <= root) {
             continue;
         }
-        check_slot_agrees_with_cluster.popularPrunedFork(
+        try check_slot_agrees_with_cluster.popularPrunedFork(
             logger,
             new_popular_pruned_slot,
             root,
@@ -867,10 +867,11 @@ const check_slot_agrees_with_cluster = struct {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_dupe_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
 
-        state_change.slotFrozen(
-            slot,
+        try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
+            logger,
             fork_choice,
             &not_dupe_confirmed_frozen_hash,
+            slot,
             frozen_hash,
         );
 
@@ -902,13 +903,10 @@ const check_slot_agrees_with_cluster = struct {
                                 "but our version has hash {}",
                             .{ slot, duplicate_confirmed_hash, frozen_hash },
                         );
-                        try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
-                        try state_change.repairDuplicateConfirmedVersion(
-                            allocator,
-                            slot,
-                            duplicate_slots_to_repair,
-                            duplicate_confirmed_hash,
-                        );
+                        // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
+                        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
+                        // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
+                        try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
                     }
                 },
 
@@ -927,20 +925,18 @@ const check_slot_agrees_with_cluster = struct {
                             .{ slot, epoch_slots_frozen_hash, frozen_hash },
                         );
                         // If the slot is not already pruned notify fork choice to mark as invalid
-                        try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
+                        // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
+                        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
                     }
-                    try state_change.repairDuplicateConfirmedVersion(
-                        allocator,
-                        slot,
-                        duplicate_slots_to_repair,
-                        epoch_slots_frozen_hash,
-                    );
+                    // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
+                    try duplicate_slots_to_repair.put(allocator, slot, epoch_slots_frozen_hash);
                 },
             }
         } else if (is_slot_duplicate) {
             // If `cluster_confirmed_hash` is Some above we should have already pushed a
             // `MarkSlotDuplicate` state change
-            try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
+            // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
+            try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
         }
 
         try not_dupe_confirmed_frozen_hash.finalize(slot, blockstore);
@@ -995,10 +991,11 @@ const check_slot_agrees_with_cluster = struct {
             .unprocessed => {},
 
             .dead => {
-                state_change.sendAncestorHashesReplayUpdate(
-                    ancestor_hashes_replay_update_sender,
-                    .{ .kind = .dead_duplicate_confirmed, .slot = slot },
-                );
+                // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
+                try ancestor_hashes_replay_update_sender.send(.{
+                    .kind = .dead_duplicate_confirmed,
+                    .slot = slot,
+                });
 
                 // If the cluster duplicate confirmed some version of this slot, then
                 // there's another version of our dead slot
@@ -1006,12 +1003,8 @@ const check_slot_agrees_with_cluster = struct {
                     "Cluster duplicate confirmed slot {} with hash {}, but we marked slot dead",
                     .{ slot, duplicate_confirmed_hash },
                 );
-                try state_change.repairDuplicateConfirmedVersion(
-                    allocator,
-                    slot,
-                    duplicate_slots_to_repair,
-                    duplicate_confirmed_hash,
-                );
+                // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
+                try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
             },
 
             .frozen => |frozen_hash| {
@@ -1037,13 +1030,10 @@ const check_slot_agrees_with_cluster = struct {
                             " but our version has hash {}",
                         .{ slot, duplicate_confirmed_hash, frozen_hash },
                     );
-                    try state_change.markSlotDuplicate(slot, fork_choice, frozen_hash);
-                    try state_change.repairDuplicateConfirmedVersion(
-                        allocator,
-                        slot,
-                        duplicate_slots_to_repair,
-                        duplicate_confirmed_hash,
-                    );
+                    // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
+                    try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
+                    // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
+                    try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
                 }
             },
         }
@@ -1074,10 +1064,11 @@ const check_slot_agrees_with_cluster = struct {
                 .duplicate_confirmed => |duplicate_confirmed_hash| {
                     // If the cluster duplicate_confirmed some version of this slot, then
                     // check if our version agrees with the cluster,
-                    state_change.sendAncestorHashesReplayUpdate(
-                        ancestor_hashes_replay_update_sender,
-                        .{ .kind = .dead_duplicate_confirmed, .slot = slot },
-                    );
+                    // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
+                    try ancestor_hashes_replay_update_sender.send(.{
+                        .kind = .dead_duplicate_confirmed,
+                        .slot = slot,
+                    });
 
                     // If the cluster duplicate confirmed some version of this slot, then
                     // there's another version of our dead slot
@@ -1086,12 +1077,8 @@ const check_slot_agrees_with_cluster = struct {
                             "but we marked slot dead",
                         .{ slot, duplicate_confirmed_hash },
                     );
-                    try state_change.repairDuplicateConfirmedVersion(
-                        allocator,
-                        slot,
-                        duplicate_slots_to_repair,
-                        duplicate_confirmed_hash,
-                    );
+                    // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
+                    try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
                 },
                 // Lower priority than having seen an actual duplicate confirmed hash in the
                 // match arm above.
@@ -1102,18 +1089,16 @@ const check_slot_agrees_with_cluster = struct {
                             "but we marked slot dead",
                         .{ slot, epoch_slots_frozen_hash },
                     );
-                    try state_change.repairDuplicateConfirmedVersion(
-                        slot,
-                        duplicate_slots_to_repair,
-                        epoch_slots_frozen_hash,
-                    );
+                    // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
+                    try duplicate_slots_to_repair.put(allocator, slot, epoch_slots_frozen_hash);
                 },
             }
         } else {
-            state_change.sendAncestorHashesReplayUpdate(
-                ancestor_hashes_replay_update_sender,
-                .{ .kind = .dead, .slot = slot },
-            );
+            // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
+            try ancestor_hashes_replay_update_sender.send(.{
+                .kind = .dead,
+                .slot = slot,
+            });
         }
     }
 
@@ -1168,7 +1153,8 @@ const check_slot_agrees_with_cluster = struct {
             // If we have not yet seen any version of the slot duplicate confirmed, then mark
             // the slot as duplicate
             if (slot_status.slotHash()) |slot_hash| {
-                try state_change.markSlotDuplicate(slot, fork_choice, slot_hash);
+                // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
+                try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = slot_hash });
             }
         }
     }
@@ -1262,7 +1248,8 @@ const check_slot_agrees_with_cluster = struct {
                     );
                     if (!is_popular_pruned) {
                         // If the slot is not already pruned notify fork choice to mark as invalid
-                        try state_change.markSlotDuplicate(slot, fork_choice, slot_frozen_hash);
+                        // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
+                        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = slot_frozen_hash });
                     }
                 }
             },
@@ -1287,12 +1274,8 @@ const check_slot_agrees_with_cluster = struct {
             },
         }
 
-        try state_change.repairDuplicateConfirmedVersion(
-            allocator,
-            slot,
-            duplicate_slots_to_repair,
-            epoch_slots_frozen_hash,
-        );
+        // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
+        try duplicate_slots_to_repair.put(allocator, slot, epoch_slots_frozen_hash);
     }
 
     fn popularPrunedFork(
@@ -1300,7 +1283,7 @@ const check_slot_agrees_with_cluster = struct {
         slot: sig.core.Slot,
         root: sig.core.Slot,
         ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
-    ) void {
+    ) !void {
         logger.info().logf(
             "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {s}",
             .{ slot, root, "popular_pruned_fork" },
@@ -1317,10 +1300,11 @@ const check_slot_agrees_with_cluster = struct {
                 "Notifying ancestor_hashes_service",
             .{slot},
         );
-        state_change.sendAncestorHashesReplayUpdate(
-            ancestor_hashes_replay_update_sender,
-            .{ .kind = .popular_pruned_fork, .slot = slot },
-        );
+        // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
+        try ancestor_hashes_replay_update_sender.send(.{
+            .kind = .popular_pruned_fork,
+            .slot = slot,
+        });
     }
 };
 
@@ -1354,36 +1338,31 @@ const state_change = struct {
         }
     };
 
-    /// aka `BankFrozen` in agave.
-    fn slotFrozen(
-        slot: u64,
+    /// Checks if `.{ frozen_slot, frozen_hash }` is duplicate confirmed in fork_choice,
+    /// and updates `not_dupe_confirmed_frozen_hash` accordingly.
+    /// Logs and returns an error if it doesn't exist in `fork_choice.`
+    ///
+    /// AKA: `ResultingStateChange::BankFrozen` in agave.
+    fn maybeUpdateNotDupeConfirmedFrozenHash(
+        logger: sig.trace.Logger,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         not_dupe_confirmed_frozen_hash: *NotDupeConfirmedFrozenHash,
-        slot_frozen_hash: sig.core.Hash,
-    ) void {
-        const is_duplicate_confirmed =
-            fork_choice.isDuplicateConfirmed(&.{ .slot = slot, .hash = slot_frozen_hash }) orelse
-            std.debug.panic("frozen slot must exist in fork choice", .{});
+        frozen_slot: u64,
+        frozen_hash: sig.core.Hash,
+    ) error{FrozenSlotNotInForkChoice}!void {
+        const is_duplicate_confirmed = fork_choice.isDuplicateConfirmed(&.{
+            .slot = frozen_slot,
+            .hash = frozen_hash,
+        }) orelse {
+            logger.err().logf(
+                "frozen '{{ .slot = {}, .hash = {} }}' must exist in fork choice",
+                .{ frozen_slot, frozen_hash },
+            );
+            return error.FrozenSlotNotInForkChoice;
+        };
         if (!is_duplicate_confirmed) {
-            not_dupe_confirmed_frozen_hash.update(slot_frozen_hash);
+            not_dupe_confirmed_frozen_hash.update(frozen_hash);
         }
-    }
-
-    fn markSlotDuplicate(
-        slot: u64,
-        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
-        slot_frozen_hash: sig.core.Hash,
-    ) !void {
-        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = slot_frozen_hash });
-    }
-
-    fn repairDuplicateConfirmedVersion(
-        allocator: std.mem.Allocator,
-        slot: u64,
-        duplicate_slots_to_repair: *DuplicateSlotsToRepair,
-        duplicate_confirmed_hash: sig.core.Hash,
-    ) !void {
-        try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
     }
 
     fn duplicateConfirmedSlotMatchesCluster(
@@ -1416,15 +1395,6 @@ const state_change = struct {
 
         _ = duplicate_slots_to_repair.swapRemove(slot);
         _ = purge_repair_slot_counter.orderedRemove(slot);
-    }
-
-    fn sendAncestorHashesReplayUpdate(
-        ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
-        ancestor_hashes_replay_update: AncestorHashesReplayUpdate,
-    ) void {
-        ancestor_hashes_replay_update_sender.send(ancestor_hashes_replay_update) catch {
-            // TODO: agave just ignores this error, is that alright?
-        };
     }
 };
 
@@ -1667,11 +1637,8 @@ test "apply state changes" {
     // the slot from fork choice
     const duplicate_slot = slot_tracker.root + 1;
     const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
-    try state_change.markSlotDuplicate(
-        duplicate_slot,
-        heaviest_subtree_fork_choice,
-        duplicate_slot_hash,
-    );
+    // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
+    try heaviest_subtree_fork_choice.markForkInvalidCandidate(&.{ .slot = duplicate_slot, .hash = duplicate_slot_hash });
     try std.testing.expect(!heaviest_subtree_fork_choice.isCandidate(&.{
         .slot = duplicate_slot,
         .hash = duplicate_slot_hash,
@@ -1701,12 +1668,8 @@ test "apply state changes" {
     // to `duplicate_slots_to_repair`
     try std.testing.expect(duplicate_slots_to_repair.count() == 0);
     const correct_hash: sig.core.Hash = .initRandom(random);
-    try state_change.repairDuplicateConfirmedVersion(
-        allocator,
-        duplicate_slot,
-        &duplicate_slots_to_repair,
-        correct_hash,
-    );
+    // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
+    try duplicate_slots_to_repair.put(allocator, duplicate_slot, correct_hash);
     try std.testing.expectEqual(1, duplicate_slots_to_repair.count());
     try std.testing.expectEqual(
         correct_hash,
@@ -1743,10 +1706,11 @@ test "apply state changes slot frozen" {
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
-        state_change.slotFrozen(
-            duplicate_slot,
+        try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
+            .noop,
             heaviest_subtree_fork_choice,
             &not_duplicate_confirmed_frozen_hash,
+            duplicate_slot,
             duplicate_slot_hash,
         );
         try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
@@ -1775,10 +1739,11 @@ test "apply state changes slot frozen" {
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_duplicate_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
-        state_change.slotFrozen(
-            duplicate_slot,
+        try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
+            .noop,
             heaviest_subtree_fork_choice,
             &not_duplicate_confirmed_frozen_hash,
+            duplicate_slot,
             new_slot_hash,
         );
         try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
@@ -1923,10 +1888,11 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
             our_duplicate_slot_hash,
         );
 
-        state_change.slotFrozen(
-            duplicate_slot,
+        try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
+            .noop,
             heaviest_subtree_fork_choice,
             &not_duplicate_confirmed_frozen_hash,
+            duplicate_slot,
             our_duplicate_slot_hash,
         );
 
