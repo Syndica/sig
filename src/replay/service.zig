@@ -978,25 +978,14 @@ const check_slot_agrees_with_cluster = struct {
             }
         }
 
-        // datapoint_info!(
-        //     "duplicate_confirmed_slot",
-        //     ("slot", slot, i64),
-        //     (
-        //         "duplicate_confirmed_hash",
-        //         duplicate_confirmed_state
-        //             .duplicate_confirmed_hash
-        //             .to_string(),
-        //         String
-        //     ),
-        //     (
-        //         "my_hash",
-        //         bank_status
-        //             .bank_hash()
-        //             .unwrap_or_default()
-        //             .to_string(),
-        //         String
-        //     ),
-        // );
+        // TODO: consider putting a prometheus metric here, similar to how agave
+        // has a datapoint_info here. Specifically one bound to "duplicate_confirmed_slots",
+        // with fields:
+        // .{
+        //     .slot = slot,
+        //     .duplicate_confirmed_hash = duplicate_confirmed_hash,
+        //     .my_hash = slot_status.slotHash(),
+        // }
 
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var not_dupe_confirmed_frozen_hash: state_change.NotDupeConfirmedFrozenHash = .init;
@@ -1153,27 +1142,14 @@ const check_slot_agrees_with_cluster = struct {
             return;
         }
 
-        // datapoint_info!(
-        //     "duplicate_slot",
-        //     ("slot", slot, i64),
-        //     (
-        //         "duplicate_confirmed_hash",
-        //         duplicate_state
-        //             .duplicate_confirmed_hash
-        //             .unwrap_or_default()
-        //             .to_string(),
-        //         String
-        //     ),
-        //     (
-        //         "my_hash",
-        //         duplicate_state
-        //             .bank_status
-        //             .bank_hash()
-        //             .unwrap_or_default()
-        //             .to_string(),
-        //         String
-        //     ),
-        // );
+        // TODO: consider putting a prometheus metric here, similar to how agave
+        // has a datapoint_info here. Specifically one bound to "duplicate_slot",
+        // with fields:
+        // .{
+        //     .slot = slot,
+        //     .duplicate_confirmed_hash = duplicate_confirmed_hash,
+        //     .my_hash = slot_status.slotHash(),
+        // }
 
         const slot_status = duplicate_state.slot_status;
         const duplicate_confirmed_hash = duplicate_state.duplicate_confirmed_hash;
