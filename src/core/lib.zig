@@ -20,6 +20,7 @@ pub const stakes_cache = @import("stakes_cache.zig");
 pub const status_cache = @import("status_cache.zig");
 pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
+pub const vote_accounts = @import("vote_accounts.zig");
 
 pub const Account = account.Account;
 pub const Ancestors = ancestors.Ancestors;
