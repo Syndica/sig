@@ -6,9 +6,10 @@ const Allocator = std.mem.Allocator;
 
 const bincode = sig.bincode;
 const vote_program = sig.runtime.program.vote;
+const stake_program = sig.runtime.program.stake;
 
 const Pubkey = sig.core.Pubkey;
-const CalculateStakeContext = sig.core.stake.CaclulateStakeContext;
+const Epoch = sig.core.Epoch;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 
@@ -16,127 +17,97 @@ const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
 const Clock = sig.runtime.sysvar.Clock;
+const StakeHistory = sig.runtime.sysvar.StakeHistory;
+const StakeHistoryEntry = sig.runtime.sysvar.StakeHistory.Entry;
+const ClusterStake = sig.runtime.sysvar.StakeHistory.ClusterStake;
+const RwMux = sig.sync.RwMux;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
-
-pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount);
-pub const StakedNodesMap = std.AutoArrayHashMapUnmanaged(Pubkey, u64);
-
-pub const StakeAndVoteAccount = struct {
-    stake: u64,
-    account: VoteAccount,
-
-    pub fn init(stake: u64, account: VoteAccount) StakeAndVoteAccount {
-        return .{ .stake = stake, .account = account };
-    }
-
-    pub fn deinit(self: *const StakeAndVoteAccount, allocator: Allocator) void {
-        self.account.deinit(allocator);
-    }
-
-    pub fn clone(
-        self: *const StakeAndVoteAccount,
-        allocator: Allocator,
-    ) Allocator.Error!StakeAndVoteAccount {
-        return .{ .stake = self.stake, .account = try self.account.clone(allocator) };
-    }
-};
-
-/// Deserialization in Agave allows invalid vote accounts to exist for snapshot
-/// compatibility. It is noted that this should change to a hard error in the
-/// future. We take the hard error on deserialisation approach and can write a
-/// custom deserializer if we come across a need to deserialize invalid vote
-/// accounts.
+/// Deserialization in Agave allows invalid vote accounts to exist for snapshot compatibility. It is
+/// noted that this should change to a hard error in the future. We take the hard error on desererialisation
+/// approach and can write a custom deserializer if we come across a need to deserialize invalid vote accounts.
+/// [agave] https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L431-L438
 ///
-/// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L45-L46)
+/// [agave] https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L45-L46
 pub const VoteAccounts = struct {
     /// Maps pubkeys to vote account and delegated stake.
-    vote_accounts: StakeAndVoteAccountsMap = .{},
+    vote_accounts: std.AutoArrayHashMapUnmanaged(Pubkey, VoteAccountAndDelegatedStake) = .{},
     /// Maps vote account node pubkeys to their total delegated stake.
-    /// NOTE: Should we make this nullable and emulate Agave's beahviour? I think it is fine
-    /// to just compute the staked nodes on deserialisation but am open to changing this approach.
-    staked_nodes: StakedNodesMap = .{},
+    staked_nodes: std.AutoArrayHashMapUnmanaged(Pubkey, u64) = .{},
 
-    pub const @"!bincode-config" = bincode.FieldConfig(VoteAccounts){ .deserializer = deserialize };
-    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(StakedNodesMap){ .skip = true };
+    pub const @"!bincode-config" = bincode.FieldConfig(
+        VoteAccounts,
+    ){ .deserializer = deserialize };
 
-    pub fn clone(
-        self: *const VoteAccounts,
-        allocator: std.mem.Allocator,
-    ) Allocator.Error!VoteAccounts {
-        var result = VoteAccounts{};
-        errdefer result.deinit(allocator);
+    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(
+        std.AutoArrayHashMapUnmanaged(Pubkey, u64),
+    ){ .skip = true };
 
-        try result.vote_accounts.ensureTotalCapacity(allocator, self.vote_accounts.capacity());
-        for (self.vote_accounts.keys(), self.vote_accounts.values()) |key, value|
-            try result.vote_accounts.put(allocator, key, try value.clone(allocator));
+    pub const VoteAccountAndDelegatedStake = struct {
+        vote_account: VoteAccount,
+        delegated_stake: u64,
 
-        try result.staked_nodes.ensureTotalCapacity(allocator, self.staked_nodes.capacity());
-        for (self.staked_nodes.keys(), self.staked_nodes.values()) |key, value|
-            try result.staked_nodes.put(allocator, key, value);
-
-        return result;
-    }
+        pub fn deinit(self: *const VoteAccountAndDelegatedStake, allocator: Allocator) void {
+            self.vote_account.deinit(allocator);
+        }
+    };
 
     pub fn deinit(self: *const VoteAccounts, allocator: Allocator) void {
-        deinitMapAndValues(allocator, self.vote_accounts);
-        var staked_nodes = self.staked_nodes;
-        staked_nodes.deinit(allocator);
+        for (self.vote_accounts.values()) |v| v.deinit(allocator);
+        var votes = self.vote_accounts;
+        votes.deinit(allocator);
+        var stakes = self.staked_nodes;
+        stakes.deinit(allocator);
     }
 
     pub fn getAccount(self: *const VoteAccounts, pubkey: Pubkey) ?VoteAccount {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return null;
-        return entry.account;
+        return entry.vote_account;
     }
 
     pub fn getDelegatedStake(self: *const VoteAccounts, pubkey: Pubkey) u64 {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return 0;
-        return entry.stake;
+        return entry.delegated_stake;
     }
 
     /// Inserts a new vote account into the `vote_accounts` map, or updates an existing one.
-    /// If the vote account is new, it will calculate the stake and add it to the `staked_nodes` map
+    /// If the vote account is new, it will calculate the stake and add it to the `staked_nodes` map.
     /// If the vote account already exists, and the node pubkey has changed, it will move the stake
     /// from the old node to the new node in the `staked_nodes` map.
-    /// Takes ownership of `account` and returns the previous value if it existed.
     pub fn insert(
         self: *VoteAccounts,
         allocator: Allocator,
         pubkey: Pubkey,
         account: VoteAccount,
-        calculated_stake_context: CalculateStakeContext,
-    ) !?StakeAndVoteAccount {
-        errdefer account.deinit(allocator);
-
+        caclulated_stake: u64,
+    ) Allocator.Error!?VoteAccountAndDelegatedStake {
         const entry = try self.vote_accounts.getOrPut(allocator, pubkey);
         if (entry.found_existing) {
-            const old_stake = entry.value_ptr.stake;
-            const old_node_pubkey = entry.value_ptr.account.getNodePubkey();
+            const old_stake = entry.value_ptr.delegated_stake;
+            const old_node_pubkey = entry.value_ptr.vote_account.getNodePubkey();
             const new_node_pubkey = account.getNodePubkey();
             if (!new_node_pubkey.equals(&old_node_pubkey)) {
-                try self.subNodeStake(old_node_pubkey, old_stake);
+                self.subNodeStake(old_node_pubkey, old_stake);
                 try self.addNodeStake(allocator, new_node_pubkey, old_stake);
             }
             const old_entry_value = entry.value_ptr.*;
-            entry.value_ptr.account = account;
+            entry.value_ptr.vote_account = try account.clone(allocator);
             return old_entry_value;
         } else {
-            const calculated_stake = calculated_stake_context.calculateStake(pubkey);
-            entry.value_ptr.* = .{ .stake = calculated_stake, .account = account };
-            try self.addNodeStake(allocator, account.state.node_pubkey, calculated_stake);
+            entry.value_ptr.* = .{ .delegated_stake = caclulated_stake, .vote_account = try account.clone(allocator) };
+            try self.addNodeStake(allocator, account.state.node_pubkey, caclulated_stake);
             return null;
         }
     }
 
     /// Removes the vote account identified by `pubkey` from the `vote_accounts` map, and updates
     /// the `staked_nodes` map by subtracting the stake of the removed vote account.
-    pub fn remove(self: *VoteAccounts, allocator: std.mem.Allocator, pubkey: Pubkey) !void {
-        const entry: StakeAndVoteAccount = self.vote_accounts.get(pubkey) orelse return;
+    pub fn remove(self: *VoteAccounts, allocator: std.mem.Allocator, pubkey: Pubkey) void {
+        const entry: VoteAccountAndDelegatedStake = self.vote_accounts.get(pubkey) orelse return;
         defer entry.deinit(allocator);
         _ = self.vote_accounts.swapRemove(pubkey);
-        try self.subNodeStake(entry.account.getNodePubkey(), entry.stake);
+        self.subNodeStake(entry.vote_account.getNodePubkey(), entry.delegated_stake);
     }
 
     /// Adds `delta` to the stake of the vote account identified by `pubkey`, and updates the
@@ -148,22 +119,20 @@ pub const VoteAccounts = struct {
         delta: u64,
     ) Allocator.Error!void {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return;
-        entry.stake += delta;
-        try self.addNodeStake(allocator, entry.account.state.node_pubkey, delta);
+        entry.delegated_stake += delta;
+        try self.addNodeStake(allocator, entry.vote_account.state.node_pubkey, delta);
     }
 
-    /// Subtracts `delta` from the stake of the vote account identified by
-    /// `pubkey`, and updates the `staked_nodes` map. Panics if `delta` is
-    /// greater than the current stake.
-    pub fn subStake(self: *VoteAccounts, pubkey: Pubkey, delta: u64) !void {
+    /// Subtracts `delta` from the stake of the vote account identified by `pubkey`, and updates the
+    /// `staked_nodes` map. Panics if `delta` is greater than the current stake.
+    pub fn subStake(self: *VoteAccounts, pubkey: Pubkey, delta: u64) void {
         const entry = self.vote_accounts.getPtr(pubkey) orelse return;
-        if (entry.stake < delta) return error.SubStakeOverflow;
-        entry.stake -= delta;
-        try self.subNodeStake(entry.account.state.node_pubkey, delta);
+        if (entry.delegated_stake < delta) @panic("subtraction value exceeds vote account's stake");
+        entry.delegated_stake -= delta;
+        self.subNodeStake(entry.vote_account.state.node_pubkey, delta);
     }
 
-    /// Adds `stake` to an entry in `staked_nodes`. If the entry does not exist,
-    /// one will be created.
+    /// Adds `stake` to an entry in `staked_nodes`. If the entry does not exist, one will be created.
     fn addNodeStake(
         self: *VoteAccounts,
         allocator: Allocator,
@@ -180,92 +149,46 @@ pub const VoteAccounts = struct {
             entry.value_ptr.* = stake;
     }
 
-    /// Subtracts `stake` from an entry in `staked_nodes`. If the entry does not
-    /// exist, it will panic.
-    fn subNodeStake(self: *VoteAccounts, pubkey: Pubkey, stake: u64) !void {
+    /// Subtracts `stake` from an entry in `staked_nodes`. If the entry does not exist, it will panic.
+    fn subNodeStake(self: *VoteAccounts, pubkey: Pubkey, stake: u64) void {
         if (stake == 0) return;
 
         const current_stake = self.staked_nodes.getPtr(pubkey) orelse
-            return error.NodeNotFound;
+            @panic("pubkey not present in staked_nodes");
 
         switch (std.math.order(current_stake.*, stake)) {
-            .lt => return error.SubStakeOverflow,
+            .lt => @panic("subtraction value exceeds node's stake"),
             .eq => _ = self.staked_nodes.swapRemove(pubkey),
             .gt => current_stake.* -= stake,
         }
     }
 
-    fn computeStakedNodes(
-        allocator: Allocator,
-        accounts: *const StakeAndVoteAccountsMap,
-    ) Allocator.Error!StakedNodesMap {
-        var staked_nodes = StakedNodesMap{};
-        errdefer staked_nodes.deinit(allocator);
-
-        for (accounts.keys(), accounts.values()) |_, value| {
-            if (value.stake > 0) {
-                const entry = try staked_nodes.getOrPut(allocator, value.account.getNodePubkey());
-                if (entry.found_existing)
-                    entry.value_ptr.* += value.stake
-                else
-                    entry.value_ptr.* = value.stake;
-            }
-        }
-
-        return staked_nodes;
-    }
-
-    /// Analogous to [deserialize_accounts_hash_map](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L431-L438)
     fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !VoteAccounts {
         var vote_accounts = try bincode.read(
             allocator,
-            StakeAndVoteAccountsMap,
+            std.AutoArrayHashMapUnmanaged(Pubkey, VoteAccountAndDelegatedStake),
             reader,
             .{},
         );
-        errdefer {
-            for (vote_accounts.values()) |v| v.deinit(allocator);
-            vote_accounts.deinit(allocator);
+        errdefer vote_accounts.deinit(allocator);
+
+        var staked_nodes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+        errdefer staked_nodes.deinit(allocator);
+
+        for (vote_accounts.keys(), vote_accounts.values()) |_, value| {
+            if (value.delegated_stake > 0) {
+                const entry = try staked_nodes.getOrPut(allocator, value.vote_account.getNodePubkey());
+                if (entry.found_existing)
+                    entry.value_ptr.* += value.delegated_stake
+                else
+                    entry.value_ptr.* = value.delegated_stake;
+            }
         }
 
         return .{
             .vote_accounts = vote_accounts,
-            .staked_nodes = try computeStakedNodes(
-                allocator,
-                &vote_accounts,
-            ),
+            .staked_nodes = staked_nodes,
         };
-    }
-
-    pub fn initRandom(
-        allocator: Allocator,
-        random: std.Random,
-        max_list_entries: usize,
-    ) Allocator.Error!VoteAccounts {
-        // TODO: Uncomment once not required by bank init random
-        // if (!builtin.is_test) @compileError("only for testing");
-
-        var self = VoteAccounts{};
-        errdefer self.deinit(allocator);
-
-        for (0..random.intRangeAtMost(u64, 1, max_list_entries)) |_| {
-            try self.vote_accounts.put(
-                allocator,
-                Pubkey.initRandom(random),
-                .{ .stake = random.int(u64), .account = try createRandomVoteAccount(
-                    allocator,
-                    random,
-                    Pubkey.initRandom(random),
-                ) },
-            );
-        }
-
-        self.staked_nodes = try computeStakedNodes(
-            allocator,
-            &self.vote_accounts,
-        );
-
-        return self;
     }
 };
 
@@ -273,8 +196,10 @@ pub const VoteAccount = struct {
     account: AccountSharedData,
     state: VoteState,
 
-    pub const @"!bincode-config" = bincode.FieldConfig(VoteAccount){ .deserializer = deserialize };
-    pub const @"!bincode-config:state" = bincode.FieldConfig(VoteState){ .skip = true };
+    pub const @"!bincode-config" = bincode.FieldConfig(VoteAccount){
+        .serializer = serialize,
+        .deserializer = deserialize,
+    };
 
     pub fn deinit(self: *const VoteAccount, allocator: Allocator) void {
         self.account.deinit(allocator);
@@ -302,7 +227,7 @@ pub const VoteAccount = struct {
         return self.account.equals(&other.account) and self.state.equals(&other.state);
     }
 
-    /// Takes ownership of `account`.
+    /// Creates a `VoteAccount` from an `AccountSharedData`, taking ownership of the `AccountSharedData`.
     pub fn fromAccountSharedData(allocator: Allocator, account: AccountSharedData) !VoteAccount {
         errdefer account.deinit(allocator);
 
@@ -322,44 +247,17 @@ pub const VoteAccount = struct {
         };
     }
 
-    /// Deserialize the `AccountSharedData`, and attempt to deserialize
-    /// `VoteState` from the account data.
+    /// Serialize only the `AccountSharedData` part of the `VoteAccount`.
+    fn serialize(writer: anytype, data: VoteAccount, _: bincode.Params) !void {
+        try bincode.write(writer, data.account, .{});
+    }
+
+    /// Deserialize the `AccountSharedData`, and attempt to deserialize `VoteState` from the account data.
     fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !VoteAccount {
         return fromAccountSharedData(
             allocator,
             try bincode.read(allocator, AccountSharedData, reader, .{}),
         );
-    }
-
-    pub fn initRandom(
-        allocator: Allocator,
-        random: std.Random,
-        node_pubkey: ?Pubkey,
-    ) Allocator.Error!VoteAccount {
-        // TODO: Uncomment once not required by bank init random
-        // if (!builtin.is_test) @compileError("only for testing");
-
-        const account = try createVoteAccount(
-            allocator,
-            node_pubkey orelse Pubkey.initRandom(random),
-            Pubkey.initRandom(random),
-            Pubkey.initRandom(random),
-            random.int(u8),
-            random.intRangeAtMost(u64, 1, 1_000_000),
-            Clock.initRandom(random),
-        );
-
-        return VoteAccount.fromAccountSharedData(
-            allocator,
-            account,
-        ) catch |err| {
-            switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                // We just created a 'valid' vote account, so the only possible
-                // error is `OutOfMemory`.
-                else => unreachable,
-            }
-        };
     }
 };
 
@@ -371,9 +269,8 @@ pub fn createVoteAccount(
     commission: u8,
     lamports: u64,
     clock: ?Clock,
-) Allocator.Error!AccountSharedData {
-    // TODO: Uncomment once not required by bank init random
-    // if (!builtin.is_test) @compileError("only for testing");
+) !AccountSharedData {
+    if (!builtin.is_test) @compileError("only for testing");
 
     const vote_account = AccountSharedData{
         .lamports = lamports,
@@ -394,13 +291,11 @@ pub fn createVoteAccount(
     );
     defer vote_state.deinit();
 
-    _ = bincode.writeToSlice(
+    _ = try bincode.writeToSlice(
         vote_account.data,
         VoteStateVersions{ .current = vote_state },
         .{},
-    ) catch unreachable;
-    // unreachable: We just created a 'valid' vote state and allocated
-    // MAX_VOTE_STATE_SIZE bytes
+    );
 
     return vote_account;
 }
@@ -409,10 +304,8 @@ pub fn createRandomVoteAccount(
     allocator: Allocator,
     random: std.Random,
     node_pubkey: Pubkey,
-) Allocator.Error!VoteAccount {
-    // TODO: Uncomment once not required by bank init random
-    // if (!builtin.is_test) @compileError("only for testing");
-
+) !VoteAccount {
+    if (!builtin.is_test) @compileError("only for testing");
     const account = try createVoteAccount(
         allocator,
         node_pubkey,
@@ -422,21 +315,10 @@ pub fn createRandomVoteAccount(
         random.intRangeAtMost(u64, 1, 1_000_000),
         Clock.initRandom(random),
     );
-
-    return VoteAccount.fromAccountSharedData(
-        allocator,
-        account,
-    ) catch |err| {
-        switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            // We just created a 'valid' vote account, so the only possible
-            // error is `OutOfMemory`.
-            else => unreachable,
-        }
-    };
+    return VoteAccount.fromAccountSharedData(allocator, account);
 }
 
-const VoteAccountsArray = std.ArrayListUnmanaged(struct { Pubkey, StakeAndVoteAccount });
+const VoteAccountsArray = std.ArrayListUnmanaged(struct { Pubkey, VoteAccounts.VoteAccountAndDelegatedStake });
 
 pub fn createRandomVoteAccounts(
     allocator: Allocator,
@@ -458,8 +340,8 @@ pub fn createRandomVoteAccounts(
         const account = try createRandomVoteAccount(allocator, random, node_pubkey);
         const stake = random.intRangeAtMost(u64, 0, 1_000_000);
         vote_accounts.appendAssumeCapacity(.{ Pubkey.initRandom(random), .{
-            .stake = stake,
-            .account = account,
+            .delegated_stake = stake,
+            .vote_account = account,
         } });
     }
 
@@ -468,16 +350,16 @@ pub fn createRandomVoteAccounts(
 
 pub fn calculateStakedNodes(
     allocator: Allocator,
-    accounts: []struct { Pubkey, StakeAndVoteAccount },
-) Allocator.Error!StakedNodesMap {
+    accounts: []struct { Pubkey, VoteAccounts.VoteAccountAndDelegatedStake },
+) Allocator.Error!std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
     if (!builtin.is_test) @compileError("only for testing");
 
-    var staked_nodes = StakedNodesMap{};
+    var staked_nodes = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
     errdefer staked_nodes.deinit(allocator);
 
     for (accounts) |item| {
-        const stake = item[1].stake;
-        const account = item[1].account;
+        const stake = item[1].delegated_stake;
+        const account = item[1].vote_account;
         if (stake == 0) continue;
         const entry = try staked_nodes.getOrPut(allocator, account.getNodePubkey());
         if (entry.found_existing)
@@ -583,8 +465,6 @@ test "vote account serialize and deserialize" {
 }
 
 test "vote accounts serialize and deserialize" {
-    const Stakes = sig.core.Stakes;
-
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
@@ -592,27 +472,9 @@ test "vote accounts serialize and deserialize" {
     var vote_accounts = VoteAccounts{};
     defer vote_accounts.deinit(allocator);
 
-    var stakes = try Stakes(.delegation).init(allocator);
-    defer stakes.deinit(allocator);
-
-    // Add stake delegation for the vote pubket for the calculate stake context.
-    const vote_pubkey = Pubkey.initRandom(random);
-    try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
-        .voter_pubkey = vote_pubkey,
-        .stake = 10,
-        .activation_epoch = std.math.maxInt(u64),
-        .deactivation_epoch = std.math.maxInt(u64),
-        .deprecated_warmup_cooldown_rate = 0,
-    });
-
     // Insert a valid vote account
     var account = try createRandomVoteAccount(allocator, random, Pubkey.initRandom(random));
-    _ = try vote_accounts.insert(
-        allocator,
-        vote_pubkey,
-        try account.clone(allocator),
-        .init(.delegation, &stakes, null),
-    );
+    _ = try vote_accounts.insert(allocator, Pubkey.initRandom(random), account, 10);
 
     { // Valid serialization and deserialization
         const serialized = try bincode.writeAlloc(allocator, vote_accounts, .{});
@@ -628,19 +490,16 @@ test "vote accounts serialize and deserialize" {
             vote_accounts.vote_accounts.count(),
             deserialized.vote_accounts.count(),
         );
-        for (
-            vote_accounts.vote_accounts.keys(),
-            vote_accounts.vote_accounts.values(),
-        ) |key, value| {
-            const actual_value = deserialized.vote_accounts.get(key) orelse
-                return error.VoteAccountNotFound;
-            try std.testing.expectEqual(value.stake, actual_value.stake);
-            try std.testing.expect(value.account.account.equals(&actual_value.account.account));
-            try std.testing.expect(value.account.state.equals(&actual_value.account.state));
+        for (vote_accounts.vote_accounts.keys(), vote_accounts.vote_accounts.values()) |key, value| {
+            const deserialized_value = deserialized.vote_accounts.get(key) orelse
+                @panic("key not found in deserialized vote accounts");
+            try std.testing.expectEqual(value.delegated_stake, deserialized_value.delegated_stake);
+            try std.testing.expect(value.vote_account.account.equals(&deserialized_value.vote_account.account));
+            try std.testing.expect(value.vote_account.state.equals(&deserialized_value.vote_account.state));
         }
         for (vote_accounts.staked_nodes.keys(), vote_accounts.staked_nodes.values()) |key, value| {
             const deserialized_value = deserialized.staked_nodes.get(key) orelse
-                return error.NodeNotFound;
+                @panic("key not found in deserialized staked nodes");
             try std.testing.expectEqual(value, deserialized_value);
         }
     }
@@ -650,7 +509,7 @@ test "vote accounts serialize and deserialize" {
     try vote_accounts.vote_accounts.put(
         allocator,
         Pubkey.initRandom(random),
-        .{ .stake = 0, .account = account },
+        .{ .delegated_stake = 0, .vote_account = account },
     );
 
     { // Invalid serialization and deserialization
@@ -666,8 +525,6 @@ test "vote accounts serialize and deserialize" {
 }
 
 test "staked nodes" {
-    const Stakes = sig.core.Stakes;
-
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
@@ -678,10 +535,10 @@ test "staked nodes" {
         64,
         1024,
     );
-    defer accounts.deinit(allocator);
-
-    var stakes = try Stakes(.delegation).init(allocator);
-    defer stakes.deinit(allocator);
+    defer {
+        for (accounts.items) |item| item[1].deinit(allocator);
+        accounts.deinit(allocator);
+    }
 
     var vote_accounts = VoteAccounts{};
     defer vote_accounts.deinit(allocator);
@@ -689,35 +546,19 @@ test "staked nodes" {
     // Add vote accounts and check staked nodes
     for (accounts.items, 0..) |item, i| {
         const pubkey = item[0];
-        const stake = item[1].stake;
-        const account = item[1].account;
+        const stake = item[1].delegated_stake;
+        const account = item[1].vote_account;
 
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
-            .voter_pubkey = pubkey,
-            .stake = stake,
-            .activation_epoch = std.math.maxInt(u64),
-            .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
-        });
-
-        const maybe_old = try vote_accounts.insert(
-            allocator,
-            pubkey,
-            account,
-            .init(.delegation, &stakes, null),
-        );
+        const maybe_old = try vote_accounts.insert(allocator, pubkey, account, stake);
         defer if (maybe_old) |old| old.deinit(allocator);
 
-        if ((i + 1) % 128 == 0) {
-            var expected_staked_nodes = try calculateStakedNodes(
-                allocator,
-                accounts.items[0 .. i + 1],
-            );
+        if ((i + 1) % 1 == 0) {
+            var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items[0 .. i + 1]);
             defer expected_staked_nodes.deinit(allocator);
-            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, value| {
+            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, expected_value| {
                 const actual_value = vote_accounts.staked_nodes.get(key) orelse
-                    return error.NodeNotFound;
-                try std.testing.expectEqual(value, actual_value);
+                    @panic("key not found in actual staked nodes");
+                try std.testing.expectEqual(expected_value, actual_value);
             }
         }
     }
@@ -725,15 +566,16 @@ test "staked nodes" {
     // Remove some vote accounts
     for (0..256) |i| {
         const index = random.intRangeLessThan(u64, 0, accounts.items.len);
-        const pubkey, _ = accounts.swapRemove(index);
-        try vote_accounts.remove(allocator, pubkey);
-        if ((i + 1) % 32 == 0) {
+        const pubkey, const account_and_stake = accounts.swapRemove(index);
+        account_and_stake.deinit(allocator);
+        vote_accounts.remove(allocator, pubkey);
+        if ((i + 1) % 1 == 0) {
             var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items);
             defer expected_staked_nodes.deinit(allocator);
-            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, value| {
+            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, expected_value| {
                 const actual_value = vote_accounts.staked_nodes.get(key) orelse
                     @panic("key not found in actual staked nodes");
-                try std.testing.expectEqual(value, actual_value);
+                try std.testing.expectEqual(expected_value, actual_value);
             }
         }
     }
@@ -742,21 +584,21 @@ test "staked nodes" {
     for (0..2048) |i| {
         const index = random.intRangeLessThan(u64, 0, accounts.items.len);
         const pubkey, const account_and_stake = accounts.items[index];
-        const old_stake = account_and_stake.stake;
+        const old_stake = account_and_stake.delegated_stake;
         const new_stake = random.intRangeAtMost(u64, 0, 1_000_000);
         if (new_stake < old_stake) {
-            try vote_accounts.subStake(pubkey, old_stake - new_stake);
+            vote_accounts.subStake(pubkey, old_stake - new_stake);
         } else {
             try vote_accounts.addStake(allocator, pubkey, new_stake - old_stake);
         }
-        accounts.items[index][1].stake = new_stake;
-        if ((i + 1) % 128 == 0) {
+        accounts.items[index][1].delegated_stake = new_stake;
+        if ((i + 1) % 1 == 0) {
             var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items);
             defer expected_staked_nodes.deinit(allocator);
-            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, value| {
+            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, expected_value| {
                 const actual_value = vote_accounts.staked_nodes.get(key) orelse
                     @panic("key not found in actual staked nodes");
-                try std.testing.expectEqual(value, actual_value);
+                try std.testing.expectEqual(expected_value, actual_value);
             }
         }
     }
@@ -764,15 +606,16 @@ test "staked nodes" {
     // Remove everything
     while (accounts.items.len > 0) {
         const index = random.intRangeLessThan(u64, 0, accounts.items.len);
-        const pubkey, _ = accounts.swapRemove(index);
-        try vote_accounts.remove(allocator, pubkey);
-        if (accounts.items.len % 32 == 0) {
+        const pubkey, const account_and_stake = accounts.swapRemove(index);
+        account_and_stake.deinit(allocator);
+        vote_accounts.remove(allocator, pubkey);
+        if ((accounts.items.len + 1) % 1 == 0) {
             var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items);
             defer expected_staked_nodes.deinit(allocator);
-            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, value| {
+            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, expected_value| {
                 const actual_value = vote_accounts.staked_nodes.get(key) orelse
                     @panic("key not found in actual staked nodes");
-                try std.testing.expectEqual(value, actual_value);
+                try std.testing.expectEqual(expected_value, actual_value);
             }
         }
     }
@@ -780,92 +623,43 @@ test "staked nodes" {
 }
 
 test "staked nodes update" {
-    const Stakes = sig.core.Stakes;
-
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
-
-    var stakes = try Stakes(.delegation).init(allocator);
-    defer stakes.deinit(allocator);
 
     var vote_accounts = VoteAccounts{};
     defer vote_accounts.deinit(allocator);
 
     const pubkey = Pubkey.initRandom(random);
     const node_pubkey = Pubkey.initRandom(random);
-    const account_0 = try createRandomVoteAccount(
-        allocator,
-        random,
-        node_pubkey,
-    );
+    const account_0 = try createRandomVoteAccount(allocator, random, node_pubkey);
+    defer account_0.deinit(allocator);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
-            .voter_pubkey = pubkey,
-            .stake = 42,
-            .activation_epoch = std.math.maxInt(u64),
-            .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
-        });
-
-        const maybe_old = try vote_accounts.insert(
-            allocator,
-            pubkey,
-            try account_0.clone(allocator),
-            .init(.delegation, &stakes, null),
-        );
-
+        const maybe_old = try vote_accounts.insert(allocator, pubkey, account_0, 42);
         try std.testing.expectEqual(null, maybe_old);
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);
     }
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
-            .voter_pubkey = pubkey,
-            .stake = 0,
-            .activation_epoch = std.math.maxInt(u64),
-            .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
-        });
-
-        const maybe_old = try vote_accounts.insert(
-            allocator,
-            pubkey,
-            account_0,
-            .init(.delegation, &stakes, null),
-        );
+        const maybe_old = try vote_accounts.insert(allocator, pubkey, account_0, 0);
         defer maybe_old.?.deinit(allocator);
-
-        try std.testing.expectEqual(42, maybe_old.?.stake);
-        try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        try std.testing.expectEqual(42, maybe_old.?.delegated_stake);
+        try std.testing.expect(account_0.equals(&maybe_old.?.vote_account));
         try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);
     }
 
     const account_1 = try createRandomVoteAccount(allocator, random, node_pubkey);
+    defer account_1.deinit(allocator);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
-            .voter_pubkey = pubkey,
-            .stake = 0,
-            .activation_epoch = std.math.maxInt(u64),
-            .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
-        });
-
-        const maybe_old = try vote_accounts.insert(
-            allocator,
-            pubkey,
-            account_1,
-            .init(.delegation, &stakes, null),
-        );
+        const maybe_old = try vote_accounts.insert(allocator, pubkey, account_1, 0);
         defer maybe_old.?.deinit(allocator);
-
-        try std.testing.expectEqual(42, maybe_old.?.stake);
-        try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        try std.testing.expectEqual(42, maybe_old.?.delegated_stake);
+        try std.testing.expect(account_0.equals(&maybe_old.?.vote_account));
         try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);
@@ -873,26 +667,13 @@ test "staked nodes update" {
 
     const new_node_pubkey = Pubkey.initRandom(random);
     const account_2 = try createRandomVoteAccount(allocator, random, new_node_pubkey);
+    defer account_2.deinit(allocator);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
-            .voter_pubkey = pubkey,
-            .stake = 0,
-            .activation_epoch = std.math.maxInt(u64),
-            .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
-        });
-
-        const maybe_old = try vote_accounts.insert(
-            allocator,
-            pubkey,
-            account_2,
-            .init(.delegation, &stakes, null),
-        );
+        const maybe_old = try vote_accounts.insert(allocator, pubkey, account_2, 0);
         defer maybe_old.?.deinit(allocator);
-
-        try std.testing.expectEqual(42, maybe_old.?.stake);
-        try std.testing.expect(account_1.equals(&maybe_old.?.account));
+        try std.testing.expectEqual(42, maybe_old.?.delegated_stake);
+        try std.testing.expect(account_1.equals(&maybe_old.?.vote_account));
         try std.testing.expect(account_2.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
@@ -901,14 +682,9 @@ test "staked nodes update" {
 }
 
 test "staked nodes zero stake" {
-    const Stakes = sig.core.Stakes;
-
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
-
-    var stakes = try Stakes(.delegation).init(allocator);
-    defer stakes.deinit(allocator);
 
     var vote_accounts = VoteAccounts{};
     defer vote_accounts.deinit(allocator);
@@ -916,23 +692,10 @@ test "staked nodes zero stake" {
     const pubkey = Pubkey.initRandom(random);
     const node_pubkey = Pubkey.initRandom(random);
     const account_0 = try createRandomVoteAccount(allocator, random, node_pubkey);
+    defer account_0.deinit(allocator);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
-            .voter_pubkey = pubkey,
-            .stake = 0,
-            .activation_epoch = std.math.maxInt(u64),
-            .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
-        });
-
-        const maybe_old = try vote_accounts.insert(
-            allocator,
-            pubkey,
-            account_0,
-            .init(.delegation, &stakes, null),
-        );
-
+        const maybe_old = try vote_accounts.insert(allocator, pubkey, account_0, 0);
         try std.testing.expectEqual(null, maybe_old);
         try std.testing.expect(account_0.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(0, vote_accounts.getDelegatedStake(pubkey));
@@ -941,26 +704,13 @@ test "staked nodes zero stake" {
 
     const new_node_pubkey = Pubkey.initRandom(random);
     const account_1 = try createRandomVoteAccount(allocator, random, new_node_pubkey);
+    defer account_1.deinit(allocator);
 
     {
-        try stakes.stake_delegations.put(allocator, Pubkey.initRandom(random), .{
-            .voter_pubkey = pubkey,
-            .stake = 0,
-            .activation_epoch = std.math.maxInt(u64),
-            .deactivation_epoch = std.math.maxInt(u64),
-            .deprecated_warmup_cooldown_rate = 0,
-        });
-
-        const maybe_old = try vote_accounts.insert(
-            allocator,
-            pubkey,
-            account_1,
-            .init(.delegation, &stakes, null),
-        );
+        const maybe_old = try vote_accounts.insert(allocator, pubkey, account_1, 0);
         defer maybe_old.?.deinit(allocator);
-
-        try std.testing.expectEqual(0, maybe_old.?.stake);
-        try std.testing.expect(account_0.equals(&maybe_old.?.account));
+        try std.testing.expectEqual(0, maybe_old.?.delegated_stake);
+        try std.testing.expect(account_0.equals(&maybe_old.?.vote_account));
         try std.testing.expect(account_1.equals(&vote_accounts.getAccount(pubkey).?));
         try std.testing.expectEqual(0, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(null, vote_accounts.staked_nodes.get(node_pubkey));
