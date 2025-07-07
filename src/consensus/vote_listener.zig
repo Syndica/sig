@@ -1462,6 +1462,84 @@ test verifyVoteTransaction {
     );
 }
 
+test "simple usage" {
+    const allocator = std.testing.allocator;
+
+    var bank_forks_rw = sig.sync.RwMux(BankForksStub).init(blk: {
+        var stakes: sig.core.stake.EpochStakes = try .initEmpty(allocator);
+        defer stakes.deinit(allocator);
+
+        break :blk try .init(allocator, .DEFAULT, .{
+            .slot = 0,
+            .constants = .{
+                .parent_slot = 0,
+                .parent_hash = .ZEROES,
+                .block_height = 1,
+                .collector_id = .ZEROES,
+                .max_tick_height = 1,
+                .fee_rate_governor = .DEFAULT,
+                .epoch_reward_status = .inactive,
+            },
+            .state = .GENESIS,
+            .epoch_constants = .{
+                .hashes_per_tick = 1,
+                .ticks_per_slot = 1,
+                .ns_per_slot = 1,
+                .genesis_creation_time = 1,
+                .slots_per_year = 1,
+                .stakes = stakes,
+            },
+        });
+    });
+    defer {
+        const bank_forks, _ = bank_forks_rw.writeWithLock();
+        bank_forks.deinit(allocator);
+    }
+
+    var gossip_table_rw: sig.sync.RwMux(sig.gossip.GossipTable) = .init(
+        try .init(allocator, allocator),
+    );
+    defer {
+        const gossip_table, _ = gossip_table_rw.writeWithLock();
+        gossip_table.deinit();
+    }
+
+    const replay_votes_channel: *sig.sync.Channel(vote_parser.ParsedVote) = try .create(allocator);
+    defer replay_votes_channel.destroy();
+
+    const verified_vote_channel: *sig.sync.Channel(VerifiedVote) = try .create(allocator);
+    defer verified_vote_channel.destroy();
+
+    const gossip_verified_vote_hash_channel: *sig.sync.Channel(GossipVerifiedVoteHash) =
+        try .create(allocator);
+    defer gossip_verified_vote_hash_channel.destroy();
+
+    var vote_tracker: VoteTracker = .EMPTY;
+    defer vote_tracker.deinit(allocator);
+
+    var exit: std.atomic.Value(bool) = .init(false);
+    const exit_cond: sig.sync.ExitCondition = .{ .unordered = &exit };
+
+    const vote_listener: VoteListener = try .init(allocator, exit_cond, .noop, &vote_tracker, .{
+        .bank_forks_rw = &bank_forks_rw,
+        .gossip_table_rw = &gossip_table_rw,
+        .ledger_db = {},
+        .receivers = .{
+            .replay_votes = replay_votes_channel,
+        },
+        .senders = .{
+            .verified_vote = verified_vote_channel,
+            .gossip_verified_vote_hash = gossip_verified_vote_hash_channel,
+            .bank_notification = null,
+            .duplicate_confirmed_slot = null,
+            .subscriptions = .{},
+        },
+    });
+    defer vote_listener.joinAndDeinit();
+    std.time.sleep(sig.time.Duration.asNanos(.fromMillis(100)));
+    exit_cond.setExit();
+}
+
 test VoteListener {
     const allocator = std.testing.allocator;
 
