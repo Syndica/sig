@@ -31,14 +31,12 @@ const schema = ledger.schema.schema;
 /// or reaching consensus on a block.
 pub const LedgerResultWriter = struct {
     allocator: Allocator,
-    logger: ScopedLogger(@typeName(Self)),
+    logger: ScopedLogger(@typeName(LedgerResultWriter)),
     db: BlockstoreDB,
     // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(Slot),
     scan_and_fix_roots_metrics: ScanAndFixRootsMetrics,
-
-    const Self = @This();
 
     pub fn init(
         allocator: Allocator,
@@ -50,7 +48,7 @@ pub const LedgerResultWriter = struct {
     ) !LedgerResultWriter {
         return .{
             .allocator = allocator,
-            .logger = logger.withScope(@typeName(Self)),
+            .logger = logger.withScope(@typeName(LedgerResultWriter)),
             .db = db,
             .lowest_cleanup_slot = lowest_cleanup_slot,
             .max_root = max_root,
@@ -60,7 +58,7 @@ pub const LedgerResultWriter = struct {
 
     /// agave: write_transaction_status
     pub fn writeTransactionStatus(
-        self: *Self,
+        self: *LedgerResultWriter,
         slot: Slot,
         signature: Signature,
         writeable_keys: ArrayList(Pubkey),
@@ -87,7 +85,7 @@ pub const LedgerResultWriter = struct {
 
     /// agave: insert_bank_hash
     pub fn insertBankHash(
-        self: *Self,
+        self: *LedgerResultWriter,
         slot: Slot,
         frozen_hash: Hash,
         is_duplicate_confirmed: bool,
@@ -109,7 +107,7 @@ pub const LedgerResultWriter = struct {
 
     /// agave: set_duplicate_confirmed_slots_and_hashes
     pub fn setDuplicateConfirmedSlotsAndHashes(
-        self: *Self,
+        self: *LedgerResultWriter,
         duplicate_confirmed_slot_hashes: []const struct { Slot, Hash },
     ) !void {
         var setter = try self.setDuplicateConfirmedSlotsAndHashesIncremental();
@@ -126,7 +124,7 @@ pub const LedgerResultWriter = struct {
 
     /// Returns a struct which can be used to enact the same operation as `setDuplicateConfirmedSlotsAndHashes`, incrementally.
     pub fn setDuplicateConfirmedSlotsAndHashesIncremental(
-        self: *Self,
+        self: *LedgerResultWriter,
     ) !SetDuplicateConfirmedSlotsAndHashesIncremental {
         return .{
             .result_writer = self,
@@ -136,7 +134,7 @@ pub const LedgerResultWriter = struct {
     }
 
     pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
-        result_writer: *Self,
+        result_writer: *LedgerResultWriter,
         write_batch: BlockstoreDB.WriteBatch,
         is_committed_or_cancelled: bool,
 
@@ -182,7 +180,7 @@ pub const LedgerResultWriter = struct {
     };
 
     /// agave: set_roots
-    pub fn setRoots(self: *Self, rooted_slots: []const Slot) !void {
+    pub fn setRoots(self: *LedgerResultWriter, rooted_slots: []const Slot) !void {
         var setter = try self.setRootsIncremental();
         defer setter.deinit();
         errdefer setter.cancel();
@@ -191,7 +189,7 @@ pub const LedgerResultWriter = struct {
     }
 
     /// Returns a struct which can be used to enact the same operation as `setRoots`, incrementally.
-    pub fn setRootsIncremental(self: *Self) !SetRootsIncremental {
+    pub fn setRootsIncremental(self: *LedgerResultWriter) !SetRootsIncremental {
         return .{
             .result_writer = self,
             .write_batch = try self.db.initWriteBatch(),
@@ -201,7 +199,7 @@ pub const LedgerResultWriter = struct {
     }
 
     pub const SetRootsIncremental = struct {
-        result_writer: *Self,
+        result_writer: *LedgerResultWriter,
         write_batch: BlockstoreDB.WriteBatch,
         max_new_rooted_slot: Slot,
         is_committed_or_cancelled: bool,
@@ -243,7 +241,7 @@ pub const LedgerResultWriter = struct {
 
     /// agave: mark_slots_as_if_rooted_normally_at_startup
     pub fn markSlotsAsIfRootedNormallyAtStartup(
-        self: *Self,
+        self: *LedgerResultWriter,
         slot_maybe_hashes: []const struct { Slot, ?Hash },
         with_hash: bool,
     ) !void {
@@ -289,7 +287,7 @@ pub const LedgerResultWriter = struct {
     ///  - `exit`: Exit early if this flag is set to `true`.
     /// agave: scan_and_fix_roots
     pub fn scanAndFixRoots(
-        self: *Self,
+        self: *LedgerResultWriter,
         maybe_start_root: ?Slot,
         maybe_end_slot: ?Slot,
         exit: std.atomic.Value(bool),
@@ -366,7 +364,7 @@ pub const LedgerResultWriter = struct {
     /// root as connected such that the node that joined midway through can
     /// have their slots considered connected.
     /// agave: set_and_chain_connected_on_root_and_next_slots
-    pub fn setAndChainConnectedOnRootAndNextSlots(self: *Self, root: Slot) !void {
+    pub fn setAndChainConnectedOnRootAndNextSlots(self: *LedgerResultWriter, root: Slot) !void {
         var root_slot_meta: SlotMeta = try self.db.get(self.allocator, schema.slot_meta, root) orelse
             SlotMeta.init(self.allocator, root, null);
         defer root_slot_meta.deinit();
@@ -409,7 +407,7 @@ pub const LedgerResultWriter = struct {
         try self.db.commit(&write_batch);
     }
 
-    fn isRoot(self: *Self, slot: Slot) !bool {
+    fn isRoot(self: *LedgerResultWriter, slot: Slot) !bool {
         return try self.db.get(self.allocator, schema.rooted_slots, slot) orelse false;
     }
 };
