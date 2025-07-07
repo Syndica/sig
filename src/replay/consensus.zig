@@ -376,7 +376,12 @@ fn checkAndHandleNewRoot(
     try ledger_result_writer.setRoots(rooted_slots);
 
     // Audit: The rest of the code maps to Self::handle_new_root in Agave.
+    // Update the slot tracker.
+    // Set new root.
     slot_tracker.root = new_root;
+    // Prune non rooted slots
+    try slot_tracker.pruneNonRooted(allocator);
+
     // TODO
     // - Prune program cache bank_forks.read().unwrap().prune_program_cache(new_root);
     // - Extra operations as part of setting new root:
