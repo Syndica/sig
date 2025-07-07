@@ -235,7 +235,7 @@ const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(
     sig.core.Slot,
     sig.core.Hash,
 );
-const DuplicateSlot = sig.utils.collections.SortedMapUnmanaged(
+const DuplicateSlots = sig.utils.collections.SortedMapUnmanaged(
     sig.core.Slot,
     void,
 );
@@ -327,7 +327,7 @@ const SlotFrozenState = struct {
         logger: sig.trace.Logger,
         slot: sig.core.Slot,
         frozen_hash: sig.core.Hash,
-        duplicate_slots_tracker: *const DuplicateSlot,
+        duplicate_slots_tracker: *const DuplicateSlots,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
@@ -361,7 +361,7 @@ pub const DeadState = struct {
     pub fn fromState(
         logger: sig.trace.Logger,
         slot: sig.core.Slot,
-        duplicate_slots_tracker: *const DuplicateSlot,
+        duplicate_slots_tracker: *const DuplicateSlots,
         duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
@@ -693,7 +693,7 @@ fn processDuplicateSlots(
     allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
     duplicate_slots_receiver: *sig.sync.Channel(sig.core.Slot),
-    duplicate_slots_tracker: *DuplicateSlot,
+    duplicate_slots_tracker: *DuplicateSlots,
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
     slot_tracker_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
     progress: *const sig.consensus.ProgressMap,
@@ -1122,7 +1122,7 @@ const check_slot_agrees_with_cluster = struct {
         logger: sig.trace.Logger,
         slot: sig.core.Slot,
         root: sig.core.Slot,
-        duplicate_slots_tracker: *DuplicateSlot,
+        duplicate_slots_tracker: *DuplicateSlots,
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
         duplicate_state: DuplicateState,
     ) !void {
@@ -1984,7 +1984,7 @@ fn testStateDuplicateThenSlotFrozen(initial_slot_hash: ?sig.core.Hash) !void {
     // 2) None (a slot that hasn't even started replay yet).
     const root: Slot = 0;
 
-    var duplicate_slots_tracker: DuplicateSlot = .empty;
+    var duplicate_slots_tracker: DuplicateSlots = .empty;
     defer duplicate_slots_tracker.deinit(allocator);
 
     const duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
@@ -2096,7 +2096,7 @@ test "state ancestor confirmed descendant duplicate" {
     );
     const root = 0;
 
-    var duplicate_slots_tracker: DuplicateSlot = .empty;
+    var duplicate_slots_tracker: DuplicateSlots = .empty;
     defer duplicate_slots_tracker.deinit(allocator);
 
     var purge_repair_slot_counter: PurgeRepairSlotCounters = .empty;
@@ -2245,7 +2245,7 @@ test "state ancestor duplicate descendant confirmed" {
     );
     const root = 0;
 
-    var duplicate_slots_tracker: DuplicateSlot = .empty;
+    var duplicate_slots_tracker: DuplicateSlots = .empty;
     defer duplicate_slots_tracker.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
@@ -2395,7 +2395,7 @@ test "state descendant confirmed ancestor duplicate" {
 
     const root: Slot = 0;
 
-    var duplicate_slots_tracker: DuplicateSlot = .empty;
+    var duplicate_slots_tracker: DuplicateSlots = .empty;
     defer duplicate_slots_tracker.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
@@ -2493,7 +2493,7 @@ test "duplicate confirmed and epoch slots frozen" {
 
     const root: Slot = 0;
 
-    var duplicate_slots_tracker: DuplicateSlot = .empty;
+    var duplicate_slots_tracker: DuplicateSlots = .empty;
     defer duplicate_slots_tracker.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
@@ -2604,7 +2604,7 @@ test "duplicate confirmed and epoch slots frozen mismatched" {
 
     const root: Slot = 0;
 
-    var duplicate_slots_tracker: DuplicateSlot = .empty;
+    var duplicate_slots_tracker: DuplicateSlots = .empty;
     defer duplicate_slots_tracker.deinit(allocator);
 
     var duplicate_confirmed_slots: DuplicateConfirmedSlots = .empty;
