@@ -546,6 +546,21 @@ const CircBufV1 = struct {
         }
         return if (self.idx < self.buf.len) self.buf[self.idx] else null;
     }
+
+    pub fn equals(self: CircBufV1, other: CircBufV1) bool {
+        if (self.is_empty != other.is_empty) return false;
+        if (self.is_empty) return true;
+
+        var self_idx = self.idx;
+        var other_idx = other.idx;
+        for (0..MAX_PRIOR_VOTERS) |_| {
+            if (!std.meta.eql(self.buf[self_idx], other.buf[other_idx])) return false;
+            self_idx = (self_idx + 1) % MAX_PRIOR_VOTERS;
+            other_idx = (other_idx + 1) % MAX_PRIOR_VOTERS;
+        }
+
+        return true;
+    }
 };
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L20
@@ -880,6 +895,35 @@ pub const VoteState = struct {
             .epoch_credits = try self.epoch_credits.clone(),
             .last_timestamp = self.last_timestamp,
         };
+    }
+
+    pub fn equals(self: *const VoteState, other: *const VoteState) bool {
+        if (self.votes.items.len != other.votes.items.len) return false;
+        for (self.votes.items, other.votes.items) |a, b|
+            if (!std.meta.eql(a, b)) return false;
+
+        if (self.voters.count() != other.voters.count()) return false;
+        // Sorted map keys requires a mutable pointer because it calls `sort` before
+        // returning keys. This is annoying, sort should be enforced when inserting.
+        var self_voters = self.voters.voters;
+        var other_voters = other.voters.voters;
+        for (self_voters.keys()) |key| {
+            const self_value = self_voters.get(key).?;
+            const other_value = other_voters.get(key) orelse return false;
+            if (!self_value.equals(&other_value)) return false;
+        }
+
+        if (!self.prior_voters.equals(other.prior_voters)) return false;
+
+        if (self.epoch_credits.items.len != other.epoch_credits.items.len) return false;
+        for (self.epoch_credits.items, other.epoch_credits.items) |a, b|
+            if (!std.meta.eql(a, b)) return false;
+
+        return self.node_pubkey.equals(&other.node_pubkey) and
+            self.withdrawer.equals(&other.withdrawer) and
+            self.commission == other.commission and
+            self.root_slot == other.root_slot and
+            std.meta.eql(self.last_timestamp, other.last_timestamp);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
