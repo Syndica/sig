@@ -1540,7 +1540,7 @@ test "simple usage" {
     exit_cond.setExit();
 }
 
-test VoteListener {
+test "check trackers" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(123);
