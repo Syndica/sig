@@ -27,6 +27,7 @@ const RwMux = sig.sync.RwMux;
 const BlockhashQueue = core.BlockhashQueue;
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
 const Hash = core.hash.Hash;
+const HardForks = core.HardForks;
 const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -507,42 +508,6 @@ pub fn ancestorsRandom(
 
     return .{ .ancestors = ancestors.unmanaged };
 }
-
-/// Analogous to [HardForks](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/hard_forks.rs#L13)
-pub const HardForks = struct {
-    items: []const SlotAndCount,
-
-    pub const SlotAndCount = struct { Slot, usize };
-
-    pub fn deinit(self: HardForks, allocator: std.mem.Allocator) void {
-        allocator.free(self.items);
-    }
-
-    pub fn clone(
-        self: HardForks,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!HardForks {
-        return .{ .items = try allocator.dupe(SlotAndCount, self.items) };
-    }
-
-    pub fn initRandom(
-        random: std.Random,
-        allocator: std.mem.Allocator,
-        max_list_entries: usize,
-    ) std.mem.Allocator.Error!HardForks {
-        const hard_forks_len = random.uintAtMost(usize, max_list_entries);
-
-        const self = try allocator.alloc(SlotAndCount, hard_forks_len);
-        errdefer allocator.free(self);
-
-        for (self) |*hard_fork| hard_fork.* = .{
-            random.int(Slot),
-            random.int(usize),
-        };
-
-        return .{ .items = self };
-    }
-};
 
 /// Analogous to [UnusedAccounts](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L123)
 pub const UnusedAccounts = struct {
