@@ -131,41 +131,53 @@ pub const LedgerResultWriter = struct {
         return .{
             .result_writer = self,
             .write_batch = try self.db.initWriteBatch(),
-            .is_committed = false,
+            .is_committed_or_cancelled = false,
         };
     }
+
     pub const SetDuplicateConfirmedSlotsAndHashesIncremental = struct {
         result_writer: *Self,
         write_batch: BlockstoreDB.WriteBatch,
-        is_committed: bool,
+        is_committed_or_cancelled: bool,
 
+        /// Asserts that either `self.cancel()` or `self.commit()` has been called.
         pub fn deinit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
-            std.debug.assert(self.is_committed);
+            std.debug.assert(self.is_committed_or_cancelled);
             self.write_batch.deinit();
         }
 
+        /// Should be called if `self` cannot be completed, e.g. in the error path:
+        /// ```zig
+        /// var setter = try ledger.setDuplicateConfirmedSlotsAndHashesIncremental();
+        /// defer setter.deinit();
+        /// errdefer setter.cancel();
+        /// ```
+        ///
+        /// Asserts `self.commit()` was not called before this.
+        pub fn cancel(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            self.is_committed_or_cancelled = true;
+        }
+
+        /// Asserts `self.cancel()` was not called before this.
+        pub fn commit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) !void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            try self.result_writer.db.commit(&self.write_batch);
+            self.is_committed_or_cancelled = true;
+        }
+
+        /// Asserts that neither of `self.cancel()` and `self.commit()` was called before this.
         pub fn addSlotAndHash(
             self: *SetDuplicateConfirmedSlotsAndHashesIncremental,
             slot: Slot,
             frozen_hash: Hash,
         ) !void {
-            std.debug.assert(!self.is_committed);
+            std.debug.assert(!self.is_committed_or_cancelled);
             const data: FrozenHashVersioned = .{ .current = .{
                 .frozen_hash = frozen_hash,
                 .is_duplicate_confirmed = true,
             } };
             try self.write_batch.put(schema.bank_hash, slot, data);
-        }
-
-        pub fn cancel(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) void {
-            std.debug.assert(!self.is_committed);
-            self.is_committed = true;
-        }
-
-        pub fn commit(self: *SetDuplicateConfirmedSlotsAndHashesIncremental) !void {
-            std.debug.assert(!self.is_committed);
-            try self.result_writer.db.commit(&self.write_batch);
-            self.is_committed = true;
         }
     };
 
@@ -184,7 +196,7 @@ pub const LedgerResultWriter = struct {
             .result_writer = self,
             .write_batch = try self.db.initWriteBatch(),
             .max_new_rooted_slot = 0,
-            .is_committed = false,
+            .is_committed_or_cancelled = false,
         };
     }
 
@@ -192,29 +204,40 @@ pub const LedgerResultWriter = struct {
         result_writer: *Self,
         write_batch: BlockstoreDB.WriteBatch,
         max_new_rooted_slot: Slot,
-        is_committed: bool,
+        is_committed_or_cancelled: bool,
 
+        /// Asserts that either `self.cancel()` or `self.commit()` has been called.
         pub fn deinit(self: *SetRootsIncremental) void {
-            std.debug.assert(self.is_committed);
+            std.debug.assert(self.is_committed_or_cancelled);
             self.write_batch.deinit();
         }
 
-        pub fn addRoot(self: *SetRootsIncremental, rooted_slot: Slot) !void {
-            std.debug.assert(!self.is_committed);
-            self.max_new_rooted_slot = @max(self.max_new_rooted_slot, rooted_slot);
-            try self.write_batch.put(schema.rooted_slots, rooted_slot, true);
-        }
-
+        /// Should be called if `self` cannot be completed, e.g. in the error path:
+        /// ```zig
+        /// var setter = try ledger.setRootsIncremental();
+        /// defer setter.deinit();
+        /// errdefer setter.cancel();
+        /// ```
+        ///
+        /// Asserts `self.commit()` was not called before this.
         pub fn cancel(self: *SetRootsIncremental) void {
-            std.debug.assert(!self.is_committed);
-            self.is_committed = true;
+            std.debug.assert(!self.is_committed_or_cancelled);
+            self.is_committed_or_cancelled = true;
         }
 
+        /// Asserts `self.cancel()` was not called before this.
         pub fn commit(self: *SetRootsIncremental) !void {
-            std.debug.assert(!self.is_committed);
+            std.debug.assert(!self.is_committed_or_cancelled);
             try self.result_writer.db.commit(&self.write_batch);
             _ = self.result_writer.max_root.fetchMax(self.max_new_rooted_slot, .monotonic);
-            self.is_committed = true;
+            self.is_committed_or_cancelled = true;
+        }
+
+        /// Asserts that neither of `self.cancel()` and `self.commit()` was called before this.
+        pub fn addRoot(self: *SetRootsIncremental, rooted_slot: Slot) !void {
+            std.debug.assert(!self.is_committed_or_cancelled);
+            self.max_new_rooted_slot = @max(self.max_new_rooted_slot, rooted_slot);
+            try self.write_batch.put(schema.rooted_slots, rooted_slot, true);
         }
     };
 
