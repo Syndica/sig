@@ -293,6 +293,42 @@ pub const ClusterConfirmedHash = struct {
         duplicate_confirmed,
         epoch_slots_frozen,
     };
+
+    /// Finds the cluster confirmed hash
+    ///
+    /// 1) If we have a frozen hash, check if it's been duplicate confirmed by cluster
+    ///    in turbine or gossip
+    /// 2) Otherwise poll `epoch_slots_frozen_slots` to see if we have a hash
+    ///
+    /// Note `epoch_slots_frozen_slots` is not populated from `EpochSlots` in gossip but actually
+    /// aggregated through hashes sent in response to requests from `ancestor_hashes_service`
+    ///
+    /// AKA: `getClusterConfirmedHashFromState` in agave.
+    fn fromState(
+        logger: sig.trace.Logger,
+        slot: sig.core.Slot,
+        duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
+        epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
+        fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
+        maybe_slot_frozen_hash: ?sig.core.Hash,
+    ) ?ClusterConfirmedHash {
+        const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
+        if (getDuplicateConfirmedHash(
+            logger,
+            fork_choice,
+            slot,
+            duplicate_confirmed_hash,
+            maybe_slot_frozen_hash,
+        )) |hash| return .{
+            .kind = .duplicate_confirmed,
+            .hash = hash,
+        };
+        const hash = epoch_slots_frozen_slots.get(slot) orelse return null;
+        return .{
+            .kind = .epoch_slots_frozen,
+            .hash = hash,
+        };
+    }
 };
 
 pub const SlotStatus = union(enum) {
@@ -332,19 +368,17 @@ const SlotFrozenState = struct {
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     ) SlotFrozenState {
-        const cluster_confirmed_hash = getClusterConfirmedHashFromState(
-            logger,
-            slot,
-            duplicate_confirmed_slots,
-            epoch_slots_frozen_slots,
-            fork_choice,
-            frozen_hash,
-        );
-        const is_slot_duplicate = duplicate_slots_tracker.contains(slot);
         return .{
             .frozen_hash = frozen_hash,
-            .cluster_confirmed_hash = cluster_confirmed_hash,
-            .is_slot_duplicate = is_slot_duplicate,
+            .is_slot_duplicate = duplicate_slots_tracker.contains(slot),
+            .cluster_confirmed_hash = .fromState(
+                logger,
+                slot,
+                duplicate_confirmed_slots,
+                epoch_slots_frozen_slots,
+                fork_choice,
+                frozen_hash,
+            ),
         };
     }
 };
@@ -366,18 +400,16 @@ pub const DeadState = struct {
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
     ) DeadState {
-        const cluster_confirmed_hash = getClusterConfirmedHashFromState(
-            logger,
-            slot,
-            duplicate_confirmed_slots,
-            epoch_slots_frozen_slots,
-            fork_choice,
-            null,
-        );
-        const is_slot_duplicate = duplicate_slots_tracker.contains(slot);
         return .{
-            .cluster_confirmed_hash = cluster_confirmed_hash,
-            .is_slot_duplicate = is_slot_duplicate,
+            .is_slot_duplicate = duplicate_slots_tracker.contains(slot),
+            .cluster_confirmed_hash = .fromState(
+                logger,
+                slot,
+                duplicate_confirmed_slots,
+                epoch_slots_frozen_slots,
+                fork_choice,
+                null,
+            ),
         };
     }
 };
@@ -396,11 +428,11 @@ pub const DuplicateState = struct {
         // We can only skip marking duplicate if this slot has already been
         // duplicate confirmed, any weaker confirmation levels are not sufficient
         // to skip marking the slot as duplicate.
-        const duplicate_confirmed_hash = getDuplicateConfirmedHashFromState(
+        const duplicate_confirmed_hash = getDuplicateConfirmedHash(
             logger,
-            slot,
-            duplicate_confirmed_slots,
             fork_choice,
+            slot,
+            duplicate_confirmed_slots.get(slot),
             slot_status.slotHash(),
         );
         return .{
@@ -425,11 +457,11 @@ pub const EpochSlotsFrozenState = struct {
         slot_status: SlotStatus,
         is_popular_pruned: bool,
     ) EpochSlotsFrozenState {
-        const duplicate_confirmed_hash = getDuplicateConfirmedHashFromState(
+        const duplicate_confirmed_hash = getDuplicateConfirmedHash(
             logger,
-            slot,
-            duplicate_confirmed_slots,
             fork_choice,
+            slot,
+            duplicate_confirmed_slots.get(slot),
             slot_status.slotHash(),
         );
         return .{
@@ -742,62 +774,14 @@ fn processDuplicateSlots(
     }
 }
 
-/// Finds the cluster confirmed hash
-///
-/// 1) If we have a frozen hash, check if it's been duplicate confirmed by cluster
-///    in turbine or gossip
-/// 2) Otherwise poll `epoch_slots_frozen_slots` to see if we have a hash
-///
-/// Note `epoch_slots_frozen_slots` is not populated from `EpochSlots` in gossip but actually
-/// aggregated through hashes sent in response to requests from `ancestor_hashes_service`
-fn getClusterConfirmedHashFromState(
-    logger: sig.trace.Logger,
-    slot: sig.core.Slot,
-    duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-    epoch_slots_frozen_slots: *const EpochSlotsFrozenSlots,
-    fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
-    maybe_slot_frozen_hash: ?sig.core.Hash,
-) ?ClusterConfirmedHash {
-    const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
-    if (getDuplicateConfirmedHash(
-        logger,
-        fork_choice,
-        slot,
-        duplicate_confirmed_hash,
-        maybe_slot_frozen_hash,
-    )) |hash| return .{
-        .kind = .duplicate_confirmed,
-        .hash = hash,
-    };
-    const hash = epoch_slots_frozen_slots.get(slot) orelse return null;
-    return .{
-        .kind = .epoch_slots_frozen,
-        .hash = hash,
-    };
-}
-
-fn getDuplicateConfirmedHashFromState(
-    logger: sig.trace.Logger,
-    slot: sig.core.Slot,
-    duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-    fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
-    maybe_slot_frozen_hash: ?sig.core.Hash,
-) ?sig.core.Hash {
-    const duplicate_confirmed_hash = duplicate_confirmed_slots.get(slot);
-    return getDuplicateConfirmedHash(
-        logger,
-        fork_choice,
-        slot,
-        duplicate_confirmed_hash,
-        maybe_slot_frozen_hash,
-    );
-}
-
 /// Finds the duplicate confirmed hash for a slot.
 ///
 /// 1) If `maybe_slot_frozen_hash != null and isDuplicateConfirmed(maybe_slot_frozen_hash.?)`, `return maybe_slot_frozen_hash.?`
 /// 2) If `maybe_duplicate_confirmed_hash != null`, `return maybe_duplicate_confirmed_hash.?`
 /// 3) Else return null
+///
+/// NOTE: the agave version of this is always called the same way, so the duplicated logic has been
+/// deduplicated into this function, which is why it is not quite the same.
 fn getDuplicateConfirmedHash(
     logger: sig.trace.Logger,
     fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
