@@ -178,7 +178,8 @@ pub const EpochTracker = struct {
 
 test "SlotTracker.prune removes all slots less than root" {
     const allocator = std.testing.allocator;
-    var tracker = SlotTracker.init(0);
+    const root = 4;
+    var tracker = SlotTracker.init(root);
     defer tracker.deinit(allocator);
 
     // Add slots 1, 2, 3, 4, 5

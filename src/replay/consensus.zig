@@ -1212,6 +1212,9 @@ test "checkAndHandleNewRoot - success" {
         hash3.slot,
     );
 
-    try testing.expectEqual(2, fixture.progress.map.count());
+    try testing.expectEqual(1, fixture.progress.map.count());
+    for (slot_tracker.slots.keys()) |remaining_slots| {
+        try testing.expect(remaining_slots >= hash3.slot);
+    }
     try testing.expect(!fixture.progress.map.contains(hash1.slot));
 }
