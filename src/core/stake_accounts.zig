@@ -24,7 +24,7 @@ const RwMux = sig.sync.RwMux;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-const StakeAccounts = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAccount);
+pub const StakeAccounts = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAccount);
 
 pub const StakeAccount = struct {
     account: AccountSharedData,
@@ -39,7 +39,10 @@ pub const StakeAccount = struct {
             @panic("StakeAccount does not have a delegation");
     }
 
-    pub fn fromAccountSharedData(account: AccountSharedData) !StakeAccount {
+    /// Takes ownership of `account`.
+    pub fn fromAccountSharedData(allocator: Allocator, account: AccountSharedData) !StakeAccount {
+        errdefer account.deinit(allocator);
+
         if (!stake_program.ID.equals(&account.owner)) return error.InvalidOwner;
 
         const state = try bincode.readFromSlice(
