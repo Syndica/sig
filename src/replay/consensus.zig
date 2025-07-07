@@ -222,7 +222,7 @@ fn maybeRefreshLastVote(
     // Add after transaction scheduling.
     if (maybe_last_vote_tx_blockhash) |last_vote_tx_blockhash| {
         // Check the blockhash queue to see if enough blocks have been built on our last voted fork
-        _ = &last_vote_tx_blockhash;
+        _ = last_vote_tx_blockhash;
     }
 
     if (last_vote_refresh_time.last_refresh_time.elapsed().asMillis() <
@@ -335,7 +335,7 @@ fn pushVote(
 
     switch (vote_tx_result) {
         .tx => |vote_tx| {
-            _ = &vote_tx;
+            _ = vote_tx;
             // TODO to be implemented
         },
         .non_voting => {
@@ -416,12 +416,12 @@ fn resetFork(
     last_blockhash: Hash,
     last_reset_bank_descendants: std.ArrayList(Slot),
 ) !void {
-    _ = &progress;
-    _ = &blockstore;
-    _ = &reset_slot;
-    _ = &last_reset_hash;
-    _ = &last_blockhash;
-    _ = &last_reset_bank_descendants;
+    _ = progress;
+    _ = blockstore;
+    _ = reset_slot;
+    _ = last_reset_hash;
+    _ = last_blockhash;
+    _ = last_reset_bank_descendants;
 }
 
 const testing = std.testing;
