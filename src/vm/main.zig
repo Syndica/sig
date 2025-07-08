@@ -17,7 +17,7 @@ const FeatureSet = sig.core.FeatureSet;
 const Hash = sig.core.Hash;
 const Rent = sig.runtime.sysvar.Rent;
 const ComputeBudget = sig.runtime.ComputeBudget;
-const EpochStakes = sig.core.EpochStakes;
+const EpochStakes = sig.core.epoch_stakes.EpochStakes;
 const SysvarCache = sig.runtime.SysvarCache;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 

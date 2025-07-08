@@ -326,7 +326,7 @@ pub const ForkProgress = struct {
             slot_hash: ?Hash,
             last_entry: Hash,
             i_am_leader: bool,
-            epoch_stakes: *const sig.core.EpochStakes,
+            epoch_stakes: *const sig.core.epoch_stakes.EpochStakes,
         },
     ) !ForkProgress {
         const parent = params.parent;

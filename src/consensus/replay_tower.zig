@@ -10,7 +10,7 @@ const Lockout = sig.runtime.program.vote.state.Lockout;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
-const EpochStakesMap = sig.core.EpochStakesMap;
+const EpochStakeMap = sig.core.epoch_stakes.EpochStakeMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -3681,8 +3681,8 @@ test "selectVoteAndResetForks stake not found" {
 const TreeNode = sig.consensus.fork_choice.TreeNode;
 const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
-const EpochStakes = sig.core.stake.EpochStakes;
-const Stakes = sig.core.stake_accounts.Stakes;
+const EpochStakes = sig.core.epoch_stakes.EpochStakes;
+const Stakes = sig.core.stake.Stakes;
 const splitOff = sig.consensus.fork_choice.splitOff;
 
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
