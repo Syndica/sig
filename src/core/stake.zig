@@ -181,9 +181,9 @@ pub const EpochStakes = struct {
 // To begin, lets take a look at the usage of EpochStakes in Agave.
 //
 // The Bank contains an 'epoch_stakes' field, which is a HashMap<Epoch, EpochStakes>.
-//    - `Bank::new_from_paths` - populates the epoch_stakes from epoch 0 to leader schedule epoch
+//    - `Bank::new_from_paths` - populates the epoch_stakes from epoch 0 to leader schedule epoch -- uses StakesEnum::Accounts
 //    - `Bank::get_fields_to_serialize` - splits the epoch_stakes into EpochStakes and VersionedEpochStakes
-//    - `Bank::update_epoch_stakes` - removes old entries, creates and inserts a new entry using bank.stakes_cache.stakes()
+//    - `Bank::update_epoch_stakes` - removes old entries, creates and inserts a new entry using bank.stakes_cache.stakes() -- uses StakesEnum::Accounts
 //    - a bunch of accessors methods
 
 //
@@ -555,51 +555,3 @@ pub const VersionedEpochStake = union(enum(u32)) {
         }
     };
 };
-
-// /// Analogous to [StakeHistoryEntry](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L17)
-// pub const StakeHistoryEntry = struct {
-//     /// effective stake at this epoch
-//     effective: u64,
-//     /// sum of portion of stakes not fully warmed up
-//     activating: u64,
-//     /// requested to be cooled down, not fully deactivated yet
-//     deactivating: u64,
-
-//     pub fn initRandom(random: std.Random) StakeHistoryEntry {
-//         return .{
-//             .effective = random.int(u64),
-//             .activating = random.int(u64),
-//             .deactivating = random.int(u64),
-//         };
-//     }
-// };
-
-// pub const EpochAndStakeHistoryEntry = struct {
-//     epoch: Epoch,
-//     history_entry: StakeHistoryEntry,
-
-//     pub fn initRandom(random: std.Random) EpochAndStakeHistoryEntry {
-//         return .{
-//             .epoch = random.int(Epoch),
-//             .history_entry = StakeHistoryEntry.initRandom(random),
-//         };
-//     }
-// };
-
-// /// Analogous to [StakeHistory](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L62)
-// pub const EpochAndStakeHistory = std.ArrayListUnmanaged(EpochAndStakeHistoryEntry);
-
-// pub fn stakeHistoryRandom(
-//     random: std.Random,
-//     allocator: Allocator,
-//     max_list_entries: usize,
-// ) Allocator.Error!EpochAndStakeHistory {
-//     const stake_history_len = random.uintAtMost(usize, max_list_entries);
-
-//     const stake_history = try allocator.alloc(EpochAndStakeHistoryEntry, stake_history_len);
-//     errdefer allocator.free(stake_history);
-
-//     for (stake_history) |*entry| entry.* = EpochAndStakeHistoryEntry.initRandom(random);
-
-//     return EpochAndStakeHistory.fromOwnedSlice(stake_history);
-// }
