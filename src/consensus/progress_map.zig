@@ -319,7 +319,7 @@ pub const ForkProgress = struct {
             slot_hash: ?Hash,
             last_entry: Hash,
             i_am_leader: bool,
-            epoch_stakes: *const sig.core.epoch_stakes.EpochStakes,
+            epoch_stakes: *const sig.core.EpochStakes,
         },
     ) !ForkProgress {
         const parent = params.parent;
@@ -672,8 +672,8 @@ pub const PropagatedStats = struct {
         try self.propagated_validators.ensureUnusedCapacity(allocator, vote_account_pubkeys.len);
         for (vote_account_pubkeys) |vote_account_pubkey| {
             const stake = blk: {
-                const stake_and_account = epoch_vote_accounts.get(vote_account_pubkey) orelse break :blk 0;
-                break :blk stake_and_account.stake;
+                const entry = epoch_vote_accounts.get(vote_account_pubkey) orelse break :blk 0;
+                break :blk entry.stake;
             };
             _ = self.addVotePubkeyAssumeCapacity(vote_account_pubkey, stake);
         }

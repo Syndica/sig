@@ -97,7 +97,7 @@ pub const BankForksStub = struct {
             const slot_epoch = params.epoch_schedule.getEpoch(params.slot);
             const gop = try epoch_stakes.getOrPut(allocator, slot_epoch);
             if (!gop.found_existing) {
-                gop.value_ptr.* = try sig.core.epoch_stakes.EpochStakes.initEmpty(allocator);
+                gop.value_ptr.* = try sig.core.EpochStakes.initEmpty(allocator);
             }
 
             return .{
@@ -1043,7 +1043,7 @@ fn trackOptimisticConfirmationVote(
     return .{ reached_thresholds, result == .is_new };
 }
 
-fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.epoch_stakes.EpochStakes, pubkey: Pubkey) void {
+fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.EpochStakes, pubkey: Pubkey) void {
     if (epoch_stakes) |stakes| {
         sum.* += stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }

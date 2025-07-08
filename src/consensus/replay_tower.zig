@@ -3024,7 +3024,7 @@ test "selectVoteAndResetForks stake not found" {
 const TreeNode = sig.consensus.fork_choice.TreeNode;
 const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
-const EpochStakes = sig.core.epoch_stakes.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 const Stakes = sig.core.stake.Stakes;
 const splitOff = sig.consensus.fork_choice.splitOff;
 

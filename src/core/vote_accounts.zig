@@ -6,10 +6,8 @@ const Allocator = std.mem.Allocator;
 
 const bincode = sig.bincode;
 const vote_program = sig.runtime.program.vote;
-const stake_program = sig.runtime.program.stake;
 
 const Pubkey = sig.core.Pubkey;
-const Epoch = sig.core.Epoch;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 
@@ -17,10 +15,6 @@ const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 
 const Clock = sig.runtime.sysvar.Clock;
-const StakeHistory = sig.runtime.sysvar.StakeHistory;
-const StakeHistoryEntry = sig.runtime.sysvar.StakeHistory.Entry;
-const ClusterStake = sig.runtime.sysvar.StakeHistory.ClusterStake;
-const RwMux = sig.sync.RwMux;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
@@ -39,7 +33,10 @@ pub const StakeAndVoteAccount = struct {
         self.account.deinit(allocator);
     }
 
-    pub fn clone(self: *const StakeAndVoteAccount, allocator: Allocator) Allocator.Error!StakeAndVoteAccount {
+    pub fn clone(
+        self: *const StakeAndVoteAccount,
+        allocator: Allocator,
+    ) Allocator.Error!StakeAndVoteAccount {
         return .{ .stake = self.stake, .account = try self.account.clone(allocator) };
     }
 };
@@ -65,7 +62,10 @@ pub const VoteAccounts = struct {
         StakedNodesMap,
     ){ .skip = true };
 
-    pub fn clone(self: *const VoteAccounts, allocator: std.mem.Allocator) Allocator.Error!VoteAccounts {
+    pub fn clone(
+        self: *const VoteAccounts,
+        allocator: std.mem.Allocator,
+    ) Allocator.Error!VoteAccounts {
         var result = VoteAccounts{};
         errdefer result.deinit(allocator);
 
@@ -242,7 +242,11 @@ pub const VoteAccounts = struct {
         };
     }
 
-    pub fn initRandom(allocator: Allocator, random: std.Random, max_list_entries: usize) Allocator.Error!VoteAccounts {
+    pub fn initRandom(
+        allocator: Allocator,
+        random: std.Random,
+        max_list_entries: usize,
+    ) Allocator.Error!VoteAccounts {
         // TODO: Uncomment once not required by bank init random
         // if (!builtin.is_test) @compileError("only for testing");
 
@@ -591,7 +595,12 @@ test "vote accounts serialize and deserialize" {
 
     // Insert a valid vote account
     var account = try createRandomVoteAccount(allocator, random, Pubkey.initRandom(random));
-    _ = try vote_accounts.insert(allocator, Pubkey.initRandom(random), try account.clone(allocator), 10);
+    _ = try vote_accounts.insert(
+        allocator,
+        Pubkey.initRandom(random),
+        try account.clone(allocator),
+        10,
+    );
 
     { // Valid serialization and deserialization
         const serialized = try bincode.writeAlloc(allocator, vote_accounts, .{});
@@ -608,11 +617,11 @@ test "vote accounts serialize and deserialize" {
             deserialized.vote_accounts.count(),
         );
         for (vote_accounts.vote_accounts.keys(), vote_accounts.vote_accounts.values()) |key, value| {
-            const deserialized_value = deserialized.vote_accounts.get(key) orelse
+            const actual_value = deserialized.vote_accounts.get(key) orelse
                 @panic("key not found in deserialized vote accounts");
-            try std.testing.expectEqual(value.stake, deserialized_value.stake);
-            try std.testing.expect(value.account.account.equals(&deserialized_value.account.account));
-            try std.testing.expect(value.account.state.equals(&deserialized_value.account.state));
+            try std.testing.expectEqual(value.stake, actual_value.stake);
+            try std.testing.expect(value.account.account.equals(&actual_value.account.account));
+            try std.testing.expect(value.account.state.equals(&actual_value.account.state));
         }
         for (vote_accounts.staked_nodes.keys(), vote_accounts.staked_nodes.values()) |key, value| {
             const deserialized_value = deserialized.staked_nodes.get(key) orelse
@@ -667,12 +676,15 @@ test "staked nodes" {
         defer if (maybe_old) |old| old.deinit(allocator);
 
         if ((i + 1) % 128 == 0) {
-            var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items[0 .. i + 1]);
+            var expected_staked_nodes = try calculateStakedNodes(
+                allocator,
+                accounts.items[0 .. i + 1],
+            );
             defer expected_staked_nodes.deinit(allocator);
-            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, expected_value| {
+            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, value| {
                 const actual_value = vote_accounts.staked_nodes.get(key) orelse
                     @panic("key not found in actual staked nodes");
-                try std.testing.expectEqual(expected_value, actual_value);
+                try std.testing.expectEqual(value, actual_value);
             }
         }
     }
@@ -685,10 +697,10 @@ test "staked nodes" {
         if ((i + 1) % 32 == 0) {
             var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items);
             defer expected_staked_nodes.deinit(allocator);
-            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, expected_value| {
+            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, value| {
                 const actual_value = vote_accounts.staked_nodes.get(key) orelse
                     @panic("key not found in actual staked nodes");
-                try std.testing.expectEqual(expected_value, actual_value);
+                try std.testing.expectEqual(value, actual_value);
             }
         }
     }
@@ -708,10 +720,10 @@ test "staked nodes" {
         if ((i + 1) % 128 == 0) {
             var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items);
             defer expected_staked_nodes.deinit(allocator);
-            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, expected_value| {
+            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, value| {
                 const actual_value = vote_accounts.staked_nodes.get(key) orelse
                     @panic("key not found in actual staked nodes");
-                try std.testing.expectEqual(expected_value, actual_value);
+                try std.testing.expectEqual(value, actual_value);
             }
         }
     }
@@ -724,10 +736,10 @@ test "staked nodes" {
         if (accounts.items.len % 32 == 0) {
             var expected_staked_nodes = try calculateStakedNodes(allocator, accounts.items);
             defer expected_staked_nodes.deinit(allocator);
-            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, expected_value| {
+            for (expected_staked_nodes.keys(), expected_staked_nodes.values()) |key, value| {
                 const actual_value = vote_accounts.staked_nodes.get(key) orelse
                     @panic("key not found in actual staked nodes");
-                try std.testing.expectEqual(expected_value, actual_value);
+                try std.testing.expectEqual(value, actual_value);
             }
         }
     }
@@ -744,10 +756,19 @@ test "staked nodes update" {
 
     const pubkey = Pubkey.initRandom(random);
     const node_pubkey = Pubkey.initRandom(random);
-    const account_0 = try createRandomVoteAccount(allocator, random, node_pubkey);
+    const account_0 = try createRandomVoteAccount(
+        allocator,
+        random,
+        node_pubkey,
+    );
 
     {
-        const maybe_old = try vote_accounts.insert(allocator, pubkey, try account_0.clone(allocator), 42);
+        const maybe_old = try vote_accounts.insert(
+            allocator,
+            pubkey,
+            try account_0.clone(allocator),
+            42,
+        );
         try std.testing.expectEqual(null, maybe_old);
         try std.testing.expectEqual(42, vote_accounts.getDelegatedStake(pubkey));
         try std.testing.expectEqual(42, vote_accounts.staked_nodes.get(node_pubkey).?);

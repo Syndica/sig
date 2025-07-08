@@ -32,6 +32,7 @@ pub const EpochConstants = bank.EpochConstants;
 pub const EpochContext = epoch_context.EpochContext;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
 pub const EpochStakes = epoch_stakes.EpochStakes;
+pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const HardFork = HardForks.HardFork;
 pub const HardForks = hard_forks.HardForks;
