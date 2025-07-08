@@ -592,9 +592,10 @@ pub const Manifest = struct {
         // TODO verify that this fallback approach is correct. maybe it should be:
         // - forget epoch_stakes because it's no longer used?
         // - combine stakes from both?
-        return if (self.bank_fields.epoch_stakes.getPtr(epoch)) |es|
-            try es.stakes.vote_accounts.stakedNodes(allocator)
-        else if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
+        return if (self.bank_fields.epoch_stakes.getPtr(epoch)) |es| blk: {
+            if (true) unreachable; // TODO for debugging, remove me
+            break :blk try es.stakes.vote_accounts.stakedNodes(allocator);
+        } else if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
             try es.current.stakes.vote_accounts.stakedNodes(allocator)
         else
             return error.NoEpochStakes;
