@@ -39,10 +39,10 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const EpochStakes = core.EpochStakes;
-const EpochStakeMap = core.EpochStakesMap(.delegation);
-const Stakes = core.Stakes;
 const Ancestors = sig.core.Ancestors;
+const EpochStakes = core.EpochStakes;
+const EpochStakesMap = core.EpochStakesMap;
+const Stakes = core.Stakes;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
@@ -288,7 +288,7 @@ pub const BankFields = struct {
     inflation: Inflation,
     stakes: Stakes(.delegation),
     unused_accounts: UnusedAccounts,
-    epoch_stakes: EpochStakeMap,
+    epoch_stakes: EpochStakesMap(.delegation),
     is_delta: bool,
 
     pub fn deinit(
