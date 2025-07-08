@@ -40,8 +40,8 @@ const stubs = struct {
                 "Bank epoch vote accounts must contain entry for the bank's own epoch",
                 .{},
             );
-            const entry = eva.get(vote_account) orelse return 0;
-            return entry.stake;
+            const stake_and_vote_account = eva.get(vote_account) orelse return 0;
+            return stake_and_vote_account.stake;
         }
 
         /// Get the fixed set of vote accounts for the given node id for the
@@ -679,8 +679,8 @@ pub const PropagatedStats = struct {
         try self.propagated_validators.ensureUnusedCapacity(allocator, vote_account_pubkeys.len);
         for (vote_account_pubkeys) |vote_account_pubkey| {
             const stake = blk: {
-                const entry = epoch_vote_accounts.get(vote_account_pubkey) orelse break :blk 0;
-                break :blk entry.stake;
+                const stake_and_account = epoch_vote_accounts.get(vote_account_pubkey) orelse break :blk 0;
+                break :blk stake_and_account.stake;
             };
             _ = self.addVotePubkeyAssumeCapacity(vote_account_pubkey, stake);
         }
@@ -1473,8 +1473,10 @@ test "addNodePubkeyInternal" {
     };
 
     var epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap = .{};
-    defer deinitMapAndValues(allocator, epoch_vote_accounts);
-
+    defer {
+        for (epoch_vote_accounts.values()) |*v| v.deinit(allocator);
+        epoch_vote_accounts.deinit(allocator);
+    }
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
         try epoch_vote_accounts.put(allocator, pubkey, .init(1, try VoteAccount.initRandom(
             allocator,
