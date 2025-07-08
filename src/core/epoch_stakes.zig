@@ -25,7 +25,7 @@ const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 ///     bank.stakes_cache = StakesCache.init(create Stakes(.account) from bank_fields.stakes: Stakes(.delegation) with accountsdb)
 ///         - we could load the accounts here and create Stakes(.stake) from the accountsdb
 ///     bank.epoch_stakes = fields.epoch_stakes
-pub const VersionedEpochStakes = struct {
+pub const VersionedEpochStakes = union(enum(u32)) {
     current: EpochStakes(.stake),
 
     pub fn deinit(self: VersionedEpochStakes, allocator: Allocator) void {
@@ -134,17 +134,17 @@ pub const NodeVoteAccounts = struct {
     vote_accounts: []const Pubkey,
     total_stake: u64,
 
-    pub fn deinit(node_vote_accounts: NodeVoteAccounts, allocator: Allocator) void {
-        allocator.free(node_vote_accounts.vote_accounts);
+    pub fn deinit(self: NodeVoteAccounts, allocator: Allocator) void {
+        allocator.free(self.vote_accounts);
     }
 
     pub fn clone(
-        node_vote_accounts: NodeVoteAccounts,
+        self: NodeVoteAccounts,
         allocator: Allocator,
     ) Allocator.Error!NodeVoteAccounts {
         return .{
-            .vote_accounts = try allocator.dupe(Pubkey, node_vote_accounts.vote_accounts),
-            .total_stake = node_vote_accounts.total_stake,
+            .vote_accounts = try allocator.dupe(Pubkey, self.vote_accounts),
+            .total_stake = self.total_stake,
         };
     }
 
