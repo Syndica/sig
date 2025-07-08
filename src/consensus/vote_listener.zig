@@ -72,7 +72,7 @@ pub const BankForksStub = struct {
         hash: Hash,
         ancestors: sig.core.Ancestors,
         epoch_schedule: sig.core.EpochSchedule,
-        epoch_stakes: sig.core.EpochStakesMap(.delegation),
+        epoch_stakes: sig.core.EpochStakesMap,
 
         pub fn deinit(self: BankStub, allocator: std.mem.Allocator) void {
             var copy = self;
@@ -87,7 +87,7 @@ pub const BankForksStub = struct {
                 hash: Hash,
                 ancestors: sig.core.Ancestors,
                 epoch_schedule: sig.core.EpochSchedule,
-                epoch_stakes: sig.core.EpochStakesMap(.delegation),
+                epoch_stakes: sig.core.EpochStakesMap,
             },
         ) std.mem.Allocator.Error!BankStub {
             var ancestors = try params.ancestors.clone(allocator);

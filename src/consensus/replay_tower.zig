@@ -11,7 +11,7 @@ const Lockout = sig.runtime.program.vote.state.Lockout;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
-const EpochStakeMap = sig.core.EpochStakesMap(.delegation);
+const EpochStakesMap = sig.core.EpochStakesMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -1322,7 +1322,7 @@ pub const ReplayTower = struct {
         progress: *const ProgressMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         fork_choice: *const HeaviestSubtreeForkChoice,
-        epoch_stakes: EpochStakeMap,
+        epoch_stakes: EpochStakesMap,
         slot_history: *const SlotHistory,
     ) !SelectVoteAndResetForkResult {
         // Initialize result with failure list
@@ -3460,7 +3460,7 @@ const TestFixture = struct {
     ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
-    epoch_stake_map: EpochStakeMap,
+    epoch_stake_map: EpochStakesMap,
 
     pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
         return .{
