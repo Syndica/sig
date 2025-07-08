@@ -117,16 +117,7 @@ pub fn EpochStakes(comptime stakes_type: StakesType) type {
             };
         }
 
-        pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes(.delegation) {
-            const stake_history = try StakeHistory.initWithEntries(allocator, &.{.{
-                .epoch = 0,
-                .stake = .{
-                    .effective = 0,
-                    .activating = 0,
-                    .deactivating = 0,
-                },
-            }});
-
+        pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes(stakes_type) {
             return .{
                 .total_stake = 0,
                 .stakes = .{
@@ -134,7 +125,14 @@ pub fn EpochStakes(comptime stakes_type: StakesType) type {
                     .stake_delegations = .{},
                     .unused = 0,
                     .epoch = 0,
-                    .stake_history = stake_history,
+                    .stake_history = try StakeHistory.initWithEntries(allocator, &.{.{
+                        .epoch = 0,
+                        .stake = .{
+                            .effective = 0,
+                            .activating = 0,
+                            .deactivating = 0,
+                        },
+                    }}),
                 },
                 .node_id_to_vote_accounts = .{},
                 .epoch_authorized_voters = .{},
