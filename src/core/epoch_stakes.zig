@@ -34,7 +34,10 @@ pub const VersionedEpochStakes = union(enum(u32)) {
         self.current.deinit(allocator);
     }
 
-    pub fn clone(self: *const VersionedEpochStakes, allocator: Allocator) Allocator.Error!VersionedEpochStakes {
+    pub fn clone(
+        self: *const VersionedEpochStakes,
+        allocator: Allocator,
+    ) Allocator.Error!VersionedEpochStakes {
         return .{ .current = try self.current.clone(allocator) };
     }
 

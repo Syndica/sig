@@ -7,6 +7,8 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const PubkeyArraySet = std.AutoArrayHashMapUnmanaged(Pubkey, void);
 
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+
 /// TODO: any uses of these types are to be evaluated in their context, and
 /// the actual required semantics are to be determined later.
 const stubs = struct {
@@ -1466,10 +1468,8 @@ test "addNodePubkeyInternal" {
     };
 
     var epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap = .{};
-    defer {
-        for (epoch_vote_accounts.values()) |*v| v.deinit(allocator);
-        epoch_vote_accounts.deinit(allocator);
-    }
+    defer deinitMapAndValues(allocator, epoch_vote_accounts);
+
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
         try epoch_vote_accounts.put(allocator, pubkey, .init(1, try VoteAccount.initRandom(
             allocator,
