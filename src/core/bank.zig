@@ -39,12 +39,12 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const EpochStakes = core.epoch_stakes.EpochStakes;
-const EpochStakeMap = core.epoch_stakes.EpochStakeMap;
-const Stakes = core.stake.Stakes;
-const epochStakeMapClone = core.epoch_stakes.epochStakeMapClone;
-const epochStakeMapDeinit = core.epoch_stakes.epochStakeMapDeinit;
-const epochStakeMapRandom = core.epoch_stakes.epochStakeMapRandom;
+const EpochStakes = core.old_epoch_stakes.EpochStakes;
+const EpochStakeMap = core.old_epoch_stakes.EpochStakesMap;
+const Stakes = core.Stakes;
+const epochStakeMapClone = core.old_epoch_stakes.epochStakeMapClone;
+const epochStakeMapDeinit = core.old_epoch_stakes.epochStakeMapDeinit;
+const epochStakeMapRandom = core.old_epoch_stakes.epochStakeMapRandom;
 
 const Ancestors = sig.core.Ancestors;
 
