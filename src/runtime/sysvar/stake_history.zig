@@ -9,7 +9,7 @@ const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/stake_history.rs#L67
 pub const StakeHistory = struct {
-    entries: std.ArrayListUnmanaged(Entry),
+    entries: std.ArrayListUnmanaged(Entry) = .{},
 
     pub const Entry = struct {
         epoch: Epoch,
@@ -21,6 +21,18 @@ pub const StakeHistory = struct {
 
         pub fn searchCmp(epoch: u64, b: Entry) std.math.Order {
             return std.math.order(b.epoch, epoch);
+        }
+
+        pub fn initRandom(random: std.Random) Entry {
+            if (!builtin.is_test) @compileError("only for testing");
+            return .{
+                .epoch = random.int(Epoch),
+                .stake = .{
+                    .effective = random.int(u64),
+                    .activating = random.int(u64),
+                    .deactivating = random.int(u64),
+                },
+            };
         }
     };
 
@@ -55,6 +67,10 @@ pub const StakeHistory = struct {
         allocator.free(self.entries.allocatedSlice());
     }
 
+    pub fn clone(self: StakeHistory, allocator: Allocator) Allocator.Error!StakeHistory {
+        return .{ .entries = try self.entries.clone(allocator) };
+    }
+
     pub fn isEmpty(self: StakeHistory) bool {
         return self.entries.items.len == 0;
     }
@@ -72,7 +88,6 @@ pub const StakeHistory = struct {
         allocator: Allocator,
         entries: []const Entry,
     ) Allocator.Error!StakeHistory {
-        if (!builtin.is_test) @compileError("only available in test mode");
         std.debug.assert(entries.len <= MAX_ENTRIES);
         var self = try StakeHistory.default(allocator);
         self.entries.appendSliceAssumeCapacity(entries);
@@ -81,14 +96,18 @@ pub const StakeHistory = struct {
     }
 
     pub fn initRandom(allocator: Allocator, random: std.Random) Allocator.Error!StakeHistory {
-        if (!builtin.is_test) @compileError("only available in test mode");
+        // TODO: Uncomment once not required by bank init random
+        // if (!builtin.is_test) @compileError("only for testing");
         var self = try StakeHistory.default(allocator);
-        for (0..random.intRangeAtMost(Epoch, 1, 1_000)) |epoch|
-            self.entries.appendAssumeCapacity(.{ .epoch = epoch, .stake = .{
-                .effective = random.int(u64),
-                .activating = random.int(u64),
-                .deactivating = random.int(u64),
-            } });
+        for (0..random.intRangeAtMost(Epoch, 1, MAX_ENTRIES)) |_|
+            self.entries.appendAssumeCapacity(.{
+                .epoch = random.int(u64),
+                .stake = .{
+                    .effective = random.int(u64),
+                    .activating = random.int(u64),
+                    .deactivating = random.int(u64),
+                },
+            });
         std.sort.heap(Entry, self.entries.items, {}, Entry.sortCmp);
         return self;
     }

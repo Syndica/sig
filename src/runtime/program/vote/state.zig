@@ -341,11 +341,7 @@ pub const AuthorizedVoters = struct {
         .serializer = serialize,
     };
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-        pubkey: Pubkey,
-    ) std.mem.Allocator.Error!AuthorizedVoters {
+    pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) std.mem.Allocator.Error!AuthorizedVoters {
         var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
         try authorized_voters.put(epoch, pubkey);
         return AuthorizedVoters{ .voters = authorized_voters };

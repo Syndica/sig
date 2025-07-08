@@ -7,7 +7,9 @@ const Allocator = std.mem.Allocator;
 // const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
-// const Slot = sig.core.Slot;
+const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
+
+const StakeHistory = sig.runtime.sysvar.StakeHistory;
 
 // Improve the dependencies.
 const vote_program = sig.runtime.program.vote;
@@ -173,24 +175,21 @@ pub const EpochStakes = struct {
 
     /// Creates an empty `EpochStakes` with a single stake history entry at epoch 0.
     pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes {
-        var history: EpochAndStakeHistory = .{};
-        try history.append(allocator, .{
+        const history = try StakeHistory.initWithEntries(allocator, &.{.{
             .epoch = 0,
-            .history_entry = .{
+            .stake = .{
                 .effective = 0,
                 .activating = 0,
                 .deactivating = 0,
             },
-        });
+        }});
+
         return .{
             .total_stake = 0,
             .stakes = .{
                 .epoch = 0,
                 .history = history,
-                .vote_accounts = .{
-                    .accounts = .{},
-                    .staked_nodes = null,
-                },
+                .vote_accounts = .{},
                 .delegations = .{},
                 .unused = 0,
             },
@@ -362,7 +361,7 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
         stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, T),
         unused: u64,
         epoch: Epoch,
-        stake_history: StakeHistory,
+        history: StakeHistory,
 
         const Self = @This();
 
@@ -545,16 +544,8 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
                 stake_delegations.deinit(allocator);
             }
 
-            for (0..random.uintAtMost(usize, max_list_entries)) |_| {
-                try stake_delegations.put(
-                    allocator,
-                    Pubkey.initRandom(random),
-                    if (is_account_type) T.initRandom(allocator, random) else T.initRandom(random),
-                );
-            }
-
-            const stake_history = try StakeHistory.initRandom(allocator, random);
-            errdefer stake_history.deinit(allocator);
+            const history = try StakeHistory.initRandom(allocator, random);
+            errdefer allocator.free(history);
 
             return .{
                 .vote_accounts = vote_accounts,
@@ -918,398 +909,50 @@ fn createStakeAccount(
     };
     errdefer allocator.free(stake_account.data);
 
-/// Analogous to [StakeHistoryEntry](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L17)
-pub const StakeHistoryEntry = struct {
-    /// effective stake at this epoch
-    effective: u64,
-    /// sum of portion of stakes not fully warmed up
-    activating: u64,
-    /// requested to be cooled down, not fully deactivated yet
-    deactivating: u64,
+// /// Analogous to [StakeHistoryEntry](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L17)
+// pub const StakeHistoryEntry = struct {
+//     /// effective stake at this epoch
+//     effective: u64,
+//     /// sum of portion of stakes not fully warmed up
+//     activating: u64,
+//     /// requested to be cooled down, not fully deactivated yet
+//     deactivating: u64,
 
-    pub fn initRandom(random: std.Random) StakeHistoryEntry {
-        return .{
-            .effective = random.int(u64),
-            .activating = random.int(u64),
-            .deactivating = random.int(u64),
-        };
-    }
-};
+//     pub fn initRandom(random: std.Random) StakeHistoryEntry {
+//         return .{
+//             .effective = random.int(u64),
+//             .activating = random.int(u64),
+//             .deactivating = random.int(u64),
+//         };
+//     }
+// };
 
-pub const EpochAndStakeHistoryEntry = struct {
-    epoch: Epoch,
-    history_entry: StakeHistoryEntry,
+// pub const EpochAndStakeHistoryEntry = struct {
+//     epoch: Epoch,
+//     history_entry: StakeHistoryEntry,
 
-    pub fn initRandom(random: std.Random) EpochAndStakeHistoryEntry {
-        return .{
-            .epoch = random.int(Epoch),
-            .history_entry = StakeHistoryEntry.initRandom(random),
-        };
-    }
-};
+//     pub fn initRandom(random: std.Random) EpochAndStakeHistoryEntry {
+//         return .{
+//             .epoch = random.int(Epoch),
+//             .history_entry = StakeHistoryEntry.initRandom(random),
+//         };
+//     }
+// };
 
-/// Analogous to [StakeHistory](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L62)
-pub const EpochAndStakeHistory = std.ArrayListUnmanaged(EpochAndStakeHistoryEntry);
+// /// Analogous to [StakeHistory](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L62)
+// pub const EpochAndStakeHistory = std.ArrayListUnmanaged(EpochAndStakeHistoryEntry);
 
-pub fn stakeHistoryRandom(
-    random: std.Random,
-    allocator: Allocator,
-    max_list_entries: usize,
-) Allocator.Error!EpochAndStakeHistory {
-    const stake_history_len = random.uintAtMost(usize, max_list_entries);
+// pub fn stakeHistoryRandom(
+//     random: std.Random,
+//     allocator: Allocator,
+//     max_list_entries: usize,
+// ) Allocator.Error!EpochAndStakeHistory {
+//     const stake_history_len = random.uintAtMost(usize, max_list_entries);
 
-    const stake_history = try allocator.alloc(EpochAndStakeHistoryEntry, stake_history_len);
-    errdefer allocator.free(stake_history);
+//     const stake_history = try allocator.alloc(EpochAndStakeHistoryEntry, stake_history_len);
+//     errdefer allocator.free(stake_history);
 
-    for (stake_history) |*entry| entry.* = EpochAndStakeHistoryEntry.initRandom(random);
+//     for (stake_history) |*entry| entry.* = EpochAndStakeHistoryEntry.initRandom(random);
 
-    return EpochAndStakeHistory.fromOwnedSlice(stake_history);
-}
-
-pub const StakeAndVoteAccount = struct { u64, VoteAccount };
-
-pub const StakeAndVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAndVoteAccount);
-
-pub fn stakeAndVoteAccountsMapDeinit(
-    map: StakeAndVoteAccountsMap,
-    allocator: Allocator,
-) void {
-    var copy = map;
-    for (copy.values()) |stake_and_vote_account| {
-        _ = stake_and_vote_account;
-        // _, const vote_account = stake_and_vote_account;
-        // vote_account.deinit(allocator);
-    }
-    copy.deinit(allocator);
-}
-
-pub fn stakeAndVoteAccountsMapClone(
-    map: StakeAndVoteAccountsMap,
-    allocator: Allocator,
-) Allocator.Error!StakeAndVoteAccountsMap {
-    var cloned: StakeAndVoteAccountsMap = .{};
-    errdefer stakeAndVoteAccountsMapDeinit(cloned, allocator);
-
-    try cloned.ensureTotalCapacity(allocator, map.count());
-    for (map.keys(), map.values()) |key, value| {
-        _ = key;
-        _ = value;
-        // const stake, const vote_account = value;
-        // const vote_account_cloned = try vote_account.clone(allocator);
-        // cloned.putAssumeCapacityNoClobber(key, .{ stake, vote_account_cloned });
-    }
-
-    return cloned;
-}
-
-pub fn stakeAndVoteAccountsMapClearRetainingCapacity(
-    map: *StakeAndVoteAccountsMap,
-    allocator: Allocator,
-) void {
-    for (map.values()) |pair| {
-        _, const vote_account = pair;
-        vote_account.deinit(allocator);
-    }
-    map.clearRetainingCapacity();
-}
-
-pub fn stakeAndVoteAccountsMapRandom(
-    random: std.Random,
-    allocator: Allocator,
-    max_list_entries: usize,
-) Allocator.Error!StakeAndVoteAccountsMap {
-    var result: StakeAndVoteAccountsMap = .{};
-    errdefer stakeAndVoteAccountsMapDeinit(result, allocator);
-
-    const entry_count = random.uintAtMost(usize, max_list_entries);
-    try result.ensureTotalCapacity(allocator, entry_count);
-    for (0..entry_count) |_| {
-        const key = Pubkey.initRandom(random);
-        const gop = result.getOrPutAssumeCapacity(key);
-        if (gop.found_existing) continue;
-        const value = try VoteAccount.initRandom(
-            random,
-            allocator,
-            max_list_entries,
-            error{ RandomError1, RandomError2, RandomError3 },
-        );
-        gop.value_ptr.* = .{ random.int(u64), value };
-    }
-
-    return result;
-}
-
-/// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/vote/src/vote_account.rs#L44)
-pub const VoteAccounts = struct {
-    accounts: StakeAndVoteAccountsMap,
-    staked_nodes: ?StakedNodesMap,
-
-    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?StakedNodesMap){
-        .skip = true,
-        .default_value = @as(?StakedNodesMap, null),
-    };
-
-    pub const StakedNodesMap = std.AutoArrayHashMapUnmanaged(
-        Pubkey, // VoteAccount.vote_state.node_pubkey.
-        u64, // Total stake across all vote-accounts.
-    );
-    const vote_state = try versioned_vote_state.convertToCurrent(allocator);
-    defer vote_state.deinit();
-
-    const minimum_rent = rent.minimumBalance(StakeStateV2.SIZE);
-
-        for (copy.accounts.values()) |entry| {
-            _ = entry;
-            // _, const vote_account = entry;
-            // vote_account.deinit(allocator);
-        }
-        copy.accounts.deinit(allocator);
-
-        if (copy.staked_nodes) |*staked_nodes| {
-            staked_nodes.deinit(allocator);
-        }
-    }
-
-    pub fn clone(
-        vote_accounts: VoteAccounts,
-        allocator: Allocator,
-    ) Allocator.Error!VoteAccounts {
-        const accounts = try stakeAndVoteAccountsMapClone(vote_accounts.accounts, allocator);
-        errdefer stakeAndVoteAccountsMapDeinit(accounts, allocator);
-
-        var staked_nodes: ?StakedNodesMap =
-            if (vote_accounts.staked_nodes) |map| try map.clone(allocator) else null;
-        errdefer if (staked_nodes) |*map| map.deinit(allocator);
-
-        return .{
-            .accounts = accounts,
-            .staked_nodes = staked_nodes,
-        };
-    }
-
-    pub fn stakedNodes(self: *VoteAccounts, allocator: Allocator) !*const StakedNodesMap {
-        if (self.staked_nodes) |*staked_nodes| {
-            return staked_nodes;
-        }
-        const vote_accounts = self.accounts;
-        var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
-        var iter = vote_accounts.iterator();
-        while (iter.next()) |vote_entry| {
-            if (vote_entry.value_ptr[0] == 0) continue;
-            const vote_state = try vote_entry.value_ptr[1].voteState();
-            const node_entry = try staked_nodes.getOrPut(vote_state.node_pubkey);
-            if (!node_entry.found_existing) {
-                node_entry.value_ptr.* = 0;
-            }
-            node_entry.value_ptr.* += vote_entry.value_ptr[0];
-        }
-        self.staked_nodes = staked_nodes.unmanaged;
-        return &self.staked_nodes.?;
-    }
-
-    /// NOTE: in the original agave code, this method returns 0 instead of null.
-    pub fn getDelegatedStake(self: VoteAccounts, pubkey: Pubkey) u64 {
-        const stake, _ = self.accounts.get(pubkey) orelse return 0;
-        return stake;
-    }
-
-    pub fn initRandom(
-        random: std.Random,
-        allocator: Allocator,
-        max_list_entries: usize,
-    ) Allocator.Error!VoteAccounts {
-        var stakes_vote_accounts = StakeAndVoteAccountsMap.Managed.init(allocator);
-        errdefer stakes_vote_accounts.deinit();
-
-        errdefer for (stakes_vote_accounts.values()) |pair| {
-            _, const vote_account = pair;
-            vote_account.account.deinit(allocator);
-        };
-
-        try sig.rand.fillHashmapWithRng(
-            &stakes_vote_accounts,
-            random,
-            random.uintAtMost(usize, max_list_entries),
-            struct {
-                allocator: Allocator,
-                max_list_entries: usize,
-
-                pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
-                    return Pubkey.initRandom(rand);
-                }
-                pub fn randomValue(ctx: @This(), rand: std.Random) !StakeAndVoteAccount {
-                    const vote_account: VoteAccount = try VoteAccount.initRandom(
-                        rand,
-                        ctx.allocator,
-                        ctx.max_list_entries,
-                        error{ RandomError1, RandomError2, RandomError3 },
-                    );
-                    errdefer vote_account.deinit(ctx.allocator);
-                    return .{ rand.int(u64), vote_account };
-                }
-            }{
-                .allocator = allocator,
-                .max_list_entries = max_list_entries,
-            },
-            .credits_observed = vote_state.getCredits(),
-        },
-        .flags = .EMPTY,
-    } };
-
-    _ = try bincode.writeToSlice(stake_account.data, stake_state, .{});
-
-    return stake_account;
-}
-
-fn getStakeFromStakeAccount(account: AccountSharedData) !Stake {
-    if (!builtin.is_test) @compileError("only for testing");
-
-    const state_state = try bincode.readFromSlice(
-        failing_allocator,
-        StakeStateV2,
-        account.data,
-        .{},
-    );
-
-    return state_state.getStake().?;
-}
-
-const TestStakedNodeAccounts = struct {
-    vote_pubkey: Pubkey,
-    vote_account: AccountSharedData,
-    stake_pubkey: Pubkey,
-    stake_account: AccountSharedData,
-
-    pub fn init(allocator: Allocator, random: std.Random, stake: u64) !TestStakedNodeAccounts {
-        if (!builtin.is_test) @compileError("only for testing");
-
-        const vote_pubkey, const vote_account = blk: {
-            const vote_pubkey = Pubkey.initRandom(random);
-            const vote_authority = Pubkey.initRandom(random);
-            const vote_account = try createVoteAccount(
-                allocator,
-                vote_pubkey,
-                vote_authority,
-                vote_authority,
-                0,
-                1,
-                null,
-            );
-            break :blk .{ vote_pubkey, vote_account };
-        };
-        errdefer allocator.free(vote_account.data);
-
-        const stake_pubkey, const stake_account = blk: {
-            const staked_vote_authority = Pubkey.initRandom(random);
-            const staked_vote_account = try createVoteAccount(
-                allocator,
-                vote_pubkey,
-                staked_vote_authority,
-                staked_vote_authority,
-                0,
-                1,
-                null,
-            );
-            defer allocator.free(staked_vote_account.data);
-
-            const stake_pubkey = Pubkey.initRandom(random);
-            const stake_account = try createStakeAccount(
-                allocator,
-                stake_pubkey,
-                vote_pubkey,
-                staked_vote_account,
-                Rent.FREE,
-                stake,
-                std.math.maxInt(u64),
-            );
-
-            break :blk .{ stake_pubkey, stake_account };
-        };
-
-        return .{
-            .vote_pubkey = vote_pubkey,
-            .vote_account = vote_account,
-            .stake_pubkey = stake_pubkey,
-            .stake_account = stake_account,
-        };
-    }
-
-    pub fn deinit(self: TestStakedNodeAccounts, allocator: Allocator) void {
-        self.vote_account.deinit(allocator);
-        self.stake_account.deinit(allocator);
-    }
-};
-
-pub const VoteAccount = struct {
-    account: sig.runtime.AccountSharedData,
-    vote_state: sig.runtime.program.vote.state.VoteState,
-
-    inline for (.{
-        StakesType.delegation,
-        StakesType.stake,
-        StakesType.account,
-    }) |stakes_type| {
-        for (0..4) |i| {
-            const StakesT = Stakes(stakes_type);
-
-    pub fn deinit(vote_account: sig.runtime.AccountSharedData, allocator: Allocator) void {
-        vote_account.account.deinit(allocator);
-    }
-
-    pub fn clone(
-        vote_account: sig.runtime.AccountSharedData,
-        allocator: Allocator,
-    ) Allocator.Error!sig.runtime.AccountSharedData {
-        const account = try vote_account.account.cloneOwned(allocator);
-        errdefer account.deinit(allocator);
-        return .{
-            .account = account,
-            .vote_state = vote_account.vote_state,
-        };
-    }
-
-    pub fn voteState(self: *@This()) !VoteState {
-        return self.vote_state;
-    }
-
-    pub fn initRandom(
-        random: std.Random,
-        allocator: Allocator,
-        max_list_entries: usize,
-        comptime RandomErrorSet: type,
-    ) Allocator.Error!VoteAccount {
-        _ = random;
-        _ = max_list_entries;
-        _ = RandomErrorSet;
-        const account = sig.runtime.AccountSharedData.EMPTY;
-        return .{
-            .account = account,
-            .vote_state = sig.runtime.program.vote.state.VoteState.default(allocator),
-        };
-    }
-};
-
-pub const VoteState = struct {
-    /// The variant of the rust enum
-    tag: u32, // TODO: consider varint bincode serialization (in rust this is enum)
-    /// the node that votes in this account
-    node_pubkey: Pubkey,
-
-    pub fn initRandom(random: std.Random) VoteState {
-        return .{
-            .tag = 0, // must always be 0, since this is the enum tag
-            .node_pubkey = Pubkey.initRandom(random),
-        };
-    }
-};
-
-test "deserialize VoteState.node_pubkey" {
-    const bytes = .{
-        2,  0,   0,   0, 60,  155, 13,  144, 187, 252, 153, 72,  190, 35,  87,  94,  7,  178,
-        90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
-    } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
-    const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
-    const expected_pubkey =
-        try Pubkey.parseBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
-    try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
-}
+//     return EpochAndStakeHistory.fromOwnedSlice(stake_history);
+// }
