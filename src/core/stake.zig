@@ -8,6 +8,10 @@ const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
 const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
+const Delegation = sig.core.stake_accounts.Delegation;
+const Stake = sig.core.stake_accounts.Stake;
+const StakeAccount = sig.core.stake_accounts.StakeAccount;
+const Stakes = sig.core.stake_accounts.Stakes;
 
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 
@@ -162,7 +166,7 @@ pub const EpochStakes = struct {
 
     /// Creates an empty `EpochStakes` with a single stake history entry at epoch 0.
     pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes {
-        const history = try StakeHistory.initWithEntries(allocator, &.{.{
+        const stake_history = try StakeHistory.initWithEntries(allocator, &.{.{
             .epoch = 0,
             .stake = .{
                 .effective = 0,
@@ -174,11 +178,11 @@ pub const EpochStakes = struct {
         return .{
             .total_stake = 0,
             .stakes = .{
-                .epoch = 0,
-                .history = history,
                 .vote_accounts = .{},
-                .delegations = .{},
+                .stake_delegations = .{},
                 .unused = 0,
+                .epoch = 0,
+                .stake_history = stake_history,
             },
             .node_id_to_vote_accounts = .{},
             .epoch_authorized_voters = .{},
@@ -327,523 +331,74 @@ pub const EpochStakes = struct {
 //
 // Proposed Epoch Staked Nodes
 
-/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186).
-/// It differs in that its delegation element parameterization is narrowed to only accept the specific types we actually need to implement.
-pub fn Stakes(comptime delegation_type: enum {
-    delegation,
-    stake,
-    account,
+/// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L14)
+pub const NodeVoteAccounts = struct {
+    vote_accounts: []const Pubkey,
+    total_stake: u64,
+
+    pub fn deinit(node_vote_accounts: NodeVoteAccounts, allocator: Allocator) void {
+        allocator.free(node_vote_accounts.vote_accounts);
+    }
+
+    pub fn clone(
+        node_vote_accounts: NodeVoteAccounts,
+        allocator: Allocator,
+    ) Allocator.Error!NodeVoteAccounts {
+        return .{
+            .vote_accounts = try allocator.dupe(Pubkey, node_vote_accounts.vote_accounts),
+            .total_stake = node_vote_accounts.total_stake,
+        };
+    }
+
+    pub fn initRandom(
+        random: std.Random,
+        allocator: Allocator,
+        max_list_entries: usize,
+    ) Allocator.Error!NodeVoteAccounts {
+        const vote_accounts =
+            try allocator.alloc(Pubkey, random.uintLessThan(usize, max_list_entries));
+        errdefer allocator.free(vote_accounts);
+        for (vote_accounts) |*vote_account| vote_account.* = Pubkey.initRandom(random);
+        return .{
+            .vote_accounts = vote_accounts,
+            .total_stake = random.int(u64),
+        };
+    }
 };
 
-// pub const Stakes = StakesGeneric(.stake);
+/// Analogous to [NodeIdToVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L9)
+pub const NodeIdToVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, NodeVoteAccounts);
 
-pub fn Stakes(comptime stakes_type: StakesType) type {
-    const T = switch (stakes_type) {
-        .delegation => Delegation,
-        .stake => Stake,
-        .account => StakeAccount,
-    };
-    const is_account_type = stakes_type == .account;
+pub fn nodeIdToVoteAccountsMapRandom(
+    allocator: Allocator,
+    random: std.Random,
+    max_list_entries: usize,
+) Allocator.Error!NodeIdToVoteAccountsMap {
+    var node_id_to_vote_accounts = NodeIdToVoteAccountsMap.Managed.init(allocator);
+    errdefer deinitMapAndValues(allocator, node_id_to_vote_accounts.unmanaged);
 
-    return struct {
-        vote_accounts: VoteAccounts,
-        stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, T),
-        unused: u64,
-        epoch: Epoch,
-        history: StakeHistory,
-
-        const Self = @This();
-
-        pub const DEFAULT: Self = .{
-            .vote_accounts = .{},
-            .stake_delegations = .{},
-            .unused = 0,
-            .epoch = 0,
-            .stake_history = .{},
-        };
-
-        pub fn deinit(self: *const Self, allocator: Allocator) void {
-            self.vote_accounts.deinit(allocator);
-            if (is_account_type) for (self.stake_delegations.values()) |*v| v.deinit(allocator);
-            var delegations = self.stake_delegations;
-            delegations.deinit(allocator);
-            self.stake_history.deinit(allocator);
-        }
-
-        pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
-            const vote_accs = try self.vote_accounts.clone(allocator);
-            errdefer vote_accs.deinit(allocator);
-
-            var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, T){};
-            errdefer {
-                if (is_account_type) for (stake_delegations.values()) |*v| v.deinit(allocator);
-                stake_delegations.deinit(allocator);
-            }
-            for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value|
-                try stake_delegations.put(
-                    allocator,
-                    key,
-                    if (is_account_type) value.clone(allocator) else value,
-                );
-
-            const stake_history = try self.stake_history.clone(allocator);
-            errdefer stake_history.deinit(allocator);
-
-            return .{
-                .vote_accounts = vote_accs,
-                .stake_delegations = stake_delegations,
-                .unused = self.unused,
-                .epoch = self.epoch,
-                .stake_history = stake_history,
-            };
-        }
-
-        pub fn calculateStake(
-            self: *const Self,
-            pubkey: Pubkey,
-            new_rate_activation_epoch: ?Epoch,
-        ) u64 {
-            var stake: u64 = 0;
-            for (self.stake_delegations.values()) |*stake_delegations| {
-                const delegation = stake_delegations.getDelegation();
-                if (!delegation.voter_pubkey.equals(&pubkey)) continue;
-                stake += delegation.getStake(
-                    self.epoch,
-                    &self.stake_history,
-                    new_rate_activation_epoch,
-                );
-            }
-            return stake;
-        }
-
-        /// Takes ownership of `account`.
-        pub fn upsertVoteAccount(
-            self: *Self,
+    try sig.rand.fillHashmapWithRng(
+        &node_id_to_vote_accounts,
+        random,
+        random.uintAtMost(usize, max_list_entries),
+        struct {
             allocator: Allocator,
-            pubkey: Pubkey,
-            account: VoteAccount,
-            new_rate_activation_epoch: ?Epoch,
-        ) Allocator.Error!void {
-            std.debug.assert(account.account.lamports > 0);
-            errdefer account.deinit(allocator);
-
-            // TODO: move this function call into vote accounts insert to prevent execution
-            // on failure paths in vote_accounts.insert
-            const stake = self.calculateStake(pubkey, new_rate_activation_epoch);
-
-            const maybe_old_account = try self.vote_accounts.insert(
-                allocator,
-                pubkey,
-                account,
-                stake,
-            );
-
-            if (maybe_old_account) |old_account| old_account.deinit(allocator);
-        }
-
-        pub fn removeVoteAccount(
-            self: *Self,
-            allocator: Allocator,
-            pubkey: Pubkey,
-        ) void {
-            self.vote_accounts.remove(allocator, pubkey);
-        }
-
-        /// Takes ownership of `account` iff `stakes_type` is `account`.
-        pub fn upsertStakeAccount(
-            self: *Self,
-            allocator: Allocator,
-            pubkey: Pubkey,
-            account: StakeAccount,
-            new_rate_activation_epoch: ?Epoch,
-        ) Allocator.Error!void {
-            std.debug.assert(account.account.lamports > 0);
-            defer if (!is_account_type) account.deinit(allocator);
-            errdefer if (is_account_type) account.deinit(allocator);
-
-            const delegation = account.getDelegation();
-            const voter_pubkey = delegation.voter_pubkey;
-            const stake = delegation.getStake(
-                self.epoch,
-                &self.stake_history,
-                new_rate_activation_epoch,
-            );
-
-            const entry = switch (stakes_type) {
-                .delegation => account.getDelegation(),
-                .stake => account.getStake(),
-                .account => account,
-            };
-
-            if (try self.stake_delegations.fetchPut(
-                allocator,
-                pubkey,
-                entry,
-            )) |old_account_entry| {
-                const old_account: T = old_account_entry.value;
-                defer if (is_account_type) old_account.deinit(allocator);
-
-                const old_delegation = old_account.getDelegation();
-                const old_voter_pubkey = old_delegation.voter_pubkey;
-                const old_stake = old_delegation.getStake(
-                    self.epoch,
-                    &self.stake_history,
-                    new_rate_activation_epoch,
-                );
-
-                if (!voter_pubkey.equals(&old_voter_pubkey) or stake != old_stake) {
-                    self.vote_accounts.subStake(old_voter_pubkey, old_stake);
-                    try self.vote_accounts.addStake(allocator, voter_pubkey, stake);
-                }
-            } else {
-                try self.vote_accounts.addStake(allocator, voter_pubkey, stake);
-            }
-        }
-
-        pub fn removeStakeAccount(
-            self: *Self,
-            allocator: Allocator,
-            pubkey: Pubkey,
-            new_rate_activation_epoch: ?Epoch,
-        ) void {
-            var account: T = (self.stake_delegations.fetchSwapRemove(pubkey) orelse return).value;
-            defer if (is_account_type) account.deinit(allocator);
-
-            const removed_delegation = account.getDelegation();
-            const removed_stake = removed_delegation.getStake(
-                self.epoch,
-                &self.stake_history,
-                new_rate_activation_epoch,
-            );
-
-            self.vote_accounts.subStake(removed_delegation.voter_pubkey, removed_stake);
-        }
-
-        pub fn initRandom(
-            allocator: Allocator,
-            random: std.Random,
             max_list_entries: usize,
-        ) Allocator.Error!Self {
-            const vote_accounts = try VoteAccounts.initRandom(allocator, random, max_list_entries);
-            errdefer vote_accounts.deinit(allocator);
 
-            var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, T){};
-            errdefer {
-                if (is_account_type) for (stake_delegations.values()) |*v| v.deinit(allocator);
-                stake_delegations.deinit(allocator);
+            pub fn randomKey(_: @This(), rand: std.Random) !Pubkey {
+                return Pubkey.initRandom(rand);
             }
 
-            const history = try StakeHistory.initRandom(allocator, random);
-            errdefer allocator.free(history);
-
-            return .{
-                .vote_accounts = vote_accounts,
-                .stake_delegations = stake_delegations,
-                .unused = random.int(u64),
-                .epoch = random.int(Epoch),
-                .stake_history = stake_history,
-            };
-        }
-    };
-}
-
-pub const StakeAccount = struct {
-    account: AccountSharedData,
-    state: StakeStateV2,
-
-    pub fn deinit(self: *const StakeAccount, allocator: Allocator) void {
-        self.account.deinit(allocator);
-    }
-
-    pub fn clone(self: *const StakeAccount, allocator: Allocator) Allocator.Error!StakeAccount {
-        return .{
-            .account = try self.account.clone(allocator),
-            .state = self.state,
-        };
-    }
-
-    pub fn getDelegation(self: StakeAccount) Delegation {
-        return self.state.getDelegation() orelse
-            @panic("StakeAccount does not have a delegation");
-    }
-
-    pub fn getStake(self: StakeAccount) Stake {
-        return self.state.getStake() orelse
-            @panic("StakeAccount does not have a stake");
-    }
-
-    /// Takes ownership of `account`.
-    pub fn fromAccountSharedData(allocator: Allocator, account: AccountSharedData) !StakeAccount {
-        errdefer account.deinit(allocator);
-
-        if (!stake_program.ID.equals(&account.owner)) return error.InvalidOwner;
-
-        const state = try bincode.readFromSlice(
-            failing_allocator,
-            StakeStateV2,
-            account.data,
-            .{},
-        );
-
-        if (state.getDelegation() == null) return error.NoDelegation;
-
-        return .{
-            .account = account,
-            .state = state,
-        };
-    }
-};
-
-pub const StakeStateV2 = union(enum) {
-    uninitialized,
-    initialized: Meta,
-    stake: struct { meta: Meta, stake: Stake, flags: StakeFlags },
-    rewards_pool,
-
-    pub const SIZE = 200;
-
-    pub fn getStake(self: *const StakeStateV2) ?Stake {
-        return switch (self.*) {
-            .uninitialized => null,
-            .initialized => null,
-            .stake => |s| s.stake,
-            .rewards_pool => null,
-        };
-    }
-
-    pub fn getDelegation(self: *const StakeStateV2) ?Delegation {
-        return switch (self.*) {
-            .uninitialized => null,
-            .initialized => null,
-            .stake => |s| s.stake.delegation,
-            .rewards_pool => null,
-        };
-    }
-};
-
-pub const Meta = struct {
-    rent_exempt_reserve: u64,
-    authorized: Authorized,
-    lockup: Lockup,
-};
-
-pub const Stake = struct {
-    delegation: Delegation,
-    /// Credits observed is credits from vote account state when delegated or redeemed.
-    credits_observed: u64,
-
-    pub fn getDelegation(self: *const Stake) Delegation {
-        return self.delegation;
-    }
-
-    pub fn initRandom(random: std.Random) Stake {
-        return .{
-            .delegation = Delegation.initRandom(random),
-            .credits_observed = random.int(u64),
-        };
-    }
-};
-
-pub const StakeFlags = struct {
-    bits: u8,
-    pub const EMPTY: StakeFlags = .{ .bits = 0 };
-};
-
-pub const Authorized = struct {
-    staker: Pubkey,
-    withdrawer: Pubkey,
-};
-
-pub const Lockup = struct {
-    unix_timestamp: i64,
-    epoch: Epoch,
-    custodian: Pubkey,
-};
-
-pub const Delegation = struct {
-    /// to whom the stake is delegated
-    voter_pubkey: Pubkey,
-    /// activated stake amount, set at delegate() time
-    stake: u64,
-    /// epoch at which this stake was activated, std::Epoch::MAX if is a bootstrap stake
-    activation_epoch: Epoch,
-    /// epoch the stake was deactivated, std::Epoch::MAX if not deactivated
-    deactivation_epoch: Epoch,
-    /// DEPRECATED: since 1.16.7
-    deprecated_warmup_cooldown_rate: f64,
-
-    pub fn isBootstrap(self: *const Delegation) bool {
-        return self.activation_epoch == std.math.maxInt(u64);
-    }
-
-    pub fn getDelegation(self: *const Delegation) Delegation {
-        return self.*;
-    }
-
-    pub fn getStake(
-        self: *const Delegation,
-        epoch: Epoch,
-        stake_history: *const StakeHistory,
-        new_rate_activation_epoch: ?Epoch,
-    ) u64 {
-        return self.getClusterStake(
-            epoch,
-            stake_history,
-            new_rate_activation_epoch,
-        ).effective;
-    }
-
-    /// TODO: Rename
-    pub fn getClusterStake(
-        self: *const Delegation,
-        epoch: Epoch,
-        history: *const StakeHistory,
-        new_rate_activation_epoch: ?Epoch,
-    ) ClusterStake {
-        const effective_stake, const activating_stake = self.getClusterEffectiveAndActivatingStake(
-            epoch,
-            history,
-            new_rate_activation_epoch,
-        );
-
-        if (epoch < self.deactivation_epoch) {
-            return .{
-                .effective = effective_stake,
-                .activating = activating_stake,
-                .deactivating = 0,
-            };
-        } else if (epoch == self.deactivation_epoch) {
-            return .{
-                .effective = effective_stake,
-                .activating = 0,
-                .deactivating = effective_stake,
-            };
-        } else if (history.getEntry(epoch)) |entry| {
-            var prev_epoch = entry.epoch;
-            var prev_cluster_stake = entry.stake;
-            var current_epoch: Epoch = undefined;
-            var current_effective_stake = effective_stake;
-
-            while (true) {
-                current_epoch = prev_epoch + 1;
-
-                if (prev_cluster_stake.deactivating == 0) break;
-
-                const weight = @as(f64, @floatFromInt(current_effective_stake)) /
-                    @as(f64, @floatFromInt(prev_cluster_stake.deactivating));
-                const warmup_cooldown_rate =
-                    warmupCooldownRate(current_epoch, new_rate_activation_epoch);
-
-                const newly_not_effective_cluster_stake =
-                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
-                const wieghted_not_effective_state: u64 =
-                    @intFromFloat(weight * newly_not_effective_cluster_stake);
-                const newly_not_effective_stake = @max(wieghted_not_effective_state, 1);
-
-                current_effective_stake = current_effective_stake -| newly_not_effective_stake;
-                if (current_effective_stake == 0) break;
-                if (current_epoch >= epoch) break;
-
-                if (history.getEntry(current_epoch)) |next_entry| {
-                    prev_epoch = entry.epoch;
-                    prev_cluster_stake = next_entry.stake;
-                } else break;
+            pub fn randomValue(ctx: @This(), rand: std.Random) !NodeVoteAccounts {
+                return try NodeVoteAccounts.initRandom(rand, ctx.allocator, ctx.max_list_entries);
             }
+        }{
+            .allocator = allocator,
+            .max_list_entries = max_list_entries,
+        },
+    );
 
-            return .{
-                .effective = current_effective_stake,
-                .activating = 0,
-                .deactivating = current_effective_stake,
-            };
-        } else {
-            return .{
-                .effective = 0,
-                .activating = 0,
-                .deactivating = 0,
-            };
-        }
-    }
-
-    /// TODO: Rename
-    pub fn getClusterEffectiveAndActivatingStake(
-        self: *const Delegation,
-        epoch: Epoch,
-        history: *const StakeHistory,
-        new_rate_activation_epoch: ?Epoch,
-    ) struct { u64, u64 } {
-        if (self.activation_epoch == std.math.maxInt(u64)) {
-            return .{ self.stake, 0 };
-        } else if (self.activation_epoch == self.deactivation_epoch) {
-            return .{ 0, 0 };
-        } else if (epoch == self.activation_epoch) {
-            return .{ 0, self.stake };
-        } else if (epoch < self.activation_epoch) {
-            return .{ 0, 0 };
-        } else if (history.getEntry(self.activation_epoch)) |entry| {
-            var prev_epoch = entry.epoch;
-            var prev_cluster_stake = entry.stake;
-            var current_epoch: Epoch = undefined;
-            var current_effective_stake: u64 = 0;
-
-            while (true) {
-                current_epoch = prev_epoch + 1;
-
-                if (prev_cluster_stake.deactivating == 0) break;
-
-                const remaining_activated_stake = self.stake - current_effective_stake;
-                const weight = @as(f64, @floatFromInt(remaining_activated_stake)) /
-                    @as(f64, @floatFromInt(prev_cluster_stake.activating));
-                const warmup_cooldown_rate =
-                    warmupCooldownRate(current_epoch, new_rate_activation_epoch);
-
-                const newly_effective_cluster_stake =
-                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
-                const weighted_effective_state: u64 =
-                    @intFromFloat(weight * newly_effective_cluster_stake);
-                const newly_effective_stake = @max(weighted_effective_state, 1);
-
-                current_effective_stake += newly_effective_stake;
-                if (current_effective_stake >= self.stake) {
-                    current_effective_stake = self.stake;
-                    break;
-                }
-
-                if (current_epoch >= epoch or current_epoch >= self.deactivation_epoch) break;
-
-                if (history.getEntry(current_epoch)) |next_entry| {
-                    prev_epoch = next_entry.epoch;
-                    prev_cluster_stake = next_entry.stake;
-                } else break;
-            }
-
-            return .{
-                current_effective_stake,
-                self.stake - current_effective_stake,
-            };
-        } else {
-            return .{ 0, 0 };
-        }
-    }
-
-    pub fn initRandom(random: std.Random) Delegation {
-        return .{
-            .voter_pubkey = Pubkey.initRandom(random),
-            .stake = random.int(u64),
-            .activation_epoch = random.int(Epoch),
-            .deactivation_epoch = random.int(Epoch),
-            .deprecated_warmup_cooldown_rate = random.float(f64),
-        };
-    }
-};
-
-const DEFAULT_WARMUP_COOLDOWN_RATE: f64 = 0.25;
-const NEW_WARMUP_COOLDOWN_RATE: f64 = 0.09;
-
-fn warmupCooldownRate(current_epoch: Epoch, new_rate_activation_epoch: ?Epoch) f64 {
-    return if (current_epoch < new_rate_activation_epoch orelse std.math.maxInt(u64))
-        DEFAULT_WARMUP_COOLDOWN_RATE
-    else
-        NEW_WARMUP_COOLDOWN_RATE;
+    return node_id_to_vote_accounts.unmanaged;
 }
 
 fn createStakeAccount(
