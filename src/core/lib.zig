@@ -24,7 +24,6 @@ pub const vote_accounts = @import("vote_accounts.zig");
 
 pub const EpochStakes = epoch_stakes.EpochStakes(.delegation);
 
-pub const NodeVoteAccounts = epoch_stakes.NodeVoteAccounts;
 pub const NewEpochStakes = epoch_stakes.EpochStakes;
 pub const EpochStakesMap = epoch_stakes.EpochStakesMap;
 pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
