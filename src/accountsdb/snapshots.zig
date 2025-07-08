@@ -18,7 +18,7 @@ const Rent = sig.core.genesis_config.Rent;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
-const VersionedEpochStakes = sig.core.NewVersionedEpochStakes;
+const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
