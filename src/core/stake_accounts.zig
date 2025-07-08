@@ -7,24 +7,302 @@ const Allocator = std.mem.Allocator;
 const bincode = sig.bincode;
 const vote_program = sig.runtime.program.vote;
 const stake_program = sig.runtime.program.stake;
+const stake_accounts = sig.core.stake_accounts;
+const vote_accounts = sig.core.vote_accounts;
 
 const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
+const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
+const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VersionedVoteState = sig.runtime.program.vote.state.VoteStateVersions;
-
 const Rent = sig.runtime.sysvar.Rent;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const StakeHistoryEntry = sig.runtime.sysvar.StakeHistory.Entry;
 const ClusterStake = sig.runtime.sysvar.StakeHistory.ClusterStake;
+
 const RwMux = sig.sync.RwMux;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-pub const StakeAccounts = std.AutoArrayHashMapUnmanaged(Pubkey, StakeAccount);
+pub fn StakesCache(comptime stakes_type: StakesType) type {
+    const StakesT = Stakes(stakes_type);
+
+    return struct {
+        stakes: RwMux(StakesT),
+
+        const Self = @This();
+
+        pub fn initEmpty(epoch: Epoch) Self {
+            return .{ .stakes = RwMux(StakesT).init(StakesT.initEmpty(epoch)) };
+        }
+
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+            defer stakes_guard.unlock();
+            stakes.deinit(allocator);
+        }
+
+        pub fn checkAndStore(
+            self: *Self,
+            allocator: Allocator,
+            pubkey: Pubkey,
+            account: AccountSharedData,
+            new_rate_activation_epoch: ?Epoch,
+        ) Allocator.Error!void {
+            if (account.lamports == 0) {
+                if (vote_program.ID.equals(&account.owner)) {
+                    var stakes, var stakes_guard = self.stakes.writeWithLock();
+                    defer stakes_guard.unlock();
+                    stakes.removeVoteAccount(allocator, pubkey);
+                } else if (stake_program.ID.equals(&account.owner)) {
+                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    defer stakes_guard.unlock();
+                    stakes.removeStakeAccount(allocator, pubkey, new_rate_activation_epoch);
+                }
+                return;
+            }
+
+            if (vote_program.ID.equals(&account.owner)) {
+                if (VersionedVoteState.isCorrectSizeAndInitialized(account.data)) {
+                    const vote_account = VoteAccount.fromAccountSharedData(
+                        allocator,
+                        try account.clone(allocator),
+                    ) catch {
+                        var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                        defer stakes_guard.unlock();
+                        stakes.removeVoteAccount(allocator, pubkey);
+                        return;
+                    };
+                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    defer stakes_guard.unlock();
+                    try stakes.upsertVoteAccount(allocator, pubkey, vote_account, new_rate_activation_epoch);
+                } else {
+                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    defer stakes_guard.unlock();
+                    stakes.removeVoteAccount(allocator, pubkey);
+                }
+            } else if (stake_program.ID.equals(&account.owner)) {
+                const stake_account = StakeAccount.fromAccountSharedData(
+                    allocator,
+                    try account.clone(allocator),
+                ) catch {
+                    var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                    defer stakes_guard.unlock();
+                    stakes.removeStakeAccount(allocator, pubkey, new_rate_activation_epoch);
+                    return;
+                };
+                var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
+                defer stakes_guard.unlock();
+                try stakes.upsertStakeAccount(
+                    allocator,
+                    pubkey,
+                    stake_account,
+                    new_rate_activation_epoch,
+                );
+            }
+        }
+    };
+}
+
+pub const StakesType = enum {
+    delegation,
+    stake,
+    account,
+};
+
+pub fn Stakes(comptime stakes_type: StakesType) type {
+    const T = switch (stakes_type) {
+        .delegation => Delegation,
+        .stake => Stake,
+        .account => StakeAccount,
+    };
+    const require_deinit = stakes_type == .account;
+
+    return struct {
+        vote_accounts: VoteAccounts,
+        stake_delegations: std.AutoArrayHashMapUnmanaged(Pubkey, T),
+        unused: u64,
+        epoch: Epoch,
+        stake_history: StakeHistory,
+
+        const Self = @This();
+
+        pub fn initEmpty(epoch: Epoch) Self {
+            return .{
+                .vote_accounts = .{},
+                .stake_delegations = .{},
+                .unused = 0,
+                .epoch = epoch,
+                .stake_history = .{},
+            };
+        }
+
+        pub fn deinit(self: *const Self, allocator: Allocator) void {
+            self.vote_accounts.deinit(allocator);
+            if (require_deinit) for (self.stake_delegations.values()) |*v| v.deinit(allocator);
+            var delegations = self.stake_delegations;
+            delegations.deinit(allocator);
+            self.stake_history.deinit(allocator);
+        }
+
+        pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
+            var stakes = Self.initEmpty(self.epoch);
+            errdefer stakes.deinit(allocator);
+
+            const vote_accs = try self.vote_accounts.clone(allocator);
+            errdefer vote_accs.deinit(allocator);
+
+            var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, T){};
+            errdefer {
+                if (require_deinit) for (stake_delegations.values()) |*v| v.deinit(allocator);
+                stake_delegations.deinit(allocator);
+            }
+            for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value|
+                try stake_delegations.put(
+                    allocator,
+                    key,
+                    if (require_deinit) value.clone(allocator) else value,
+                );
+
+            const stake_history = try self.stake_history.clone(allocator);
+            errdefer stake_history.deinit(allocator);
+
+            return .{
+                .vote_accounts = vote_accs,
+                .stake_delegations = stake_delegations,
+                .unused = self.unused,
+                .epoch = self.epoch,
+                .stake_history = stake_history,
+            };
+        }
+
+        pub fn calculateStake(
+            self: *const Self,
+            pubkey: Pubkey,
+            new_rate_activation_epoch: ?Epoch,
+        ) u64 {
+            var stake: u64 = 0;
+            for (self.stake_delegations.values()) |*stake_delegations| {
+                const delegation = stake_delegations.getDelegation();
+                if (!delegation.voter_pubkey.equals(&pubkey)) continue;
+                stake += delegation.getStake(
+                    self.epoch,
+                    &self.stake_history,
+                    new_rate_activation_epoch,
+                );
+            }
+            return stake;
+        }
+
+        /// Takes ownership of `account`.
+        pub fn upsertVoteAccount(
+            self: *Self,
+            allocator: Allocator,
+            pubkey: Pubkey,
+            account: VoteAccount,
+            new_rate_activation_epoch: ?Epoch,
+        ) Allocator.Error!void {
+            std.debug.assert(account.account.lamports > 0);
+            errdefer account.deinit(allocator);
+
+            // TODO: move this function call into vote accounts insert to prevent execution
+            // on failure paths in vote_accounts.insert
+            const stake = self.calculateStake(pubkey, new_rate_activation_epoch);
+
+            const maybe_old_account = try self.vote_accounts.insert(allocator, pubkey, account, stake);
+
+            if (maybe_old_account) |old_account| old_account.deinit(allocator);
+        }
+
+        pub fn removeVoteAccount(
+            self: *Self,
+            allocator: Allocator,
+            pubkey: Pubkey,
+        ) void {
+            self.vote_accounts.remove(allocator, pubkey);
+        }
+
+        /// Takes ownership of `account` iff `stakes_type` is `account`.
+        pub fn upsertStakeAccount(
+            self: *Self,
+            allocator: Allocator,
+            pubkey: Pubkey,
+            account: StakeAccount,
+            new_rate_activation_epoch: ?Epoch,
+        ) Allocator.Error!void {
+            std.debug.assert(account.account.lamports > 0);
+            defer if (!require_deinit) account.deinit(allocator);
+            errdefer if (require_deinit) account.deinit(allocator);
+
+            const delegation = account.getDelegation();
+            const voter_pubkey = delegation.voter_pubkey;
+            const stake = delegation.getStake(
+                self.epoch,
+                &self.stake_history,
+                new_rate_activation_epoch,
+            );
+
+            const entry = switch (stakes_type) {
+                .delegation => account.getDelegation(),
+                .stake => account.getStake(),
+                .account => account,
+            };
+
+            if (try self.stake_delegations.fetchPut(
+                allocator,
+                pubkey,
+                entry,
+            )) |old_account_entry| {
+                const old_account: T = old_account_entry.value;
+                defer if (require_deinit) old_account.deinit(allocator);
+
+                const old_delegation = old_account.getDelegation();
+                const old_voter_pubkey = old_delegation.voter_pubkey;
+                const old_stake = old_delegation.getStake(
+                    self.epoch,
+                    &self.stake_history,
+                    new_rate_activation_epoch,
+                );
+
+                if (!voter_pubkey.equals(&old_voter_pubkey) or stake != old_stake) {
+                    self.vote_accounts.subStake(old_voter_pubkey, old_stake);
+                    try self.vote_accounts.addStake(allocator, voter_pubkey, stake);
+                }
+            } else {
+                try self.vote_accounts.addStake(allocator, voter_pubkey, stake);
+            }
+        }
+
+        pub fn removeStakeAccount(
+            self: *Self,
+            allocator: Allocator,
+            pubkey: Pubkey,
+            new_rate_activation_epoch: ?Epoch,
+        ) void {
+            var account: T = (self.stake_delegations.fetchSwapRemove(pubkey) orelse return).value;
+            defer if (require_deinit) account.deinit(allocator);
+
+            const removed_delegation = account.getDelegation();
+            const removed_stake = removed_delegation.getStake(
+                self.epoch,
+                &self.stake_history,
+                new_rate_activation_epoch,
+            );
+
+            self.vote_accounts.subStake(removed_delegation.voter_pubkey, removed_stake);
+        }
+
+        pub fn initRandom(allocator: Allocator, random: std.Random, max_list_entries: usize) Allocator.Error!Self {
+            // TODO
+            _ = allocator;
+            _ = max_list_entries;
+            return initEmpty(random.int(u64));
+        }
+    };
+}
 
 pub const StakeAccount = struct {
     account: AccountSharedData,
@@ -34,9 +312,21 @@ pub const StakeAccount = struct {
         self.account.deinit(allocator);
     }
 
+    pub fn clone(self: *const StakeAccount, allocator: Allocator) Allocator.Error!StakeAccount {
+        return .{
+            .account = try self.account.clone(allocator),
+            .state = self.state,
+        };
+    }
+
     pub fn getDelegation(self: StakeAccount) Delegation {
         return self.state.getDelegation() orelse
             @panic("StakeAccount does not have a delegation");
+    }
+
+    pub fn getStake(self: StakeAccount) Stake {
+        return self.state.getStake() orelse
+            @panic("StakeAccount does not have a stake");
     }
 
     /// Takes ownership of `account`.
@@ -97,6 +387,10 @@ pub const Meta = struct {
 pub const Stake = struct {
     delegation: Delegation,
     credits_observed: u64,
+
+    pub fn getDelegation(self: *const Stake) Delegation {
+        return self.delegation;
+    }
 };
 
 pub const StakeFlags = struct {
@@ -121,6 +415,10 @@ pub const Delegation = struct {
     activation_epoch: Epoch,
     deactivation_epoch: Epoch,
     deprecated_warmup_cooldown_rate: f64,
+
+    pub fn getDelegation(self: *const Delegation) Delegation {
+        return self.*;
+    }
 
     pub fn isBootstrap(self: *const Delegation) bool {
         return self.activation_epoch == std.math.maxInt(u64);
@@ -339,4 +637,156 @@ pub fn getStakeFromStakeAccount(account: AccountSharedData) !Stake {
     );
 
     return state_state.getStake().?;
+}
+
+const TestStakedNodeAccounts = struct {
+    vote_pubkey: Pubkey,
+    vote_account: AccountSharedData,
+    stake_pubkey: Pubkey,
+    stake_account: AccountSharedData,
+
+    pub fn init(allocator: Allocator, random: std.Random, stake: u64) !TestStakedNodeAccounts {
+        if (!builtin.is_test) @compileError("only for testing");
+
+        const vote_pubkey, const vote_account = blk: {
+            const vote_pubkey = Pubkey.initRandom(random);
+            const vote_authority = Pubkey.initRandom(random);
+            const vote_account = try vote_accounts.createVoteAccount(
+                allocator,
+                vote_pubkey,
+                vote_authority,
+                vote_authority,
+                0,
+                1,
+                null,
+            );
+            break :blk .{ vote_pubkey, vote_account };
+        };
+        errdefer allocator.free(vote_account.data);
+
+        const stake_pubkey, const stake_account = blk: {
+            const staked_vote_authority = Pubkey.initRandom(random);
+            const staked_vote_account = try vote_accounts.createVoteAccount(
+                allocator,
+                vote_pubkey,
+                staked_vote_authority,
+                staked_vote_authority,
+                0,
+                1,
+                null,
+            );
+            defer allocator.free(staked_vote_account.data);
+
+            const stake_pubkey = Pubkey.initRandom(random);
+            const stake_account = try stake_accounts.createStakeAccount(
+                allocator,
+                stake_pubkey,
+                vote_pubkey,
+                staked_vote_account,
+                Rent.FREE,
+                stake,
+                std.math.maxInt(u64),
+            );
+
+            break :blk .{ stake_pubkey, stake_account };
+        };
+
+        return .{
+            .vote_pubkey = vote_pubkey,
+            .vote_account = vote_account,
+            .stake_pubkey = stake_pubkey,
+            .stake_account = stake_account,
+        };
+    }
+
+    pub fn deinit(self: TestStakedNodeAccounts, allocator: Allocator) void {
+        self.vote_account.deinit(allocator);
+        self.stake_account.deinit(allocator);
+    }
+};
+
+test "stakes basic" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+
+    for (0..1) |i| {
+        const stakes_type = StakesType.delegation;
+
+        var stakes_cache = StakesCache(stakes_type).initEmpty(i);
+        defer stakes_cache.deinit(allocator);
+
+        var accs = try TestStakedNodeAccounts.init(allocator, prng.random(), 10);
+        defer accs.deinit(allocator);
+
+        try stakes_cache.checkAndStore(allocator, accs.vote_pubkey, accs.vote_account, null);
+        try stakes_cache.checkAndStore(allocator, accs.stake_pubkey, accs.stake_account, null);
+        var stake = try stake_accounts.getStakeFromStakeAccount(accs.stake_account);
+        {
+            const stakes: *Stakes(stakes_type), var stakes_guard = stakes_cache.stakes.writeWithLock();
+            defer stakes_guard.unlock();
+            try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
+            try std.testing.expectEqual(
+                stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
+            );
+        }
+
+        accs.stake_account.lamports = 42;
+        try stakes_cache.checkAndStore(allocator, accs.stake_pubkey, accs.stake_account, null);
+        {
+            const stakes: *Stakes(stakes_type), var stakes_guard = stakes_cache.stakes.writeWithLock();
+            defer stakes_guard.unlock();
+            try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
+            try std.testing.expectEqual(
+                stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
+            );
+        }
+
+        const vote_account = try vote_accounts.createVoteAccount(
+            allocator,
+            Pubkey.initRandom(prng.random()),
+            accs.vote_pubkey,
+            accs.vote_pubkey,
+            0,
+            1,
+            null,
+        );
+        defer allocator.free(vote_account.data);
+
+        var stake_account = try stake_accounts.createStakeAccount(
+            allocator,
+            Pubkey.initRandom(prng.random()),
+            accs.vote_pubkey,
+            vote_account,
+            Rent.FREE,
+            42,
+            std.math.maxInt(u64),
+        );
+        defer allocator.free(stake_account.data);
+
+        try stakes_cache.checkAndStore(allocator, accs.stake_pubkey, stake_account, null);
+        stake = try stake_accounts.getStakeFromStakeAccount(stake_account);
+        {
+            const stakes: *Stakes(stakes_type), var stakes_guard = stakes_cache.stakes.writeWithLock();
+            defer stakes_guard.unlock();
+            try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
+            try std.testing.expectEqual(
+                stake.delegation.getStake(i, &StakeHistory.EMPTY, null),
+                stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
+            );
+        }
+
+        stake_account.lamports = 0;
+        try stakes_cache.checkAndStore(allocator, accs.stake_pubkey, stake_account, null);
+        {
+            const stakes: *Stakes(stakes_type), var stakes_guard = stakes_cache.stakes.writeWithLock();
+            defer stakes_guard.unlock();
+            try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
+            try std.testing.expectEqual(
+                0,
+                stakes.vote_accounts.getDelegatedStake(accs.vote_pubkey),
+            );
+        }
+    }
 }
