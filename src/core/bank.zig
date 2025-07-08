@@ -40,16 +40,15 @@ const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
 const EpochStakes = core.old_epoch_stakes.EpochStakes;
-const EpochStakeMap = core.old_epoch_stakes.EpochStakesMap;
+const EpochStakeMap = core.EpochStakesMap(.delegation);
 const Stakes = core.Stakes;
-const epochStakeMapClone = core.old_epoch_stakes.epochStakeMapClone;
-const epochStakeMapDeinit = core.old_epoch_stakes.epochStakeMapDeinit;
-const epochStakeMapRandom = core.old_epoch_stakes.epochStakeMapRandom;
-
 const Ancestors = sig.core.Ancestors;
 const EpochStakes = core.EpochStakes;
 const EpochStakesMap = core.EpochStakesMap;
 const Stakes = core.Stakes;
+
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
