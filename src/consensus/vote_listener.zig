@@ -347,8 +347,8 @@ fn verifyVoteTransaction(
     return .verified;
 }
 
-const ThresholdConfirmedSlot = struct { Slot, Hash };
-const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
+pub const ThresholdConfirmedSlot = struct { Slot, Hash };
+pub const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
 const VerifiedVote = struct { Pubkey, []const Slot };
 
 /// The expected duration of a slot (400 milliseconds).

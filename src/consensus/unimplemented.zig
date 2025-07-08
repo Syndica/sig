@@ -13,12 +13,14 @@ pub const LatestValidatorVotesForFrozenBanks = struct {
     pub fn checkAddVote(
         self: *LatestValidatorVotesForFrozenBanks,
         vote_pubkey: Pubkey,
-        frozend_hash: ?Hash,
+        vote_slot: Slot,
+        frozen_hash: ?Hash,
         is_replay_vote: bool,
     ) struct { bool, ?Slot } {
         _ = self;
         _ = vote_pubkey;
-        _ = frozend_hash;
+        _ = vote_slot;
+        _ = frozen_hash;
         _ = is_replay_vote;
         // TODO Implement
         return .{ false, null };
