@@ -210,10 +210,7 @@ pub fn createEpochStakes(
 ) !EpochStakes {
     var self: EpochStakes = .{
         .stakes = .{
-            .vote_accounts = .{
-                .accounts = .{},
-                .staked_nodes = null,
-            },
+            .vote_accounts = .{},
             .delegations = .{},
             .unused = 0,
             .epoch = 0,

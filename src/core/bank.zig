@@ -390,7 +390,7 @@ pub const BankFields = struct {
         epoch: Epoch,
     ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
         const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
+        return epoch_stakes.stakes.vote_accounts.getStakedNodes(allocator);
     }
 
     /// Returns the leader schedule for this bank's epoch
