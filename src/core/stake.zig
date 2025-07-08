@@ -9,6 +9,10 @@ const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
 const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
+const Delegation = sig.core.stake_accounts.Delegation;
+const Stake = sig.core.stake_accounts.Stake;
+const StakeAccount = sig.core.stake_accounts.StakeAccount;
+const Stakes = sig.core.stake_accounts.Stakes;
 
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 
@@ -78,7 +82,7 @@ pub const EpochStakes = struct {
 
     /// Creates an empty `EpochStakes` with a single stake history entry at epoch 0.
     pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes {
-        const history = try StakeHistory.initWithEntries(allocator, &.{.{
+        const stake_history = try StakeHistory.initWithEntries(allocator, &.{.{
             .epoch = 0,
             .stake = .{
                 .effective = 0,
@@ -90,11 +94,11 @@ pub const EpochStakes = struct {
         return .{
             .total_stake = 0,
             .stakes = .{
-                .epoch = 0,
-                .history = history,
                 .vote_accounts = .{},
-                .delegations = .{},
+                .stake_delegations = .{},
                 .unused = 0,
+                .epoch = 0,
+                .stake_history = stake_history,
             },
             .node_id_to_vote_accounts = .{},
             .epoch_authorized_voters = .{},
@@ -242,132 +246,6 @@ pub const EpochStakes = struct {
 // }
 //
 // Proposed Epoch Staked Nodes
-
-/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186).
-/// It differs in that its delegation element parameterization is narrowed to only accept the specific types we actually need to implement.
-pub fn Stakes(comptime delegation_type: enum {
-    delegation,
-    stake,
-}) type {
-    const Element = switch (delegation_type) {
-        .delegation => Delegation,
-        .stake => Stake,
-    };
-
-    return struct {
-        vote_accounts: VoteAccounts,
-        delegations: DelegationsMap,
-        unused: u64,
-        /// current epoch, used to calculate current stake
-        epoch: Epoch,
-        history: StakeHistory,
-
-        const Self = @This();
-        pub const DelegationsMap = std.AutoArrayHashMapUnmanaged(Pubkey, Element);
-
-        pub fn deinit(stakes: Self, allocator: Allocator) void {
-            var copy = stakes;
-            copy.vote_accounts.deinit(allocator);
-            copy.delegations.deinit(allocator);
-            copy.history.deinit(allocator);
-        }
-
-        pub fn clone(
-            stakes: Self,
-            allocator: Allocator,
-        ) Allocator.Error!Self {
-            const vote_accounts = try stakes.vote_accounts.clone(allocator);
-            errdefer vote_accounts.deinit(allocator);
-
-            var delegations = try stakes.delegations.clone(allocator);
-            errdefer delegations.deinit(allocator);
-
-            const history = try stakes.history.clone(allocator);
-            errdefer allocator.free(history);
-
-            return .{
-                .vote_accounts = vote_accounts,
-                .delegations = delegations,
-                .unused = stakes.unused,
-                .epoch = stakes.epoch,
-                .history = history,
-            };
-        }
-
-        pub fn initRandom(
-            allocator: Allocator,
-            /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
-            /// for commentary on the runtime of this function.
-            random: std.Random,
-            max_list_entries: usize,
-        ) Allocator.Error!Self {
-            const vote_accounts = try VoteAccounts.initRandom(allocator, random, max_list_entries);
-            errdefer vote_accounts.deinit(allocator);
-
-            var delegations: DelegationsMap = .{};
-            errdefer delegations.deinit(allocator);
-
-            const delegations_count = random.uintAtMost(usize, max_list_entries);
-            try delegations.ensureTotalCapacity(allocator, delegations_count);
-
-            for (0..delegations_count) |_| {
-                const key = Pubkey.initRandom(random);
-                const gop = delegations.getOrPutAssumeCapacity(key);
-                if (gop.found_existing) continue;
-                gop.value_ptr.* = Element.initRandom(random);
-            }
-
-            const history = try StakeHistory.initRandom(allocator, random);
-            errdefer allocator.free(history);
-
-            return .{
-                .vote_accounts = vote_accounts,
-                .delegations = delegations,
-                .unused = random.int(u64),
-                .epoch = random.int(Epoch),
-                .history = history,
-            };
-        }
-    };
-}
-
-/// Analogous to [Delegation](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L607)
-pub const Delegation = struct {
-    /// to whom the stake is delegated
-    voter_pubkey: Pubkey,
-    /// activated stake amount, set at delegate() time
-    stake: u64,
-    /// epoch at which this stake was activated, std::Epoch::MAX if is a bootstrap stake
-    activation_epoch: Epoch,
-    /// epoch the stake was deactivated, std::Epoch::MAX if not deactivated
-    deactivation_epoch: Epoch,
-    /// DEPRECATED: since 1.16.7
-    deprecated_warmup_cooldown_rate: f64,
-
-    pub fn initRandom(random: std.Random) Delegation {
-        return .{
-            .voter_pubkey = Pubkey.initRandom(random),
-            .stake = random.int(u64),
-            .activation_epoch = random.int(Epoch),
-            .deactivation_epoch = random.int(Epoch),
-            .deprecated_warmup_cooldown_rate = random.float(f64),
-        };
-    }
-};
-
-/// Analogous to [Stake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/sdk/program/src/stake/state.rs#L918)
-pub const Stake = struct {
-    delegation: Delegation,
-    /// Credits observed is credits from vote account state when delegated or redeemed.
-    credits_observed: u64,
-
-    pub fn initRandom(random: std.Random) Stake {
-        return .{
-            .delegation = Delegation.initRandom(random),
-            .credits_observed = random.int(u64),
-        };
-    }
-};
 
 /// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L14)
 pub const NodeVoteAccounts = struct {
