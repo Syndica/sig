@@ -24,10 +24,11 @@ pub const transaction = @import("transaction.zig");
 pub const vote_accounts = @import("vote_accounts.zig");
 
 pub const EpochStakes = old_epoch_stakes.EpochStakes;
-pub const EpochStakesMap = old_epoch_stakes.EpochStakesMap;
+// pub const EpochStakesMap = old_epoch_stakes.EpochStakesMap;
 
+pub const NodeVoteAccounts = epoch_stakes.NodeVoteAccounts;
 pub const NewEpochStakes = epoch_stakes.EpochStakes;
-pub const NewEpochStakesMap = epoch_stakes.EpochStakesMap;
+pub const EpochStakesMap = epoch_stakes.EpochStakesMap;
 
 pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 

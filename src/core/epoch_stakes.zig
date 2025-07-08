@@ -7,6 +7,7 @@ const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 const Stakes = sig.core.Stakes;
 const StakesType = sig.core.StakesType;
+const StakeHistory = sig.runtime.sysvar.StakeHistory;
 
 const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
 const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
@@ -54,6 +55,31 @@ pub fn EpochStakesMap(comptime stakes_type: StakesType) type {
     return std.AutoArrayHashMapUnmanaged(Epoch, EpochStakes(stakes_type));
 }
 
+pub fn epochStakeMapRandom(
+    allocator: Allocator,
+    random: std.Random,
+    comptime stakes_type: StakesType,
+    min_list_entries: usize,
+    max_list_entries: usize,
+) Allocator.Error!EpochStakesMap(stakes_type) {
+    var map: EpochStakesMap(stakes_type) = .{};
+    errdefer deinitMapAndValues(allocator, map);
+
+    const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
+    try map.ensureTotalCapacity(allocator, map_len);
+
+    for (0..map_len) |_| {
+        const value_ptr = while (true) {
+            const gop = map.getOrPutAssumeCapacity(random.int(Epoch));
+            if (gop.found_existing) continue;
+            break gop.value_ptr;
+        };
+        value_ptr.* = try EpochStakes(stakes_type).initRandom(allocator, random, max_list_entries);
+    }
+
+    return map;
+}
+
 pub fn EpochStakes(comptime stakes_type: StakesType) type {
     std.debug.assert(stakes_type != .account);
     return struct {
@@ -87,6 +113,30 @@ pub fn EpochStakes(comptime stakes_type: StakesType) type {
                 .total_stake = self.total_stake,
                 .node_id_to_vote_accounts = node_id_to_vote_accounts,
                 .epoch_authorized_voters = epoch_authorized_voters,
+            };
+        }
+
+        pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes(.delegation) {
+            const stake_history = try StakeHistory.initWithEntries(allocator, &.{.{
+                .epoch = 0,
+                .stake = .{
+                    .effective = 0,
+                    .activating = 0,
+                    .deactivating = 0,
+                },
+            }});
+
+            return .{
+                .total_stake = 0,
+                .stakes = .{
+                    .vote_accounts = .{},
+                    .stake_delegations = .{},
+                    .unused = 0,
+                    .epoch = 0,
+                    .stake_history = stake_history,
+                },
+                .node_id_to_vote_accounts = .{},
+                .epoch_authorized_voters = .{},
             };
         }
 

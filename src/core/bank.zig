@@ -40,13 +40,12 @@ const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
 const EpochStakes = core.old_epoch_stakes.EpochStakes;
-const EpochStakeMap = core.old_epoch_stakes.EpochStakesMap;
+const EpochStakeMap = core.EpochStakesMap(.delegation);
 const Stakes = core.Stakes;
-const epochStakeMapClone = core.old_epoch_stakes.epochStakeMapClone;
-const epochStakeMapDeinit = core.old_epoch_stakes.epochStakeMapDeinit;
-const epochStakeMapRandom = core.old_epoch_stakes.epochStakeMapRandom;
-
 const Ancestors = sig.core.Ancestors;
+
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
 /// Information about a slot that is determined when the slot is initialized and
 /// then never changes.
@@ -307,7 +306,7 @@ pub const BankFields = struct {
 
         bank_fields.unused_accounts.deinit(allocator);
 
-        epochStakeMapDeinit(bank_fields.epoch_stakes, allocator);
+        deinitMapAndValues(allocator, bank_fields.epoch_stakes);
     }
 
     pub fn clone(
@@ -329,8 +328,8 @@ pub const BankFields = struct {
         const unused_accounts = try bank_fields.unused_accounts.clone(allocator);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapClone(bank_fields.epoch_stakes, allocator);
-        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+        const epoch_stakes = try cloneMapAndValues(allocator, bank_fields.epoch_stakes);
+        errdefer deinitMapAndValues(allocator, epoch_stakes);
 
         var cloned = bank_fields.*;
         cloned.blockhash_queue = blockhash_queue;
@@ -443,8 +442,14 @@ pub const BankFields = struct {
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapRandom(random, allocator, 1, max_list_entries);
-        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+        const epoch_stakes = try sig.core.epoch_stakes.epochStakeMapRandom(
+            allocator,
+            random,
+            .delegation,
+            1,
+            max_list_entries,
+        );
+        errdefer deinitMapAndValues(allocator, epoch_stakes);
 
         return .{
             .blockhash_queue = blockhash_queue,
