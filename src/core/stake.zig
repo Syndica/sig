@@ -25,9 +25,7 @@ const createVoteAccount = sig.core.vote_accounts.createVoteAccount;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-pub const StakesCache = StakesCacheGeneric(.stake);
-
-fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
+pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
     const StakesT = Stakes(stakes_type);
 
     return struct {
