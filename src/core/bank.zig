@@ -39,12 +39,12 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const EpochStakes = core.stake.EpochStakes;
-const EpochStakeMap = core.stake.EpochStakeMap;
-const Stakes = core.stake_accounts.Stakes;
-const epochStakeMapClone = core.stake.epochStakeMapClone;
-const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
-const epochStakeMapRandom = core.stake.epochStakeMapRandom;
+const EpochStakes = core.epoch_stakes.EpochStakes;
+const EpochStakeMap = core.epoch_stakes.EpochStakeMap;
+const Stakes = core.stake.Stakes;
+const epochStakeMapClone = core.epoch_stakes.epochStakeMapClone;
+const epochStakeMapDeinit = core.epoch_stakes.epochStakeMapDeinit;
+const epochStakeMapRandom = core.epoch_stakes.epochStakeMapRandom;
 
 const Ancestors = sig.core.Ancestors;
 
@@ -718,7 +718,7 @@ pub const PartitionedStakeReward = struct {
     /// Stake account address
     stake_pubkey: Pubkey,
     /// `Stake` state to be stored in account
-    stake: core.stake_accounts.Stake,
+    stake: core.stake.Stake,
     /// Stake reward for recording in the Bank on distribution
     stake_reward: u64,
     /// Vote commission for recording reward info
