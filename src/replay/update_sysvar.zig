@@ -294,14 +294,14 @@ pub fn updateSlotHashes(
 // ) !void {
 //     if (epoch_stakes.contains(leader_schedule_epoch)) return;
 
-//     try removeOldEpochStakes(
+//     try removeEpochStakes(
 //         allocator,
 //         epoch_stakes,
 //         leader_schedule_epoch,
 //     );
 // }
 
-// fn removeOldEpochStakes(
+// fn removeEpochStakes(
 //     allocator: std.mem.Allocator,
 //     epoch_stakes: *std.AutoArrayHashMap(Epoch, EpochStakes),
 //     leader_schedule_epoch: Epoch,

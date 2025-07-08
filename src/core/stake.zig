@@ -25,7 +25,9 @@ const createVoteAccount = sig.core.vote_accounts.createVoteAccount;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-pub fn StakesCache(comptime stakes_type: StakesType) type {
+pub const StakesCache = StakesCacheGeneric(.stake);
+
+fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
     const StakesT = Stakes(stakes_type);
 
     return struct {
@@ -115,6 +117,8 @@ pub const StakesType = enum {
     stake,
     account,
 };
+
+// pub const Stakes = StakesGeneric(.stake);
 
 pub fn Stakes(comptime stakes_type: StakesType) type {
     const T = switch (stakes_type) {
@@ -779,7 +783,7 @@ test "stakes basic" {
         for (0..4) |i| {
             const StakesT = Stakes(stakes_type);
 
-            var stakes_cache = StakesCache(stakes_type).default();
+            var stakes_cache = StakesCacheGeneric(stakes_type).default();
             defer stakes_cache.deinit(allocator);
             {
                 const stakes: *StakesT, var guard = stakes_cache.stakes.writeWithLock();
