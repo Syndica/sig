@@ -1,17 +1,10 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const bincode = sig.bincode;
-
 const Allocator = std.mem.Allocator;
 
-const Account = sig.core.account.Account;
 const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
-const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
-const Delegation = sig.core.stake.Delegation;
-const Stake = sig.core.stake.Stake;
-const StakeAccount = sig.core.stake.StakeAccount;
 const Stakes = sig.core.stake.Stakes;
 
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
@@ -162,91 +155,6 @@ pub const EpochStakes = struct {
     }
 };
 
-// NOTE: Comment from stakes enum in agave:
-//
-// For backward compatibility, we can only serialize and deserialize
-// Stakes<Delegation> in the old `epoch_stakes` bank snapshot field. However,
-// Stakes<StakeAccount> entries are added to the bank's epoch stakes hashmap
-// when crossing epoch boundaries and Stakes<Stake> entries are added when
-// starting up from bank snapshots that have the new epoch stakes field. By
-// using this enum, the cost of converting all entries to Stakes<Delegation> is
-// put off until serializing new snapshots. This helps avoid bogging down epoch
-// boundaries and startup with the conversion overhead.
-//
-// The only difference between the Stake and Delegation types is that the Stake type contains
-// a `credits_observed` field, why don't we just skip that in the serialization and use one type?
-//
-// The comes the question of the StakeAccount, which contains a StakeStateV2 and an AccountSharedData,
-// which is a little more complex. However, as agave notes these entries are added to the epoch stakes
-// on epoch boundaries from the stakes cache (I think... to confirm). It looks like the stakes cache may
-// not actually need to contain the complete StakesStateV2, so we could benefit from some simplification
-// there as well.
-//
-// To begin, lets take a look at the usage of EpochStakes in Agave.
-//
-// The Bank contains an 'epoch_stakes' field, which is a HashMap<Epoch, EpochStakes>.
-//    - `Bank::new_from_paths` - populates the epoch_stakes from epoch 0 to leader schedule epoch -- uses StakesEnum::Accounts
-//    - `Bank::get_fields_to_serialize` - splits the epoch_stakes into EpochStakes and VersionedEpochStakes
-//    - `Bank::update_epoch_stakes` - removes old entries, creates and inserts a new entry using bank.stakes_cache.stakes() -- uses StakesEnum::Accounts
-//    - a bunch of accessors methods
-
-//
-// pub struct EpochStakes {
-//     #[serde(with = "serde_stakes_to_delegation_format")]
-//     stakes: Arc<StakesEnum>,
-//     total_stake: u64,
-//     node_id_to_vote_accounts: Arc<HashMap<Pubkey, NodeVoteAccounts>>,
-//     epoch_authorized_voters: Arc<HashMap<Pubkey, Pubkey>>,
-//
-//     pub fn new(stakes: Arc<StakesEnum>, leader_schedule_epoch: Epoch) -> Self
-//     pub fn new_for_tests(vote_accounts_hash_map: VoteAccountsHashMap, leader_schedule_epoch: Epoch) -> Self
-//     pub fn stakes(&self) -> &StakesEnum
-//     pub fn total_stake(&self) -> u64
-//     pub fn set_total_stake(&mut self, total_stake: u64)
-//     pub fn node_id_to_vote_accounts(&self) -> &Arc<HashMap<Pubkey, NodeVoteAccounts>>
-//     pub fn node_id_to_stake(&self, node_id: &Pubkey) -> Option<u64>
-//     pub fn epoch_authorized_voters(&self) -> &Arc<HashMap<Pubkey, Pubkey>>
-//     pub fn vote_account_stake(&self, vote_account: &Pubkey) -> u64
-// }
-// pub struct NodeVoteAccounts {
-//     pub vote_accounts: Vec<Pubkey>,
-//     pub total_stake: u64,
-// }
-// pub enum StakesEnum {
-//     Accounts(Stakes<StakeAccount>),
-//     Delegations(Stakes<Delegation>),
-//     Stakes(Stakes<Stake>),
-// }
-// pub struct StakeAccount {
-//     account: AccountSharedData,
-//     stake_state: StakeStateV2,
-// }
-// pub struct Delegation {
-//     pub voter_pubkey: Pubkey,
-//     pub stake: u64,
-//     pub activation_epoch: Epoch,
-//     pub deactivation_epoch: Epoch,
-//     pub warmup_cooldown_rate: f64, // deprecated since 1.16.7
-// }
-// pub struct Stake {
-//     pub delegation: Delegation,
-//     pub credits_observed: u64,
-// }
-//
-// And also consider StakesCache
-//
-// pub(crate) struct StakesCache(RwLock<Stakes<StakeAccount>>);
-//
-// pub struct Stakes<T: Clone> {
-//     pub vote_accounts: VoteAccounts,
-//     pub stake_delegations: ImHashMap<Pubkey, T>,
-//     pub unused: u64,
-//     pub epoch: Epoch,
-//     pub stake_history: StakeHistory,
-// }
-//
-// Proposed Epoch Staked Nodes
-
 /// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L14)
 pub const NodeVoteAccounts = struct {
     vote_accounts: []const Pubkey,
@@ -346,10 +254,10 @@ pub fn epochAuthorizedVotersRandom(
 }
 
 /// Analogous to [VersionedEpochStake](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/epoch_stakes.rs#L137)
-pub const VersionedEpochStake = union(enum(u32)) {
+pub const VersionedEpochStakes = union(enum(u32)) {
     current: Current,
 
-    pub fn deinit(self: VersionedEpochStake, allocator: Allocator) void {
+    pub fn deinit(self: VersionedEpochStakes, allocator: Allocator) void {
         switch (self) {
             .current => |current| current.deinit(allocator),
         }
@@ -359,15 +267,15 @@ pub const VersionedEpochStake = union(enum(u32)) {
         allocator: Allocator,
         random: std.Random,
         max_list_entries: usize,
-    ) Allocator.Error!VersionedEpochStake {
+    ) Allocator.Error!VersionedEpochStakes {
         // randomly generate the tag otherwise
-        comptime std.debug.assert(@typeInfo(VersionedEpochStake).@"union".fields.len == 1);
+        comptime std.debug.assert(@typeInfo(VersionedEpochStakes).@"union".fields.len == 1);
         return .{
             .current = try Current.initRandom(allocator, random, max_list_entries),
         };
     }
 
-    pub fn clone(self: *const VersionedEpochStake, allocator: Allocator) !VersionedEpochStake {
+    pub fn clone(self: *const VersionedEpochStakes, allocator: Allocator) !VersionedEpochStakes {
         return switch (self.*) {
             .current => |current| .{ .current = try current.clone(allocator) },
         };

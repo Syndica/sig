@@ -18,7 +18,7 @@ const Rent = sig.core.genesis_config.Rent;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
-const VersionedEpochStake = sig.core.epoch_stakes.VersionedEpochStake;
+const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
@@ -137,7 +137,7 @@ pub const ExtraFields = struct {
         .free = bincodeFree,
     };
 
-    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStake);
+    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStakes);
 
     /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
     pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
@@ -203,7 +203,7 @@ pub const ExtraFields = struct {
                     const entry_count = random.uintAtMost(usize, max_list_entries);
                     try field_ptr.ensureTotalCapacity(allocator, entry_count);
                     for (0..entry_count) |_| {
-                        const ves = try VersionedEpochStake.initRandom(
+                        const ves = try VersionedEpochStakes.initRandom(
                             allocator,
                             random,
                             max_list_entries,
