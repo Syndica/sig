@@ -14,11 +14,9 @@ const VoteAccounts = sig.core.vote_accounts.VoteAccounts;
 const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
-const VoteState = sig.runtime.program.vote.state.VoteState;
 const VersionedVoteState = sig.runtime.program.vote.state.VoteStateVersions;
 const Rent = sig.runtime.sysvar.Rent;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
-const StakeHistoryEntry = sig.runtime.sysvar.StakeHistory.Entry;
 const ClusterStake = sig.runtime.sysvar.StakeHistory.ClusterStake;
 
 const RwMux = sig.sync.RwMux;
@@ -35,8 +33,8 @@ pub fn StakesCache(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
-        pub fn initEmpty(epoch: Epoch) Self {
-            return .{ .stakes = RwMux(StakesT).init(StakesT.initEmpty(epoch)) };
+        pub fn default() Self {
+            return .{ .stakes = RwMux(StakesT).init(StakesT.DEFAULT) };
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {
@@ -78,7 +76,12 @@ pub fn StakesCache(comptime stakes_type: StakesType) type {
                     };
                     var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
-                    try stakes.upsertVoteAccount(allocator, pubkey, vote_account, new_rate_activation_epoch);
+                    try stakes.upsertVoteAccount(
+                        allocator,
+                        pubkey,
+                        vote_account,
+                        new_rate_activation_epoch,
+                    );
                 } else {
                     var stakes: *StakesT, var stakes_guard = self.stakes.writeWithLock();
                     defer stakes_guard.unlock();
@@ -130,15 +133,13 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
-        pub fn initEmpty(epoch: Epoch) Self {
-            return .{
-                .vote_accounts = .{},
-                .stake_delegations = .{},
-                .unused = 0,
-                .epoch = epoch,
-                .stake_history = .{},
-            };
-        }
+        pub const DEFAULT: Self = .{
+            .vote_accounts = .{},
+            .stake_delegations = .{},
+            .unused = 0,
+            .epoch = 0,
+            .stake_history = .{},
+        };
 
         pub fn deinit(self: *const Self, allocator: Allocator) void {
             self.vote_accounts.deinit(allocator);
@@ -149,9 +150,6 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
         }
 
         pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
-            var stakes = Self.initEmpty(self.epoch);
-            errdefer stakes.deinit(allocator);
-
             const vote_accs = try self.vote_accounts.clone(allocator);
             errdefer vote_accs.deinit(allocator);
 
@@ -212,7 +210,12 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             // on failure paths in vote_accounts.insert
             const stake = self.calculateStake(pubkey, new_rate_activation_epoch);
 
-            const maybe_old_account = try self.vote_accounts.insert(allocator, pubkey, account, stake);
+            const maybe_old_account = try self.vote_accounts.insert(
+                allocator,
+                pubkey,
+                account,
+                stake,
+            );
 
             if (maybe_old_account) |old_account| old_account.deinit(allocator);
         }
@@ -295,7 +298,11 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
             self.vote_accounts.subStake(removed_delegation.voter_pubkey, removed_stake);
         }
 
-        pub fn initRandom(allocator: Allocator, random: std.Random, max_list_entries: usize) Allocator.Error!Self {
+        pub fn initRandom(
+            allocator: Allocator,
+            random: std.Random,
+            max_list_entries: usize,
+        ) Allocator.Error!Self {
             const vote_accounts = try VoteAccounts.initRandom(allocator, random, max_list_entries);
             errdefer vote_accounts.deinit(allocator);
 
@@ -509,11 +516,15 @@ pub const Delegation = struct {
 
                 if (prev_cluster_stake.deactivating == 0) break;
 
-                const weight = @as(f64, @floatFromInt(current_effective_stake)) / @as(f64, @floatFromInt(prev_cluster_stake.deactivating));
-                const warmup_cooldown_rate = warmupCooldownRate(current_epoch, new_rate_activation_epoch);
+                const weight = @as(f64, @floatFromInt(current_effective_stake)) /
+                    @as(f64, @floatFromInt(prev_cluster_stake.deactivating));
+                const warmup_cooldown_rate =
+                    warmupCooldownRate(current_epoch, new_rate_activation_epoch);
 
-                const newly_not_effective_cluster_stake = @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
-                const wieghted_not_effective_state: u64 = @intFromFloat(weight * newly_not_effective_cluster_stake);
+                const newly_not_effective_cluster_stake =
+                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
+                const wieghted_not_effective_state: u64 =
+                    @intFromFloat(weight * newly_not_effective_cluster_stake);
                 const newly_not_effective_stake = @max(wieghted_not_effective_state, 1);
 
                 current_effective_stake = current_effective_stake -| newly_not_effective_stake;
@@ -567,11 +578,15 @@ pub const Delegation = struct {
                 if (prev_cluster_stake.deactivating == 0) break;
 
                 const remaining_activated_stake = self.stake - current_effective_stake;
-                const weight = @as(f64, @floatFromInt(remaining_activated_stake)) / @as(f64, @floatFromInt(prev_cluster_stake.activating));
-                const warmup_cooldown_rate = warmupCooldownRate(current_epoch, new_rate_activation_epoch);
+                const weight = @as(f64, @floatFromInt(remaining_activated_stake)) /
+                    @as(f64, @floatFromInt(prev_cluster_stake.activating));
+                const warmup_cooldown_rate =
+                    warmupCooldownRate(current_epoch, new_rate_activation_epoch);
 
-                const newly_effective_cluster_stake = @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
-                const weighted_effective_state: u64 = @intFromFloat(weight * newly_effective_cluster_stake);
+                const newly_effective_cluster_stake =
+                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate;
+                const weighted_effective_state: u64 =
+                    @intFromFloat(weight * newly_effective_cluster_stake);
                 const newly_effective_stake = @max(weighted_effective_state, 1);
 
                 current_effective_stake += newly_effective_stake;
@@ -761,9 +776,16 @@ test "stakes basic" {
         StakesType.stake,
         StakesType.account,
     }) |stakes_type| {
-        for (0..1) |i| {
-            var stakes_cache = StakesCache(stakes_type).initEmpty(i);
+        for (0..4) |i| {
+            const StakesT = Stakes(stakes_type);
+
+            var stakes_cache = StakesCache(stakes_type).default();
             defer stakes_cache.deinit(allocator);
+            {
+                const stakes: *StakesT, var guard = stakes_cache.stakes.writeWithLock();
+                defer guard.unlock();
+                stakes.epoch = i;
+            }
 
             var accs = try TestStakedNodeAccounts.init(allocator, prng.random(), 10);
             defer accs.deinit(allocator);
@@ -772,7 +794,7 @@ test "stakes basic" {
             try stakes_cache.checkAndStore(allocator, accs.stake_pubkey, accs.stake_account, null);
             var stake = try getStakeFromStakeAccount(accs.stake_account);
             {
-                const stakes: *Stakes(stakes_type), var stakes_guard = stakes_cache.stakes.writeWithLock();
+                const stakes: *StakesT, var stakes_guard = stakes_cache.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
@@ -784,7 +806,7 @@ test "stakes basic" {
             accs.stake_account.lamports = 42;
             try stakes_cache.checkAndStore(allocator, accs.stake_pubkey, accs.stake_account, null);
             {
-                const stakes: *Stakes(stakes_type), var stakes_guard = stakes_cache.stakes.writeWithLock();
+                const stakes: *StakesT, var stakes_guard = stakes_cache.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
@@ -818,7 +840,7 @@ test "stakes basic" {
             try stakes_cache.checkAndStore(allocator, accs.stake_pubkey, stake_account, null);
             stake = try getStakeFromStakeAccount(stake_account);
             {
-                const stakes: *Stakes(stakes_type), var stakes_guard = stakes_cache.stakes.writeWithLock();
+                const stakes: *StakesT, var stakes_guard = stakes_cache.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(
@@ -830,7 +852,7 @@ test "stakes basic" {
             stake_account.lamports = 0;
             try stakes_cache.checkAndStore(allocator, accs.stake_pubkey, stake_account, null);
             {
-                const stakes: *Stakes(stakes_type), var stakes_guard = stakes_cache.stakes.writeWithLock();
+                const stakes: *StakesT, var stakes_guard = stakes_cache.stakes.writeWithLock();
                 defer stakes_guard.unlock();
                 try std.testing.expect(stakes.vote_accounts.getAccount(accs.vote_pubkey) != null);
                 try std.testing.expectEqual(

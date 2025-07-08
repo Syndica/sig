@@ -46,7 +46,10 @@ pub const AccountSharedData = struct {
         allocator.free(self.data);
     }
 
-    pub fn clone(self: AccountSharedData, allocator: std.mem.Allocator) std.mem.Allocator.Error!AccountSharedData {
+    pub fn clone(
+        self: AccountSharedData,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!AccountSharedData {
         return .{
             .lamports = self.lamports,
             .data = try allocator.dupe(u8, self.data),

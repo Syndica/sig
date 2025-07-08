@@ -9,7 +9,7 @@ const vm = sig.vm;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
-const EpochStakes = sig.core.epoch_stakes.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 
 const FeatureSet = sig.core.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -210,7 +210,7 @@ pub fn createEpochStakes(
     params: []const ExecuteContextsParams.EpochStakeParam,
 ) !EpochStakes {
     var self: EpochStakes = .{
-        .stakes = .initEmpty(0),
+        .stakes = .DEFAULT,
         .total_stake = 0,
         .node_id_to_vote_accounts = .{},
         .epoch_authorized_voters = .{},
