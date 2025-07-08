@@ -22,9 +22,12 @@ pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
 pub const vote_accounts = @import("vote_accounts.zig");
 
+/// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
+/// of `BankFields` for serialization purposes. When initialising an epoch stakes for production we
+/// will need to load the accounts from accounts db to convert from `EpochStakes(.delegation)` to
+/// `EpochStakes(.stake)`. Because we need to load the `credits_observed` value which is contained in
+/// the stake account data which is a serialized `StakesStateV2`.
 pub const EpochStakes = epoch_stakes.EpochStakes(.delegation);
-
-pub const NewEpochStakes = epoch_stakes.EpochStakes;
 pub const EpochStakesMap = epoch_stakes.EpochStakesMap;
 pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 

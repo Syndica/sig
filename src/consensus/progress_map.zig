@@ -1473,10 +1473,8 @@ test "addNodePubkeyInternal" {
     };
 
     var epoch_vote_accounts: sig.core.vote_accounts.StakeAndVoteAccountsMap = .{};
-    defer {
-        for (epoch_vote_accounts.values()) |*v| v.deinit(allocator);
-        epoch_vote_accounts.deinit(allocator);
-    }
+    defer deinitMapAndValues(allocator, epoch_vote_accounts);
+
     for (vote_account_pubkeys1[num_vote_accounts - staked_vote_accounts ..]) |pubkey| {
         try epoch_vote_accounts.put(allocator, pubkey, .init(1, try VoteAccount.initRandom(
             allocator,
