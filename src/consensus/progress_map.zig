@@ -49,7 +49,7 @@ const stubs = struct {
         fn epochVoteAccountsForNodeId(
             self: Bank,
             node_id: Pubkey,
-        ) ?*const sig.core.old_epoch_stakes.NodeVoteAccounts {
+        ) ?*const sig.core.epoch_stakes.NodeVoteAccounts {
             const epoch_stakes = self.data.epoch_stakes.getPtr(self.data.epoch) orelse
                 std.debug.panic("Epoch stakes for bank's own epoch must exist", .{});
             return epoch_stakes.node_id_to_vote_accounts.getPtr(node_id);
