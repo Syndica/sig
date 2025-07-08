@@ -288,7 +288,7 @@ pub const BankFields = struct {
     inflation: Inflation,
     stakes: Stakes(.delegation),
     unused_accounts: UnusedAccounts,
-    epoch_stakes: EpochStakesMap(.delegation),
+    epoch_stakes: EpochStakesMap,
     is_delta: bool,
 
     pub fn deinit(

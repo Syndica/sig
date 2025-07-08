@@ -40,8 +40,8 @@ const stubs = struct {
                 "Bank epoch vote accounts must contain entry for the bank's own epoch",
                 .{},
             );
-            const stake_and_vote_account = eva.get(vote_account) orelse return 0;
-            return stake_and_vote_account.stake;
+            const entry = eva.get(vote_account) orelse return 0;
+            return entry.stake;
         }
 
         /// Get the fixed set of vote accounts for the given node id for the

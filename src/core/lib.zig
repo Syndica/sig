@@ -26,9 +26,12 @@ pub const vote_accounts = @import("vote_accounts.zig");
 /// of `BankFields` for serialization purposes. When initialising an epoch stakes for production we
 /// will need to load the accounts from accounts db to convert from `EpochStakes(.delegation)` to
 /// `EpochStakes(.stake)`. Because we need to load the `credits_observed` value which is contained in
-/// the stake account data which is a serialized `StakesStateV2`.
+/// the stake account data which is a serialized `StakesStateV2`. This process also validates that
+/// the stake accounts are valid.
+/// NOTE: In the short term we may be able to get away with using `EpochStakes(.delegation)` if
+/// we are not yet using the `credits_observed` value in the epoch stakes anywhere.
 pub const EpochStakes = epoch_stakes.EpochStakes(.delegation);
-pub const EpochStakesMap = epoch_stakes.EpochStakesMap;
+pub const EpochStakesMap = epoch_stakes.EpochStakesMap(.delegation);
 pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 
 pub const Account = account.Account;
