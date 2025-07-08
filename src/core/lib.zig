@@ -28,7 +28,8 @@ pub const EpochStakesMap = old_epoch_stakes.EpochStakesMap;
 
 pub const NewEpochStakes = epoch_stakes.EpochStakes;
 pub const NewEpochStakesMap = epoch_stakes.EpochStakesMap;
-pub const NewVersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
+
+pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 
 pub const Account = account.Account;
 pub const Ancestors = ancestors.Ancestors;
@@ -39,7 +40,6 @@ pub const Entry = entry.Entry;
 pub const EpochConstants = bank.EpochConstants;
 pub const EpochContext = epoch_context.EpochContext;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
-pub const VersionedEpochStakes = old_epoch_stakes.VersionedEpochStakes;
 pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const HardFork = HardForks.HardFork;
 pub const HardForks = hard_forks.HardForks;
