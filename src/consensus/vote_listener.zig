@@ -69,12 +69,12 @@ pub const BankForksStub = struct {
         hash: Hash,
         ancestors: sig.core.Ancestors,
         epoch_schedule: sig.core.EpochSchedule,
-        epoch_stakes: sig.core.stake.EpochStakeMap,
+        epoch_stakes: sig.core.epoch_stakes.EpochStakeMap,
 
         pub fn deinit(self: BankStub, allocator: std.mem.Allocator) void {
             var copy = self;
             copy.ancestors.deinit(allocator);
-            sig.core.stake.epochStakeMapDeinit(copy.epoch_stakes, allocator);
+            sig.core.epoch_stakes.epochStakeMapDeinit(copy.epoch_stakes, allocator);
         }
 
         pub fn init(
@@ -84,20 +84,20 @@ pub const BankForksStub = struct {
                 hash: Hash,
                 ancestors: sig.core.Ancestors,
                 epoch_schedule: sig.core.EpochSchedule,
-                epoch_stakes: sig.core.stake.EpochStakeMap,
+                epoch_stakes: sig.core.epoch_stakes.EpochStakeMap,
             },
         ) std.mem.Allocator.Error!BankStub {
             var ancestors = try params.ancestors.clone(allocator);
             errdefer ancestors.deinit(allocator);
 
             var epoch_stakes =
-                try sig.core.stake.epochStakeMapClone(params.epoch_stakes, allocator);
-            errdefer sig.core.stake.epochStakeMapDeinit(epoch_stakes, allocator);
+                try sig.core.epoch_stakes.epochStakeMapClone(params.epoch_stakes, allocator);
+            errdefer sig.core.epoch_stakes.epochStakeMapDeinit(epoch_stakes, allocator);
 
             const slot_epoch = params.epoch_schedule.getEpoch(params.slot);
             const gop = try epoch_stakes.getOrPut(allocator, slot_epoch);
             if (!gop.found_existing) {
-                gop.value_ptr.* = try sig.core.stake.EpochStakes.initEmpty(allocator);
+                gop.value_ptr.* = try sig.core.epoch_stakes.EpochStakes.initEmpty(allocator);
             }
 
             return .{
@@ -117,8 +117,8 @@ pub const BankForksStub = struct {
             errdefer ancestors.deinit(allocator);
 
             const epoch_stakes =
-                try sig.core.stake.epochStakeMapClone(self.epoch_stakes, allocator);
-            errdefer sig.core.stake.epochStakeMapDeinit(epoch_stakes, allocator);
+                try sig.core.epoch_stakes.epochStakeMapClone(self.epoch_stakes, allocator);
+            errdefer sig.core.epoch_stakes.epochStakeMapDeinit(epoch_stakes, allocator);
 
             return .{
                 .slot = self.slot,
@@ -1043,7 +1043,7 @@ fn trackOptimisticConfirmationVote(
     return .{ reached_thresholds, result == .is_new };
 }
 
-fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.stake.EpochStakes, pubkey: Pubkey) void {
+fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.epoch_stakes.EpochStakes, pubkey: Pubkey) void {
     if (epoch_stakes) |stakes| {
         sum.* += stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }

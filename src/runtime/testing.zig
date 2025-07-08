@@ -9,7 +9,7 @@ const vm = sig.vm;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
-const EpochStakes = sig.core.stake.EpochStakes;
+const EpochStakes = sig.core.epoch_stakes.EpochStakes;
 
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;

@@ -47,7 +47,7 @@ const stubs = struct {
         fn epochVoteAccountsForNodeId(
             self: Bank,
             node_id: Pubkey,
-        ) ?*const sig.core.stake.NodeVoteAccounts {
+        ) ?*const sig.core.epoch_stakes.NodeVoteAccounts {
             const epoch_stakes = self.data.epoch_stakes.getPtr(self.data.epoch) orelse
                 std.debug.panic("Epoch stakes for bank's own epoch must exist", .{});
             return epoch_stakes.node_id_to_vote_accounts.getPtr(node_id);
@@ -319,7 +319,7 @@ pub const ForkProgress = struct {
             slot_hash: ?Hash,
             last_entry: Hash,
             i_am_leader: bool,
-            epoch_stakes: *const sig.core.stake.EpochStakes,
+            epoch_stakes: *const sig.core.epoch_stakes.EpochStakes,
         },
     ) !ForkProgress {
         const parent = params.parent;
