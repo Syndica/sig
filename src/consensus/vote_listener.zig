@@ -12,6 +12,9 @@ const TransactionMessage = sig.core.transaction.Message;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VoteTracker = sig.consensus.VoteTracker;
 
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
+
 pub const BankForksStub = struct {
     root_slot: Slot,
     banks: std.AutoArrayHashMapUnmanaged(Slot, BankStub),
@@ -69,12 +72,12 @@ pub const BankForksStub = struct {
         hash: Hash,
         ancestors: sig.core.Ancestors,
         epoch_schedule: sig.core.EpochSchedule,
-        epoch_stakes: sig.core.old_epoch_stakes.EpochStakesMap,
+        epoch_stakes: sig.core.EpochStakesMap(.delegation),
 
         pub fn deinit(self: BankStub, allocator: std.mem.Allocator) void {
             var copy = self;
             copy.ancestors.deinit(allocator);
-            sig.core.old_epoch_stakes.epochStakeMapDeinit(copy.epoch_stakes, allocator);
+            deinitMapAndValues(allocator, self.epoch_stakes);
         }
 
         pub fn init(
@@ -84,15 +87,14 @@ pub const BankForksStub = struct {
                 hash: Hash,
                 ancestors: sig.core.Ancestors,
                 epoch_schedule: sig.core.EpochSchedule,
-                epoch_stakes: sig.core.old_epoch_stakes.EpochStakesMap,
+                epoch_stakes: sig.core.EpochStakesMap(.delegation),
             },
         ) std.mem.Allocator.Error!BankStub {
             var ancestors = try params.ancestors.clone(allocator);
             errdefer ancestors.deinit(allocator);
 
-            var epoch_stakes =
-                try sig.core.old_epoch_stakes.epochStakeMapClone(params.epoch_stakes, allocator);
-            errdefer sig.core.old_epoch_stakes.epochStakeMapDeinit(epoch_stakes, allocator);
+            var epoch_stakes = try cloneMapAndValues(allocator, params.epoch_stakes);
+            errdefer deinitMapAndValues(allocator, epoch_stakes);
 
             const slot_epoch = params.epoch_schedule.getEpoch(params.slot);
             const gop = try epoch_stakes.getOrPut(allocator, slot_epoch);
@@ -116,9 +118,8 @@ pub const BankForksStub = struct {
             var ancestors = try self.ancestors.clone(allocator);
             errdefer ancestors.deinit(allocator);
 
-            const epoch_stakes =
-                try sig.core.old_epoch_stakes.epochStakeMapClone(self.epoch_stakes, allocator);
-            errdefer sig.core.old_epoch_stakes.epochStakeMapDeinit(epoch_stakes, allocator);
+            const epoch_stakes = try cloneMapAndValues(allocator, self.epoch_stakes);
+            errdefer deinitMapAndValues(allocator, epoch_stakes);
 
             return .{
                 .slot = self.slot,
