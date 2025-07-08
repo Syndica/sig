@@ -3680,8 +3680,9 @@ test "selectVoteAndResetForks stake not found" {
 const TreeNode = sig.consensus.fork_choice.TreeNode;
 const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
-const EpochStakes = sig.core.EpochStakes;
-const Stakes = sig.core.Stakes;
+const EpochStakes = sig.core.stake.EpochStakes;
+const Stakes = sig.core.stake_accounts.Stakes;
+const splitOff = sig.consensus.fork_choice.splitOff;
 
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
     const allocator = std.testing.allocator;
