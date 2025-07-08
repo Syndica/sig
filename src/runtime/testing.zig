@@ -209,13 +209,7 @@ pub fn createEpochStakes(
     params: []const ExecuteContextsParams.EpochStakeParam,
 ) !EpochStakes {
     var self: EpochStakes = .{
-        .stakes = .{
-            .vote_accounts = .{},
-            .delegations = .{},
-            .unused = 0,
-            .epoch = 0,
-            .history = .{},
-        },
+        .stakes = .initEmpty(0),
         .total_stake = 0,
         .node_id_to_vote_accounts = .{},
         .epoch_authorized_voters = .{},
@@ -224,7 +218,7 @@ pub fn createEpochStakes(
 
     for (params) |param| {
         self.total_stake += param.stake;
-        try self.stakes.delegations.put(allocator, param.pubkey, .{
+        try self.stakes.stake_delegations.put(allocator, param.pubkey, .{
             .voter_pubkey = param.pubkey,
             .stake = param.stake,
             .activation_epoch = 0,

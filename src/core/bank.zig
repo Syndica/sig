@@ -41,7 +41,7 @@ const Inflation = core.genesis_config.Inflation;
 
 const EpochStakes = core.stake.EpochStakes;
 const EpochStakeMap = core.stake.EpochStakeMap;
-const Stakes = core.stake.Stakes;
+const Stakes = core.stake_accounts.Stakes;
 const epochStakeMapClone = core.stake.epochStakeMapClone;
 const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
 const epochStakeMapRandom = core.stake.epochStakeMapRandom;
@@ -657,7 +657,7 @@ pub const PartitionedStakeReward = struct {
     /// Stake account address
     stake_pubkey: Pubkey,
     /// `Stake` state to be stored in account
-    stake: core.stake.Stake,
+    stake: core.stake_accounts.Stake,
     /// Stake reward for recording in the Bank on distribution
     stake_reward: u64,
     /// Vote commission for recording reward info
