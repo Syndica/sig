@@ -127,30 +127,16 @@ pub const SlotTracker = struct {
     /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
     //  TODO Revisit: Currently this removes all slots less than the rooted slot.
     // In Agave, only the slots not in the root path are removed.
-    pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) !void {
-        // First, count how many slots will be removed
-        var count: usize = 0;
-        for (self.slots.keys()) |slot| {
-            if (slot < self.root) count += 1;
-        }
-        // Preallocate the list
-        var to_remove = std.ArrayListUnmanaged(Slot).empty;
-        defer to_remove.deinit(allocator);
-        errdefer to_remove.deinit(allocator);
-
-        try to_remove.ensureTotalCapacity(allocator, count);
-
-        // Now collect the slots to remove
-        for (self.slots.keys()) |slot| {
-            if (slot < self.root) {
-                to_remove.appendAssumeCapacity(slot);
-            }
-        }
-        // Remove and deallocate
-        for (to_remove.items) |slot| {
-            if (self.slots.get(slot)) |value| {
-                allocator.destroy(value);
-                _ = self.slots.swapRemove(slot);
+    pub fn pruneNonRooted(self: *SlotTracker, allocator: Allocator) void {
+        var slice = self.slots.entries.slice();
+        var index: usize = 0;
+        while (index < slice.len) {
+            if (slice.items(.key)[index] < self.root) {
+                allocator.destroy(slice.items(.value)[index]);
+                self.slots.swapRemoveAt(index);
+                slice = self.slots.entries.slice();
+            } else {
+                index += 1;
             }
         }
     }
@@ -201,7 +187,7 @@ test "SlotTracker.prune removes all slots less than root" {
     }
 
     // Prune slots less than root (4)
-    try tracker.pruneNonRooted(allocator);
+    tracker.pruneNonRooted(allocator);
 
     // Only slots 4 and 5 should remain
     try std.testing.expect(tracker.contains(4));
