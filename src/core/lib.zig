@@ -30,9 +30,18 @@ pub const vote_accounts = @import("vote_accounts.zig");
 /// the stake accounts are valid.
 /// NOTE: In the short term we may be able to get away with using `EpochStakes(.delegation)` if
 /// we are not yet using the `credits_observed` value in the epoch stakes anywhere.
-pub const EpochStakes = epoch_stakes.EpochStakes(.delegation);
-pub const EpochStakesMap = epoch_stakes.EpochStakesMap(.delegation);
+pub const EpochStakes = epoch_stakes.EpochStakesGeneric(.delegation);
+pub const EpochStakesMap = epoch_stakes.EpochStakesMapGeneric(.delegation);
+/// TODO: Move to serialization module, it is not required elsewhere.
 pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
+
+/// TODO: The `StakesCache` should ultimately be either a `.stake` or `.account` variant. This
+/// change requires populating the `StakesCache` loading accounts from the accounts db, deserializing
+/// the account state, and creating either a `Stake` or `StakeAccount`. For now we will use the
+/// `.delegation` variant for simplicity.
+pub const StakesCache = stake.StakesCacheGeneric(.delegation);
+pub const StakesType = stake.StakesType;
+pub const Stakes = stake.Stakes;
 
 pub const Account = account.Account;
 pub const Ancestors = ancestors.Ancestors;
@@ -57,9 +66,6 @@ pub const Signature = signature.Signature;
 pub const SlotConstants = bank.SlotConstants;
 pub const SlotState = bank.SlotState;
 pub const StatusCache = status_cache.StatusCache;
-pub const StakesCache = stake.StakesCache;
-pub const Stakes = stake.Stakes;
-pub const StakesType = stake.StakesType;
 pub const Transaction = transaction.Transaction;
 
 pub const Epoch = time.Epoch;
