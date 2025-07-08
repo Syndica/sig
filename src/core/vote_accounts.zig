@@ -51,8 +51,8 @@ pub const VoteAccounts = struct {
     /// Maps pubkeys to vote account and delegated stake.
     vote_accounts: StakeAndVoteAccountsMap = .{},
     /// Maps vote account node pubkeys to their total delegated stake.
-    /// NOTE: Can make nullable, or just populate on deserialization and use insert/remove
-    /// NOTE: Please access using `getStakedNodes` so we can switch to nullable in the future.
+    /// NOTE: Should we make this nullable and emulate Agave's beahviour? I think it is fine
+    /// to just compute the staked nodes on deserialisation but am open to changing this approach.
     staked_nodes: StakedNodesMap = .{},
 
     pub const @"!bincode-config" = bincode.FieldConfig(
