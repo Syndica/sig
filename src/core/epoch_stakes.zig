@@ -28,7 +28,7 @@ const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 //     bank.epoch_stakes = fields.epoch_stakes
 
 pub const VersionedEpochStakes = union(enum(u32)) {
-    current: EpochStakes(.stake),
+    current: EpochStakesGeneric(.stake),
 
     pub fn deinit(self: VersionedEpochStakes, allocator: Allocator) void {
         self.current.deinit(allocator);
@@ -46,7 +46,7 @@ pub const VersionedEpochStakes = union(enum(u32)) {
         random: std.Random,
         max_list_entries: usize,
     ) Allocator.Error!VersionedEpochStakes {
-        return .{ .current = try EpochStakes(.stake).initRandom(
+        return .{ .current = try EpochStakesGeneric(.stake).initRandom(
             allocator,
             random,
             max_list_entries,
@@ -54,9 +54,9 @@ pub const VersionedEpochStakes = union(enum(u32)) {
     }
 };
 
-pub fn EpochStakesMap(comptime stakes_type: StakesType) type {
+pub fn EpochStakesMapGeneric(comptime stakes_type: StakesType) type {
     std.debug.assert(stakes_type != .account);
-    return std.AutoArrayHashMapUnmanaged(Epoch, EpochStakes(stakes_type));
+    return std.AutoArrayHashMapUnmanaged(Epoch, EpochStakesGeneric(stakes_type));
 }
 
 pub fn epochStakeMapRandom(
@@ -65,8 +65,8 @@ pub fn epochStakeMapRandom(
     comptime stakes_type: StakesType,
     min_list_entries: usize,
     max_list_entries: usize,
-) Allocator.Error!EpochStakesMap(stakes_type) {
-    var map: EpochStakesMap(stakes_type) = .{};
+) Allocator.Error!EpochStakesMapGeneric(stakes_type) {
+    var map: EpochStakesMapGeneric(stakes_type) = .{};
     errdefer deinitMapAndValues(allocator, map);
 
     const map_len = random.intRangeAtMost(usize, min_list_entries, max_list_entries);
@@ -78,13 +78,13 @@ pub fn epochStakeMapRandom(
             if (gop.found_existing) continue;
             break gop.value_ptr;
         };
-        value_ptr.* = try EpochStakes(stakes_type).initRandom(allocator, random, max_list_entries);
+        value_ptr.* = try EpochStakesGeneric(stakes_type).initRandom(allocator, random, max_list_entries);
     }
 
     return map;
 }
 
-pub fn EpochStakes(comptime stakes_type: StakesType) type {
+pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
     std.debug.assert(stakes_type != .account);
     return struct {
         stakes: Stakes(stakes_type),
@@ -120,7 +120,7 @@ pub fn EpochStakes(comptime stakes_type: StakesType) type {
             };
         }
 
-        pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakes(stakes_type) {
+        pub fn initEmpty(allocator: std.mem.Allocator) !EpochStakesGeneric(stakes_type) {
             return .{
                 .total_stake = 0,
                 .stakes = .{
