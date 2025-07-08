@@ -39,7 +39,7 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const EpochStakes = core.old_epoch_stakes.EpochStakes;
+const EpochStakes = core.EpochStakes;
 const EpochStakeMap = core.EpochStakesMap(.delegation);
 const Stakes = core.Stakes;
 const Ancestors = sig.core.Ancestors;
