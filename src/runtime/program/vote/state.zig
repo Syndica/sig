@@ -341,7 +341,11 @@ pub const AuthorizedVoters = struct {
         .serializer = serialize,
     };
 
-    pub fn init(allocator: std.mem.Allocator, epoch: Epoch, pubkey: Pubkey) std.mem.Allocator.Error!AuthorizedVoters {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+        pubkey: Pubkey,
+    ) std.mem.Allocator.Error!AuthorizedVoters {
         var authorized_voters = SortedMap(Epoch, Pubkey).init(allocator);
         try authorized_voters.put(epoch, pubkey);
         return AuthorizedVoters{ .voters = authorized_voters };
@@ -608,7 +612,8 @@ pub const VoteStateVersions = union(enum) {
     }
 
     pub fn isCorrectSizeAndInitialized(data: []const u8) bool {
-        return VoteState.isCorrectSizeAndInitialized(data) or VoteState1_14_11.isCorrectSizeAndInitialized(data);
+        return VoteState.isCorrectSizeAndInitialized(data) or
+            VoteState1_14_11.isCorrectSizeAndInitialized(data);
     }
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L31

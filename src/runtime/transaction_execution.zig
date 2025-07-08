@@ -9,7 +9,7 @@ const vm = sig.vm;
 
 const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
-const EpochStakes = sig.core.epoch_stakes.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
