@@ -79,7 +79,7 @@ pub const AccountIndex = struct {
         .{},
     ),
 
-    pub const SlotRefMap = std.AutoHashMap(Slot, std.ArrayListUnmanaged(AccountRef));
+    pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
     pub const AllocatorConfig = union(Tag) {
         pub const Tag = ReferenceAllocator.Tag;
         ram: struct { allocator: std.mem.Allocator },
@@ -172,9 +172,6 @@ pub const AccountIndex = struct {
             const slot_reference_map, var slot_reference_map_lg =
                 self.slot_reference_map.writeWithLock();
             defer slot_reference_map_lg.unlock();
-
-            var iter = slot_reference_map.valueIterator();
-            while (iter.next()) |value| value.deinit(self.allocator);
             slot_reference_map.deinit();
         }
 
@@ -188,9 +185,6 @@ pub const AccountIndex = struct {
             const slot_reference_map, var slot_reference_map_lg =
                 self.slot_reference_map.writeWithLock();
             defer slot_reference_map_lg.unlock();
-
-            // var iter = slot_reference_map.valueIterator();
-            // while (iter.next()) |value| value.deinit(self.allocator);
             slot_reference_map.deinit();
         }
 
