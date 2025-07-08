@@ -6,7 +6,6 @@ pub const entry = @import("entry.zig");
 pub const epoch_context = @import("epoch_context.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
 pub const epoch_stakes = @import("epoch_stakes.zig");
-pub const old_epoch_stakes = @import("old_epoch_stakes.zig");
 pub const genesis_config = @import("genesis_config.zig");
 pub const hard_forks = @import("hard_forks.zig");
 pub const hash = @import("hash.zig");
@@ -23,13 +22,11 @@ pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
 pub const vote_accounts = @import("vote_accounts.zig");
 
-pub const EpochStakes = old_epoch_stakes.EpochStakes;
-// pub const EpochStakesMap = old_epoch_stakes.EpochStakesMap;
+pub const EpochStakes = epoch_stakes.EpochStakes(.delegation);
 
 pub const NodeVoteAccounts = epoch_stakes.NodeVoteAccounts;
 pub const NewEpochStakes = epoch_stakes.EpochStakes;
 pub const EpochStakesMap = epoch_stakes.EpochStakesMap;
-
 pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 
 pub const Account = account.Account;
