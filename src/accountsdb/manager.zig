@@ -810,14 +810,10 @@ fn shrinkAccountFiles(
             };
             // NOTE: this is ok because nothing points to this old reference memory
             // deinit old block of reference memory
-
-            slot_reference_map_entry.value_ptr.deinit(db.allocator);
+            db.account_index.reference_manager.free(slot_reference_map_entry.value_ptr.ptr);
 
             // point to new block
-            var new_block = std.ArrayListUnmanaged(AccountRef){};
-            try new_block.appendSlice(db.allocator, new_reference_block);
-
-            slot_reference_map_entry.value_ptr.* = new_block;
+            slot_reference_map_entry.value_ptr.* = new_reference_block;
         }
 
         // queue the old account_file for deletion
@@ -892,8 +888,7 @@ fn purgeSlot(db: *AccountsDB, slot: Slot) void {
             "slot reference map not found for slot: {d}",
             .{slot},
         );
-        var buf = r.value;
-        buf.deinit(db.allocator);
+        db.account_index.reference_manager.free(r.value.ptr);
     }
 
     // free the account memory
@@ -1422,7 +1417,7 @@ test "shrink account file works" {
         defer slot_reference_map_lg.unlock();
 
         const slot_mem = slot_reference_map.get(new_slot).?;
-        try std.testing.expectEqual(accounts2.len, slot_mem.items.len);
+        try std.testing.expect(slot_mem.len == accounts2.len);
     }
 
     // test: files were shrunk
@@ -1469,7 +1464,7 @@ test "shrink account file works" {
         defer slot_reference_map_lg.unlock();
 
         const slot_mem = slot_reference_map.get(slot).?;
-        try std.testing.expectEqual(1, slot_mem.items.len);
+        try std.testing.expectEqual(1, slot_mem.len);
     }
 
     // last account ref should still be accessible

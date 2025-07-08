@@ -790,14 +790,11 @@ pub const AccountsDB = struct {
             accounts_file_moved_to_filemap = true;
 
             // track slice of references per slot
-
-            const entry = slot_reference_map.getOrPutAssumeCapacity(slot);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
-            try entry.value_ptr.appendSlice(
-                self.allocator,
+            n_accounts_total += n_accounts_this_slot;
+            slot_reference_map.putAssumeCapacityNoClobber(
+                slot,
                 slot_references.items[0..n_accounts_this_slot],
             );
-            n_accounts_total += n_accounts_this_slot;
 
             // write to geyser
             if (geyser_is_enabled) {
@@ -1806,10 +1803,7 @@ pub const AccountsDB = struct {
         {
             const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
             defer lock.unlock();
-
-            const entry = try slot_ref_map.getOrPut(account_file.slot);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
-            try entry.value_ptr.append(self.allocator, reference_buf[0]);
+            try slot_ref_map.putNoClobber(account_file.slot, reference_buf);
         }
 
         {
@@ -1971,19 +1965,13 @@ pub const AccountsDB = struct {
         {
             const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
             defer lock.unlock();
-
-            const entry = try slot_ref_map.getOrPut(slot);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
-            try entry.value_ptr.append(self.allocator, reference_buf[0]);
+            try slot_ref_map.putNoClobber(slot, reference_buf);
         }
 
         if (accounts_dead_count != 0) {
             const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_lg.unlock();
-
-            const entry = try dead_accounts.getOrPut(slot);
-            if (!entry.found_existing) entry.value_ptr.* = 0;
-            entry.value_ptr.* += accounts_dead_count;
+            try dead_accounts.putNoClobber(slot, accounts_dead_count);
         }
     }
 
@@ -2082,19 +2070,13 @@ pub const AccountsDB = struct {
         {
             const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
             defer lock.unlock();
-
-            const entry = try slot_ref_map.getOrPut(slot);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
-            try entry.value_ptr.appendSlice(self.allocator, reference_buf);
+            try slot_ref_map.putNoClobber(slot, reference_buf);
         }
 
         if (accounts_dead_count != 0) {
             const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_lg.unlock();
-
-            const entry = try dead_accounts.getOrPut(slot);
-            if (!entry.found_existing) entry.value_ptr.* = 0;
-            entry.value_ptr.* += accounts_dead_count;
+            try dead_accounts.putNoClobber(slot, accounts_dead_count);
         }
     }
 
