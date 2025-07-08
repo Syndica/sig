@@ -6,6 +6,7 @@ pub const entry = @import("entry.zig");
 pub const epoch_context = @import("epoch_context.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
 pub const epoch_stakes = @import("epoch_stakes.zig");
+pub const old_epoch_stakes = @import("old_epoch_stakes.zig");
 pub const genesis_config = @import("genesis_config.zig");
 pub const hard_forks = @import("hard_forks.zig");
 pub const hash = @import("hash.zig");
@@ -22,6 +23,13 @@ pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
 pub const vote_accounts = @import("vote_accounts.zig");
 
+pub const EpochStakes = old_epoch_stakes.EpochStakes;
+pub const EpochStakesMap = old_epoch_stakes.EpochStakesMap;
+
+pub const NewEpochStakes = epoch_stakes.EpochStakes;
+pub const NewEpochStakesMap = epoch_stakes.EpochStakesMap;
+pub const NewVersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
+
 pub const Account = account.Account;
 pub const Ancestors = ancestors.Ancestors;
 pub const BankFields = bank.BankFields;
@@ -31,8 +39,7 @@ pub const Entry = entry.Entry;
 pub const EpochConstants = bank.EpochConstants;
 pub const EpochContext = epoch_context.EpochContext;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
-pub const EpochStakes = epoch_stakes.EpochStakes;
-pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
+pub const VersionedEpochStakes = old_epoch_stakes.VersionedEpochStakes;
 pub const GenesisConfig = genesis_config.GenesisConfig;
 pub const HardFork = HardForks.HardFork;
 pub const HardForks = hard_forks.HardForks;
@@ -45,6 +52,9 @@ pub const Signature = signature.Signature;
 pub const SlotConstants = bank.SlotConstants;
 pub const SlotState = bank.SlotState;
 pub const StatusCache = status_cache.StatusCache;
+pub const StakesCache = stake.StakesCache;
+pub const Stakes = stake.Stakes;
+pub const StakesType = stake.StakesType;
 pub const Transaction = transaction.Transaction;
 
 pub const Epoch = time.Epoch;

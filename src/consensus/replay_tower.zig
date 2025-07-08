@@ -11,7 +11,7 @@ const Lockout = sig.runtime.program.vote.state.Lockout;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
-const EpochStakeMap = sig.core.epoch_stakes.EpochStakeMap;
+const EpochStakeMap = sig.core.old_epoch_stakes.EpochStakesMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -3025,7 +3025,7 @@ const TreeNode = sig.consensus.fork_choice.TreeNode;
 const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const EpochStakes = sig.core.EpochStakes;
-const Stakes = sig.core.stake.Stakes;
+const Stakes = sig.core.Stakes;
 const splitOff = sig.consensus.fork_choice.splitOff;
 
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {

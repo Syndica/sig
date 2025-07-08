@@ -18,7 +18,7 @@ const Rent = sig.core.genesis_config.Rent;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
-const VersionedEpochStakes = sig.core.VersionedEpochStakes;
+const VersionedEpochStakes = sig.core.NewVersionedEpochStakes;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
@@ -128,7 +128,7 @@ pub const ExtraFields = struct {
     lamports_per_signature: u64,
     snapshot_persistence: ?BankIncrementalSnapshotPersistence,
     epoch_accounts_hash: ?Hash,
-    versioned_epoch_stakes: VersionedEpochStakesMap,
+    versioned_epoch_stakes: std.AutoArrayHashMapUnmanaged(Epoch, VersionedEpochStakes),
     accounts_lt_hash: ?AccountsLtHash,
 
     pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
@@ -136,8 +136,6 @@ pub const ExtraFields = struct {
         .serializer = null, // just use default serialization method
         .free = bincodeFree,
     };
-
-    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStakes);
 
     /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
     pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
