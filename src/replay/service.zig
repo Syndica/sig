@@ -21,7 +21,7 @@ const EpochTracker = replay.trackers.EpochTracker;
 const GossipVerifiedVoteHash = sig.consensus.vote_listener.GossipVerifiedVoteHash;
 const ThresholdConfirmedSlot = sig.consensus.vote_listener.ThresholdConfirmedSlot;
 const LatestValidatorVotesForFrozenSlots =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 /// Number of threads to use in replay's thread pool
 const NUM_THREADS = 4;
@@ -618,21 +618,28 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
     pub fn addVote(
         self: *UnfrozenGossipVerifiedVoteHashes,
         allocator: std.mem.Allocator,
-        pubkey: sig.core.Pubkey,
+        vote_pubkey: sig.core.Pubkey,
         vote_slot: sig.core.Slot,
         hash: sig.core.Hash,
         is_frozen: bool,
         latest_validator_votes_for_frozen_slots: *LatestValidatorVotesForFrozenSlots,
     ) !void {
         // If this is a frozen slot, then we need to update the `latest_validator_votes_for_frozen_slots`
-        const frozen_hash = if (is_frozen) hash else null;
-        const was_added, const maybe_latest_frozen_vote_slot =
-            latest_validator_votes_for_frozen_slots.checkAddVote(
-                pubkey,
-                vote_slot,
-                frozen_hash,
-                false,
-            );
+        const was_added, //
+        const maybe_latest_frozen_vote_slot //
+        = if (is_frozen) try latest_validator_votes_for_frozen_slots.checkAddVote(
+            allocator,
+            vote_pubkey,
+            vote_slot,
+            hash, // is_frozen
+            .gossip,
+        ) else blk: {
+            // Non-frozen banks are not inserted because
+            // we only track frozen votes in this struct
+            const vote_map = latest_validator_votes_for_frozen_slots.latestVotes(.gossip);
+            const slot = if (vote_map.get(vote_pubkey)) |entry| entry.slot else null;
+            break :blk .{ false, slot };
+        };
 
         const vote_slot_gt_latest_frozen_slot: bool = blk: {
             const latest_frozen_vote_slot = maybe_latest_frozen_vote_slot orelse {
@@ -663,7 +670,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
                 std.debug.assert(hash_to_votes.swapRemove(htv_gop.key_ptr.*));
             };
 
-            try htv_gop.value_ptr.append(allocator, pubkey);
+            try htv_gop.value_ptr.append(allocator, vote_pubkey);
         }
     }
 };
