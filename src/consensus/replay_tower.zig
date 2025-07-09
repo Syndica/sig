@@ -86,15 +86,6 @@ const ComputedBankState = struct {
     }
 };
 
-const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
-pub const ExpirationSlot = Slot;
-/// TODO Should be improved.
-const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
-    ExpirationSlot,
-    std.ArrayList(VotedSlotAndPubkey),
-);
-pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
-
 pub const HeaviestForkFailures = union(enum) {
     LockedOut: u64,
     FailedThreshold: struct {
