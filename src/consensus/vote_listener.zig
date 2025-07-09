@@ -1536,7 +1536,7 @@ test "simple usage" {
         },
     });
     defer vote_listener.joinAndDeinit();
-    std.time.sleep(sig.time.Duration.asNanos(.fromMillis(100)));
+    std.time.sleep(sig.time.Duration.asNanos(.fromMillis(DEFAULT_MS_PER_SLOT * 2)));
     exit_cond.setExit();
 }
 
