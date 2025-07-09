@@ -38,6 +38,10 @@ const SlotHashes = sysvars.SlotHashes;
 const StakeHistory = sysvars.StakeHistory;
 const SlotHistory = sysvars.SlotHistory;
 
+const MaxAllowableDrift = sig.time.MaxAllowableDrift;
+const EpochStartTimestamp = sig.time.EpochStartTimestamp;
+const calculateStakeWeightedTimestamp = sig.time.calculateStakeWeightedTimestamp;
+
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 pub fn fillMissingEntries(
@@ -292,30 +296,31 @@ pub fn updateEpochSchedule(
     );
 }
 
-// TODO: Requires StakesCache
-// pub fn updateStakeHistory(
-//     allocator: std.mem.Allocator,
-//     ancestors: *const Ancestors,
-//     rent: *const Rent,
-//     state: *SlotState,
-//     accounts_db: *AccountsDb,
-//     slot: Slot,
-//     epoch: Epoch,
-//     maybe_epoch: ?Epoch,
-//     stakes_cache: *const StakesCache,
-// ) !void {
-//     if (maybe_epoch) |e| if (e == epoch) return;
-//     try updateSysvarAccount(
-//         allocator,
-//         state,
-//         accounts_db,
-//         ancestors,
-//         rent,
-//         slot,
-//         StakeHistory
-//         stakes_cache.stakes().history(),
-//     );
-// }
+pub fn updateStakeHistory(
+    allocator: std.mem.Allocator,
+    ancestors: *const Ancestors,
+    rent: *const Rent,
+    state: *SlotState,
+    accounts_db: *AccountsDb,
+    slot: Slot,
+    epoch: Epoch,
+    maybe_epoch: ?Epoch,
+    stakes_cache: *const StakesCache,
+) !void {
+    if (maybe_epoch) |e| if (e == epoch) return;
+    const stakes: *const StakesCache.T(), var guard = stakes_cache.stakes.writeWithLock();
+    defer guard.unlock();
+    try updateSysvarAccount(
+        allocator,
+        state,
+        accounts_db,
+        ancestors,
+        rent,
+        slot,
+        StakeHistory,
+        stakes.stake_history,
+    );
+}
 
 pub fn updateRecentBlockhashes(
     allocator: std.mem.Allocator,
@@ -490,8 +495,12 @@ fn getSysvarFromAccount(
 
 fn nextClock(
     allocator: Allocator,
+    feature_set: *const FeatureSet,
     ancestors: *const Ancestors,
     epoch_schedule: *const EpochSchedule,
+    stakes_cache: *const StakesCache,
+    epoch_stakes_map: *const EpochStakesMap,
+    ns_per_slot: u64,
     genesis_creation_time: i64,
     accounts_db: *AccountsDb,
     slot: Slot,
@@ -516,6 +525,14 @@ fn nextClock(
     var unix_timestamp = clock.unix_timestamp;
 
     if (getTimestampEstimate(
+        allocator,
+        feature_set,
+        stakes_cache,
+        epoch_stakes_map,
+        slot,
+        epoch,
+        epoch_schedule.slots_per_epoch,
+        ns_per_slot,
         MaxAllowableDrift.DEFAULT,
         .{
             epoch_schedule.getFirstSlotInEpoch(parent_epoch orelse epoch),
@@ -539,31 +556,56 @@ fn nextClock(
     };
 }
 
-const MaxAllowableDrift = struct {
-    fast: u32,
-    slot: u32,
-
-    pub const MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST: u32 = 25;
-    pub const MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2: u32 = 150;
-
-    pub const DEFAULT: MaxAllowableDrift = .{
-        .fast = MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST,
-        .slow = MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2,
-    };
-};
-
-/// TODO: Implementation requires stakes cache
-/// https://github.com/firedancer-io/agave/blob/57059221b5ac5275bca30edceb9f7de7f45f3495/runtime/src/bank.rs#L2512
 fn getTimestampEstimate(
+    allocator: Allocator,
+    feature_set: *const FeatureSet,
+    stakes_cache: *const StakesCache,
+    epoch_stakes_map: *const EpochStakesMap,
+    slot: Slot,
+    epoch: Epoch,
+    slots_per_epoch: Slot,
+    ns_per_slot: u64,
     max_allowable_drift: MaxAllowableDrift,
-    epoch_start: ?struct {
-        slot: Slot,
-        timestamp: i64,
-    },
+    epoch_start_timestamp: ?EpochStartTimestamp,
 ) ?i64 {
-    _ = max_allowable_drift;
-    _ = epoch_start;
-    return null;
+    const recent_timestamps = blk: {
+        const stakes: *const StakesCache.T(), var guard = stakes_cache.stakes.readWithLock();
+        defer guard.unlock();
+        const vote_accounts = &stakes.vote_accounts.vote_accounts;
+
+        const recent_timestamps = try std.ArrayListUnmanaged(struct { Pubkey, Slot, i64 })
+            .initCapacity(allocator, vote_accounts.len);
+        errdefer recent_timestamps.deinit(allocator);
+
+        for (vote_accounts.keys(), vote_accounts.values()) |pubkey, vote_account| {
+            const vote_state = &vote_account.account.state;
+            const slot_delta = std.math.sub(u64, slot, vote_state.last_timestamp.slot) catch
+                return null;
+            if (slot_delta <= slots_per_epoch) {
+                recent_timestamps.appendAssumeCapacity(.{
+                    pubkey,
+                    vote_state.last_timestamp.slot,
+                    vote_state.last_timestamp.timestamp,
+                });
+            }
+        }
+
+        break :blk recent_timestamps;
+    };
+    defer recent_timestamps.deinit(allocator);
+
+    const epoch_stakes = epoch_stakes_map.get(epoch) orelse return null;
+
+    return calculateStakeWeightedTimestamp(
+        allocator,
+        recent_timestamps.items,
+        &epoch_stakes.stakes.vote_accounts.vote_accounts,
+        slot,
+        ns_per_slot,
+        epoch_start_timestamp,
+        max_allowable_drift,
+        feature_set.active.contains(features.WARP_TIMESTAMP_AGAIN),
+    );
 }
 
 test createSysvarAccount {

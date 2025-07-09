@@ -22,6 +22,7 @@ const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 // fields_from_streams: https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/serde_snapshot.rs#L519
 // bank_from_streams: https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/serde_snapshot.rs#L556
 // reconstruct_bank_from_fields: https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/serde_snapshot.rs#L847
+//
 // new_from_fields: https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L1700
 //     bank.stakes_cache = StakesCache.init(create Stakes(.account) from bank_fields.stakes: Stakes(.delegation) with accountsdb)
 //         - we could load the accounts here and create Stakes(.stake) from the accountsdb
@@ -78,7 +79,11 @@ pub fn epochStakeMapRandom(
             if (gop.found_existing) continue;
             break gop.value_ptr;
         };
-        value_ptr.* = try EpochStakesGeneric(stakes_type).initRandom(allocator, random, max_list_entries);
+        value_ptr.* = try EpochStakesGeneric(stakes_type).initRandom(
+            allocator,
+            random,
+            max_list_entries,
+        );
     }
 
     return map;
