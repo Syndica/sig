@@ -31,7 +31,7 @@ const ProgressMap = sig.consensus.ProgressMap;
 const Tower = sig.consensus.tower.Tower;
 const TowerError = sig.consensus.tower.TowerError;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
-const VotedStakes = sig.consensus.tower.VotedStakes;
+const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 
 const Stake = u64;
 
@@ -1391,7 +1391,7 @@ pub const ReplayTower = struct {
     }
 };
 
-const BlockhashStatus = union(enum) {
+pub const BlockhashStatus = union(enum) {
     /// No vote since restart
     uninitialized,
     /// Non voting validator
@@ -1402,7 +1402,7 @@ const BlockhashStatus = union(enum) {
     blockhash: Hash,
 };
 
-const SwitchForkDecision = union(enum) {
+pub const SwitchForkDecision = union(enum) {
     switch_proof: Hash,
     same_fork,
     failed_switch_threshold: struct {
@@ -1504,7 +1504,7 @@ fn checkVoteStakeThreshold(
     threshold_depth: usize,
     threshold_size: f64,
     slot: Slot,
-    voted_stakes: *const AutoHashMapUnmanaged(Slot, u64),
+    voted_stakes: *const VotedStakes,
     total_stake: u64,
 ) ThresholdDecision {
     const threshold_vote = maybe_threshold_vote orelse {
@@ -1574,7 +1574,7 @@ test "check vote threshold without votes" {
     var tower = try createTestReplayTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -1594,7 +1594,7 @@ test "check vote threshold no skip lockout with new root" {
     var replay_tower = try createTestReplayTower(4, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, MAX_LOCKOUT_HISTORY);
 
@@ -1819,7 +1819,7 @@ test "check vote threshold below threshold" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -1845,7 +1845,7 @@ test "check vote threshold above threshold" {
     var replay_tower = try createTestReplayTower(1, 0.67);
     defer replay_tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -1871,7 +1871,7 @@ test "check vote thresholds above thresholds" {
     var tower = try createTestReplayTower(VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 3);
 
@@ -1902,7 +1902,7 @@ test "check vote threshold deep below threshold" {
     var tower = try createTestReplayTower(VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 2);
 
@@ -1932,7 +1932,7 @@ test "check vote threshold shallow below threshold" {
     var tower = try createTestReplayTower(VOTE_THRESHOLD_DEPTH, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 2);
 
@@ -1962,7 +1962,7 @@ test "check vote threshold above threshold after pop" {
     var tower = try createTestReplayTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -1991,7 +1991,7 @@ test "check vote threshold above threshold no stake" {
     var tower = try createTestReplayTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
 
     _ = try tower.recordBankVote(
@@ -2015,7 +2015,7 @@ test "check vote threshold lockouts not updated" {
     var tower = try createTestReplayTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 2);
 
@@ -2821,7 +2821,7 @@ test "is slot confirmed not enough stake failure" {
     var tower = try createTestReplayTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -2835,7 +2835,7 @@ test "is slot confirmed unknown slot" {
     var tower = try createTestReplayTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
 
     const result = isSlotConfirmed(&tower, 0, &stakes, 2);
@@ -2846,7 +2846,7 @@ test "is slot confirmed pass" {
     var tower = try createTestReplayTower(1, 0.67);
     defer tower.deinit(std.testing.allocator);
 
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -3351,7 +3351,7 @@ pub fn createTestReplayTower(
 fn isSlotConfirmed(
     replay_tower: *const ReplayTower,
     slot: Slot,
-    voted_stakes: *const sig.consensus.tower.VotedStakes,
+    voted_stakes: *const sig.consensus.progress_map.consensus.VotedStakes,
     total_stake: u64,
 ) bool {
     if (!builtin.is_test) {
@@ -3451,9 +3451,9 @@ fn fillProgressMapForkStats(
     }
 }
 
-const MAX_TEST_TREE_LEN = 100;
+pub const MAX_TEST_TREE_LEN = 100;
 const Tree = struct { root: SlotAndHash, data: std.BoundedArray(TreeNode, MAX_TEST_TREE_LEN) };
-const TestFixture = struct {
+pub const TestFixture = struct {
     fork_choice: HeaviestSubtreeForkChoice,
     ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
