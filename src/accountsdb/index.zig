@@ -79,7 +79,8 @@ pub const AccountIndex = struct {
         .{},
     ),
 
-    pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
+    // NOTE: this arraylist's memory is managed by the ReferenceManger - cannot use the allocator interface
+    pub const SlotRefMap = std.AutoHashMap(Slot, std.ArrayListUnmanaged(AccountRef));
     pub const AllocatorConfig = union(Tag) {
         pub const Tag = ReferenceAllocator.Tag;
         ram: struct { allocator: std.mem.Allocator },
