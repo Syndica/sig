@@ -26,8 +26,15 @@ pub const AccountRef = struct {
     // NOTE: next_index is kept in sync to point to the same data as next_ptr.
     next_index: ?u64 = null,
 
+    // NOTE: used purely so that we can realloc slices of AccountRefs and fix up the next(ptr+index).
+    // this isn't serialised - it is inferred from next_index.
+    prev_ptr: ?*AccountRef = null,
+
     // we dont want recursion in bincode
     pub const @"!bincode-config:next_ptr" = sig.bincode.FieldConfig(?*AccountRef){
+        .skip = true,
+    };
+    pub const @"!bincode-config:prev_ptr" = sig.bincode.FieldConfig(?*AccountRef){
         .skip = true,
     };
 
@@ -72,7 +79,8 @@ pub const AccountIndex = struct {
         .{},
     ),
 
-    pub const SlotRefMap = std.AutoHashMap(Slot, []AccountRef);
+    // NOTE: this arraylist's memory is managed by the ReferenceManger - cannot use the allocator interface
+    pub const SlotRefMap = std.AutoHashMap(Slot, std.ArrayListUnmanaged(AccountRef));
     pub const AllocatorConfig = union(Tag) {
         pub const Tag = ReferenceAllocator.Tag;
         ram: struct { allocator: std.mem.Allocator },
@@ -288,6 +296,7 @@ pub const AccountIndex = struct {
             }
             const next_ptr = curr_ref.next_ptr orelse {
                 // end of the list => insert it here
+                account_ref.prev_ptr = curr_ref;
                 curr_ref.next_ptr = account_ref;
                 curr_ref.next_index = index;
                 return true;
@@ -319,6 +328,7 @@ pub const AccountIndex = struct {
             curr_ref = next_ref;
         }
 
+        account_ref.prev_ptr = curr_ref;
         curr_ref.next_ptr = account_ref;
         curr_ref.next_index = index;
     }
@@ -426,9 +436,10 @@ pub const AccountIndex = struct {
         // update the pointers of the references
         self.logger.info().log("organizing manager memory");
         for (references) |*ref| {
-            if (ref.next_index != null) {
-                ref.next_ptr = &references[ref.next_index.?];
-            }
+            const next_index = ref.next_index orelse continue;
+
+            ref.next_ptr = &references[next_index];
+            references[next_index].prev_ptr = ref;
         }
 
         // load the records
