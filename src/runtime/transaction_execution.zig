@@ -7,9 +7,9 @@ const executor = sig.runtime.executor;
 const compute_budget_program = sig.runtime.program.compute_budget;
 const vm = sig.vm;
 
-const Ancestors = sig.core.status_cache.Ancestors;
-const BlockhashQueue = sig.core.bank.BlockhashQueue;
-const EpochStakes = sig.core.stake.EpochStakes;
+const Ancestors = sig.core.Ancestors;
+const BlockhashQueue = sig.core.BlockhashQueue;
+const EpochStakes = sig.core.EpochStakes;
 const Hash = sig.core.Hash;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
@@ -417,8 +417,8 @@ test "loadAndExecuteTransactions: no transactions" {
     const sysvar_cache: SysvarCache = .{};
     const rent_collector: RentCollector = sig.core.rent_collector.defaultCollector(10);
     const blockhash_queue: BlockhashQueue = try BlockhashQueue.initRandom(
-        prng.random(),
         allocator,
+        prng.random(),
         10,
     );
     defer blockhash_queue.deinit(allocator);

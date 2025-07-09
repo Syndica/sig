@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const FeeCalculator = sig.runtime.sysvar.Fees.FeeCalculator;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/current.rs#L10-L11
 const DURABLE_NONCE_HASH_PREFIX = "DURABLE_NONCE";
@@ -83,8 +82,8 @@ pub const Data = struct {
     authority: Pubkey,
     /// Durable nonce value derived from a valid previous blockhash.
     durable_nonce: Hash,
-    /// The fee calculator associated with the blockhash.
-    fee_calculator: FeeCalculator,
+    /// The lamports per signature associated with the blockhash.
+    lamports_per_signature: u64,
 
     pub fn init(
         authority: Pubkey,
@@ -94,7 +93,7 @@ pub const Data = struct {
         return .{
             .authority = authority,
             .durable_nonce = durable_nonce,
-            .fee_calculator = .{ .lamports_per_signature = lamports_per_signature },
+            .lamports_per_signature = lamports_per_signature,
         };
     }
 };
@@ -125,7 +124,7 @@ test "verify_durable_nonce" {
         const data = Data{
             .authority = Pubkey.initRandom(prng.random()),
             .durable_nonce = durable_nonce,
-            .fee_calculator = FeeCalculator{ .lamports_per_signature = 2718 },
+            .lamports_per_signature = 2718,
         };
         const versions = Versions{ .legacy = .{ .initialized = data } };
         try std.testing.expectEqual(null, versions.verify(blockhash));
@@ -138,7 +137,7 @@ test "verify_durable_nonce" {
         const data = Data{
             .authority = Pubkey.initRandom(prng.random()),
             .durable_nonce = durable_nonce,
-            .fee_calculator = FeeCalculator{ .lamports_per_signature = 2718 },
+            .lamports_per_signature = 2718,
         };
         const versions = Versions{ .current = .{ .initialized = data } };
         try std.testing.expectEqual(null, versions.verify(blockhash));
@@ -162,7 +161,7 @@ test "upgrade_nonce_version" {
         const initial_data = Data{
             .authority = Pubkey.initRandom(prng.random()),
             .durable_nonce = initial_durable_nonce,
-            .fee_calculator = FeeCalculator{ .lamports_per_signature = 2718 },
+            .lamports_per_signature = 2718,
         };
 
         const versions = Versions{ .legacy = .{ .initialized = initial_data } };
@@ -172,7 +171,7 @@ test "upgrade_nonce_version" {
         const expected_data = Data{
             .authority = initial_data.authority,
             .durable_nonce = expected_durable_nonce,
-            .fee_calculator = initial_data.fee_calculator,
+            .lamports_per_signature = initial_data.lamports_per_signature,
         };
         const expected = Versions{ .current = .{ .initialized = expected_data } };
 

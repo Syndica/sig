@@ -138,7 +138,9 @@ pub const AccountsDB = struct {
     // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap),
 
-    pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
+    const PubkeyAndAccount = struct { pubkey: Pubkey, account: Account };
+
+    pub const PubkeysAndAccounts = std.MultiArrayList(PubkeyAndAccount);
     pub const SlotPubkeyAccounts = std.AutoHashMap(Slot, PubkeysAndAccounts);
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
@@ -250,10 +252,8 @@ pub const AccountsDB = struct {
             defer unrooted_accounts_lg.unlock();
             var iter = unrooted_accounts.valueIterator();
             while (iter.next()) |pubkeys_and_accounts| {
-                const pubkeys, const accounts = pubkeys_and_accounts.*;
-                for (accounts) |account| account.deinit(self.allocator);
-                self.allocator.free(pubkeys);
-                self.allocator.free(accounts);
+                for (pubkeys_and_accounts.items(.account)) |account| account.deinit(self.allocator);
+                pubkeys_and_accounts.deinit(self.allocator);
             }
             unrooted_accounts.deinit();
         }
@@ -1492,8 +1492,8 @@ pub const AccountsDB = struct {
                     self.unrooted_accounts.readWithLock();
                 defer unrooted_accounts_lg.unlock();
 
-                _, const accounts = unrooted_accounts.get(account_ref.slot) orelse
-                    return error.SlotNotFound;
+                const accounts = (unrooted_accounts.get(account_ref.slot) orelse
+                    return error.SlotNotFound).items(.account);
                 const account = accounts[ref_info.index];
 
                 return try account.cloneOwned(self.allocator);
@@ -1544,8 +1544,8 @@ pub const AccountsDB = struct {
                     self.unrooted_accounts.readWithLock();
                 errdefer unrooted_accounts_lg.unlock();
 
-                _, const accounts = unrooted_accounts.get(account_ref.slot) orelse
-                    return error.SlotNotFound;
+                const accounts = (unrooted_accounts.get(account_ref.slot) orelse
+                    return error.SlotNotFound).items(.account);
                 return .{
                     .{ .unrooted_map = accounts[ref_info.index] },
                     .{ .unrooted_map = unrooted_accounts_lg },
@@ -1667,6 +1667,26 @@ pub const AccountsDB = struct {
         const account = try self.getAccountFromRef(max_ref);
 
         return account;
+    }
+
+    /// gets an account given an associated pubkey. mut ref is required for locks.
+    /// Will only find rooted accounts, or unrooted accounts from a slot in ancestors.
+    pub fn getAccountWithAncestors(
+        self: *AccountsDB,
+        pubkey: *const Pubkey,
+        ancestors: *const sig.core.Ancestors,
+    ) GetFileFromRefError!?Account {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return null;
+        defer lock.unlock();
+
+        const max_ref = greatestInAncestors(
+            head_ref.ref_ptr,
+            ancestors,
+            self.largest_flushed_slot.load(.monotonic),
+        ) orelse return null;
+
+        return try self.getAccountFromRef(max_ref);
     }
 
     pub fn getAccountAndReference(
@@ -1848,6 +1868,113 @@ pub const AccountsDB = struct {
         }
     }
 
+    /// writes one account to storage
+    /// intended for use from runtime
+    pub fn putAccount(
+        self: *AccountsDB,
+        slot: Slot,
+        pubkey: Pubkey,
+        account: sig.runtime.AccountSharedData,
+    ) !void {
+        const duplicated = Account{
+            .data = .{
+                .owned_allocation = try self.allocator.dupe(u8, account.data),
+            },
+            .executable = account.executable,
+            .lamports = account.lamports,
+            .owner = account.owner,
+            .rent_epoch = account.rent_epoch,
+        };
+        var inserted_duplicate: bool = false;
+        defer {
+            if (!inserted_duplicate) duplicated.deinit(self.allocator);
+        }
+
+        if (self.geyser_writer) |geyser_writer| {
+            const data_versioned = sig.geyser.core.VersionedAccountPayload{
+                .AccountPayloadV1 = .{
+                    .accounts = &.{duplicated},
+                    .pubkeys = &.{pubkey},
+                    .slot = slot,
+                },
+            };
+            try geyser_writer.writePayloadToPipe(data_versioned);
+        }
+
+        {
+            const bhs, var bhs_lg = try self.getOrInitBankHashStats(slot);
+            defer bhs_lg.unlock();
+            bhs.update(.{
+                .lamports = account.lamports,
+                .data_len = account.data.len,
+                .executable = account.executable,
+            });
+        }
+
+        {
+            const unrooted_accounts, var unrooted_accounts_lg =
+                self.unrooted_accounts.writeWithLock();
+            defer unrooted_accounts_lg.unlock();
+
+            const entry = try unrooted_accounts.getOrPut(slot);
+
+            if (!entry.found_existing) entry.value_ptr.* = .{};
+            try entry.value_ptr.append(
+                self.allocator,
+                .{ .account = duplicated, .pubkey = pubkey },
+            );
+            inserted_duplicate = true;
+        }
+
+        // prealloc the ref map space
+        {
+            const shard_map_rw = self.account_index.pubkey_ref_map.getShard(&pubkey);
+            const shard_map, var shard_map_lg = shard_map_rw.writeWithLock();
+            defer shard_map_lg.unlock();
+
+            try shard_map.ensureTotalCapacity(1 + shard_map.count());
+        }
+
+        // update index
+        var accounts_dead_count: u64 = 0;
+        const reference_buf, const global_ref_index = try self.account_index
+            .reference_manager.allocOrExpand(1);
+
+        reference_buf[0] = AccountRef{
+            .pubkey = pubkey,
+            .slot = slot,
+            .location = .{ .UnrootedMap = .{ .index = 0 } },
+        };
+
+        const was_inserted = self.account_index
+            .indexRefIfNotDuplicateSlotAssumeCapacity(
+            &reference_buf[0],
+            global_ref_index,
+        );
+        if (!was_inserted) {
+            self.logger.warn().logf(
+                "duplicate reference not inserted: slot: {d} pubkey: {s}",
+                .{ slot, pubkey },
+            );
+            accounts_dead_count += 1;
+        }
+
+        std.debug.assert(self.account_index.exists(&pubkey, slot));
+
+        // track the slot's references
+        {
+            const slot_ref_map, var lock = self.account_index.slot_reference_map.writeWithLock();
+            defer lock.unlock();
+            try slot_ref_map.putNoClobber(slot, reference_buf);
+        }
+
+        if (accounts_dead_count != 0) {
+            const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
+            defer dead_accounts_lg.unlock();
+            try dead_accounts.putNoClobber(slot, accounts_dead_count);
+        }
+    }
+
     /// writes a batch of accounts to storage and updates the index
     /// NOTE: only currently used in benchmarks and tests
     pub fn putAccountSlice(
@@ -1872,7 +1999,7 @@ pub const AccountsDB = struct {
 
         {
             const accounts_duped = try self.allocator.alloc(Account, accounts.len);
-            errdefer self.allocator.free(accounts_duped);
+            defer self.allocator.free(accounts_duped);
 
             for (accounts_duped, accounts, 0..) |*account, original, i| {
                 errdefer for (accounts_duped[0..i]) |prev| prev.deinit(self.allocator);
@@ -1887,14 +2014,16 @@ pub const AccountsDB = struct {
                 });
             }
 
-            const pubkeys_duped = try self.allocator.dupe(Pubkey, pubkeys);
-            errdefer self.allocator.free(pubkeys_duped);
-
             const unrooted_accounts, var unrooted_accounts_lg =
                 self.unrooted_accounts.writeWithLock();
             defer unrooted_accounts_lg.unlock();
-            // NOTE: there should only be a single state per slot
-            try unrooted_accounts.putNoClobber(slot, .{ pubkeys_duped, accounts_duped });
+
+            const entry = try unrooted_accounts.getOrPut(slot);
+            if (!entry.found_existing) entry.value_ptr.* = .{};
+            try entry.value_ptr.ensureUnusedCapacity(self.allocator, pubkeys.len);
+            for (pubkeys, accounts_duped) |pubkey, account| {
+                entry.value_ptr.appendAssumeCapacity(.{ .account = account, .pubkey = pubkey });
+            }
         }
 
         // prealloc the ref map space
@@ -1968,19 +2097,53 @@ pub const AccountsDB = struct {
         return .{ gop.value_ptr, bank_hash_stats_lg };
     }
 
-    pub inline fn slotListMaxWithinBounds(
+    /// first searches for the highest slot in ancestors. if none are found,
+    /// then searches for the highest rooted slot that has been flushed.
+    ///
+    /// we need to filter by flushed slots here because if you just filter by
+    /// rooted, you might catch some accounts from another branch before
+    /// flushing should remove items from the cache.
+    fn greatestInAncestors(
+        ref_ptr: *AccountRef,
+        ancestors: *const sig.core.Ancestors,
+        largest_flushed_slot: Slot,
+    ) ?*AccountRef {
+        var biggest: ?*AccountRef = null;
+
+        var curr: ?*AccountRef = ref_ptr;
+        while (curr) |ref| : (curr = ref.next_ptr) {
+            if (ancestors.containsSlot(ref.slot)) {
+                const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
+                if (new_biggest) biggest = ref;
+            }
+        }
+
+        if (biggest == null) {
+            curr = ref_ptr;
+            while (curr) |ref| : (curr = ref.next_ptr) {
+                if (ref.slot < largest_flushed_slot) {
+                    const new_biggest = if (biggest) |big| ref.slot > big.slot else true;
+                    if (new_biggest) biggest = ref;
+                }
+            }
+        }
+
+        return biggest;
+    }
+
+    inline fn slotListMaxWithinBounds(
         ref_ptr: *AccountRef,
         min_slot: ?Slot,
         max_slot: ?Slot,
     ) ?*AccountRef {
         var biggest: ?*AccountRef = null;
-        if (inBoundsIf(ref_ptr.slot, min_slot, max_slot)) {
+        if (slotInRange(ref_ptr.slot, min_slot, max_slot)) {
             biggest = ref_ptr;
         }
 
         var curr = ref_ptr;
         while (curr.next_ptr) |ref| {
-            if (inBoundsIf(ref.slot, min_slot, max_slot) and
+            if (slotInRange(ref.slot, min_slot, max_slot) and
                 (biggest == null or ref.slot > biggest.?.slot) //
             ) biggest = ref;
             curr = ref;
@@ -2481,42 +2644,28 @@ pub const AccountsDB = struct {
         try self.snapshot_dir.deleteFile(file_name);
     }
 
-    inline fn lessThanIf(
+    inline fn slotSatisfiesMax(
         slot: Slot,
         max_slot: ?Slot,
     ) bool {
-        if (max_slot) |max| {
-            if (slot <= max) {
-                return true;
-            } else {
-                return false;
-            }
-        } else {
-            return true;
-        }
+        if (max_slot) |max| return slot <= max;
+        return true;
     }
 
-    inline fn greaterThanIf(
+    inline fn slotSatisfiesMin(
         slot: Slot,
         min_slot: ?Slot,
     ) bool {
-        if (min_slot) |min| {
-            if (slot > min) {
-                return true;
-            } else {
-                return false;
-            }
-        } else {
-            return true;
-        }
+        if (min_slot) |min| return slot > min;
+        return true;
     }
 
-    inline fn inBoundsIf(
+    inline fn slotInRange(
         slot: Slot,
         min_slot: ?Slot,
         max_slot: ?Slot,
     ) bool {
-        return lessThanIf(slot, max_slot) and greaterThanIf(slot, min_slot);
+        return slotSatisfiesMax(slot, max_slot) and slotSatisfiesMin(slot, min_slot);
     }
 };
 
@@ -2978,7 +3127,7 @@ pub fn unpackSnapshotFilePair(
     }
 }
 
-fn loadTestAccountsDB(
+pub fn loadTestAccountsDB(
     allocator: std.mem.Allocator,
     use_disk: bool,
     n_threads: u32,
@@ -3132,6 +3281,116 @@ test "write and read an account" {
     var account_2 = try accounts_db.getAccount(&pubkey);
     defer account_2.deinit(allocator);
     try std.testing.expect(accounts[0].equals(&account_2));
+}
+
+test "write and read an account (write single + read with ancestors)" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const snapshot_dir = tmp_dir_root.dir;
+
+    var accounts_db, const full_inc_manifest =
+        try loadTestAccountsDB(allocator, false, 1, .noop, snapshot_dir);
+    defer accounts_db.deinit();
+    defer full_inc_manifest.deinit(allocator);
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const pubkey = Pubkey.initRandom(prng.random());
+
+    var data = [_]u8{ 1, 2, 3 };
+
+    const test_account = Account{
+        .data = AccountDataHandle.initAllocated(&data),
+        .executable = false,
+        .lamports = 100,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    };
+    const test_account_shared = sig.runtime.AccountSharedData{
+        .data = &data,
+        .executable = false,
+        .lamports = 100,
+        .owner = Pubkey.ZEROES,
+        .rent_epoch = 0,
+    };
+
+    try accounts_db.putAccount(5083, pubkey, test_account_shared);
+
+    // normal get
+    {
+        var account = try accounts_db.getAccount(&pubkey);
+        defer account.deinit(allocator);
+        try std.testing.expect(test_account.equals(&account));
+    }
+
+    // assume we've progessed past the need for ancestors
+    {
+        accounts_db.largest_flushed_slot.store(10_000, .monotonic);
+        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &.{})).?;
+        accounts_db.largest_flushed_slot.store(0, .monotonic);
+        defer account.deinit(allocator);
+        try std.testing.expect(test_account.equals(&account));
+    }
+
+    // slot is in ancestors
+    {
+        var ancestors = sig.core.Ancestors{};
+        defer ancestors.deinit(allocator);
+        try ancestors.ancestors.put(allocator, 5083, {});
+
+        var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+        defer account.deinit(allocator);
+        try std.testing.expect(test_account.equals(&account));
+    }
+
+    // slot is not in ancestors
+    try std.testing.expectEqual(null, accounts_db.getAccountWithAncestors(&pubkey, &.{}));
+
+    // write account to the same pubkey in the next slot (!)
+    {
+        var data_2 = [_]u8{ 0, 1, 0, 1 };
+
+        const test_account_2 = Account{
+            .data = AccountDataHandle.initAllocated(&data_2),
+            .executable = true,
+            .lamports = 1000,
+            .owner = Pubkey.ZEROES,
+            .rent_epoch = 1,
+        };
+
+        const test_account_2_shared = sig.runtime.AccountSharedData{
+            .data = &data_2,
+            .executable = true,
+            .lamports = 1000,
+            .owner = Pubkey.ZEROES,
+            .rent_epoch = 1,
+        };
+
+        try accounts_db.putAccount(5084, pubkey, test_account_2_shared);
+
+        // prev slot, get prev account
+        {
+            var ancestors = sig.core.Ancestors{};
+            defer ancestors.deinit(allocator);
+            try ancestors.ancestors.put(allocator, 5083, {});
+
+            var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+            defer account.deinit(allocator);
+            try std.testing.expect(test_account.equals(&account));
+        }
+
+        // new slot, get new account
+        {
+            var ancestors = sig.core.Ancestors{};
+            defer ancestors.deinit(allocator);
+            try ancestors.ancestors.put(allocator, 5084, {});
+
+            var account = (try accounts_db.getAccountWithAncestors(&pubkey, &ancestors)).?;
+            defer account.deinit(allocator);
+            try std.testing.expect(test_account_2.equals(&account));
+        }
+    }
 }
 
 test "load and validate BankFields from test snapshot" {

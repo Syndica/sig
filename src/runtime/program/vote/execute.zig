@@ -1315,10 +1315,6 @@ test "vote_program: executeIntializeAccount" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .rent = rent,
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -1420,9 +1416,6 @@ test "vote_program: executeAuthorize withdrawer signed by current withdrawer" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -1532,9 +1525,6 @@ test "vote_program: executeAuthorize voter signed by current withdrawer" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -1646,9 +1636,6 @@ test "vote_program: authorizeWithSeed withdrawer" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -1761,9 +1748,6 @@ test "vote_program: authorizeCheckedWithSeed withdrawer" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -1863,9 +1847,6 @@ test "vote_program: authorizeChecked withdrawer" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -1956,9 +1937,6 @@ test "vote_program: update_validator_identity" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -2050,9 +2028,6 @@ test "vote_program: update_validator_identity new authority did not sign" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -2146,9 +2121,6 @@ test "vote_program: update_validator_identity current authority did not sign" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-            },
         },
         .{},
     );
@@ -2262,20 +2234,6 @@ test "vote_program: update_commission increasing commission" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .epoch_schedule = epoch_schedule,
-            },
-            .feature_set = &.{
-                .{
-                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
-                    .slot = 0,
-                },
-                .{
-                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
-                    .slot = 0,
-                },
-            },
         },
         .{},
     );
@@ -2387,20 +2345,6 @@ test "vote_program: update_commission decreasing commission" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .epoch_schedule = epoch_schedule,
-            },
-            .feature_set = &.{
-                .{
-                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
-                    .slot = 0,
-                },
-                .{
-                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
-                    .slot = 0,
-                },
-            },
         },
         .{},
     );
@@ -2503,11 +2447,6 @@ test "vote_program: update_commission commission update too late passes with fea
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .epoch_schedule = epoch_schedule,
-            },
-            .feature_set = &.{}, // None of the required feature_set is set,
         },
         .{},
     );
@@ -2619,20 +2558,6 @@ test "vote_program: update_commission error commission update too late failure" 
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .epoch_schedule = epoch_schedule,
-            },
-            .feature_set = &.{
-                .{
-                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
-                    .slot = 0,
-                },
-                .{
-                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
-                    .slot = 0,
-                },
-            },
         },
         .{},
     ) catch |err| {
@@ -2749,20 +2674,6 @@ test "vote_program: update_commission missing signature" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .epoch_schedule = epoch_schedule,
-            },
-            .feature_set = &.{
-                .{
-                    .pubkey = features.ALLOW_COMMISSION_DECREASE_AT_ANY_TIME,
-                    .slot = 0,
-                },
-                .{
-                    .pubkey = features.COMMISSION_UPDATES_ONLY_ALLOWED_IN_FIRST_HALF_OF_EPOCH,
-                    .slot = 0,
-                },
-            },
         },
         .{},
     ) catch |err| {
@@ -2849,10 +2760,6 @@ test "vote_program: widthdraw no changes" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .rent = rent,
-            },
         },
         .{},
     );
@@ -2937,10 +2844,6 @@ test "vote_program: widthdraw some amount below with balance above rent exempt" 
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .rent = rent,
-            },
         },
         .{},
     );
@@ -3046,10 +2949,6 @@ test "vote_program: widthdraw all and close account with active vote account" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .rent = rent,
-            },
         },
         .{},
     ) catch |err| {
@@ -3139,10 +3038,6 @@ test "vote_program: widthdraw some amount below with balance below rent exempt" 
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .rent = rent,
-            },
         },
         .{},
     ) catch |err| {
@@ -3228,10 +3123,6 @@ test "vote_program: widthdraw insufficient funds" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .rent = rent,
-            },
         },
         .{},
     ) catch |err| {
@@ -3319,10 +3210,6 @@ test "vote_program: widthdraw with missing signature" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .rent = rent,
-            },
         },
         .{},
     ) catch |err| {
@@ -3367,11 +3254,11 @@ test "vote_program: vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes{
-        .entries = &.{
-            .{ slots[slots.len - 1], vote.hash },
-        },
-    };
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
+    );
+    // deinitialised by expectProgramExecuteResult
 
     var final_state = try VoteState.init(
         allocator,
@@ -3441,10 +3328,6 @@ test "vote_program: vote" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = slot_hashes,
-            },
         },
         .{},
     );
@@ -3487,11 +3370,11 @@ test "vote_program: vote switch" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes{
-        .entries = &.{
-            .{ slots[slots.len - 1], vote.hash },
-        },
-    };
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
+    );
+    // deinitialised by expectProgramExecuteResult
 
     var final_state = try VoteState.init(
         allocator,
@@ -3561,10 +3444,6 @@ test "vote_program: vote switch" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = slot_hashes,
-            },
         },
         .{},
     );
@@ -3607,11 +3486,11 @@ test "vote_program: vote missing signature" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes{
-        .entries = &.{
-            .{ slots[slots.len - 1], vote.hash },
-        },
-    };
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{.{ .slot = slots[slots.len - 1], .hash = vote.hash }},
+    );
+    // deinitialised by expectProgramExecuteResult
 
     var final_state = try VoteState.init(
         allocator,
@@ -3682,10 +3561,6 @@ test "vote_program: vote missing signature" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = slot_hashes,
-            },
         },
         .{},
     ) catch |err| {
@@ -3731,11 +3606,11 @@ test "vote_program: empty vote" {
         .timestamp = null,
     };
 
-    const slot_hashes = SlotHashes{
-        .entries = &.{
-            .{ 0, sig.core.Hash.ZEROES },
-        },
-    };
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{.{ .slot = 0, .hash = sig.core.Hash.ZEROES }},
+    );
+    // deinitialised by expectProgramExecuteResult
 
     var final_state = try VoteState.init(
         allocator,
@@ -3805,10 +3680,6 @@ test "vote_program: empty vote" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = slot_hashes,
-            },
         },
         .{},
     ) catch |err| {
@@ -3900,6 +3771,17 @@ test "vote_program: vote state update" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+        },
+    );
+    // deinitialised by expectProgramExecuteResult
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -3926,14 +3808,7 @@ test "vote_program: vote state update" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
+                .slot_hashes = slot_hashes,
             },
         },
         .{
@@ -3948,17 +3823,6 @@ test "vote_program: vote state update" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
-            },
         },
         .{},
     );
@@ -4046,6 +3910,17 @@ test "vote_program: vote state update switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+        },
+    );
+    // deinitialised by expectProgramExecuteResult
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4073,14 +3948,7 @@ test "vote_program: vote state update switch" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
+                .slot_hashes = slot_hashes,
             },
         },
         .{
@@ -4095,17 +3963,6 @@ test "vote_program: vote state update switch" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
-            },
         },
         .{},
     );
@@ -4193,6 +4050,17 @@ test "vote_program: compact vote state update" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+        },
+    );
+    // deinitialised by expectProgramExecuteResult
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4219,14 +4087,7 @@ test "vote_program: compact vote state update" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
+                .slot_hashes = slot_hashes,
             },
         },
         .{
@@ -4241,17 +4102,6 @@ test "vote_program: compact vote state update" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
-            },
         },
         .{},
     );
@@ -4339,6 +4189,17 @@ test "vote_program: compact vote state update switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+        },
+    );
+    // deinitialised by expectProgramExecuteResult
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4366,14 +4227,7 @@ test "vote_program: compact vote state update switch" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
+                .slot_hashes = slot_hashes,
             },
         },
         .{
@@ -4388,17 +4242,6 @@ test "vote_program: compact vote state update switch" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
-            },
         },
         .{},
     );
@@ -4487,6 +4330,17 @@ test "vote_program: tower sync" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+        },
+    );
+    // deinitialised by expectProgramExecuteResult
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4513,14 +4367,7 @@ test "vote_program: tower sync" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
+                .slot_hashes = slot_hashes,
             },
             .feature_set = &.{
                 .{
@@ -4541,17 +4388,6 @@ test "vote_program: tower sync" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
-            },
         },
         .{},
     );
@@ -4640,6 +4476,17 @@ test "vote_program: tower sync switch" {
     var final_vote_state_bytes = ([_]u8{0} ** VoteState.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(final_vote_state_bytes[0..], final_vote_state, .{});
 
+    const slot_hashes = try SlotHashes.initWithEntries(
+        allocator,
+        &.{
+            .{ .slot = 8, .hash = vote_slot_hash },
+            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+        },
+    );
+    // deinitialised by expectProgramExecuteResult
+
     try testing.expectProgramExecuteResult(
         std.testing.allocator,
         vote_program.ID,
@@ -4667,14 +4514,7 @@ test "vote_program: tower sync switch" {
             .compute_meter = vote_program.COMPUTE_UNITS,
             .sysvar_cache = .{
                 .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
+                .slot_hashes = slot_hashes,
             },
             .feature_set = &.{
                 .{
@@ -4695,17 +4535,6 @@ test "vote_program: tower sync switch" {
                 .{ .pubkey = vote_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .compute_meter = 0,
-            .sysvar_cache = .{
-                .clock = clock,
-                .slot_hashes = SlotHashes{
-                    .entries = &.{
-                        .{ 8, vote_slot_hash },
-                        .{ 6, sig.core.Hash.ZEROES },
-                        .{ 4, sig.core.Hash.ZEROES },
-                        .{ 2, sig.core.Hash.ZEROES },
-                    },
-                },
-            },
         },
         .{},
     );
