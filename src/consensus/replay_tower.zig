@@ -21,10 +21,11 @@ const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
 const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
+const StakeAndVoteAccount = sig.core.vote_accounts.StakeAndVoteAccount;
+const VoteAccount = sig.core.vote_accounts.VoteAccount;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const UnixTimestamp = sig.core.UnixTimestamp;
-const VoteAccount = sig.core.stake.VoteAccount;
 
 const HeaviestSubtreeForkChoice = sig.consensus.HeaviestSubtreeForkChoice;
 const LatestValidatorVotesForFrozenBanks =
@@ -1627,7 +1628,7 @@ pub fn collectVoteLockouts(
     var vote_slots = SortedSet(Slot).init(allocator);
     defer vote_slots.deinit();
 
-    var voted_stakes = std.AutoHashMapUnmanaged(Slot, Stake).empty;
+    var voted_stakes = VotedStakes.empty;
 
     var total_stake: u64 = 0;
 
@@ -1639,8 +1640,8 @@ pub fn collectVoteLockouts(
     var my_latest_landed_vote: ?Slot = null;
 
     for (vote_accounts.keys(), vote_accounts.values()) |key, value| {
-        const voted_stake = value[0];
-        const vote_account = value[1];
+        const voted_stake = value.stake;
+        const vote_account = value.account;
         // Skip accounts with no stake.
         if (voted_stake == 0) {
             continue;
@@ -1677,13 +1678,15 @@ pub fn collectVoteLockouts(
 
         // Add the last vote to update the `heaviest_subtree_fork_choice`
         if (vote_state.lastVotedSlot()) |last_landed_voted_slot| {
-            _ = try latest_validator_votes_for_frozen_banks.checkAddVote(
-                allocator,
-                key,
-                last_landed_voted_slot,
-                progress_map.getHash(last_landed_voted_slot),
-                true,
-            );
+            if (progress_map.getHash(last_landed_voted_slot)) |frozen_hash| {
+                _ = try latest_validator_votes_for_frozen_banks.checkAddVote(
+                    allocator,
+                    key,
+                    last_landed_voted_slot,
+                    frozen_hash,
+                    true,
+                );
+            }
         }
 
         // Simulate next vote and extract vote slots using the provided bank slot.
@@ -1782,7 +1785,7 @@ pub fn lastVotedSlotInBank(
 
 pub fn populateAncestorVotedStakes(
     allocator: std.mem.Allocator,
-    voted_stakes: *std.AutoHashMapUnmanaged(Slot, u64),
+    voted_stakes: *VotedStakes,
     vote_slots: []const Slot,
     ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
 ) !void {
@@ -1833,7 +1836,7 @@ pub fn isSlotDuplicateConfirmed(
 }
 
 test "is slot duplicate confirmed not enough stake failure" {
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -1848,7 +1851,7 @@ test "is slot duplicate confirmed not enough stake failure" {
 }
 
 test "is slot duplicate confirmed unknown slot" {
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
 
     const result = isSlotDuplicateConfirmed(
@@ -1860,7 +1863,7 @@ test "is slot duplicate confirmed unknown slot" {
 }
 
 test "is slot duplicate confirmed pass" {
-    var stakes = AutoHashMapUnmanaged(u64, u64){};
+    var stakes = VotedStakes.empty;
     defer stakes.deinit(std.testing.allocator);
     try stakes.ensureTotalCapacity(std.testing.allocator, 1);
 
@@ -1921,8 +1924,8 @@ test "check_vote_threshold_forks" {
     );
     defer {
         for (accounts.values()) |value| {
-            allocator.free(value[1].account.data);
-            value[1].vote_state.deinit();
+            allocator.free(value.account.account.data);
+            value.account.state.deinit();
         }
         accounts.deinit(allocator);
     }
@@ -2023,8 +2026,8 @@ test "collect vote lockouts root" {
     );
     defer {
         for (accounts.values()) |value| {
-            allocator.free(value[1].account.data);
-            value[1].vote_state.deinit();
+            allocator.free(value.account.account.data);
+            value.account.state.deinit();
         }
         accounts.deinit(allocator);
     }
@@ -2095,10 +2098,10 @@ test "collect vote lockouts root" {
     errdefer fork_progress.deinit(allocator);
     fork_progress.fork_stats.bank_hash = sig.core.hash.Hash.ZEROES;
 
-    for (accounts.values()) |account| {
+    for (accounts.values()) |value| {
         try progres_map.map.put(
             allocator,
-            account[1].vote_state.lastVotedSlot().?,
+            value.account.state.lastVotedSlot().?,
             fork_progress,
         );
     }
@@ -2122,14 +2125,14 @@ test "collect vote lockouts root" {
     try std.testing.expectEqual(expected_bank_stake, computed_banks.fork_stake);
     try std.testing.expectEqual(expected_total_stake, computed_banks.total_stake);
 
-    var new_votes =
+    const new_votes =
         try latest_votes.takeVotesDirtySet(allocator, root.slot);
-    defer new_votes.deinit(allocator);
+    defer allocator.free(new_votes);
 
     try std.testing.expectEqualSlices(
         struct { Pubkey, sig.core.hash.SlotAndHash },
         account_latest_votes,
-        new_votes.items,
+        new_votes,
     );
 }
 
@@ -2148,8 +2151,8 @@ test "collect vote lockouts sums" {
     );
     defer {
         for (accounts.values()) |value| {
-            allocator.free(value[1].account.data);
-            value[1].vote_state.deinit();
+            allocator.free(value.account.account.data);
+            value.account.state.deinit();
         }
         accounts.deinit(allocator);
     }
@@ -2199,7 +2202,7 @@ test "collect vote lockouts sums" {
     for (accounts.values()) |account| {
         try progres_map.map.put(
             allocator,
-            account[1].vote_state.lastVotedSlot().?,
+            account.account.state.lastVotedSlot().?,
             fork_progress,
         );
     }
@@ -2219,12 +2222,12 @@ test "collect vote lockouts sums" {
     try std.testing.expectEqual(2, computed_banks.voted_stakes.get(0).?);
     try std.testing.expectEqual(2, computed_banks.total_stake);
 
-    var new_votes = try latest_votes.takeVotesDirtySet(allocator, 0);
-    defer new_votes.deinit(allocator);
+    const new_votes = try latest_votes.takeVotesDirtySet(allocator, 0);
+    defer allocator.free(new_votes);
     try std.testing.expectEqualSlices(
         struct { Pubkey, sig.core.hash.SlotAndHash },
         account_latest_votes,
-        new_votes.items,
+        new_votes,
     );
 }
 
@@ -4507,6 +4510,7 @@ fn genStakes(
         );
         for (votes) |slot| {
             try sig.runtime.program.vote.state.processSlotVoteUnchecked(
+                allocator,
                 &vote_state,
                 slot,
             );
@@ -4519,9 +4523,9 @@ fn genStakes(
         try map.put(
             allocator,
             Pubkey.initRandom(random),
-            .{
-                lamports,
-                VoteAccount{ .account = account, .vote_state = vote_state },
+            StakeAndVoteAccount{
+                .stake = lamports,
+                .account = VoteAccount{ .account = account, .state = vote_state },
             },
         );
     }
