@@ -740,7 +740,10 @@ pub const AccountsDB = struct {
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
         const reference_manager = self.account_index.reference_manager;
 
-        var reference_bufs = try ArrayList([]AccountRef).initCapacity(self.allocator, n_account_files);
+        var reference_bufs = try ArrayList([]AccountRef).initCapacity(
+            self.allocator,
+            n_account_files,
+        );
         defer reference_bufs.deinit();
         var global_indices = try ArrayList(u64).initCapacity(self.allocator, n_account_files);
         defer global_indices.deinit();
@@ -947,14 +950,20 @@ pub const AccountsDB = struct {
 
             timer.reset();
 
-            for (0.., reference_bufs.items, global_indices.items) |i_ref_buf, reference_buf, global_index| {
+            for (
+                0..,
+                reference_bufs.items,
+                global_indices.items,
+            ) |i_ref_buf, reference_buf, global_index| {
                 for (0.., reference_buf) |i, *ref| {
                     _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(
                         ref,
                         global_index + i,
                     );
 
-                    if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
+                    if (print_progress and
+                        progress_timer.read().asNanos() > DB_LOG_RATE.asNanos())
+                    {
                         printTimeEstimate(
                             self.logger,
                             &timer,
@@ -2113,7 +2122,9 @@ pub const AccountsDB = struct {
 
                     // if we just moved an accountref which is the head, fix up the head
                     if (shard_map.getPtr(ref.pubkey)) |head| {
-                        if (head.ref_ptr.slot == ref.slot and head.ref_ptr.pubkey.equals(&ref.pubkey)) {
+                        if (head.ref_ptr.slot == ref.slot and
+                            head.ref_ptr.pubkey.equals(&ref.pubkey))
+                        {
                             head.ref_index = global_ref_index + i;
                             head.ref_ptr = ref;
                         }
@@ -2148,7 +2159,8 @@ pub const AccountsDB = struct {
             }
 
             if (accounts_dead_count != 0) {
-                const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
+                const dead_accounts, var dead_accounts_lg =
+                    self.dead_accounts_counter.writeWithLock();
                 defer dead_accounts_lg.unlock();
 
                 const entry = try dead_accounts.getOrPut(slot);
