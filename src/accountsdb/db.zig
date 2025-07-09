@@ -2106,7 +2106,7 @@ pub const AccountsDB = struct {
                 } else {
                     // new ref
                     ref.* = AccountRef{
-                        .pubkey = pubkeys[i],
+                        .pubkey = pubkeys[i - slot_entry.value_ptr.items.len],
                         .slot = slot,
                         .location = .{ .UnrootedMap = .{ .index = i } },
                     };
@@ -2155,7 +2155,7 @@ pub const AccountsDB = struct {
                     );
                 }
 
-                std.debug.assert(self.account_index.exists(&pubkeys[i], slot));
+                std.debug.assert(self.account_index.exists(&pubkeys[i - slot_entry.value_ptr.items.len], slot));
             }
 
             if (accounts_dead_count != 0) {
