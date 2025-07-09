@@ -717,12 +717,28 @@ fn processPopularPrunedForks(
         if (new_popular_pruned_slot <= root) {
             continue;
         }
-        try check_slot_agrees_with_cluster.popularPrunedFork(
-            logger,
-            new_popular_pruned_slot,
-            root,
-            ancestor_hashes_replay_update_sender,
+
+        logger.info().logf(
+            "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {s}",
+            .{ new_popular_pruned_slot, root, "popular_pruned_fork" },
         );
+
+        if (new_popular_pruned_slot <= root) {
+            continue;
+        }
+
+        logger.warn().logf(
+            "{} is part of a pruned fork which has reached the DUPLICATE_THRESHOLD " ++
+                "aggregating across descendants and slot versions. It is suspected " ++
+                "to be duplicate or have an ancestor that is duplicate. " ++
+                "Notifying ancestor_hashes_service",
+            .{new_popular_pruned_slot},
+        );
+        // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
+        try ancestor_hashes_replay_update_sender.send(.{
+            .kind = .popular_pruned_fork,
+            .slot = new_popular_pruned_slot,
+        });
     }
 }
 
@@ -1283,35 +1299,6 @@ const check_slot_agrees_with_cluster = struct {
 
         // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
         try duplicate_slots_to_repair.put(allocator, slot, epoch_slots_frozen_hash);
-    }
-
-    fn popularPrunedFork(
-        logger: sig.trace.Logger,
-        slot: sig.core.Slot,
-        root: sig.core.Slot,
-        ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
-    ) !void {
-        logger.info().logf(
-            "check_slot_agrees_with_cluster() slot: {}, root: {}, slot_state_update: {s}",
-            .{ slot, root, "popular_pruned_fork" },
-        );
-
-        if (slot <= root) {
-            return;
-        }
-
-        logger.warn().logf(
-            "{} is part of a pruned fork which has reached the DUPLICATE_THRESHOLD " ++
-                "aggregating across descendants and slot versions. It is suspected " ++
-                "to be duplicate or have an ancestor that is duplicate. " ++
-                "Notifying ancestor_hashes_service",
-            .{slot},
-        );
-        // AKA: `ResultingStateChange::SendAncestorHashesReplayUpdate` in agave.
-        try ancestor_hashes_replay_update_sender.send(.{
-            .kind = .popular_pruned_fork,
-            .slot = slot,
-        });
     }
 };
 
