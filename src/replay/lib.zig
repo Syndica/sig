@@ -5,3 +5,4 @@ pub const resolve_lookup = @import("resolve_lookup.zig");
 pub const scheduler = @import("scheduler.zig");
 pub const service = @import("service.zig");
 pub const trackers = @import("trackers.zig");
+pub const consensus = @import("consensus.zig");

@@ -1,4 +1,5 @@
 pub const fork_choice = @import("fork_choice.zig");
+pub const latest_validator_votes = @import("latest_validator_votes.zig");
 pub const progress_map = @import("progress_map.zig");
 pub const replay_tower = @import("replay_tower.zig");
 pub const tower = @import("tower.zig");

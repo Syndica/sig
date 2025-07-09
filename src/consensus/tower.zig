@@ -5,9 +5,11 @@ const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 
 const Account = sig.core.Account;
 const AccountsDB = sig.accounts_db.AccountsDB;
-const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const Hash = sig.core.Hash;
+const LatestValidatorVotesForFrozenBanks = sig.consensus.latest_validator_votes.LatestValidatorVotes;
+const LockoutIntervals = sig.consensus.replay_tower.LockoutIntervals;
 const Lockout = sig.runtime.program.vote.state.Lockout;
+const VotedStakes = sig.consensus.progress_map.consensus.VotedStakes;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -15,20 +17,18 @@ const TowerStorage = sig.consensus.tower_storage.TowerStorage;
 const TowerVoteState = sig.consensus.tower_state.TowerVoteState;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
+const VotedSlotAndPubkey = sig.consensus.replay_tower.VotedSlotAndPubkey;
+const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 
-const SWITCH_FORK_THRESHOLD: f64 = 0.38;
-const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
-const DUPLICATE_LIVENESS_THRESHOLD: f64 = 0.1;
-pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIVENESS_THRESHOLD;
-pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
+const DUPLICATE_THRESHOLD = sig.replay.service.DUPLICATE_THRESHOLD;
+
 pub const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
 
 pub const Stake = u64;
 
 pub const VotedSlot = Slot;
-pub const VotedStakes = AutoHashMapUnmanaged(Slot, Stake);
 
 pub const ThresholdDecision = union(enum) {
     passed_threshold,
@@ -281,4 +281,96 @@ pub fn stateFromAccount(
         .{},
     );
     return try versioned_state.convertToCurrent(allocator);
+}
+
+pub fn populateAncestorVotedStakes(
+    voted_stakes: *SortedSet(Slot),
+    vote_slots: []const Slot,
+    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+) !void {
+    // If there's no ancestors, that means this slot must be from before the current root,
+    // in which case the lockouts won't be calculated in bank_weight anyways, so ignore
+    // this slot
+    for (vote_slots) |vote_slot| {
+        if (ancestors.getPtr(vote_slot)) |maybe_slot_ancestors| {
+            try voted_stakes.put(vote_slot);
+            for (maybe_slot_ancestors.items()) |slot| {
+                _ = try voted_stakes.put(slot);
+            }
+        }
+    }
+}
+
+fn updateAncestorVotedStakes(
+    voted_stakes: *VotedStakes,
+    voted_slot: Slot,
+    voted_stake: u64,
+    ancestors: *const AutoHashMapUnmanaged(Slot, SortedSet(Slot)),
+) void {
+    // If there's no ancestors, that means this slot must be from
+    // before the current root, so ignore this slot
+    if (ancestors.getPtr(voted_slot)) |vote_slot_ancestors| {
+        var entry_vote_stake = try voted_stakes.getOrPutValue(voted_slot, 0);
+        entry_vote_stake.value_ptr += voted_stake;
+        var iter = vote_slot_ancestors.*.iterator();
+        for (iter.next()) |ancestor_slot| {
+            var entry_voted_stake = try voted_stakes.getOrPutValue(ancestor_slot, 0);
+            entry_voted_stake.value_ptr += voted_stake;
+        }
+    }
+}
+
+pub fn isSlotDuplicateConfirmed(
+    slot: Slot,
+    voted_stakes: *const VotedStakes,
+    total_stake: Stake,
+) bool {
+    if (voted_stakes.get(slot)) |stake| {
+        return (@as(f64, @floatFromInt(stake)) / @as(f64, @floatFromInt(total_stake))) >
+            DUPLICATE_THRESHOLD;
+    } else {
+        return false;
+    }
+}
+
+test "is slot duplicate confirmed not enough stake failure" {
+    var stakes = VotedStakes.empty;
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
+
+    stakes.putAssumeCapacity(0, 52);
+
+    const result = isSlotDuplicateConfirmed(
+        0,
+        &stakes,
+        100,
+    );
+    try std.testing.expect(!result);
+}
+
+test "is slot duplicate confirmed unknown slot" {
+    var stakes = VotedStakes.empty;
+    defer stakes.deinit(std.testing.allocator);
+
+    const result = isSlotDuplicateConfirmed(
+        0,
+        &stakes,
+        100,
+    );
+    try std.testing.expect(!result);
+}
+
+test "is slot duplicate confirmed pass" {
+    var stakes = VotedStakes.empty;
+    defer stakes.deinit(std.testing.allocator);
+    try stakes.ensureTotalCapacity(std.testing.allocator, 1);
+
+    stakes.putAssumeCapacity(0, 53);
+
+    const result = isSlotDuplicateConfirmed(
+        0,
+        &stakes,
+        100,
+    );
+    try std.testing.expect(result);
 }
