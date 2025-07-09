@@ -27,7 +27,10 @@ const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.latest_validator_votes.LatestValidatorVotes;
+    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+
+const EpochStakeMap = sig.core.stake.EpochStakeMap;
+const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
