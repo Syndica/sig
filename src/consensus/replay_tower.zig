@@ -44,6 +44,15 @@ const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
 
 pub const VOTE_THRESHOLD_SIZE: f64 = 2.0 / 3.0;
 
+const VotedSlotAndPubkey = struct { slot: Slot, pubkey: Pubkey };
+pub const ExpirationSlot = Slot;
+/// TODO Should be improved.
+const HashThatShouldBeMadeBTreeMap = std.AutoArrayHashMapUnmanaged(
+    ExpirationSlot,
+    std.ArrayList(VotedSlotAndPubkey),
+);
+pub const LockoutIntervals = HashThatShouldBeMadeBTreeMap;
+
 pub const HeaviestForkFailures = union(enum) {
     LockedOut: u64,
     FailedThreshold: struct {
