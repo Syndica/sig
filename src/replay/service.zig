@@ -858,7 +858,7 @@ const check_slot_agrees_with_cluster = struct {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
         var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
 
-        try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
+        try state_change.maybeUpdateConfirmedAndNotDupeFrozenHash(
             logger,
             fork_choice,
             &confirmed_non_dupe_frozen_hash,
@@ -876,7 +876,7 @@ const check_slot_agrees_with_cluster = struct {
                         // If the versions match, then add the slot to the candidate
                         // set to account for the case where it was removed earlier
                         // by the `on_duplicate_slot()` handler
-                        try state_change.duplicateConfirmedSlotMatchesCluster(
+                        try state_change.markAllNewConfirmedAndDuplicateSlots(
                             slot,
                             fork_choice,
                             duplicate_slots_to_repair,
@@ -1013,7 +1013,7 @@ const check_slot_agrees_with_cluster = struct {
                     // If the versions match, then add the slot to the candidate
                     // set to account for the case where it was removed earlier
                     // by the `on_duplicate_slot()` handler
-                    try state_change.duplicateConfirmedSlotMatchesCluster(
+                    try state_change.markAllNewConfirmedAndDuplicateSlots(
                         slot,
                         fork_choice,
                         duplicate_slots_to_repair,
@@ -1361,14 +1361,14 @@ const state_change = struct {
     /// Logs and returns an error if it doesn't exist in `fork_choice.`
     ///
     /// AKA: `ResultingStateChange::BankFrozen` in agave.
-    fn maybeUpdateNotDupeConfirmedFrozenHash(
+    fn maybeUpdateConfirmedAndNotDupeFrozenHash(
         logger: sig.trace.Logger,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
         confirmed_non_dupe_frozen_hash: *ConfirmedNonDupeFrozenHash,
         frozen_slot: u64,
         frozen_hash: sig.core.Hash,
     ) error{FrozenSlotNotInForkChoice}!void {
-        const is_duplicate_confirmed = fork_choice.isDuplicateConfirmed(&.{
+        const is_duplicate_and_confirmed = fork_choice.isDuplicateConfirmed(&.{
             .slot = frozen_slot,
             .hash = frozen_hash,
         }) orelse {
@@ -1378,12 +1378,13 @@ const state_change = struct {
             );
             return error.FrozenSlotNotInForkChoice;
         };
-        if (!is_duplicate_confirmed) {
+        if (!is_duplicate_and_confirmed) {
             confirmed_non_dupe_frozen_hash.update(frozen_hash);
         }
     }
 
-    fn duplicateConfirmedSlotMatchesCluster(
+    /// AKA: `ResultingStateChange::DuplicateConfirmedSlotMatchesCluster` in agave.
+    fn markAllNewConfirmedAndDuplicateSlots(
         slot: u64,
         fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
@@ -1396,16 +1397,16 @@ const state_change = struct {
         // When we detect that our frozen slot matches the cluster version (note this
         // will catch both slot frozen first -> confirmation, or confirmation first ->
         // slot frozen), mark all the newly duplicate confirmed slots in blockstore
-        const new_duplicate_confirmed_slot_hashes = try fork_choice.markForkValidCandidate(&.{
+        const new_duplicate_and_confirmed_slot_hashes = try fork_choice.markForkValidCandidate(&.{
             .slot = slot,
             .hash = slot_frozen_hash,
         });
-        defer new_duplicate_confirmed_slot_hashes.deinit();
+        defer new_duplicate_and_confirmed_slot_hashes.deinit();
 
         {
             var setter = try blockstore.setDuplicateConfirmedSlotsAndHashesIncremental();
             defer setter.deinit();
-            for (new_duplicate_confirmed_slot_hashes.items) |confirmed| {
+            for (new_duplicate_and_confirmed_slot_hashes.items) |confirmed| {
                 try setter.addSlotAndHash(confirmed.slot, confirmed.hash);
             }
             try setter.commit();
@@ -1726,15 +1727,15 @@ test "apply state changes slot frozen" {
 
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
-        try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
+        var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
+        try state_change.maybeUpdateConfirmedAndNotDupeFrozenHash(
             .noop,
             heaviest_subtree_fork_choice,
-            &not_duplicate_confirmed_frozen_hash,
+            &confirmed_non_dupe_frozen_hash,
             duplicate_slot,
             duplicate_slot_hash,
         );
-        try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, &ledger_writer);
     }
 
     try std.testing.expectEqual(duplicate_slot_hash, ledger_reader.getBankHash(duplicate_slot));
@@ -1759,15 +1760,15 @@ test "apply state changes slot frozen" {
     );
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
-        try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
+        var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
+        try state_change.maybeUpdateConfirmedAndNotDupeFrozenHash(
             .noop,
             heaviest_subtree_fork_choice,
-            &not_duplicate_confirmed_frozen_hash,
+            &confirmed_non_dupe_frozen_hash,
             duplicate_slot,
             new_slot_hash,
         );
-        try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, &ledger_writer);
     }
     try std.testing.expectEqual(new_slot_hash, ledger_reader.getBankHash(duplicate_slot));
     try std.testing.expectEqual(false, ledger_reader.isDuplicateConfirmed(duplicate_slot));
@@ -1816,18 +1817,18 @@ test "apply state changes duplicate confirmed matches frozen" {
     // 3) Set the status to duplicate confirmed in Blockstore
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
-        try state_change.duplicateConfirmedSlotMatchesCluster(
+        var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
+        try state_change.markAllNewConfirmedAndDuplicateSlots(
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &duplicate_slots_to_repair,
             &ledger_writer,
             &purge_repair_slot_counter,
-            &not_duplicate_confirmed_frozen_hash,
+            &confirmed_non_dupe_frozen_hash,
             our_duplicate_slot_hash,
         );
 
-        try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, &ledger_writer);
     }
 
     for ([_][]const sig.core.Slot{
@@ -1897,27 +1898,27 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     // 3) Set the status to duplicate confirmed in Blockstore
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
+        var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
 
-        try state_change.duplicateConfirmedSlotMatchesCluster(
+        try state_change.markAllNewConfirmedAndDuplicateSlots(
             duplicate_slot,
             heaviest_subtree_fork_choice,
             &duplicate_slots_to_repair,
             &ledger_writer,
             &purge_repair_slot_counter,
-            &not_duplicate_confirmed_frozen_hash,
+            &confirmed_non_dupe_frozen_hash,
             our_duplicate_slot_hash,
         );
 
-        try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
+        try state_change.maybeUpdateConfirmedAndNotDupeFrozenHash(
             .noop,
             heaviest_subtree_fork_choice,
-            &not_duplicate_confirmed_frozen_hash,
+            &confirmed_non_dupe_frozen_hash,
             duplicate_slot,
             our_duplicate_slot_hash,
         );
 
-        try not_duplicate_confirmed_frozen_hash.finalize(duplicate_slot, &ledger_writer);
+        try confirmed_non_dupe_frozen_hash.finalize(duplicate_slot, &ledger_writer);
     }
 
     for ([_][]const sig.core.Slot{
