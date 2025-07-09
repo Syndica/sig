@@ -4,14 +4,14 @@ const sig = @import("../sig.zig");
 const Slot = sig.core.Slot;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
-const VoteAccount = sig.core.stake.VoteAccount;
+const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
 pub const TowerVoteState = struct {
     root_slot: ?Slot = null,
     votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
 
     pub fn fromAccount(allocator: std.mem.Allocator, account: *const VoteAccount) !TowerVoteState {
-        const vote_state = account.vote_state;
+        const vote_state = account.state;
         var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
             allocator,
             vote_state.votes.items.len,
