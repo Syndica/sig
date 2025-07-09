@@ -888,9 +888,16 @@ const check_slot_agrees_with_cluster = struct {
                             .{ slot, duplicate_confirmed_hash, frozen_hash },
                         );
                         // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
+                        try fork_choice.markForkInvalidCandidate(&.{
+                            .slot = slot,
+                            .hash = frozen_hash,
+                        });
                         // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
-                        try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
+                        try duplicate_slots_to_repair.put(
+                            allocator,
+                            slot,
+                            duplicate_confirmed_hash,
+                        );
                     }
                 },
 
@@ -910,7 +917,10 @@ const check_slot_agrees_with_cluster = struct {
                         );
                         // If the slot is not already pruned notify fork choice to mark as invalid
                         // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
+                        try fork_choice.markForkInvalidCandidate(&.{
+                            .slot = slot,
+                            .hash = frozen_hash,
+                        });
                     }
                     // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
                     try duplicate_slots_to_repair.put(allocator, slot, epoch_slots_frozen_hash);
@@ -1015,7 +1025,10 @@ const check_slot_agrees_with_cluster = struct {
                         .{ slot, duplicate_confirmed_hash, frozen_hash },
                     );
                     // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                    try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
+                    try fork_choice.markForkInvalidCandidate(&.{
+                        .slot = slot,
+                        .hash = frozen_hash,
+                    });
                     // AKA: `ResultingStateChange::RepairDuplicateConfirmedVersion` in agave
                     try duplicate_slots_to_repair.put(allocator, slot, duplicate_confirmed_hash);
                 }
@@ -1233,7 +1246,10 @@ const check_slot_agrees_with_cluster = struct {
                     if (!is_popular_pruned) {
                         // If the slot is not already pruned notify fork choice to mark as invalid
                         // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-                        try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = slot_frozen_hash });
+                        try fork_choice.markForkInvalidCandidate(&.{
+                            .slot = slot,
+                            .hash = slot_frozen_hash,
+                        });
                     }
                 }
             },
@@ -1630,7 +1646,10 @@ test "apply state changes" {
     const duplicate_slot = slot_tracker.root + 1;
     const duplicate_slot_hash = slot_tracker.get(duplicate_slot).?.state.hash.readCopy().?;
     // AKA: `ResultingStateChange::MarkSlotDuplicate` in agave
-    try heaviest_subtree_fork_choice.markForkInvalidCandidate(&.{ .slot = duplicate_slot, .hash = duplicate_slot_hash });
+    try heaviest_subtree_fork_choice.markForkInvalidCandidate(&.{
+        .slot = duplicate_slot,
+        .hash = duplicate_slot_hash,
+    });
     try std.testing.expect(!heaviest_subtree_fork_choice.isCandidate(&.{
         .slot = duplicate_slot,
         .hash = duplicate_slot_hash,
