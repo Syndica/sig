@@ -4,10 +4,39 @@ const sig = @import("../sig.zig");
 const Slot = sig.core.Slot;
 const Lockout = sig.runtime.program.vote.state.Lockout;
 const MAX_LOCKOUT_HISTORY = sig.runtime.program.vote.state.MAX_LOCKOUT_HISTORY;
+const VoteAccount = sig.core.vote_accounts.VoteAccount;
 
 pub const TowerVoteState = struct {
-    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
     root_slot: ?Slot = null,
+    votes: std.BoundedArray(Lockout, MAX_LOCKOUT_HISTORY) = .{},
+
+    pub fn fromAccount(allocator: std.mem.Allocator, account: *const VoteAccount) !TowerVoteState {
+        const vote_state = account.state;
+        var lockouts = try std.ArrayListUnmanaged(Lockout).initCapacity(
+            allocator,
+            vote_state.votes.items.len,
+        );
+        for (vote_state.votes.items) |landed| {
+            try lockouts.append(
+                allocator,
+                Lockout{
+                    .slot = landed.lockout.slot,
+                    .confirmation_count = landed.lockout.confirmation_count,
+                },
+            );
+        }
+
+        const owned_slice = try lockouts.toOwnedSlice(allocator);
+        defer allocator.free(owned_slice);
+
+        return .{
+            .root_slot = vote_state.root_slot,
+            .votes = try std.BoundedArray(
+                Lockout,
+                MAX_LOCKOUT_HISTORY,
+            ).fromSlice(owned_slice),
+        };
+    }
 
     pub fn lastLockout(self: *const TowerVoteState) ?Lockout {
         if (self.votes.len == 0) return null;
