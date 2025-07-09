@@ -849,12 +849,12 @@ const check_slot_agrees_with_cluster = struct {
         const is_slot_duplicate = slot_frozen_state.is_slot_duplicate;
 
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var non_dupe_confirmed_frozen_hash: state_change.NonDupeConfirmedFrozenHash = .init;
+        var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
 
         try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
             logger,
             fork_choice,
-            &non_dupe_confirmed_frozen_hash,
+            &confirmed_non_dupe_frozen_hash,
             slot,
             frozen_hash,
         );
@@ -875,7 +875,7 @@ const check_slot_agrees_with_cluster = struct {
                             duplicate_slots_to_repair,
                             blockstore,
                             purge_repair_slot_counter,
-                            &non_dupe_confirmed_frozen_hash,
+                            &confirmed_non_dupe_frozen_hash,
                             frozen_hash,
                         );
                     } else {
@@ -933,7 +933,7 @@ const check_slot_agrees_with_cluster = struct {
             try fork_choice.markForkInvalidCandidate(&.{ .slot = slot, .hash = frozen_hash });
         }
 
-        try non_dupe_confirmed_frozen_hash.finalize(slot, blockstore);
+        try confirmed_non_dupe_frozen_hash.finalize(slot, blockstore);
     }
 
     fn duplicateConfirmed(
@@ -978,7 +978,7 @@ const check_slot_agrees_with_cluster = struct {
         // }
 
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var non_dupe_confirmed_frozen_hash: state_change.NonDupeConfirmedFrozenHash = .init;
+        var confirmed_non_dupe_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
 
         switch (slot_status) {
             // No action to be taken yet
@@ -1012,7 +1012,7 @@ const check_slot_agrees_with_cluster = struct {
                         duplicate_slots_to_repair,
                         blockstore,
                         purge_repair_slot_counter,
-                        &non_dupe_confirmed_frozen_hash,
+                        &confirmed_non_dupe_frozen_hash,
                         frozen_hash,
                     );
                 } else {
@@ -1035,7 +1035,7 @@ const check_slot_agrees_with_cluster = struct {
             },
         }
 
-        try non_dupe_confirmed_frozen_hash.finalize(slot, blockstore);
+        try confirmed_non_dupe_frozen_hash.finalize(slot, blockstore);
     }
 
     fn dead(
@@ -1309,32 +1309,35 @@ const check_slot_agrees_with_cluster = struct {
 };
 
 /// Analogous to [apply_state_change](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L793),
-/// or more concretely, each function is analogous to a variant in the `ResultingStateChange` tagged union, a list of which is supplied to the function, representing
-/// a list of these function calls.
+/// or more concretely, each function is analogous to a variant in the `ResultingStateChange`
+/// tagged union, a list of which is supplied to the function, representing a list of these
+/// function calls.
 const state_change = struct {
-    /// CONTEXT: Across certain series of operations, a hash may be identified for a slot, and then invalidated by a subsequent
-    /// operation, and then replaced by a new one or nullified entirely, repeatedly. A naive approach would have each of those
-    /// operations result in a mutation of the ledger to update the slot hash pair's status as a non-duplicate confirmed frozen
-    /// slot, which would result in multiple costly operations to update the ledger.
+    /// CONTEXT: Across certain series of operations, a hash may be identified for a slot, and
+    /// then invalidated by a subsequent operation, and then replaced by a new one or nullified
+    /// entirely, repeatedly. A naive approach would have each of those operations result in a
+    /// mutation of the ledger to update the slot hash pair's status as a non-duplicate confirmed
+    /// frozen slot, which would result in multiple costly operations to update the ledger.
     ///
-    /// Instead of committing multiple ledger updates which may cancel out or overwrite each other, this struct is used to represent
-    /// the transient hash for the slot that is `update`d across a series of operations, before being `finalize`d, committing just
-    /// one update at most (no update if by the end the frozen hash is null).
-    const NonDupeConfirmedFrozenHash = struct {
+    /// Instead of committing multiple ledger updates which may cancel out or overwrite each
+    /// other, this struct is used to represent the transient hash for the slot that is `update`d
+    /// across a series of operations, before being `finalize`d, committing just one update at
+    /// most (no update if by the end the frozen hash is null).
+    const ConfirmedNonDupeFrozenHash = struct {
         frozen_hash: ?sig.core.Hash,
         finalized: bool,
 
-        const init: NonDupeConfirmedFrozenHash = .{
+        const init: ConfirmedNonDupeFrozenHash = .{
             .frozen_hash = null,
             .finalized = false,
         };
 
-        fn update(self: *NonDupeConfirmedFrozenHash, frozen_hash: ?sig.core.Hash) void {
+        fn update(self: *ConfirmedNonDupeFrozenHash, frozen_hash: ?sig.core.Hash) void {
             self.frozen_hash = frozen_hash;
         }
 
         fn finalize(
-            self: *NonDupeConfirmedFrozenHash,
+            self: *ConfirmedNonDupeFrozenHash,
             slot: sig.core.Slot,
             ledger: *sig.ledger.LedgerResultWriter,
         ) !void {
@@ -1347,14 +1350,14 @@ const state_change = struct {
     };
 
     /// Checks if `.{ frozen_slot, frozen_hash }` is duplicate confirmed in fork_choice,
-    /// and updates `non_dupe_confirmed_frozen_hash` accordingly.
+    /// and updates `confirmed_non_dupe_frozen_hash` accordingly.
     /// Logs and returns an error if it doesn't exist in `fork_choice.`
     ///
     /// AKA: `ResultingStateChange::BankFrozen` in agave.
     fn maybeUpdateNotDupeConfirmedFrozenHash(
         logger: sig.trace.Logger,
         fork_choice: *const sig.consensus.HeaviestSubtreeForkChoice,
-        non_dupe_confirmed_frozen_hash: *NonDupeConfirmedFrozenHash,
+        confirmed_non_dupe_frozen_hash: *ConfirmedNonDupeFrozenHash,
         frozen_slot: u64,
         frozen_hash: sig.core.Hash,
     ) error{FrozenSlotNotInForkChoice}!void {
@@ -1369,7 +1372,7 @@ const state_change = struct {
             return error.FrozenSlotNotInForkChoice;
         };
         if (!is_duplicate_confirmed) {
-            non_dupe_confirmed_frozen_hash.update(frozen_hash);
+            confirmed_non_dupe_frozen_hash.update(frozen_hash);
         }
     }
 
@@ -1379,10 +1382,10 @@ const state_change = struct {
         duplicate_slots_to_repair: *DuplicateSlotsToRepair,
         blockstore: *sig.ledger.LedgerResultWriter,
         purge_repair_slot_counter: *PurgeRepairSlotCounters,
-        non_dupe_confirmed_frozen_hash: *NonDupeConfirmedFrozenHash,
+        confirmed_non_dupe_frozen_hash: *ConfirmedNonDupeFrozenHash,
         slot_frozen_hash: sig.core.Hash,
     ) !void {
-        non_dupe_confirmed_frozen_hash.update(null);
+        confirmed_non_dupe_frozen_hash.update(null);
         // When we detect that our frozen slot matches the cluster version (note this
         // will catch both slot frozen first -> confirmation, or confirmation first ->
         // slot frozen), mark all the newly duplicate confirmed slots in blockstore
@@ -1716,7 +1719,7 @@ test "apply state changes slot frozen" {
 
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: state_change.NonDupeConfirmedFrozenHash = .init;
+        var not_duplicate_confirmed_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
         try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
             .noop,
             heaviest_subtree_fork_choice,
@@ -1749,7 +1752,7 @@ test "apply state changes slot frozen" {
     );
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: state_change.NonDupeConfirmedFrozenHash = .init;
+        var not_duplicate_confirmed_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
         try state_change.maybeUpdateNotDupeConfirmedFrozenHash(
             .noop,
             heaviest_subtree_fork_choice,
@@ -1806,7 +1809,7 @@ test "apply state changes duplicate confirmed matches frozen" {
     // 3) Set the status to duplicate confirmed in Blockstore
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: state_change.NonDupeConfirmedFrozenHash = .init;
+        var not_duplicate_confirmed_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
         try state_change.duplicateConfirmedSlotMatchesCluster(
             duplicate_slot,
             heaviest_subtree_fork_choice,
@@ -1887,7 +1890,7 @@ test "apply state changes slot frozen and duplicate confirmed matches frozen" {
     // 3) Set the status to duplicate confirmed in Blockstore
     {
         // Handle cases where the slot is frozen, but not duplicate confirmed yet.
-        var not_duplicate_confirmed_frozen_hash: state_change.NonDupeConfirmedFrozenHash = .init;
+        var not_duplicate_confirmed_frozen_hash: state_change.ConfirmedNonDupeFrozenHash = .init;
 
         try state_change.duplicateConfirmedSlotMatchesCluster(
             duplicate_slot,
