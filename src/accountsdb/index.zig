@@ -16,12 +16,6 @@ const createAndMmapFile = sig.utils.allocators.createAndMmapFile;
 const LOG_SCOPE = "accounts_db.index";
 const ScopedLogger = sig.trace.ScopedLogger(LOG_SCOPE);
 
-//       owned by the reference manager
-//          v
-// slot -> []refs
-// pubkey -> head ref
-// head ref -> ref -> ... -> ref
-
 /// reference to an account (either in a file or in the unrooted_map)
 pub const AccountRef = struct {
     pubkey: Pubkey,
