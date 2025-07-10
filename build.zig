@@ -17,6 +17,7 @@ pub const Config = struct {
     enable_tracy: bool,
     use_llvm: bool,
     force_pic: bool,
+    error_tracing: ?bool,
 
     pub fn fromBuild(b: *Build) Config {
         var self: Config = .{
@@ -90,6 +91,11 @@ pub const Config = struct {
                 "force_pic",
                 "Builds linked dependencies with PIC enabled",
             ) orelse false,
+            .error_tracing = b.option(
+                bool,
+                "error-tracing",
+                "Enable or disable error tracing. Default: Only for Debug builds.",
+            ),
         };
 
         if (self.ssh_host) |host| {
@@ -201,6 +207,7 @@ pub fn build(b: *Build) void {
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports,
+            .error_tracing = config.error_tracing,
         }),
         .sanitize_thread = config.enable_tsan,
         .use_llvm = config.use_llvm,
@@ -223,6 +230,7 @@ pub fn build(b: *Build) void {
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports,
+            .error_tracing = config.error_tracing,
         }),
         .sanitize_thread = config.enable_tsan,
         .filters = config.filters orelse &.{},
@@ -242,6 +250,7 @@ pub fn build(b: *Build) void {
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports,
+            .error_tracing = config.error_tracing,
         }),
         .sanitize_thread = config.enable_tsan,
     });
@@ -260,6 +269,7 @@ pub fn build(b: *Build) void {
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports,
+            .error_tracing = config.error_tracing,
         }),
         .sanitize_thread = config.enable_tsan,
     });
@@ -280,6 +290,7 @@ pub fn build(b: *Build) void {
         .target = config.target,
         .optimize = config.optimize,
         .sanitize_thread = config.enable_tsan,
+        .error_tracing = config.error_tracing,
     });
     geyser_reader_step.dependOn(&geyser_reader_exe.step);
     install_step.dependOn(&geyser_reader_exe.step);
@@ -294,6 +305,7 @@ pub fn build(b: *Build) void {
         .target = config.target,
         .optimize = config.optimize,
         .sanitize_thread = config.enable_tsan,
+        .error_tracing = config.error_tracing,
     });
     vm_exe.root_module.addImport("sig", sig_mod);
     vm_exe.root_module.addImport("cli", cli_mod);

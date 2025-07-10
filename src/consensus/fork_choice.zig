@@ -430,7 +430,8 @@ pub const ForkChoice = struct {
         self: *ForkChoice,
         valid_slot_hash_key: *const SlotAndHash,
     ) !std.ArrayList(SlotAndHash) {
-        var newly_duplicate_confirmed_ancestors = std.ArrayList(SlotAndHash).init(self.allocator);
+        var newly_duplicate_confirmed_ancestors: std.ArrayList(SlotAndHash) = .init(self.allocator);
+        errdefer newly_duplicate_confirmed_ancestors.deinit();
         if (!(self.isDuplicateConfirmed(valid_slot_hash_key) orelse return error.MissingForkInfo)) {
             try newly_duplicate_confirmed_ancestors.append(valid_slot_hash_key.*);
         }
@@ -807,7 +808,7 @@ pub const ForkChoice = struct {
     ///
     /// subtreeDiff(root1, root2) = {0, 2, 5}
     fn subtreeDiff(
-        self: *ForkChoice,
+        self: *const ForkChoice,
         root1: *const SlotAndHash,
         root2: *const SlotAndHash,
     ) !SortedMap(SlotAndHash, void) {
@@ -865,7 +866,7 @@ pub const ForkChoice = struct {
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L780
     fn insertAggregateOperations(
-        self: *ForkChoice,
+        self: *const ForkChoice,
         update_operations: *UpdateOperations,
         slot_hash_key: SlotAndHash,
     ) !void {
@@ -878,7 +879,7 @@ pub const ForkChoice = struct {
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L793
     fn doInsertAggregateOperationsAcrossAncestors(
-        self: *ForkChoice,
+        self: *const ForkChoice,
         update_operations: *UpdateOperations,
         modify_fork_validity: ?UpdateOperation,
         slot_hash_key: SlotAndHash,

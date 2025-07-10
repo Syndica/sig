@@ -347,8 +347,8 @@ fn verifyVoteTransaction(
     return .verified;
 }
 
-const ThresholdConfirmedSlot = struct { Slot, Hash };
-const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
+pub const ThresholdConfirmedSlot = struct { Slot, Hash };
+pub const GossipVerifiedVoteHash = struct { Pubkey, Slot, Hash };
 const VerifiedVote = struct { Pubkey, []const Slot };
 
 /// The expected duration of a slot (400 milliseconds).
@@ -1001,7 +1001,7 @@ fn trackNewVotesAndNotifyConfirmations(
 
 const ThresholdReachedResults = std.bit_set.IntegerBitSet(THRESHOLDS_TO_CHECK.len);
 const THRESHOLDS_TO_CHECK: [2]f64 = .{
-    sig.consensus.unimplemented.DUPLICATE_THRESHOLD,
+    sig.replay.service.DUPLICATE_THRESHOLD,
     sig.consensus.replay_tower.VOTE_THRESHOLD_SIZE,
 };
 
