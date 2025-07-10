@@ -8,3 +8,4 @@ pub const scheduler = @import("scheduler.zig");
 pub const service = @import("service.zig");
 pub const svm_gateway = @import("svm_gateway.zig");
 pub const trackers = @import("trackers.zig");
+pub const update_sysvar = @import("update_sysvar.zig");

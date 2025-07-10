@@ -8,8 +8,8 @@ const compute_budget_program = sig.runtime.program.compute_budget;
 const vm = sig.vm;
 
 const Ancestors = sig.core.Ancestors;
-const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
 const BlockhashQueue = sig.core.BlockhashQueue;
+const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
 const Hash = sig.core.Hash;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
