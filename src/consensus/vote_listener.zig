@@ -12,6 +12,9 @@ const TransactionMessage = sig.core.transaction.Message;
 const VoteTransaction = sig.consensus.vote_transaction.VoteTransaction;
 const VoteTracker = sig.consensus.VoteTracker;
 
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
+
 pub const BankForksStub = struct {
     root_slot: Slot,
     banks: std.AutoArrayHashMapUnmanaged(Slot, BankStub),
@@ -69,12 +72,12 @@ pub const BankForksStub = struct {
         hash: Hash,
         ancestors: sig.core.Ancestors,
         epoch_schedule: sig.core.EpochSchedule,
-        epoch_stakes: sig.core.stake.EpochStakeMap,
+        epoch_stakes: sig.core.EpochStakesMap,
 
         pub fn deinit(self: BankStub, allocator: std.mem.Allocator) void {
             var copy = self;
             copy.ancestors.deinit(allocator);
-            sig.core.stake.epochStakeMapDeinit(copy.epoch_stakes, allocator);
+            deinitMapAndValues(allocator, self.epoch_stakes);
         }
 
         pub fn init(
@@ -84,20 +87,19 @@ pub const BankForksStub = struct {
                 hash: Hash,
                 ancestors: sig.core.Ancestors,
                 epoch_schedule: sig.core.EpochSchedule,
-                epoch_stakes: sig.core.stake.EpochStakeMap,
+                epoch_stakes: sig.core.EpochStakesMap,
             },
         ) std.mem.Allocator.Error!BankStub {
             var ancestors = try params.ancestors.clone(allocator);
             errdefer ancestors.deinit(allocator);
 
-            var epoch_stakes =
-                try sig.core.stake.epochStakeMapClone(params.epoch_stakes, allocator);
-            errdefer sig.core.stake.epochStakeMapDeinit(epoch_stakes, allocator);
+            var epoch_stakes = try cloneMapAndValues(allocator, params.epoch_stakes);
+            errdefer deinitMapAndValues(allocator, epoch_stakes);
 
             const slot_epoch = params.epoch_schedule.getEpoch(params.slot);
             const gop = try epoch_stakes.getOrPut(allocator, slot_epoch);
             if (!gop.found_existing) {
-                gop.value_ptr.* = try sig.core.stake.EpochStakes.initEmpty(allocator);
+                gop.value_ptr.* = try sig.core.EpochStakes.initEmpty(allocator);
             }
 
             return .{
@@ -116,9 +118,8 @@ pub const BankForksStub = struct {
             var ancestors = try self.ancestors.clone(allocator);
             errdefer ancestors.deinit(allocator);
 
-            const epoch_stakes =
-                try sig.core.stake.epochStakeMapClone(self.epoch_stakes, allocator);
-            errdefer sig.core.stake.epochStakeMapDeinit(epoch_stakes, allocator);
+            const epoch_stakes = try cloneMapAndValues(allocator, self.epoch_stakes);
+            errdefer deinitMapAndValues(allocator, epoch_stakes);
 
             return .{
                 .slot = self.slot,
@@ -1043,7 +1044,7 @@ fn trackOptimisticConfirmationVote(
     return .{ reached_thresholds, result == .is_new };
 }
 
-fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.stake.EpochStakes, pubkey: Pubkey) void {
+fn sumStake(sum: *u64, epoch_stakes: ?*const sig.core.EpochStakes, pubkey: Pubkey) void {
     if (epoch_stakes) |stakes| {
         sum.* += stakes.stakes.vote_accounts.getDelegatedStake(pubkey);
     }

@@ -9,7 +9,7 @@ const vm = sig.vm;
 
 const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
-const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
+const EpochStakes = sig.core.EpochStakes;
 const Hash = sig.core.Hash;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
@@ -69,7 +69,7 @@ pub const TransactionExecutionEnvironment = struct {
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
     blockhash_queue: *const BlockhashQueue,
-    epoch_stakes: *const VersionedEpochStake.Current,
+    epoch_stakes: *const EpochStakes,
     vm_environment: *const vm.Environment,
     next_vm_environment: ?*const vm.Environment,
 
@@ -449,7 +449,7 @@ test "loadAndExecuteTransactions: no transactions" {
         10,
     );
     defer blockhash_queue.deinit(allocator);
-    const epoch_stakes: VersionedEpochStake.Current = try VersionedEpochStake.Current.initEmpty(allocator);
+    const epoch_stakes: EpochStakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
     const vm_environment = vm.Environment{};
     defer vm_environment.deinit(allocator);
@@ -524,7 +524,7 @@ test "loadAndExecuteTransactions: invalid compute budget instruction" {
     var account_cache = BatchAccountCache{};
     defer account_cache.deinit(allocator);
 
-    const epoch_stakes = try VersionedEpochStake.Current.initEmpty(allocator);
+    const epoch_stakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
 
     var status_cache = StatusCache.DEFAULT;
@@ -699,7 +699,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
     );
     defer blockhash_queue.deinit(allocator);
 
-    const epoch_stakes = try VersionedEpochStake.Current.initEmpty(allocator);
+    const epoch_stakes = try EpochStakes.initEmpty(allocator);
     defer epoch_stakes.deinit(allocator);
 
     const environment = TransactionExecutionEnvironment{

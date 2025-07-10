@@ -11,14 +11,14 @@ const Lockout = sig.runtime.program.vote.state.Lockout;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
-const EpochStakeMap = sig.core.stake.EpochStakeMap;
+const EpochStakesMap = sig.core.EpochStakesMap;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSet = sig.utils.collections.SortedSet;
 const TowerSync = sig.runtime.program.vote.state.TowerSync;
 const Vote = sig.runtime.program.vote.state.Vote;
 const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
-const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
+const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 const UnixTimestamp = sig.core.UnixTimestamp;
@@ -651,7 +651,7 @@ pub const ReplayTower = struct {
                     {
                         const stake =
                             if (epoch_vote_accounts.get(vote_account[1])) |staked_account|
-                                staked_account[0]
+                                staked_account.stake
                             else
                                 0;
                         locked_out_stake += stake;
@@ -711,7 +711,7 @@ pub const ReplayTower = struct {
 
                 if (is_valid) {
                     const stake_entry = epoch_vote_accounts.get(vote_account_pubkey);
-                    const stake = if (stake_entry) |entry_stake| entry_stake[0] else 0;
+                    const stake = if (stake_entry) |entry_stake| entry_stake.stake else 0;
                     locked_out_stake += stake;
 
                     const stake_ratio = @as(f64, @floatFromInt(locked_out_stake)) /
@@ -1331,7 +1331,7 @@ pub const ReplayTower = struct {
         progress: *const ProgressMap,
         latest_validator_votes_for_frozen_banks: *const LatestValidatorVotesForFrozenBanks,
         fork_choice: *const HeaviestSubtreeForkChoice,
-        epoch_stakes: EpochStakeMap,
+        epoch_stakes: EpochStakesMap,
         slot_history: *const SlotHistory,
     ) !SelectVoteAndResetForkResult {
         // Initialize result with failure list
@@ -1349,7 +1349,7 @@ pub const ReplayTower = struct {
             descendants,
             progress,
             epoch_stake.total_stake,
-            &epoch_stake.stakes.vote_accounts.accounts,
+            &epoch_stake.stakes.vote_accounts.vote_accounts,
             latest_validator_votes_for_frozen_banks,
             fork_choice,
         );
@@ -3031,8 +3031,8 @@ test "selectVoteAndResetForks stake not found" {
 const TreeNode = sig.consensus.fork_choice.TreeNode;
 const ForkStats = sig.consensus.progress_map.ForkStats;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
-const EpochStakes = sig.core.stake.EpochStakes;
-const Stakes = sig.core.stake.Stakes;
+const EpochStakes = sig.core.EpochStakes;
+const Stakes = sig.core.Stakes;
 const splitOff = sig.consensus.fork_choice.splitOff;
 
 test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
@@ -3467,7 +3467,7 @@ pub const TestFixture = struct {
     ancestors: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     descendants: AutoArrayHashMapUnmanaged(Slot, SortedSet(Slot)) = .{},
     progress: ProgressMap = ProgressMap.INIT,
-    epoch_stake_map: EpochStakeMap,
+    epoch_stake_map: EpochStakesMap,
 
     pub fn init(allocator: std.mem.Allocator, root: SlotAndHash) !TestFixture {
         return .{
@@ -3584,7 +3584,7 @@ pub const TestFixture = struct {
         );
         epoch_stakes.total_stake = 1000;
         epoch_stakes.stakes.deinit(allocator);
-        epoch_stakes.stakes = try Stakes(sig.core.stake.Delegation).initRandom(
+        epoch_stakes.stakes = try Stakes(.delegation).initRandom(
             allocator,
             random,
             1,

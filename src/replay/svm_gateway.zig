@@ -8,7 +8,7 @@ const Allocator = std.mem.Allocator;
 
 const Ancestors = sig.core.Ancestors;
 const BlockhashQueue = sig.core.BlockhashQueue;
-const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
+const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const StatusCache = sig.core.StatusCache;
 
@@ -80,7 +80,7 @@ pub const SvmSlot = struct {
         ancestors: *const Ancestors,
         feature_set: FeatureSet,
         rent_collector: *const RentCollector,
-        epoch_stakes: *const VersionedEpochStake.Current,
+        epoch_stakes: *const sig.core.EpochStakes,
         status_cache: *StatusCache,
     };
 

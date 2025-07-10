@@ -9,7 +9,7 @@ const vm = sig.vm;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
-const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
+const EpochStakes = sig.core.EpochStakes;
 
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -106,7 +106,7 @@ pub fn createTransactionContext(
     errdefer feature_set.deinit(allocator);
 
     // Create EpochStakes
-    const epoch_stakes = try allocator.create(VersionedEpochStake.Current);
+    const epoch_stakes = try allocator.create(EpochStakes);
     epoch_stakes.* = try createEpochStakes(allocator, params.epoch_stakes);
 
     // Create SysvarCache
@@ -207,18 +207,9 @@ pub fn deinitTransactionContext(
 pub fn createEpochStakes(
     allocator: std.mem.Allocator,
     params: []const ExecuteContextsParams.EpochStakeParam,
-) !VersionedEpochStake.Current {
-    var self: VersionedEpochStake.Current = .{
-        .stakes = .{
-            .vote_accounts = .{
-                .accounts = .{},
-                .staked_nodes = null,
-            },
-            .delegations = .{},
-            .unused = 0,
-            .epoch = 0,
-            .history = .{},
-        },
+) !EpochStakes {
+    var self: EpochStakes = .{
+        .stakes = .DEFAULT,
         .total_stake = 0,
         .node_id_to_vote_accounts = .{},
         .epoch_authorized_voters = .{},
@@ -227,15 +218,12 @@ pub fn createEpochStakes(
 
     for (params) |param| {
         self.total_stake += param.stake;
-        try self.stakes.delegations.put(allocator, param.pubkey, .{
-            .delegation = .{
-                .voter_pubkey = param.pubkey,
-                .stake = param.stake,
-                .activation_epoch = 0,
-                .deactivation_epoch = 0,
-                .deprecated_warmup_cooldown_rate = 0.0,
-            },
-            .credits_observed = 0,
+        try self.stakes.stake_delegations.put(allocator, param.pubkey, .{
+            .voter_pubkey = param.pubkey,
+            .stake = param.stake,
+            .activation_epoch = 0,
+            .deactivation_epoch = 0,
+            .deprecated_warmup_cooldown_rate = 0.0,
         });
     }
 

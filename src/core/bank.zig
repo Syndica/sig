@@ -39,16 +39,13 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const Delegation = core.stake.Delegation;
-const EpochStakes = core.stake.EpochStakes;
-const EpochStakeMap = core.stake.EpochStakeMap;
-const Stake = core.stake.Stake;
-const Stakes = core.stake.Stakes;
-const epochStakeMapClone = core.stake.epochStakeMapClone;
-const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
-const epochStakeMapRandom = core.stake.epochStakeMapRandom;
-
 const Ancestors = sig.core.Ancestors;
+const EpochStakes = core.EpochStakes;
+const EpochStakesMap = core.EpochStakesMap;
+const Stakes = core.Stakes;
+
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
 /// Information about a slot that is determined when the slot is initialized and
 /// then never changes.
@@ -251,7 +248,7 @@ pub const EpochConstants = struct {
     slots_per_year: f64,
 
     /// The pre-determined stakes assigned to this epoch.
-    stakes: sig.core.stake.VersionedEpochStake.Current,
+    stakes: sig.core.EpochStakes,
 
     rent_collector: RentCollector,
 
@@ -271,7 +268,7 @@ pub const EpochConstants = struct {
 
     pub fn fromBankFields(
         bank_fields: *const BankFields,
-        epoch_stakes: sig.core.stake.VersionedEpochStake.Current,
+        epoch_stakes: sig.core.EpochStakes,
     ) Allocator.Error!EpochConstants {
         return .{
             .hashes_per_tick = bank_fields.hashes_per_tick,
@@ -324,9 +321,9 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes(Delegation),
+    stakes: Stakes(.delegation),
     unused_accounts: UnusedAccounts,
-    epoch_stakes: EpochStakeMap,
+    epoch_stakes: EpochStakesMap,
     is_delta: bool,
 
     pub fn deinit(
@@ -344,7 +341,7 @@ pub const BankFields = struct {
 
         bank_fields.unused_accounts.deinit(allocator);
 
-        epochStakeMapDeinit(bank_fields.epoch_stakes, allocator);
+        deinitMapAndValues(allocator, bank_fields.epoch_stakes);
     }
 
     pub fn clone(
@@ -366,8 +363,8 @@ pub const BankFields = struct {
         const unused_accounts = try bank_fields.unused_accounts.clone(allocator);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapClone(bank_fields.epoch_stakes, allocator);
-        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+        const epoch_stakes = try cloneMapAndValues(allocator, bank_fields.epoch_stakes);
+        errdefer deinitMapAndValues(allocator, epoch_stakes);
 
         var cloned = bank_fields.*;
         cloned.blockhash_queue = blockhash_queue;
@@ -437,14 +434,20 @@ pub const BankFields = struct {
         const hard_forks = try HardForks.initRandom(random, allocator, max_list_entries);
         errdefer hard_forks.deinit(allocator);
 
-        const stakes = try Stakes(Delegation).initRandom(allocator, random, max_list_entries);
+        const stakes = try Stakes(.delegation).initRandom(allocator, random, max_list_entries);
         errdefer stakes.deinit(allocator);
 
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapRandom(random, allocator, 1, max_list_entries);
-        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+        const epoch_stakes = try sig.core.epoch_stakes.epochStakeMapRandom(
+            allocator,
+            random,
+            .delegation,
+            1,
+            max_list_entries,
+        );
+        errdefer deinitMapAndValues(allocator, epoch_stakes);
 
         return .{
             .blockhash_queue = blockhash_queue,
