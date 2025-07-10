@@ -6,7 +6,7 @@ orbs:
 executors:
   linux-executor:
     machine:
-      image: ubuntu-2004:current
+      image: ubuntu-2404:current
   python-executor:
     docker:
       - image: cimg/python:3.10
@@ -81,7 +81,10 @@ jobs:
           command: |
             apt update && apt install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
-            workspace/zig/zig build -Denable-tsan=true -p workspace/zig-out -Dcpu=x86_64_v3 --summary all
+            workspace/zig/zig build -Denable-tsan=true \
+                                    -p workspace/zig-out \
+                                    -Dcpu=x86_64_v3 \
+                                    --summary all
       - save_cache:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
           paths:
@@ -105,7 +108,12 @@ jobs:
           command: |
             apt update && apt install wget -y
             ./scripts/proxy_workaround.sh workspace/zig/zig
-            workspace/zig/zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dcpu=x86_64_v3 -p workspace/zig-out-release --summary all
+            workspace/zig/zig build sig fuzz -Dno-run \
+                                             -Denable-tsan=false \
+                                             -Doptimize=ReleaseSafe \
+                                             -Dcpu=x86_64_v3 \
+                                             -p workspace/zig-out-release \
+                                             --summary all
       - save_cache:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}-release
           paths:
@@ -132,7 +140,12 @@ jobs:
             # it seems that the feature detection is a bit broken in CircleCI's virtual machines
             # so we will manually say that it's an Apple M2.
             zig build -Denable-tsan=true -Dno-run -Dcpu=apple_m2 --summary all
-            zig build test -Denable-tsan=true -Dblockstore=hashmap -Dfilter="ledger" -Dno-bin -Dcpu=apple_m2 --summary all
+            zig build test -Denable-tsan=true \
+                           -Dblockstore=hashmap \
+                           -Dfilter="ledger" \
+                           -Dno-bin \
+                           -Dcpu=apple_m2 \
+                           --summary all
             zig-out/bin/test
       - save_cache:
           key: macos-aarch64-0.14.1-{{ checksum "build.zig.zon" }}
@@ -150,7 +163,11 @@ jobs:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
       - run:
           name: Build and Test
-          command: workspace/zig/zig build test -Denable-tsan=true -Dblockstore=hashmap -Dcpu=x86_64_v3 -Dfilter="ledger" --summary all
+          command: workspace/zig/zig build test -Denable-tsan=true \
+                                                -Dblockstore=hashmap \
+                                                -Dcpu=x86_64_v3 \
+                                                -Dfilter="ledger" \
+                                                --summary all
 
   test_linux:
     executor: linux-executor
@@ -165,7 +182,10 @@ jobs:
       - run:
           name: Test
           # Disable network-accessing tests for this job, which behave badly on circleci
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=true -Dno-network-tests --summary all
+          command: workspace/zig/zig build test -Dcpu=x86_64_v3 \
+                                                -Denable-tsan=true \
+                                                -Dno-network-tests \
+                                                --summary all
 
   test_kcov_linux:
     executor: linux-executor
@@ -177,7 +197,15 @@ jobs:
           key: linux-x86_64-0.14.1-{{ checksum "build.zig.zon" }}
       - run:
           name: Build
-          command: workspace/zig/zig build test -Dcpu=x86_64_v3 -Denable-tsan=false -Dno-run -Dno-network-tests --summary all
+          # Build with musl instead of glibc so it's statically linked, in order
+          # to run inside of the docker container which could contain a different
+          # GLIBC version.
+          command: workspace/zig/zig build test -Dcpu=x86_64_v3 \
+                                                -Dtarget=x86_64-linux-musl \ 
+                                                -Denable-tsan=false \
+                                                -Dno-run \
+                                                -Dno-network-tests \
+                                                --summary all
       - run:
           name: Test and Collect
           command: |
