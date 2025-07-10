@@ -114,6 +114,14 @@ pub const StakesType = enum {
     delegation,
     stake,
     account,
+
+    pub fn T(self: StakesType) type {
+        return switch (self) {
+            .delegation => Delegation,
+            .stake => Stake,
+            .account => StakeAccount,
+        };
+    }
 };
 
 // pub const Stakes = StakesGeneric(.stake);
@@ -152,20 +160,39 @@ pub fn Stakes(comptime stakes_type: StakesType) type {
         }
 
         pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
+            return self.convert(allocator, stakes_type);
+        }
+
+        pub fn convert(
+            self: *const Self,
+            allocator: Allocator,
+            comptime output_type: StakesType,
+        ) Allocator.Error!Stakes(output_type) {
             const vote_accs = try self.vote_accounts.clone(allocator);
             errdefer vote_accs.deinit(allocator);
 
-            var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, T){};
+            var stake_delegations = std.AutoArrayHashMapUnmanaged(Pubkey, output_type.T()){};
             errdefer {
-                if (is_account_type) for (stake_delegations.values()) |*v| v.deinit(allocator);
+                if (output_type == .account) {
+                    for (stake_delegations.values()) |*v| v.deinit(allocator);
+                }
                 stake_delegations.deinit(allocator);
             }
-            for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value|
-                try stake_delegations.put(
-                    allocator,
-                    key,
-                    if (is_account_type) value.clone(allocator) else value,
-                );
+            for (self.stake_delegations.keys(), self.stake_delegations.values()) |key, value| {
+                const new_value =
+                    if (stakes_type == .account and output_type == .account)
+                        try value.clone(allocator)
+                    else if (stakes_type == .stake and output_type == .stake)
+                        value
+                    else if (stakes_type == .delegation and output_type == .delegation)
+                        value
+                    else if (stakes_type == .stake and output_type == .delegation)
+                        value.delegation
+                    else
+                        @compileLog("unsupported conversion.", stakes_type, output_type);
+
+                try stake_delegations.put(allocator, key, new_value);
+            }
 
             const stake_history = try self.stake_history.clone(allocator);
             errdefer stake_history.deinit(allocator);

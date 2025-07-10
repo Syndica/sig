@@ -1216,7 +1216,7 @@ fn validator(
             .current_epoch = epoch,
             .current_epoch_constants = try .fromBankFields(
                 bank_fields,
-                (try epoch_stakes.clone(allocator)).current,
+                try epoch_stakes.current.convert(allocator, .delegation),
             ),
         }},
     );
