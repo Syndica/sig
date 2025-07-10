@@ -810,7 +810,9 @@ fn shrinkAccountFiles(
             };
             // NOTE: this is ok because nothing points to this old reference memory
             // deinit old block of reference memory
-            db.account_index.reference_manager.free(slot_reference_map_entry.value_ptr.refs.items.ptr);
+            db.account_index.reference_manager.free(
+                slot_reference_map_entry.value_ptr.refs.items.ptr,
+            );
 
             // point to new block
             slot_reference_map_entry.value_ptr.* = .{

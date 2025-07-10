@@ -4447,7 +4447,10 @@ test "insert multiple accounts on same slot" {
     }
 }
 
-fn createRandomAccount(allocator: std.mem.Allocator, random: std.Random) !sig.runtime.AccountSharedData {
+fn createRandomAccount(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+) !sig.runtime.AccountSharedData {
     if (!builtin.is_test) @compileError("only for testing");
 
     const data_size = random.uintAtMost(u64, 1_024);
@@ -4515,7 +4518,10 @@ test "insert multiple accounts on multiple slots" {
         try ancestors.ancestors.put(allocator, slot, {});
 
         const pubkey = Pubkey.initRandom(random);
-        errdefer std.debug.print("Failed to insert and load account: i={}, slot={}, ancestors={any} pubkey={}\n", .{ i, slot, ancestors.ancestors.keys(), pubkey });
+        errdefer std.debug.print(
+            "Failed to insert and load account: i={}, slot={}, ancestors={any} pubkey={}\n",
+            .{ i, slot, ancestors.ancestors.keys(), pubkey },
+        );
 
         const expected = try createRandomAccount(allocator, random);
         defer allocator.free(expected.data);
@@ -4555,7 +4561,15 @@ test "insert account on multiple slots" {
             defer ancestors.deinit(allocator);
             try ancestors.ancestors.put(allocator, slot, {});
 
-            errdefer std.debug.print("Failed to insert and load account: i={}, j={}/{}, slot={}, ancestors={any} pubkey={}\n", .{ i, j, num_slots_to_insert, slot, ancestors.ancestors.keys(), pubkey });
+            errdefer std.debug.print(
+                \\Failed to insert and load account: i={}
+                \\    j:         {}/{}
+                \\    slot:      {}
+                \\    ancestors: {any}
+                \\    pubkey:    {}
+            ,
+                .{ i, j, num_slots_to_insert, slot, ancestors.ancestors.keys(), pubkey },
+            );
 
             const expected = try createRandomAccount(allocator, random);
             defer allocator.free(expected.data);
