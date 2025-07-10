@@ -3399,6 +3399,28 @@ pub fn unpackSnapshotFilePair(
     }
 }
 
+pub fn loadTestAccountsDbEmpty(
+    allocator: std.mem.Allocator,
+    use_disk: bool,
+    logger: Logger,
+    /// The directory into which the snapshots are unpacked, and
+    /// the `snapshots_dir` for the returned `AccountsDB`.
+    snapshot_dir: std.fs.Dir,
+) !AccountsDB {
+    var accounts_db = try AccountsDB.init(.{
+        .allocator = allocator,
+        .logger = logger,
+        .snapshot_dir = snapshot_dir,
+        .geyser_writer = null,
+        .gossip_view = null,
+        .index_allocation = if (use_disk) .disk else .ram,
+        .number_of_index_shards = 4,
+    });
+    errdefer accounts_db.deinit();
+
+    return accounts_db;
+}
+
 pub fn loadTestAccountsDB(
     allocator: std.mem.Allocator,
     use_disk: bool,
