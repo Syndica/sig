@@ -27,7 +27,7 @@ const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.latest_validator_votes.LatestValidatorVotes;
 
 const EpochStakeMap = sig.core.stake.EpochStakeMap;
 const BlockhashQueue = sig.core.blockhash_queue.BlockhashQueue;
