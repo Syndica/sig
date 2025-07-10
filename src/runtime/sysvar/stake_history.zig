@@ -4,12 +4,18 @@ const sig = @import("../../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
+const bincode = sig.bincode;
+
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/stake_history.rs#L67
 pub const StakeHistory = struct {
     entries: std.ArrayListUnmanaged(Entry),
+
+    pub const @"!bincode-config" = bincode.FieldConfig(StakeHistory){
+        .deserializer = deserialize,
+    };
 
     pub const Entry = struct {
         epoch: Epoch,
@@ -41,12 +47,7 @@ pub const StakeHistory = struct {
     pub const SIZE_OF: u64 = 16_392;
 
     pub fn default(allocator: Allocator) Allocator.Error!StakeHistory {
-        return .{
-            .entries = try std.ArrayListUnmanaged(Entry).initCapacity(
-                allocator,
-                MAX_ENTRIES,
-            ),
-        };
+        return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };
     }
 
     pub fn deinit(self: StakeHistory, allocator: Allocator) void {
@@ -90,6 +91,12 @@ pub const StakeHistory = struct {
         std.sort.heap(Entry, self.entries.items, {}, Entry.sortCmp);
         return self;
     }
+
+    pub fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !StakeHistory {
+        var entries = try bincode.read(allocator, std.ArrayListUnmanaged(Entry), reader, .{});
+        try entries.ensureTotalCapacityPrecise(allocator, MAX_ENTRIES);
+        return .{ .entries = entries };
+    }
 };
 
 test "serialize and deserialize" {
@@ -107,16 +114,16 @@ test "serialize and deserialize" {
         const deserialized = try bincode.readFromSlice(allocator, StakeHistory, serialized, .{});
         defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity());
+        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity);
         try std.testing.expectEqualSlices(
             StakeHistory.Entry,
-            stake_history.entries.constSlice(),
-            deserialized.entries.constSlice(),
+            stake_history.entries.items,
+            deserialized.entries.items,
         );
     }
 
     {
-        var stake_history = try StakeHistory.init(allocator);
+        var stake_history = StakeHistory{ .entries = try .initCapacity(allocator, 1) };
         defer stake_history.deinit(allocator);
         stake_history.entries.appendAssumeCapacity(.{
             .epoch = random.int(Epoch),
@@ -133,11 +140,11 @@ test "serialize and deserialize" {
         const deserialized = try bincode.readFromSlice(allocator, StakeHistory, serialized, .{});
         defer deserialized.deinit(allocator);
 
-        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity());
+        try std.testing.expectEqual(StakeHistory.MAX_ENTRIES, deserialized.entries.capacity);
         try std.testing.expectEqualSlices(
             StakeHistory.Entry,
-            stake_history.entries.constSlice(),
-            deserialized.entries.constSlice(),
+            stake_history.entries.items,
+            deserialized.entries.items,
         );
     }
 }

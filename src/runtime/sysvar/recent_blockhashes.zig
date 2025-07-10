@@ -4,6 +4,8 @@ const sig = @import("../../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
+const bincode = sig.bincode;
+
 const BlockhashQueue = sig.core.BlockhashQueue;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
@@ -14,7 +16,11 @@ const Pubkey = sig.core.Pubkey;
 pub const RecentBlockhashes = struct {
     entries: std.ArrayListUnmanaged(Entry),
 
-    pub const Entry = extern struct {
+    pub const @"!bincode-config" = bincode.FieldConfig(RecentBlockhashes){
+        .deserializer = deserialize,
+    };
+
+    pub const Entry = struct {
         blockhash: Hash,
         lamports_per_signature: u64,
     };
@@ -26,12 +32,7 @@ pub const RecentBlockhashes = struct {
     pub const SIZE_OF: u64 = 6_008;
 
     pub fn default(allocator: Allocator) Allocator.Error!RecentBlockhashes {
-        return .{
-            .entries = try std.ArrayListUnmanaged(Entry).initCapacity(
-                allocator,
-                MAX_ENTRIES,
-            ),
-        };
+        return .{ .entries = try .initCapacity(allocator, MAX_ENTRIES) };
     }
 
     pub fn deinit(self: RecentBlockhashes, allocator: Allocator) void {
@@ -55,7 +56,8 @@ pub const RecentBlockhashes = struct {
             }
         };
 
-        const entries = try allocator.alloc(IndexAndEntry, MAX_ENTRIES);
+        const num_entries = @min(queue.hash_infos.count(), MAX_ENTRIES);
+        const entries = try allocator.alloc(IndexAndEntry, num_entries);
         defer allocator.free(entries);
 
         var i: usize = 0;
@@ -103,6 +105,12 @@ pub const RecentBlockhashes = struct {
         }
         return self;
     }
+
+    pub fn deserialize(allocator: Allocator, reader: anytype, _: bincode.Params) !RecentBlockhashes {
+        var entries = try bincode.read(allocator, std.ArrayListUnmanaged(Entry), reader, .{});
+        try entries.ensureTotalCapacityPrecise(allocator, MAX_ENTRIES);
+        return .{ .entries = entries };
+    }
 };
 
 test "from blockhash queue" {
@@ -121,4 +129,52 @@ test "from blockhash queue" {
     }
 
     try std.testing.expect(!recent_blockhashes.isEmpty());
+}
+
+test "serialize and deserialize" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
+    {
+        var blockhashes = try RecentBlockhashes.initRandom(allocator, random);
+        defer blockhashes.deinit(allocator);
+
+        const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
+        defer allocator.free(serialized);
+
+        const deserialized =
+            try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
+        defer deserialized.deinit(allocator);
+
+        try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity);
+        try std.testing.expectEqualSlices(
+            RecentBlockhashes.Entry,
+            blockhashes.entries.items,
+            deserialized.entries.items,
+        );
+    }
+
+    {
+        var blockhashes = RecentBlockhashes{ .entries = try .initCapacity(allocator, 1) };
+        defer blockhashes.deinit(allocator);
+        blockhashes.entries.appendAssumeCapacity(.{
+            .blockhash = Hash.initRandom(random),
+            .lamports_per_signature = random.int(u64),
+        });
+
+        const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
+        defer allocator.free(serialized);
+
+        const deserialized =
+            try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
+        defer deserialized.deinit(allocator);
+
+        try std.testing.expectEqual(RecentBlockhashes.MAX_ENTRIES, deserialized.entries.capacity);
+        try std.testing.expectEqualSlices(
+            RecentBlockhashes.Entry,
+            blockhashes.entries.items,
+            deserialized.entries.items,
+        );
+    }
 }
