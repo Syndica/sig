@@ -49,7 +49,7 @@ pub const EpochRewards = extern struct {
         .active = false,
     };
 
-    pub const SIZE_OF: u64 = @sizeOf(EpochRewards);
+    pub const SIZE_OF: u64 = 81;
 
     pub fn initRandom(random: std.Random) EpochRewards {
         if (!builtin.is_test) @compileError("only for testing");

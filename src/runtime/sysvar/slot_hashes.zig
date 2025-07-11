@@ -18,7 +18,7 @@ pub const SlotHashes = struct {
         .deserializer = deserialize,
     };
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         slot: Slot,
         hash: Hash,
 

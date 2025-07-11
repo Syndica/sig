@@ -20,7 +20,7 @@ pub const RecentBlockhashes = struct {
         .deserializer = deserialize,
     };
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         blockhash: Hash,
         lamports_per_signature: u64,
     };
@@ -42,6 +42,11 @@ pub const RecentBlockhashes = struct {
 
     pub fn isEmpty(self: RecentBlockhashes) bool {
         return self.entries.items.len == 0;
+    }
+
+    pub fn getFirst(self: *const RecentBlockhashes) ?Entry {
+        if (self.entries.items.len == 0) return null;
+        return self.entries.items[0];
     }
 
     pub fn fromBlockhashQueue(
@@ -166,6 +171,8 @@ test "serialize and deserialize" {
 
         const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
         defer allocator.free(serialized);
+
+        std.debug.print("serialized: {any}\n", .{serialized[0..16]});
 
         const deserialized =
             try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});

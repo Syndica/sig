@@ -46,7 +46,7 @@ pub const Rent = extern struct {
         .burn_percent = 0,
     };
 
-    pub const SIZE_OF: u64 = @sizeOf(Rent);
+    pub const SIZE_OF: u64 = 17;
 
     pub fn minimumBalance(self: Rent, data_len: usize) u64 {
         const bytes: u64 = @intCast(data_len);
