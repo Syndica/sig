@@ -78,7 +78,7 @@ const ReplayState = struct {
 
         const epoch_tracker = try deps.allocator.create(EpochTracker);
         errdefer deps.allocator.destroy(epoch_tracker);
-        epoch_tracker.* = .{ .schedule = deps.epoch_schedule };
+        epoch_tracker.* = .init(deps.epoch_schedule);
 
         return .{
             .allocator = deps.allocator,
@@ -269,7 +269,7 @@ test trackNewSlots {
     try slot_tracker.put(allocator, 0, .genesis(.DEFAULT), .GENESIS);
     slot_tracker.get(0).?.state.hash.set(.ZEROES);
 
-    var epoch_tracker = EpochTracker{ .schedule = .DEFAULT };
+    var epoch_tracker: EpochTracker = .init(.DEFAULT);
     defer epoch_tracker.deinit(allocator);
     try epoch_tracker.epochs.put(allocator, 0, .{
         .hashes_per_tick = 1,
