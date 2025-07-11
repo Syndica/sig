@@ -25,15 +25,17 @@ const createVoteAccount = sig.core.vote_accounts.createVoteAccount;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
-pub const StakesCache = StakesCacheGeneric(.stake);
-
-fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
+pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
     const StakesT = Stakes(stakes_type);
 
     return struct {
         stakes: RwMux(StakesT),
 
         const Self = @This();
+
+        pub fn T() type {
+            return StakesT;
+        }
 
         pub fn default() Self {
             return .{ .stakes = RwMux(StakesT).init(StakesT.DEFAULT) };
@@ -117,8 +119,6 @@ pub const StakesType = enum {
     stake,
     account,
 };
-
-// pub const Stakes = StakesGeneric(.stake);
 
 pub fn Stakes(comptime stakes_type: StakesType) type {
     const T = switch (stakes_type) {
