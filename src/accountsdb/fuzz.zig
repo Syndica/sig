@@ -463,7 +463,7 @@ fn readRandomAccounts(
         }
 
         for (pubkeys) |pubkey| {
-            const account = db.getAccount(&pubkey) catch continue;
+            const account = db.getAccountDeprecated(&pubkey) catch continue;
             defer account.deinit(db.allocator);
         }
     }

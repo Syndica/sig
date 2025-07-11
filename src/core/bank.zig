@@ -24,8 +24,10 @@ const Atomic = std.atomic.Value;
 
 const RwMux = sig.sync.RwMux;
 
+const BlockhashQueue = core.BlockhashQueue;
 const EpochSchedule = core.epoch_schedule.EpochSchedule;
 const Hash = core.hash.Hash;
+const HardForks = core.HardForks;
 const LtHash = core.hash.LtHash;
 const Pubkey = core.pubkey.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
@@ -37,14 +39,13 @@ const UnixTimestamp = core.time.UnixTimestamp;
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;
 
-const EpochStakes = core.stake.EpochStakes;
-const EpochStakeMap = core.stake.EpochStakeMap;
-const Stakes = core.stake.Stakes;
-const epochStakeMapClone = core.stake.epochStakeMapClone;
-const epochStakeMapDeinit = core.stake.epochStakeMapDeinit;
-const epochStakeMapRandom = core.stake.epochStakeMapRandom;
+const Ancestors = sig.core.Ancestors;
+const EpochStakes = core.EpochStakes;
+const EpochStakesMap = core.EpochStakesMap;
+const Stakes = core.Stakes;
 
-const Ancestors = sig.core.status_cache.Ancestors;
+const deinitMapAndValues = sig.utils.collections.deinitMapAndValues;
+const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 
 /// Information about a slot that is determined when the slot is initialized and
 /// then never changes.
@@ -78,7 +79,19 @@ pub const SlotConstants = struct {
     /// Whether and how epoch rewards should be distributed in this slot.
     epoch_reward_status: EpochRewardStatus,
 
-    pub fn fromBankFields(bank_fields: *const BankFields) SlotConstants {
+    /// Set of slots leading to this one.
+    /// Includes the current slot.
+    /// Does not go back to genesis, may prune slots beyond 8192 generations ago.
+    ancestors: Ancestors,
+
+    /// A map of activated features to the slot when they were activated.
+    feature_set: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+
+    pub fn fromBankFields(
+        allocator: Allocator,
+        bank_fields: *const BankFields,
+        feature_set: std.AutoArrayHashMapUnmanaged(Pubkey, Slot),
+    ) Allocator.Error!SlotConstants {
         return .{
             .parent_slot = bank_fields.parent_slot,
             .parent_hash = bank_fields.parent_hash,
@@ -87,6 +100,8 @@ pub const SlotConstants = struct {
             .max_tick_height = bank_fields.max_tick_height,
             .fee_rate_governor = bank_fields.fee_rate_governor,
             .epoch_reward_status = .inactive,
+            .ancestors = try bank_fields.ancestors.clone(allocator),
+            .feature_set = feature_set,
         };
     }
 
@@ -99,11 +114,15 @@ pub const SlotConstants = struct {
             .max_tick_height = 0,
             .fee_rate_governor = fee_rate_governor,
             .epoch_reward_status = .inactive,
+            .ancestors = .{},
+            .feature_set = .empty,
         };
     }
 
     pub fn deinit(self: SlotConstants, allocator: Allocator) void {
         self.epoch_reward_status.deinit(allocator);
+        self.ancestors.deinit(allocator);
+        self.feature_set.deinit(allocator);
     }
 };
 
@@ -142,6 +161,8 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(LtHash),
 
+    stakes_cache: sig.core.StakesCache,
+
     pub const GENESIS = SlotState{
         .blockhash_queue = .init(.DEFAULT),
         .hash = .init(null),
@@ -151,6 +172,7 @@ pub const SlotState = struct {
         .tick_height = .init(0),
         .collected_rent = .init(0),
         .accounts_lt_hash = .init(.ZEROES),
+        .stakes_cache = .default(),
     };
 
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
@@ -163,8 +185,14 @@ pub const SlotState = struct {
         allocator: Allocator,
         bank_fields: *const BankFields,
     ) Allocator.Error!SlotState {
+        const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
+        errdefer blockhash_queue.deinit(allocator);
+
+        const stakes = try bank_fields.stakes.clone(allocator);
+        errdefer stakes.deinit(allocator);
+
         return .{
-            .blockhash_queue = .init(try bank_fields.blockhash_queue.clone(allocator)),
+            .blockhash_queue = .init(blockhash_queue),
             .hash = .init(bank_fields.hash),
             .capitalization = .init(bank_fields.capitalization),
             .transaction_count = .init(bank_fields.transaction_count),
@@ -172,6 +200,7 @@ pub const SlotState = struct {
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
             .accounts_lt_hash = .init(LtHash{ .data = .{0xBAD1} ** LtHash.NUM_ELEMENTS }),
+            .stakes_cache = .{ .stakes = .init(stakes) },
         };
     }
 
@@ -183,6 +212,14 @@ pub const SlotState = struct {
             break :foo try bhq.get().clone(allocator);
         };
         errdefer blockhash_queue.deinit(allocator);
+
+        const stakes = foo: {
+            var cache = parent.stakes_cache.stakes.read();
+            defer cache.unlock();
+            break :foo try cache.get().clone(allocator);
+        };
+        errdefer stakes.deinit(allocator);
+
         return .{
             .blockhash_queue = .init(blockhash_queue),
             .hash = .init(null),
@@ -192,6 +229,7 @@ pub const SlotState = struct {
             .tick_height = .init(parent.tick_height.load(.monotonic)),
             .collected_rent = .init(0),
             .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
+            .stakes_cache = .{ .stakes = .init(stakes) },
         };
     }
 
@@ -229,7 +267,9 @@ pub const EpochConstants = struct {
     slots_per_year: f64,
 
     /// The pre-determined stakes assigned to this epoch.
-    stakes: EpochStakes,
+    stakes: sig.core.EpochStakes,
+
+    rent_collector: RentCollector,
 
     pub fn genesis(
         allocator: Allocator,
@@ -242,6 +282,21 @@ pub const EpochConstants = struct {
             .genesis_creation_time = genesis_config.creation_time,
             .slots_per_year = genesis_config.slotsPerYear(),
             .stakes = .initEmpty(allocator),
+        };
+    }
+
+    pub fn fromBankFields(
+        bank_fields: *const BankFields,
+        epoch_stakes: sig.core.EpochStakes,
+    ) Allocator.Error!EpochConstants {
+        return .{
+            .hashes_per_tick = bank_fields.hashes_per_tick,
+            .ticks_per_slot = bank_fields.ticks_per_slot,
+            .ns_per_slot = bank_fields.ns_per_slot,
+            .genesis_creation_time = bank_fields.genesis_creation_time,
+            .slots_per_year = bank_fields.slots_per_year,
+            .stakes = epoch_stakes,
+            .rent_collector = bank_fields.rent_collector,
         };
     }
 
@@ -277,7 +332,9 @@ pub const BankFields = struct {
     block_height: u64,
     collector_id: Pubkey,
     collector_fees: u64,
-    fee_calculator: FeeCalculator,
+    /// This is a FeeCalculator in Agave which is just a wrapped u64 containing lamports per signature.
+    /// Lamports per signature is already stored in `fee_rate_governor`, so
+    fee_calculator: u64,
     fee_rate_governor: FeeRateGovernor,
     collected_rent: u64,
     rent_collector: RentCollector,
@@ -285,7 +342,7 @@ pub const BankFields = struct {
     inflation: Inflation,
     stakes: Stakes(.delegation),
     unused_accounts: UnusedAccounts,
-    epoch_stakes: EpochStakeMap,
+    epoch_stakes: EpochStakesMap,
     is_delta: bool,
 
     pub fn deinit(
@@ -303,7 +360,7 @@ pub const BankFields = struct {
 
         bank_fields.unused_accounts.deinit(allocator);
 
-        epochStakeMapDeinit(bank_fields.epoch_stakes, allocator);
+        deinitMapAndValues(allocator, bank_fields.epoch_stakes);
     }
 
     pub fn clone(
@@ -325,8 +382,8 @@ pub const BankFields = struct {
         const unused_accounts = try bank_fields.unused_accounts.clone(allocator);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapClone(bank_fields.epoch_stakes, allocator);
-        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+        const epoch_stakes = try cloneMapAndValues(allocator, bank_fields.epoch_stakes);
+        errdefer deinitMapAndValues(allocator, epoch_stakes);
 
         var cloned = bank_fields.*;
         cloned.blockhash_queue = blockhash_queue;
@@ -380,43 +437,6 @@ pub const BankFields = struct {
             @as(f64, @floatFromInt(ticks_per_slot));
     }
 
-    pub fn getStakedNodes(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
-        const epoch_stakes = self.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-        return epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
-    }
-
-    /// Returns the leader schedule for this bank's epoch
-    pub fn leaderSchedule(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-    ) !core.leader_schedule.LeaderSchedule {
-        return self.leaderScheduleForEpoch(allocator, self.epoch);
-    }
-
-    /// Returns the leader schedule for an arbitrary epoch.
-    /// Only works if the bank is aware of the staked nodes for that epoch.
-    pub fn leaderScheduleForEpoch(
-        self: *const BankFields,
-        allocator: std.mem.Allocator,
-        epoch: Epoch,
-    ) !core.leader_schedule.LeaderSchedule {
-        const slots_in_epoch = self.epoch_schedule.getSlotsInEpoch(self.epoch);
-        const staked_nodes = try self.getStakedNodes(allocator, epoch);
-        return .{
-            .allocator = allocator,
-            .slot_leaders = try core.leader_schedule.LeaderSchedule.fromStakedNodes(
-                allocator,
-                epoch,
-                slots_in_epoch,
-                staked_nodes,
-            ),
-        };
-    }
-
     pub fn initRandom(
         allocator: std.mem.Allocator,
         /// Should be a PRNG, not a true RNG. See the documentation on `std.Random.uintLessThan`
@@ -424,7 +444,7 @@ pub const BankFields = struct {
         random: std.Random,
         max_list_entries: usize,
     ) std.mem.Allocator.Error!BankFields {
-        var blockhash_queue = try BlockhashQueue.initRandom(random, allocator, max_list_entries);
+        var blockhash_queue = try BlockhashQueue.initRandom(allocator, random, max_list_entries);
         errdefer blockhash_queue.deinit(allocator);
 
         var ancestors = try ancestorsRandom(random, allocator, max_list_entries);
@@ -439,8 +459,14 @@ pub const BankFields = struct {
         const unused_accounts = try UnusedAccounts.initRandom(random, allocator, max_list_entries);
         errdefer unused_accounts.deinit(allocator);
 
-        const epoch_stakes = try epochStakeMapRandom(random, allocator, 1, max_list_entries);
-        errdefer epochStakeMapDeinit(epoch_stakes, allocator);
+        const epoch_stakes = try sig.core.epoch_stakes.epochStakeMapRandom(
+            allocator,
+            random,
+            .delegation,
+            1,
+            max_list_entries,
+        );
+        errdefer deinitMapAndValues(allocator, epoch_stakes);
 
         return .{
             .blockhash_queue = blockhash_queue,
@@ -465,7 +491,7 @@ pub const BankFields = struct {
             .block_height = random.int(u64),
             .collector_id = Pubkey.initRandom(random),
             .collector_fees = random.int(u64),
-            .fee_calculator = FeeCalculator.initRandom(random),
+            .fee_calculator = random.int(u64),
             .fee_rate_governor = FeeRateGovernor.initRandom(random),
             .collected_rent = random.int(u64),
             .rent_collector = RentCollector.initRandom(random),
@@ -504,187 +530,6 @@ pub fn ancestorsRandom(
 
     return .{ .ancestors = ancestors.unmanaged };
 }
-
-/// Analogous to [BlockhashQueue](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L32)
-pub const BlockhashQueue = struct {
-    last_hash_index: u64,
-
-    /// last hash to be registered
-    last_hash: ?Hash,
-    ages: BlockhashQueueAges,
-
-    /// hashes older than `max_age` will be dropped from the queue
-    max_age: usize,
-
-    pub const DEFAULT = BlockhashQueue.init(MAX_RECENT_BLOCKHASHES);
-
-    const MAX_RECENT_BLOCKHASHES = 300;
-
-    pub fn init(max_age: usize) BlockhashQueue {
-        return .{
-            .ages = .{},
-            .last_hash_index = 0,
-            .last_hash = null,
-            .max_age = max_age,
-        };
-    }
-
-    pub fn deinit(self: BlockhashQueue, allocator: std.mem.Allocator) void {
-        var ages = self.ages;
-        ages.deinit(allocator);
-    }
-
-    pub fn clone(
-        self: BlockhashQueue,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!BlockhashQueue {
-        var ages = try self.ages.clone(allocator);
-        errdefer ages.deinit(allocator);
-        return .{
-            .last_hash_index = self.last_hash_index,
-            .last_hash = self.last_hash,
-            .ages = ages,
-            .max_age = self.max_age,
-        };
-    }
-
-    pub fn getHashInfoIfValid(self: BlockhashQueue, hash: *const Hash, max_age: usize) ?HashAge {
-        const age = self.ages.get(hash.*) orelse return null;
-        if (!isHashIndexValid(self.last_hash_index, max_age, age.hash_index)) return null;
-        return age;
-    }
-
-    fn isHashIndexValid(last_hash_index: u64, max_age: usize, hash_index: u64) bool {
-        return last_hash_index - hash_index <= @as(u64, max_age);
-    }
-
-    pub fn initRandom(
-        random: std.Random,
-        allocator: std.mem.Allocator,
-        max_list_entries: usize,
-    ) std.mem.Allocator.Error!BlockhashQueue {
-        var ages = try blockhashQueueAgesRandom(random, allocator, max_list_entries);
-        errdefer ages.deinit(allocator);
-
-        return .{
-            .last_hash_index = random.int(u64),
-            .last_hash = if (random.boolean()) Hash.initRandom(random) else null,
-            .ages = ages,
-            .max_age = random.int(usize),
-        };
-    }
-
-    pub fn initWithSingleEntry(
-        allocator: std.mem.Allocator,
-        entry_hash: Hash,
-        entry_lamports_per_signature: u64,
-    ) !BlockhashQueue {
-        return .{
-            .last_hash = entry_hash,
-            .max_age = 0,
-            .ages = try .init(
-                allocator,
-                &.{entry_hash},
-                &.{.{
-                    .fee_calculator = .{ .lamports_per_signature = entry_lamports_per_signature },
-                    .hash_index = 0,
-                    .timestamp = 0,
-                }},
-            ),
-            .last_hash_index = 0,
-        };
-    }
-};
-
-pub const BlockhashQueueAges = std.AutoArrayHashMapUnmanaged(Hash, HashAge);
-
-pub fn blockhashQueueAgesRandom(
-    random: std.Random,
-    allocator: std.mem.Allocator,
-    max_list_entries: usize,
-) std.mem.Allocator.Error!BlockhashQueueAges {
-    var ages = BlockhashQueueAges.Managed.init(allocator);
-    errdefer ages.deinit();
-
-    try sig.rand.fillHashmapWithRng(
-        &ages,
-        random,
-        random.uintAtMost(usize, max_list_entries),
-        struct {
-            pub fn randomKey(rand: std.Random) !Hash {
-                return Hash.initRandom(rand);
-            }
-            pub fn randomValue(rand: std.Random) !HashAge {
-                return HashAge.initRandom(rand);
-            }
-        },
-    );
-
-    return ages.unmanaged;
-}
-
-/// Analogous to [HardForks](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/hard_forks.rs#L13)
-pub const HardForks = struct {
-    items: []const SlotAndCount,
-
-    pub const SlotAndCount = struct { Slot, usize };
-
-    pub fn deinit(self: HardForks, allocator: std.mem.Allocator) void {
-        allocator.free(self.items);
-    }
-
-    pub fn clone(
-        self: HardForks,
-        allocator: std.mem.Allocator,
-    ) std.mem.Allocator.Error!HardForks {
-        return .{ .items = try allocator.dupe(SlotAndCount, self.items) };
-    }
-
-    pub fn initRandom(
-        random: std.Random,
-        allocator: std.mem.Allocator,
-        max_list_entries: usize,
-    ) std.mem.Allocator.Error!HardForks {
-        const hard_forks_len = random.uintAtMost(usize, max_list_entries);
-
-        const self = try allocator.alloc(SlotAndCount, hard_forks_len);
-        errdefer allocator.free(self);
-
-        for (self) |*hard_fork| hard_fork.* = .{
-            random.int(Slot),
-            random.int(usize),
-        };
-
-        return .{ .items = self };
-    }
-};
-
-/// Analogous to [HashInfo](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L13)
-pub const HashAge = struct {
-    fee_calculator: FeeCalculator,
-    hash_index: u64,
-    timestamp: u64,
-
-    pub fn initRandom(random: std.Random) HashAge {
-        return .{
-            .fee_calculator = FeeCalculator.initRandom(random),
-            .hash_index = random.int(u64),
-            .timestamp = random.int(u64),
-        };
-    }
-};
-
-pub const FeeCalculator = struct {
-    /// The current cost of a signature.
-    ///
-    /// This amount may increase/decrease over time based on cluster processing
-    /// load.
-    lamports_per_signature: u64,
-
-    pub fn initRandom(random: std.Random) FeeCalculator {
-        return .{ .lamports_per_signature = random.int(u64) };
-    }
-};
 
 /// Analogous to [UnusedAccounts](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L123)
 pub const UnusedAccounts = struct {

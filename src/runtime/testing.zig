@@ -9,7 +9,7 @@ const vm = sig.vm;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const Slot = sig.core.Slot;
-const EpochStakes = sig.core.stake.EpochStakes;
+const EpochStakes = sig.core.EpochStakes;
 
 const FeatureSet = sig.runtime.FeatureSet;
 const InstructionInfo = sig.runtime.InstructionInfo;
@@ -209,16 +209,7 @@ pub fn createEpochStakes(
     params: []const ExecuteContextsParams.EpochStakeParam,
 ) !EpochStakes {
     var self: EpochStakes = .{
-        .stakes = .{
-            .vote_accounts = .{
-                .accounts = .{},
-                .staked_nodes = null,
-            },
-            .delegations = .{},
-            .unused = 0,
-            .epoch = 0,
-            .history = .{},
-        },
+        .stakes = .DEFAULT,
         .total_stake = 0,
         .node_id_to_vote_accounts = .{},
         .epoch_authorized_voters = .{},
@@ -227,7 +218,7 @@ pub fn createEpochStakes(
 
     for (params) |param| {
         self.total_stake += param.stake;
-        try self.stakes.delegations.put(allocator, param.pubkey, .{
+        try self.stakes.stake_delegations.put(allocator, param.pubkey, .{
             .voter_pubkey = param.pubkey,
             .stake = param.stake,
             .activation_epoch = 0,
@@ -287,30 +278,15 @@ pub fn createSysvarCache(
     }
     if (params.slot_hashes) |slot_hashes| {
         sysvar_cache.slot_hashes = try sysvar.serialize(allocator, slot_hashes);
-        sysvar_cache.slot_hashes_obj = .{
-            .entries = try allocator.dupe(
-                sysvar.SlotHashes.Entry,
-                slot_hashes.entries,
-            ),
-        };
+        sysvar_cache.slot_hashes_obj = slot_hashes;
     }
     if (params.stake_history) |stake_history| {
         sysvar_cache.stake_history = try sysvar.serialize(allocator, stake_history);
-        sysvar_cache.stake_history_obj = .{
-            .entries = try allocator.dupe(
-                sysvar.StakeHistory.Entry,
-                stake_history.entries,
-            ),
-        };
+        sysvar_cache.stake_history_obj = stake_history;
     }
     sysvar_cache.fees_obj = params.fees;
     if (params.recent_blockhashes) |recent_blockhashes| {
-        sysvar_cache.recent_blockhashes_obj = .{
-            .entries = try allocator.dupe(
-                sysvar.RecentBlockhashes.Entry,
-                recent_blockhashes.entries,
-            ),
-        };
+        sysvar_cache.recent_blockhashes_obj = recent_blockhashes;
     }
 
     return sysvar_cache;
@@ -436,19 +412,11 @@ pub fn expectTransactionContextEqual(
     // if (expected.maybe_log_collector != actual.maybe_log_collector)
     //     return error.MaybeLogCollectorMismatch;
 
-    // TODO: implement eqls for SysvarCache
-    // if (expected.sysvar_cache != actual.sysvar_cache)
-    //     return error.SysvarCacheMismatch;
-
     if (expected.prev_lamports_per_signature != actual.prev_lamports_per_signature)
         return error.LamportsPerSignatureMismatch;
 
     if (!expected.prev_blockhash.eql(actual.prev_blockhash))
         return error.LastBlockhashMismatch;
-
-    // TODO: implement eqls for FeatureSet
-    // if (expected.feature_set != actual.feature_set)
-    //     return error.FeatureSetMismatch;
 
     try expectTransactionReturnDataEqual(expected.return_data, actual.return_data);
 }

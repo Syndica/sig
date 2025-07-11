@@ -46,6 +46,8 @@ pub const EpochSchedule = extern struct {
         true,
     ) catch unreachable;
 
+    pub const SIZE_OF: u64 = @sizeOf(EpochSchedule);
+
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
         return self.getEpochAndSlotIndex(slot)[0];
     }
@@ -86,12 +88,40 @@ pub const EpochSchedule = extern struct {
             self.slots_per_epoch;
     }
 
+    pub fn getFirstSlotInEpoch(self: *const EpochSchedule, epoch: Epoch) Slot {
+        if (epoch <= self.first_normal_epoch) {
+            const x = if (epoch >= 64)
+                std.math.maxInt(u64)
+            else
+                std.math.pow(Epoch, 2, epoch);
+            return (x -| 1) *| MINIMUM_SLOTS_PER_EPOCH;
+        } else {
+            return ((epoch -| self.first_normal_epoch) *|
+                self.slots_per_epoch) +|
+                self.first_normal_slot;
+        }
+    }
+
+    pub fn getLastSlotInEpoch(self: *const EpochSchedule, epoch: Epoch) Slot {
+        return self.getFirstSlotInEpoch(epoch) +| self.getSlotsInEpoch(epoch) -| 1;
+    }
+
+    pub fn getLeaderScheduleEpoch(self: *const EpochSchedule, slot: Slot) u64 {
+        if (slot < self.first_normal_slot) {
+            return self.getEpochAndSlotIndex(slot)[0] +| 1;
+        } else {
+            return self.first_normal_epoch +|
+                (((slot -| self.first_normal_slot) +|
+                    self.leader_schedule_slot_offset) / self.slots_per_epoch);
+        }
+    }
+
     pub fn custom(
         slots_per_epoch: u64,
         leader_schedule_slot_offset: u64,
         warmup: bool,
     ) !EpochSchedule {
-        std.debug.assert(slots_per_epoch > MINIMUM_SLOTS_PER_EPOCH);
+        std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
         var first_normal_epoch: Epoch = 0;
         var first_normal_slot: Slot = 0;
         if (warmup) {
@@ -119,3 +149,53 @@ pub const EpochSchedule = extern struct {
         };
     }
 };
+
+test "epoch_schedule" {
+    for (MINIMUM_SLOTS_PER_EPOCH..MINIMUM_SLOTS_PER_EPOCH * 16) |slots_per_epoch| {
+        const epoch_schedule = try EpochSchedule.custom(
+            slots_per_epoch,
+            slots_per_epoch / 2,
+            true,
+        );
+
+        try std.testing.expectEqual(epoch_schedule.getFirstSlotInEpoch(0), 0);
+        try std.testing.expectEqual(
+            epoch_schedule.getLastSlotInEpoch(0),
+            MINIMUM_SLOTS_PER_EPOCH - 1,
+        );
+
+        var last_leader_schedule: u64 = 0;
+        var last_epoch: u64 = 0;
+        var last_slots_in_epoch: u64 = MINIMUM_SLOTS_PER_EPOCH;
+
+        for (0..2 * slots_per_epoch) |slot| {
+            const leader_schedule = epoch_schedule.getLeaderScheduleEpoch(slot);
+            if (leader_schedule != last_leader_schedule) {
+                try std.testing.expectEqual(leader_schedule, last_leader_schedule + 1);
+                last_leader_schedule = leader_schedule;
+            }
+
+            const epoch, const offset = epoch_schedule.getEpochAndSlotIndex(slot);
+
+            if (epoch != last_epoch) {
+                try std.testing.expectEqual(epoch, last_epoch + 1);
+                last_epoch = epoch;
+
+                try std.testing.expectEqual(epoch_schedule.getFirstSlotInEpoch(epoch), slot);
+                try std.testing.expectEqual(epoch_schedule.getLastSlotInEpoch(epoch - 1), slot - 1);
+
+                const slots_in_epoch = epoch_schedule.getSlotsInEpoch(epoch);
+                if (slots_in_epoch != last_slots_in_epoch and slots_in_epoch != slots_per_epoch) {
+                    try std.testing.expectEqual(slots_in_epoch, last_slots_in_epoch * 2);
+                }
+                last_slots_in_epoch = slots_in_epoch;
+            }
+
+            try std.testing.expect(offset < last_slots_in_epoch);
+        }
+
+        try std.testing.expect(last_leader_schedule != 0);
+        try std.testing.expect(last_epoch != 0);
+        try std.testing.expectEqual(slots_per_epoch, last_slots_in_epoch);
+    }
+}

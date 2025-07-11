@@ -19,7 +19,7 @@ const Vote = sig.runtime.program.vote.state.Vote;
 const VoteState = sig.runtime.program.vote.state.VoteState;
 const VoteStateVersions = sig.runtime.program.vote.state.VoteStateVersions;
 const VotedSlotAndPubkey = sig.consensus.replay_tower.VotedSlotAndPubkey;
-const StakeAndVoteAccountsMap = sig.core.stake.StakeAndVoteAccountsMap;
+const StakeAndVoteAccountsMap = sig.core.vote_accounts.StakeAndVoteAccountsMap;
 const Logger = sig.trace.Logger;
 const ScopedLogger = sig.trace.ScopedLogger;
 
@@ -94,7 +94,7 @@ pub const Tower = struct {
         fork_root: Slot,
         accounts_db: *AccountsDB,
     ) !void {
-        const vote_account = accounts_db.getAccount(vote_account_pubkey) catch {
+        const vote_account = accounts_db.getAccountDeprecated(vote_account_pubkey) catch {
             self.initializeRoot(fork_root);
             return;
         };
@@ -430,7 +430,7 @@ pub fn lastVotedSlotInBank(
     accounts_db: *AccountsDB,
     vote_account_pubkey: *const Pubkey,
 ) ?Slot {
-    const vote_account = accounts_db.getAccount(vote_account_pubkey) catch return null;
+    const vote_account = accounts_db.getAccountDeprecated(vote_account_pubkey) catch return null;
     const vote_state = stateFromAccount(
         allocator,
         &vote_account,

@@ -11,10 +11,10 @@ const ReplayTower = sig.consensus.replay_tower.ReplayTower;
 const ProgressMap = sig.consensus.progress_map.ProgressMap;
 const ForkChoice = sig.consensus.fork_choice.ForkChoice;
 const LatestValidatorVotesForFrozenBanks =
-    sig.consensus.unimplemented.LatestValidatorVotesForFrozenBanks;
+    sig.consensus.replay_tower.LatestValidatorVotesForFrozenBanks;
 
 const EpochStakeMap = sig.core.stake.EpochStakeMap;
-const BlockhashQueue = sig.core.bank.BlockhashQueue;
+const BlockhashQueue = sig.core.BlockhashQueue;
 
 const SlotTracker = sig.replay.trackers.SlotTracker;
 const EpochTracker = sig.replay.trackers.EpochTracker;
@@ -932,6 +932,8 @@ test "checkAndHandleNewRoot - missing slot" {
         .max_tick_height = 0,
         .fee_rate_governor = .initRandom(random),
         .epoch_reward_status = .inactive,
+        .ancestors = .{},
+        .feature_set = .empty,
     }, .{
         .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
         .hash = RwMux(?Hash).init(null),
@@ -943,6 +945,7 @@ test "checkAndHandleNewRoot - missing slot" {
         .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
+        .stakes_cache = .default(),
     });
 
     const logger = .noop;
@@ -1006,6 +1009,8 @@ test "checkAndHandleNewRoot - missing hash" {
         .max_tick_height = 0,
         .fee_rate_governor = .initRandom(random),
         .epoch_reward_status = .inactive,
+        .ancestors = .{},
+        .feature_set = .empty,
     }, .{
         .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
         .hash = RwMux(?Hash).init(null),
@@ -1017,6 +1022,7 @@ test "checkAndHandleNewRoot - missing hash" {
         .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
+        .stakes_cache = .default(),
     });
 
     const logger = .noop;
@@ -1137,6 +1143,8 @@ test "checkAndHandleNewRoot - success" {
         .max_tick_height = 0,
         .fee_rate_governor = .initRandom(random),
         .epoch_reward_status = .inactive,
+        .ancestors = .{},
+        .feature_set = .empty,
     }, .{
         .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
         .hash = RwMux(?Hash).init(hash2.hash),
@@ -1148,6 +1156,7 @@ test "checkAndHandleNewRoot - success" {
         .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
+        .stakes_cache = .default(),
     });
 
     try slot_tracker.put(testing.allocator, hash3.slot, .{
@@ -1158,6 +1167,8 @@ test "checkAndHandleNewRoot - success" {
         .max_tick_height = 0,
         .fee_rate_governor = .initRandom(random),
         .epoch_reward_status = .inactive,
+        .ancestors = .{},
+        .feature_set = .empty,
     }, .{
         .blockhash_queue = RwMux(BlockhashQueue).init(BlockhashQueue.init(10)),
         .hash = RwMux(?Hash).init(hash3.hash),
@@ -1169,6 +1180,7 @@ test "checkAndHandleNewRoot - success" {
         .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
+        .stakes_cache = .default(),
     });
 
     // Add some entries to progress map that should be removed

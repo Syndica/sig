@@ -18,7 +18,7 @@ const Rent = sig.core.genesis_config.Rent;
 const Slot = sig.core.time.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
-const VersionedEpochStake = sig.core.stake.VersionedEpochStake;
+const VersionedEpochStakes = sig.core.VersionedEpochStakes;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
 const FileId = sig.accounts_db.accounts_file.FileId;
@@ -128,7 +128,7 @@ pub const ExtraFields = struct {
     lamports_per_signature: u64,
     snapshot_persistence: ?BankIncrementalSnapshotPersistence,
     epoch_accounts_hash: ?Hash,
-    versioned_epoch_stakes: VersionedEpochStakesMap,
+    versioned_epoch_stakes: std.AutoArrayHashMapUnmanaged(Epoch, VersionedEpochStakes),
     accounts_lt_hash: ?AccountsLtHash,
 
     pub const @"!bincode-config": bincode.FieldConfig(ExtraFields) = .{
@@ -136,8 +136,6 @@ pub const ExtraFields = struct {
         .serializer = null, // just use default serialization method
         .free = bincodeFree,
     };
-
-    pub const VersionedEpochStakesMap = std.AutoArrayHashMapUnmanaged(u64, VersionedEpochStake);
 
     /// TODO: https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=85238686
     pub const ACCOUNTS_LATTICE_HASH_LEN = 1024;
@@ -203,7 +201,7 @@ pub const ExtraFields = struct {
                     const entry_count = random.uintAtMost(usize, max_list_entries);
                     try field_ptr.ensureTotalCapacity(allocator, entry_count);
                     for (0..entry_count) |_| {
-                        const ves = try VersionedEpochStake.initRandom(
+                        const ves = try VersionedEpochStakes.initRandom(
                             allocator,
                             random,
                             max_list_entries,
@@ -582,6 +580,46 @@ pub const Manifest = struct {
         reader: anytype,
     ) !Manifest {
         return try bincode.read(allocator, Manifest, reader, .{});
+    }
+
+    pub fn getStakedNodes(
+        self: *const Manifest,
+        allocator: std.mem.Allocator,
+        epoch: Epoch,
+    ) !*const std.AutoArrayHashMapUnmanaged(Pubkey, u64) {
+        // TODO verify that this fallback approach is correct. maybe it should be:
+        // - forget epoch_stakes because it's no longer used?
+        // - combine stakes from both?
+        return if (self.bank_fields.epoch_stakes.getPtr(epoch)) |es| blk: {
+            if (true) unreachable; // TODO for debugging, remove me
+            break :blk try es.stakes.vote_accounts.stakedNodes(allocator);
+        } else if (self.bank_extra.versioned_epoch_stakes.getPtr(epoch)) |es|
+            try es.current.stakes.vote_accounts.stakedNodes(allocator)
+        else
+            return error.NoEpochStakes;
+    }
+
+    /// Returns the leader schedule for an arbitrary epoch.
+    /// Only works if the bank is aware of the staked nodes for that epoch.
+    pub fn leaderSchedule(
+        self: *const Manifest,
+        allocator: std.mem.Allocator,
+        /// Default is the bank's epoch.
+        custom_epoch: ?Epoch,
+    ) !sig.core.leader_schedule.LeaderSchedule {
+        const epoch = custom_epoch orelse self.bank_fields.epoch;
+        const slots_in_epoch =
+            self.bank_fields.epoch_schedule.getSlotsInEpoch(self.bank_fields.epoch);
+        const staked_nodes = try self.getStakedNodes(allocator, epoch);
+        return .{
+            .allocator = allocator,
+            .slot_leaders = try sig.core.leader_schedule.LeaderSchedule.fromStakedNodes(
+                allocator,
+                epoch,
+                slots_in_epoch,
+                staked_nodes,
+            ),
+        };
     }
 };
 

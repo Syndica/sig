@@ -402,6 +402,7 @@ const Cmd = struct {
         force_unpack_snapshot: bool,
         number_of_index_shards: u64,
         accounts_per_file_estimate: u64,
+        skip_snapshot_validation: bool,
 
         const cmd_info: cli.ArgumentInfoGroup(@This()) = .{
             .use_disk_index = .{
@@ -455,6 +456,14 @@ const Cmd = struct {
                 .help = "number of accounts to estimate inside of account files" ++
                     " (used for pre-allocation)",
             },
+            .skip_snapshot_validation = .{
+                .kind = .named,
+                .name_override = null,
+                .alias = .none,
+                .default_value = false,
+                .config = {},
+                .help = "skip the validation of the snapshot",
+            },
         };
 
         fn apply(args: @This(), cfg: *config.Cmd) void {
@@ -464,6 +473,7 @@ const Cmd = struct {
             cfg.accounts_db.force_unpack_snapshot = args.force_unpack_snapshot;
             cfg.accounts_db.number_of_index_shards = args.number_of_index_shards;
             cfg.accounts_db.accounts_per_file_estimate = args.accounts_per_file_estimate;
+            cfg.accounts_db.skip_snapshot_validation = args.skip_snapshot_validation;
         }
     };
     const AccountsDbArgumentsDownload = struct {
@@ -1041,7 +1051,7 @@ fn validator(
     var loaded_snapshot = try loadSnapshot(allocator, cfg, app_base.logger.unscoped(), .{
         .gossip_service = gossip_service,
         .geyser_writer = geyser_writer,
-        .validate_snapshot = true,
+        .validate_snapshot = !cfg.accounts_db.skip_snapshot_validation,
     });
     defer loaded_snapshot.deinit();
 
@@ -1053,7 +1063,7 @@ fn validator(
     if (try getLeaderScheduleFromCli(allocator, cfg)) |leader_schedule| {
         try leader_schedule_cache.put(bank_fields.epoch, leader_schedule[1]);
     } else {
-        const schedule = try bank_fields.leaderSchedule(allocator);
+        const schedule = try collapsed_manifest.leaderSchedule(allocator, null);
         errdefer schedule.deinit();
         try leader_schedule_cache.put(bank_fields.epoch, schedule);
     }
@@ -1110,7 +1120,6 @@ fn validator(
         cfg.max_shreds,
         app_base.exit,
     });
-    defer cleanup_service_handle.join();
 
     // Random number generator
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
@@ -1121,22 +1130,28 @@ fn validator(
 
     const epoch_schedule = bank_fields.epoch_schedule;
     const epoch = bank_fields.epoch;
-    const staked_nodes =
-        try bank_fields.getStakedNodes(allocator, epoch);
 
-    var epoch_context_manager = try sig.adapter.EpochContextManager.init(
-        allocator,
-        epoch_schedule,
-    );
-    try epoch_context_manager.put(epoch, .{
-        .staked_nodes = try staked_nodes.clone(allocator),
-        .leader_schedule = try LeaderSchedule.fromStakedNodes(
+    const staked_nodes = try collapsed_manifest.getStakedNodes(allocator, epoch);
+    var epoch_context_manager = try sig.adapter.EpochContextManager.init(allocator, epoch_schedule);
+    defer epoch_context_manager.deinit();
+    try epoch_context_manager.contexts.realign(epoch);
+    {
+        var staked_nodes_cloned = try staked_nodes.clone(allocator);
+        errdefer staked_nodes_cloned.deinit(allocator);
+
+        const leader_schedule = try LeaderSchedule.fromStakedNodes(
             allocator,
             epoch,
             epoch_schedule.slots_per_epoch,
             staked_nodes,
-        ),
-    });
+        );
+        errdefer allocator.free(leader_schedule);
+
+        try epoch_context_manager.put(epoch, .{
+            .staked_nodes = staked_nodes_cloned,
+            .leader_schedule = leader_schedule,
+        });
+    }
 
     const rpc_cluster_type = loaded_snapshot.genesis_config.cluster_type;
     var rpc_client = try sig.rpc.Client.init(allocator, rpc_cluster_type, .{});
@@ -1178,6 +1193,11 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
+    const epoch_stakes = epoch_stakes_map.get(epoch) orelse
+        return error.EpochStakesMissingFromSnapshot;
+
+    // TODO: errdefers
     const replay_thread = try app_base.spawnService(
         "replay",
         sig.replay.service.run,
@@ -1192,8 +1212,14 @@ fn validator(
             .epoch_schedule = bank_fields.epoch_schedule,
             .slot_leaders = epoch_context_manager.slotLeaders(),
             .root_slot = bank_fields.slot,
-            .root_slot_constants = .fromBankFields(bank_fields),
+            .root_slot_constants = try .fromBankFields(allocator, bank_fields, .empty),
             .root_slot_state = try .fromBankFields(allocator, bank_fields),
+            .current_epoch = epoch,
+            .current_epoch_constants = try .fromBankFields(
+                bank_fields,
+                try epoch_stakes.current.convert(allocator, .delegation),
+            ),
+            .hard_forks = try bank_fields.hard_forks.clone(allocator),
         }},
     );
 
@@ -1201,6 +1227,7 @@ fn validator(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
+    cleanup_service_handle.join();
 }
 
 fn shredNetwork(
@@ -1293,7 +1320,6 @@ fn shredNetwork(
         cfg.max_shreds,
         app_base.exit,
     });
-    defer cleanup_service_handle.join();
 
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
 
@@ -1321,6 +1347,7 @@ fn shredNetwork(
     rpc_epoch_ctx_service_thread.join();
     gossip_service.service_manager.join();
     shred_network_manager.join();
+    cleanup_service_handle.join();
 }
 
 fn printManifest(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
@@ -1466,7 +1493,7 @@ fn printLeaderSchedule(allocator: std.mem.Allocator, cfg: config.Cmd) !void {
         _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
         break :b .{
             bank_fields.slot - slot_index,
-            try bank_fields.leaderSchedule(allocator),
+            try loaded_snapshot.collapsed_manifest.leaderSchedule(allocator, null),
         };
     };
 

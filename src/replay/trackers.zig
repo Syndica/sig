@@ -181,6 +181,8 @@ test "SlotTracker.prune removes all slots less than root" {
                 .max_tick_height = 0,
                 .fee_rate_governor = sig.core.genesis_config.FeeRateGovernor.DEFAULT,
                 .epoch_reward_status = .inactive,
+                .ancestors = .{},
+                .feature_set = .empty,
             },
             sig.core.SlotState.GENESIS,
         );
