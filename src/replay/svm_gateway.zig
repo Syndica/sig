@@ -126,10 +126,18 @@ pub const SvmSlot = struct {
             programs.deinit(allocator);
         }
 
+        var sysvar_cache = SysvarCache{};
+        try replay.update_sysvar.fillMissingSysvarCacheEntries(
+            allocator,
+            params.accounts_db,
+            params.ancestors,
+            &sysvar_cache,
+        );
+
         return .{
             .params = params,
             .state = .{
-                .sysvar_cache = .{}, // TODO: populate
+                .sysvar_cache = sysvar_cache,
                 .vm_environment = vm_environment,
                 .next_vm_environment = null, // TODO epoch boundary
                 .accounts = accounts,
