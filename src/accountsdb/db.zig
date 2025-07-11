@@ -4625,3 +4625,131 @@ test "insert account on multiple slots" {
         }
     }
 }
+
+test "missing ancestor returns null" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
+    defer accounts_db.deinit();
+
+    const slot: Slot = 15;
+    const pubkey = Pubkey.initRandom(random);
+
+    const account = try createRandomAccount(allocator, random);
+    defer allocator.free(account.data);
+    try accounts_db.putAccount(slot, pubkey, account);
+
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(allocator);
+
+    try std.testing.expectEqual(null, try accounts_db.getAccountWithAncestors(&pubkey, &ancestors));
+}
+
+test "overwrite account in same slot" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
+    defer accounts_db.deinit();
+
+    const slot: Slot = 15;
+    const pubkey = Pubkey.initRandom(random);
+
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, slot, {});
+
+    const first = try createRandomAccount(allocator, random);
+    defer allocator.free(first.data);
+    try accounts_db.putAccount(slot, pubkey, first);
+
+    const second = try createRandomAccount(allocator, random);
+    defer allocator.free(second.data);
+    try accounts_db.putAccount(slot, pubkey, second);
+
+    const maybe_actual = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors);
+    defer if (maybe_actual) |actual| actual.deinit(allocator);
+
+    if (maybe_actual) |actual|
+        try expectedAccountSharedDataEqualsAccount(allocator, second, actual, false)
+    else
+        return error.AccountNotFound;
+}
+
+test "insert many duplicate individual accounts, get latest with ancestors" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(5083);
+    const random = prng.random();
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var accounts_db = try loadTestAccountsDbEmpty(allocator, false, .noop, tmp_dir.dir);
+    defer accounts_db.deinit();
+
+    const pubkey_count = 50;
+    const max_versions_per_key = 50;
+
+    var pubkeys: [pubkey_count]Pubkey = undefined;
+    for (&pubkeys) |*p| p.* = Pubkey.initRandom(random);
+
+    var allocated_accounts = ArrayList(sig.runtime.AccountSharedData).init(allocator);
+    defer {
+        for (allocated_accounts.items) |account| allocator.free(account.data);
+        allocated_accounts.deinit();
+    }
+
+    var expected_latest: [pubkey_count]?struct {
+        slot: Slot,
+        account: sig.runtime.AccountSharedData,
+    } = .{null} ** pubkey_count;
+
+    for (0..pubkey_count) |i| {
+        const pubkey = pubkeys[i];
+
+        const num_versions = 1 + random.uintLessThan(u32, max_versions_per_key);
+
+        for (0..num_versions) |_| {
+            // we cannot go backwards in slots
+            const max_slot_so_far = if (expected_latest[i]) |expected| expected.slot else 0;
+            const slot = @min(random.uintLessThan(u64, 20), max_slot_so_far);
+
+            const account = try createRandomAccount(allocator, random);
+            try allocated_accounts.append(account);
+
+            try accounts_db.putAccount(slot, pubkey, account);
+
+            std.debug.assert(slot >= max_slot_so_far);
+
+            expected_latest[i] = .{ .slot = slot, .account = account };
+        }
+    }
+
+    for (pubkeys, expected_latest) |pubkey, maybe_expected| {
+        const expected = maybe_expected orelse return error.ExpectedMissing;
+
+        var ancestors = Ancestors{};
+        defer ancestors.deinit(allocator);
+        try ancestors.ancestors.put(allocator, expected.slot, {});
+
+        const maybe_actual = try accounts_db.getAccountWithAncestors(&pubkey, &ancestors);
+        defer if (maybe_actual) |actual| actual.deinit(allocator);
+
+        if (maybe_actual) |actual| {
+            try expectedAccountSharedDataEqualsAccount(
+                allocator,
+                expected.account,
+                actual,
+                false,
+            );
+        } else {
+            return error.AccountNotFound;
+        }
+    }
+}
