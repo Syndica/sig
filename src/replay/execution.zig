@@ -108,7 +108,13 @@ pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
         }
         const slot_info = state.slot_tracker.get(slot) orelse unreachable;
         if (slot_info.state.tickHeight() == slot_info.constants.max_tick_height) {
-            try freezeSlot(state.accounts_db, slot, slot_info.state);
+            try freezeSlot(
+                state.allocator,
+                state.accounts_db,
+                slot,
+                &slot_info.constants.parent_hash,
+                slot_info.state,
+            );
         }
     }
 
@@ -283,10 +289,14 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
 
 /// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
 fn freezeSlot(
+    allocator: Allocator,
     accounts_db: *AccountsDB,
     slot: Slot,
+    parent_slot_hash: *const sig.core.Hash,
     state: *sig.core.SlotState,
 ) !void {
+    // TODO: reconsider locking the hash for the entire function. it actually
+    // makes sense in a way, but give it some more thought.
     var slot_hash = state.hash.write();
     defer slot_hash.unlock();
 
@@ -294,12 +304,23 @@ fn freezeSlot(
 
     // TODO: update sysvars and collect rent
 
-    std.debug.print("hashing slot: {}\n", .{slot});
-    const hash, _ = try accounts_db.computeAccountHashesAndLamports(
-        .{ .FullAccountHash = .{ .max_slot = slot } },
-    );
-    slot_hash.mut().* = hash;
-    std.debug.print("slot hashed: {} - {}\n", .{ slot, hash });
+    const accounts_delta_hash = try accounts_db.deltaHash(allocator, slot);
 
-    // TODO: lthash
+    const last_blockhash = blk: {
+        var q = state.blockhash_queue.read();
+        defer q.unlock();
+        break :blk q.get().last_hash orelse return error.MissingLastBlockhash;
+    };
+
+    var signature_count: [8]u8 = undefined;
+    std.mem.writeInt(u64, &signature_count, state.signature_count.load(.monotonic), .little);
+
+    slot_hash.mut().* = sig.core.Hash.generateSha256(.{
+        &parent_slot_hash.data,
+        &accounts_delta_hash.data,
+        &signature_count,
+        &last_blockhash.data,
+    });
+
+    // NOTE: agave updates hard_forks and hash_overrides here
 }

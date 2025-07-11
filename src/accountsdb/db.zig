@@ -1170,33 +1170,50 @@ pub const AccountsDB = struct {
     }
 
     pub fn deltaHash(
-        self: *const AccountsDB,
+        self: *AccountsDB,
         allocator: Allocator,
         slot: Slot,
-    ) void {
-        const hashes = try self.slotAccountHashes(allocator, slot);
-        _ = hashes; // autofix
-        // TODO
+    ) !Hash {
+        const pubkey_hashes = try self.slotAccountHashes(allocator, slot);
+
+        std.mem.sort(struct { Pubkey, Hash }, pubkey_hashes, {}, struct {
+            fn lt(_: void, lhs: struct { Pubkey, Hash }, rhs: struct { Pubkey, Hash }) bool {
+                return std.mem.order(u8, &lhs[0].data, &rhs[0].data) == .lt;
+            }
+        }.lt);
+
+        // TODO put more thought into the nesting - should there be multiple?
+        // is NestedHashTree the right data structure?
+        const hashes = try self.allocator.alloc(Hash, pubkey_hashes.len);
+        defer self.allocator.free(hashes);
+        for (hashes, 0..) |*h, i| {
+            h.* = pubkey_hashes[i][1];
+        }
+        const hash_tree = NestedHashTree{ .items = &.{hashes} };
+
+        const hash = try sig.utils.merkle_tree.computeMerkleRoot(&hash_tree, MERKLE_FANOUT);
+
+        return hash.*;
     }
 
     /// Returns the hash of every account that was modified in the slot.
     ///
     /// Analogous to [get_pubkey_hash_for_slot](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/accounts-db/src/accounts_db.rs#L6871)
     fn slotAccountHashes(
-        self: *const AccountsDB,
+        self: *AccountsDB,
         allocator: Allocator,
         slot: Slot,
-    ) ![]const struct { Pubkey, Hash } {
-        const slot_ref_map = self.account_index.slot_reference_map.read();
+    ) ![]struct { Pubkey, Hash } {
+        var slot_ref_map = self.account_index.slot_reference_map.read();
         defer slot_ref_map.unlock();
 
         const slot_references = slot_ref_map.get().get(slot) orelse return &.{};
 
-        const pubkey_hashes = try allocator.alloc(struct { Pubkey, Hash }, slot_references.len);
+        const pubkey_hashes = try allocator.alloc(struct { Pubkey, Hash }, slot_references.items.len);
 
-        for (slot_references, pubkey_hashes) |account_ref, pubkey_hash| {
-            const account = try self.getAccountFromRef(account_ref);
-            pubkey_hash.* = .{ account_ref.pubkey, account.hash(account_ref.pubkey) };
+        for (slot_references.items, pubkey_hashes) |account_ref, *pubkey_hash| {
+            const account = try self.getAccountFromRef(&account_ref);
+            pubkey_hash.* = .{ account_ref.pubkey, account.hash(&account_ref.pubkey) };
         }
 
         return pubkey_hashes;
