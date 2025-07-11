@@ -582,6 +582,7 @@ fn translateAccounts(
     comptime AccountInfoType: type,
     account_infos_addr: u64,
     account_infos_len: u64,
+    program_index_in_transaction: u16,
     account_metas: []const InstructionInfo.AccountMeta,
 ) !TranslatedAccounts {
     // translate_account_infos():
@@ -645,7 +646,7 @@ fn translateAccounts(
 
     var accounts: TranslatedAccounts = .{};
     try accounts.append(.{
-        .index_in_caller = ic.ixn_info.program_meta.index_in_transaction,
+        .index_in_caller = program_index_in_transaction,
         .caller_account = null,
     });
 
@@ -656,9 +657,8 @@ fn translateAccounts(
         defer callee_account.release();
 
         const account_key = blk: {
-            const account_meta = ic.ixn_info.getAccountMetaAtIndex(
-                meta.index_in_transaction,
-            ) orelse return InstructionError.NotEnoughAccountKeys;
+            const account_meta = ic.tc.getAccountAtIndex(meta.index_in_transaction) orelse
+                return InstructionError.NotEnoughAccountKeys;
             break :blk account_meta.pubkey;
         };
 
@@ -684,7 +684,7 @@ fn translateAccounts(
             return InstructionError.MissingAccount;
         };
 
-        const serialized_account_metas = ic.tc.serialized_accounts.slice();
+        const serialized_account_metas = ic.tc.serialized_accounts.constSlice();
         const serialized_metadata = if (meta.index_in_caller < serialized_account_metas.len) blk: {
             break :blk &serialized_account_metas[meta.index_in_caller];
         } else {
@@ -1280,7 +1280,8 @@ fn cpiCommon(
         AccountInfoType,
         account_infos_addr,
         account_infos_len,
-        info.account_metas.slice(),
+        info.program_meta.index_in_transaction,
+        info.account_metas.constSlice(),
     );
 
     // Process the callee instruction.
@@ -1363,7 +1364,7 @@ fn invokeSigned(
     const signers_seeds_addr = registers.get(.r4);
     const signers_seeds_len = registers.get(.r5);
 
-    const caller_ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
+    const caller_ic = try tc.getCurrentInstructionContext();
 
     return cpiCommon(
         tc.allocator,
@@ -1743,6 +1744,7 @@ test "translateAccounts" {
         AccountInfoRust,
         vm_addr, // account_infos_addr
         1, // account_infos_len
+        ctx.ic.ixn_info.program_meta.index_in_transaction, // program_meta_index
         &.{
             .{
                 .pubkey = account.key,
