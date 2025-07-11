@@ -39,7 +39,7 @@ pub const Clock = extern struct {
         .unix_timestamp = 0,
     };
 
-    pub const SIZE_OF: u64 = @sizeOf(Clock);
+    pub const SIZE_OF: u64 = 40;
 
     pub fn initRandom(random: std.Random) Clock {
         // TODO: Uncomment once not required by bank init random

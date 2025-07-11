@@ -20,7 +20,7 @@ pub const RecentBlockhashes = struct {
         .deserializer = deserialize,
     };
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         blockhash: Hash,
         lamports_per_signature: u64,
     };
@@ -171,6 +171,8 @@ test "serialize and deserialize" {
 
         const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
         defer allocator.free(serialized);
+
+        std.debug.print("serialized: {any}\n", .{serialized[0..16]});
 
         const deserialized =
             try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});

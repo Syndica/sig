@@ -17,7 +17,7 @@ pub const StakeHistory = struct {
         .deserializer = deserialize,
     };
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         epoch: Epoch,
         stake: ClusterStake,
 
@@ -42,7 +42,7 @@ pub const StakeHistory = struct {
         }
     };
 
-    pub const ClusterStake = struct {
+    pub const ClusterStake = extern struct {
         /// Effective stake at this epoch
         effective: u64,
         /// Sum of portion of stakes not fully warmed up
