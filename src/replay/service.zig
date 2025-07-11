@@ -14,6 +14,8 @@ const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
 const LedgerResultWriter = sig.ledger.result_writer.LedgerResultWriter;
+const AncestorHashesReplayUpdate = sig.replay.consensus.AncestorHashesReplayUpdate;
+
 const ReplayExecutionState = replay.execution.ReplayExecutionState;
 const SlotTracker = replay.trackers.SlotTracker;
 const EpochTracker = replay.trackers.EpochTracker;
@@ -52,6 +54,15 @@ pub const ReplayDependencies = struct {
 };
 
 pub const Logger = sig.trace.ScopedLogger("replay");
+
+pub const SlotData = struct {
+    duplicate_confirmed_slots: replay.edge_cases.DuplicateConfirmedSlots,
+    epoch_slots_frozen_slots: replay.edge_cases.EpochSlotsFrozenSlots,
+    duplicate_slots_to_repair: replay.edge_cases.DuplicateSlotsToRepair,
+    purge_repair_slot_counter: replay.edge_cases.PurgeRepairSlotCounters,
+    unfrozen_gossip_verified_vote_hashes: replay.edge_cases.UnfrozenGossipVerifiedVoteHashes,
+    duplicate_slots: replay.edge_cases.DuplicateSlots,
+};
 
 const ReplayState = struct {
     allocator: Allocator,
