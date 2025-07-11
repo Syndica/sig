@@ -2,8 +2,6 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const replay = @import("lib.zig");
 
-const Allocator = std.mem.Allocator;
-
 const ThreadPool = sig.sync.ThreadPool;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
@@ -33,7 +31,7 @@ pub const DUPLICATE_THRESHOLD: f64 = 1.0 - SWITCH_FORK_THRESHOLD - DUPLICATE_LIV
 
 pub const ReplayDependencies = struct {
     /// Used for all allocations within the replay stage
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     logger: sig.trace.Logger,
     my_identity: sig.core.Pubkey,
     /// Tell replay when to exit
@@ -65,7 +63,7 @@ pub const SlotData = struct {
 };
 
 const ReplayState = struct {
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     logger: Logger,
     thread_pool: *ThreadPool,
     slot_leaders: SlotLeaders,
@@ -74,7 +72,7 @@ const ReplayState = struct {
     blockstore_db: BlockstoreDB,
     execution: ReplayExecutionState,
 
-    fn init(deps: ReplayDependencies) Allocator.Error!ReplayState {
+    fn init(deps: ReplayDependencies) std.mem.Allocator.Error!ReplayState {
         const thread_pool = try deps.allocator.create(ThreadPool);
         errdefer deps.allocator.destroy(thread_pool);
         thread_pool.* = ThreadPool.init(.{ .max_threads = NUM_THREADS });
@@ -163,7 +161,7 @@ fn advanceReplay(state: *ReplayState) !void {
 /// Analogous to
 /// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
 fn trackNewSlots(
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     blockstore_db: *sig.ledger.BlockstoreDB,
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
@@ -175,8 +173,8 @@ fn trackNewSlots(
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
 
-    var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
-        .initCapacity(allocator, frozen_slots.count());
+    var frozen_slots_since_root: std.ArrayListUnmanaged(Slot) =
+        try .initCapacity(allocator, frozen_slots.count());
     defer frozen_slots_since_root.deinit(allocator);
     for (frozen_slots.keys()) |slot| if (slot >= root) {
         frozen_slots_since_root.appendAssumeCapacity(slot);
