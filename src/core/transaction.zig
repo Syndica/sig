@@ -223,7 +223,10 @@ pub const Transaction = struct {
             return error.NotEnoughAccounts;
         }
         for (self.signatures, self.msg.account_keys[0..self.signatures.len]) |signature, pubkey| {
-            if (!try signature.verify(pubkey, serialized_message.slice())) {
+            const verified = signature.verify(pubkey, serialized_message.slice()) catch {
+                return error.SignatureVerificationFailed;
+            };
+            if (!verified) {
                 return error.SignatureVerificationFailed;
             }
         }
