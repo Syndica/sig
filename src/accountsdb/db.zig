@@ -312,6 +312,30 @@ pub const AccountsDB = struct {
         return .{ .accounts_db = self };
     }
 
+    pub fn getAllPubkeysSorted(self: *AccountsDB, allocator: std.mem.Allocator) ![]const Pubkey {
+        var pubkeys = std.ArrayListUnmanaged(Pubkey){};
+        errdefer pubkeys.deinit(allocator);
+
+        for (self.account_index.pubkey_ref_map.shards) |*shard| {
+            const shard_map, var shard_lg = shard.readWithLock();
+            defer shard_lg.unlock();
+            var shard_map_iter = shard_map.iterator();
+            while (shard_map_iter.next()) |entry| {
+                // NOTE: we use the pubkey from the entry key, not the value
+                // because the value is a reference head, which is not a pubkey.
+                try pubkeys.append(allocator, entry.key_ptr.*);
+            }
+        }
+
+        std.sort.heap(Pubkey, pubkeys.items, {}, struct {
+            pub fn sortCmp(_: void, lhs: Pubkey, rhs: Pubkey) bool {
+                return std.mem.order(u8, &lhs.data, &rhs.data) != .gt;
+            }
+        }.sortCmp);
+
+        return pubkeys.toOwnedSlice(allocator);
+    }
+
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *AccountsDB,
@@ -1744,6 +1768,21 @@ pub const AccountsDB = struct {
         return account;
     }
 
+    pub fn getSlotAndAccount(
+        self: *AccountsDB,
+        pubkey: *const Pubkey,
+    ) GetAccountError!struct { Slot, Account } {
+        const head_ref, var lock = self.account_index.pubkey_ref_map.getRead(pubkey) orelse
+            return error.PubkeyNotInIndex;
+        defer lock.unlock();
+
+        // NOTE: this will always be a safe unwrap since both bounds are null
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        const account = try self.getAccountFromRef(max_ref);
+
+        return .{ max_ref.slot, account };
+    }
+
     /// gets an account given an associated pubkey. mut ref is required for locks.
     /// Will only find rooted accounts, or unrooted accounts from a slot in ancestors.
     pub fn getAccountWithAncestors(
@@ -2121,6 +2160,7 @@ pub const AccountsDB = struct {
             }
 
             // insert + check if inserted
+            var accounts_dead_count: u64 = 0;
             for (0.., reference_buf[0..new_len]) |i, *ref| {
                 if (i < old_refs.len) continue;
 
@@ -2129,6 +2169,7 @@ pub const AccountsDB = struct {
                     global_ref_index + i,
                 );
                 if (!was_inserted) {
+                    accounts_dead_count += 1;
                     self.logger.warn().logf(
                         "account was not referenced because its slot was a duplicate: {any}",
                         .{.{ .slot = ref.slot, .pubkey = ref.pubkey }},
@@ -2147,6 +2188,16 @@ pub const AccountsDB = struct {
                 }
 
                 std.debug.assert(self.account_index.exists(&pubkeys[i - old_refs.len], slot));
+            }
+
+            if (accounts_dead_count != 0) {
+                const dead_accounts, var dead_accounts_lg =
+                    self.dead_accounts_counter.writeWithLock();
+                defer dead_accounts_lg.unlock();
+
+                const entry = try dead_accounts.getOrPut(slot);
+                if (!entry.found_existing) entry.value_ptr.* = 0;
+                entry.value_ptr.* += accounts_dead_count;
             }
 
             // free old ref
