@@ -12,8 +12,7 @@ const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const Pubkey = sig.core.Pubkey;
 const UnixTimestamp = sig.core.UnixTimestamp;
-
-pub const Rent = sig.runtime.sysvar.Rent;
+const Rent = sig.runtime.sysvar.Rent;
 
 pub const String = std.ArrayList(u8);
 
@@ -49,6 +48,10 @@ pub const PohConfig = struct {
     };
 };
 
+pub const DEFAULT_TARGET_LAMPORTS_PER_SIGNATURE: u64 = 10_000;
+pub const DEFAULT_TARGET_SIGNATURES_PER_SLOT: u64 = 20_000;
+pub const DEFAULT_BURN_PERCENT: u8 = 50;
+
 /// Analogous to [FeeRateGovernor](https://github.com/anza-xyz/agave/blob/ec9bd798492c3b15d62942f2d9b5923b99042350/sdk/program/src/fee_calculator.rs#L55)
 pub const FeeRateGovernor = struct {
     /// The current cost of a signature  This amount may increase/decrease over time based on
@@ -74,11 +77,11 @@ pub const FeeRateGovernor = struct {
 
     pub const DEFAULT = FeeRateGovernor{
         .lamports_per_signature = 0,
-        .target_lamports_per_signature = 10_000,
-        .target_signatures_per_slot = 50 * 400,
+        .target_lamports_per_signature = DEFAULT_TARGET_LAMPORTS_PER_SIGNATURE,
+        .target_signatures_per_slot = DEFAULT_TARGET_SIGNATURES_PER_SLOT,
         .min_lamports_per_signature = 0,
         .max_lamports_per_signature = 0,
-        .burn_percent = 50,
+        .burn_percent = DEFAULT_BURN_PERCENT,
     };
 
     pub fn initDerived(
@@ -220,6 +223,9 @@ pub const ClusterType = union(enum(u8)) {
         url: []const u8,
     },
 };
+
+// deprecated default that is no longer used
+pub const UNUSED_DEFAULT: u64 = 1024;
 
 /// Analogous to [GenesisConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L93)
 pub const GenesisConfig = struct {
