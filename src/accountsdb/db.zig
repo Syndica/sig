@@ -4607,10 +4607,16 @@ fn expectedAccountSharedDataEqualsAccount(
     account: Account,
     print_instead_of_expect: bool,
 ) !void {
+    if (!builtin.is_test)
+        @compileError("expectedAccountSharedDataEqualsAccount is only for testing");
+
     if (print_instead_of_expect) {
         std.debug.print("expected: {any}\n", .{expected});
         std.debug.print("actual:   {any}\n\n", .{account});
     } else {
+        // we know where this data came from (not from the disk), so we can take its slice directly
+        std.debug.assert(account.data == .owned_allocation);
+
         try std.testing.expectEqual(expected.lamports, account.lamports);
         try std.testing.expectEqualSlices(u8, expected.data, account.data.owned_allocation);
         try std.testing.expectEqualSlices(u8, &expected.owner.data, &account.owner.data);
