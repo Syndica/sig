@@ -945,6 +945,7 @@ test "checkAndHandleNewRoot - missing slot" {
         .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
+        .stakes_cache = .default(),
     });
 
     const logger = .noop;
@@ -1021,6 +1022,7 @@ test "checkAndHandleNewRoot - missing hash" {
         .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
+        .stakes_cache = .default(),
     });
 
     const logger = .noop;
@@ -1154,6 +1156,7 @@ test "checkAndHandleNewRoot - success" {
         .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
+        .stakes_cache = .default(),
     });
 
     try slot_tracker.put(testing.allocator, hash3.slot, .{
@@ -1177,6 +1180,7 @@ test "checkAndHandleNewRoot - success" {
         .accounts_lt_hash = sig.sync.Mux(LtHash).init(LtHash{
             .data = [_]u16{0} ** LtHash.NUM_ELEMENTS,
         }),
+        .stakes_cache = .default(),
     });
 
     // Add some entries to progress map that should be removed

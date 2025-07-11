@@ -161,6 +161,8 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(LtHash),
 
+    stakes_cache: sig.core.StakesCache,
+
     pub const GENESIS = SlotState{
         .blockhash_queue = .init(.DEFAULT),
         .hash = .init(null),
@@ -170,6 +172,7 @@ pub const SlotState = struct {
         .tick_height = .init(0),
         .collected_rent = .init(0),
         .accounts_lt_hash = .init(.ZEROES),
+        .stakes_cache = .default(),
     };
 
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
@@ -182,8 +185,14 @@ pub const SlotState = struct {
         allocator: Allocator,
         bank_fields: *const BankFields,
     ) Allocator.Error!SlotState {
+        const blockhash_queue = try bank_fields.blockhash_queue.clone(allocator);
+        errdefer blockhash_queue.deinit(allocator);
+
+        const stakes = try bank_fields.stakes.clone(allocator);
+        errdefer stakes.deinit(allocator);
+
         return .{
-            .blockhash_queue = .init(try bank_fields.blockhash_queue.clone(allocator)),
+            .blockhash_queue = .init(blockhash_queue),
             .hash = .init(bank_fields.hash),
             .capitalization = .init(bank_fields.capitalization),
             .transaction_count = .init(bank_fields.transaction_count),
@@ -191,6 +200,7 @@ pub const SlotState = struct {
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
             .accounts_lt_hash = .init(LtHash{ .data = .{0xBAD1} ** LtHash.NUM_ELEMENTS }),
+            .stakes_cache = .{ .stakes = .init(stakes) },
         };
     }
 
@@ -202,6 +212,14 @@ pub const SlotState = struct {
             break :foo try bhq.get().clone(allocator);
         };
         errdefer blockhash_queue.deinit(allocator);
+
+        const stakes = foo: {
+            var cache = parent.stakes_cache.stakes.read();
+            defer cache.unlock();
+            break :foo try cache.get().clone(allocator);
+        };
+        errdefer stakes.deinit(allocator);
+
         return .{
             .blockhash_queue = .init(blockhash_queue),
             .hash = .init(null),
@@ -211,6 +229,7 @@ pub const SlotState = struct {
             .tick_height = .init(parent.tick_height.load(.monotonic)),
             .collected_rent = .init(0),
             .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
+            .stakes_cache = .{ .stakes = .init(stakes) },
         };
     }
 
