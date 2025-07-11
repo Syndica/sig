@@ -640,7 +640,7 @@ pub const AccountFile = struct {
                     error.EOF => break,
                     else => return err,
                 };
-                self.offset = self.offset + account.len;
+                self.offset += account.len;
                 return account;
             }
             return null;
