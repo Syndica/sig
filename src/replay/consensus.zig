@@ -263,6 +263,13 @@ fn maybeRefreshLastVote(
 pub const AncestorHashesReplayUpdate = union(enum) {
     dead: Slot,
     dead_duplicate_confirmed: Slot,
+    /// `Slot` belongs to a fork we have pruned. We have observed that this fork is "popular" aka
+    /// reached 52+% stake through votes in turbine/gossip including votes for descendants. These
+    /// votes are hash agnostic since we have not replayed `Slot` so we can never say for certainty
+    /// that this fork has reached duplicate confirmation, but it is suspected to have. This
+    /// indicates that there is most likely a block with invalid ancestry present and thus we
+    /// collect an ancestor sample to resolve this issue. `Slot` is the deepest slot in this fork
+    /// that is popular, so any duplicate problems will be for `Slot` or one of it's ancestors.
     popular_pruned_fork: Slot,
 };
 
