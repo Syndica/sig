@@ -220,8 +220,8 @@ fn trackNewSlots(
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
 
-    var frozen_slots_since_root = try std.ArrayListUnmanaged(sig.core.Slot)
-        .initCapacity(allocator, frozen_slots.count());
+    var frozen_slots_since_root: std.ArrayListUnmanaged(Slot) =
+        try .initCapacity(allocator, frozen_slots.count());
     defer frozen_slots_since_root.deinit(allocator);
     for (frozen_slots.keys()) |slot| if (slot >= root) {
         frozen_slots_since_root.appendAssumeCapacity(slot);
