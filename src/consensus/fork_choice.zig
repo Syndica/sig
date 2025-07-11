@@ -189,13 +189,17 @@ pub const ForkChoice = struct {
         return self;
     }
 
-    pub fn deinit(self: *ForkChoice) void {
+    pub fn deinit(self: ForkChoice) void {
         var it = self.fork_infos.iterator();
         while (it.next()) |fork_info| {
             fork_info.value_ptr.deinit();
         }
-        self.fork_infos.deinit();
-        self.latest_votes.deinit();
+
+        var fork_infos = self.fork_infos;
+        fork_infos.deinit();
+
+        var latest_votes = self.latest_votes;
+        latest_votes.deinit();
     }
 
     /// [Agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/core/src/consensus/heaviest_subtree_fork_choice.rs#L452
