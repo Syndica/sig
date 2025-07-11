@@ -95,6 +95,13 @@ pub fn EpochStakesGeneric(comptime stakes_type: StakesType) type {
 
         const Self = @This();
 
+        pub const DEFAULT: Self = .{
+            .stakes = .DEFAULT,
+            .total_stake = 0,
+            .node_id_to_vote_accounts = .{},
+            .epoch_authorized_voters = .{},
+        };
+
         pub fn deinit(self: Self, allocator: Allocator) void {
             self.stakes.deinit(allocator);
             deinitMapAndValues(allocator, self.node_id_to_vote_accounts);
