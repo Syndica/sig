@@ -78,7 +78,7 @@ pub fn epochStakeMapRandom(
             if (gop.found_existing) continue;
             break gop.value_ptr;
         };
-        value_ptr.* = try EpochStakesGeneric(stakes_type).initRandom(allocator, random, max_list_entries);
+        value_ptr.* = try .initRandom(allocator, random, max_list_entries);
     }
 
     return map;
