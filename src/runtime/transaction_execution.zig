@@ -905,7 +905,7 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
     const feature_set: FeatureSet = .ALL_ENABLED_AT_GENESIS;
 
-    var status_cache = StatusCache.DEFAULT;
+    var status_cache: StatusCache = .empty;
     defer status_cache.deinit(allocator);
 
     const sysvar_cache: SysvarCache = .{};

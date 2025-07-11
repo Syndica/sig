@@ -28,20 +28,16 @@ pub fn processEdgeCases(
         my_pubkey: sig.core.Pubkey,
         tpu_has_bank: bool,
 
-        bank_forks_rwmux: *sig.sync.RwMux(sig.replay.trackers.SlotTracker),
-        progress: *const sig.consensus.ProgressMap,
-        fork_choice: *sig.consensus.HeaviestSubtreeForkChoice,
+        slot_tracker: *SlotTracker,
+        progress: *const ProgressMap,
+        fork_choice: *HeaviestSubtreeForkChoice,
         ledger: *sig.ledger.LedgerResultWriter,
-
-        ancestor_duplicate_slots_receiver: *sig.sync.Channel(AncestorDuplicateSlotToRepair),
-        duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
-        gossip_verified_vote_hash_receiver: *sig.sync.Channel(GossipVerifiedVoteHash),
-        popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
-        duplicate_slots_receiver: *sig.sync.Channel(sig.core.Slot),
-        ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 
         latest_validator_votes: *LatestValidatorVotes,
         slot_data: *replay.service.SlotData,
+
+        senders: replay.service.Senders,
+        receivers: replay.service.Receivers,
     },
 ) !ProcessEdgeCaseTimings {
     var timer = try sig.time.Timer.start();
@@ -54,12 +50,12 @@ pub fn processEdgeCases(
         allocator,
         logger,
         params.my_pubkey,
-        params.ancestor_duplicate_slots_receiver,
+        params.receivers.ancestor_duplicate_slots,
         &params.slot_data.duplicate_confirmed_slots,
         &params.slot_data.epoch_slots_frozen_slots,
         params.progress,
         params.fork_choice,
-        params.bank_forks_rwmux,
+        params.slot_tracker,
         &params.slot_data.duplicate_slots_to_repair,
     );
     const ancestor_hashes_duplicate_slots_time = timer.lap();
@@ -71,14 +67,14 @@ pub fn processEdgeCases(
     try processDuplicateConfirmedSlots(
         allocator,
         logger,
-        params.duplicate_confirmed_slots_receiver,
+        params.receivers.duplicate_confirmed_slots,
         params.ledger,
         &params.slot_data.duplicate_confirmed_slots,
-        params.bank_forks_rwmux,
+        params.slot_tracker,
         params.progress,
         params.fork_choice,
         &params.slot_data.duplicate_slots_to_repair,
-        params.ancestor_hashes_replay_update_sender,
+        params.senders.ancestor_hashes_replay_update,
         &params.slot_data.purge_repair_slot_counter,
     );
     const duplicate_confirmed_slots_time = timer.lap();
@@ -90,12 +86,12 @@ pub fn processEdgeCases(
     timer.reset();
     try processGossipVerifiedVoteHashes(
         allocator,
-        params.gossip_verified_vote_hash_receiver,
+        params.receivers.gossip_verified_vote_hash,
         &params.slot_data.unfrozen_gossip_verified_vote_hashes,
         params.fork_choice,
         params.latest_validator_votes,
     );
-    while (params.gossip_verified_vote_hash_receiver.tryReceive()) |_| {
+    while (params.receivers.gossip_verified_vote_hash.tryReceive()) |_| {
         // TODO: what's the point of draining this here exactly? Remove this TODO after
         // figuring out the reason and documenting it here.
     }
@@ -107,9 +103,9 @@ pub fn processEdgeCases(
     timer.reset();
     try processPopularPrunedForks(
         logger,
-        params.popular_pruned_forks_receiver,
-        params.bank_forks_rwmux,
-        params.ancestor_hashes_replay_update_sender,
+        params.receivers.popular_pruned_forks,
+        params.slot_tracker,
+        params.senders.ancestor_hashes_replay_update,
     );
     const popular_pruned_forks_time = timer.lap();
 
@@ -119,10 +115,10 @@ pub fn processEdgeCases(
         try processDuplicateSlots(
             allocator,
             logger,
-            params.duplicate_slots_receiver,
+            params.receivers.duplicate_slots,
             &params.slot_data.duplicate_slots,
             &params.slot_data.duplicate_confirmed_slots,
-            params.bank_forks_rwmux,
+            params.slot_tracker,
             params.progress,
             params.fork_choice,
         );
@@ -373,14 +369,10 @@ fn processAncestorHashesDuplicateSlots(
     epoch_slots_frozen_slots: *EpochSlotsFrozenSlots,
     progress: *const ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
-    slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
+    slot_tracker: *SlotTracker,
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
 ) !void {
-    const root = root: {
-        const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
-        defer slot_tracker_lg.unlock();
-        break :root slot_tracker.root;
-    };
+    const root = slot_tracker.root;
 
     while (ancestor_duplicate_slots_receiver.tryReceive()) |ancestor_dupe_slot_to_repair| {
         const request_type = ancestor_dupe_slot_to_repair.request_type;
@@ -396,15 +388,15 @@ fn processAncestorHashesDuplicateSlots(
         );
 
         const slot_status: SlotStatus = status: {
-            if (progress.isDead(epoch_slots_frozen_slot) orelse false) break :status .dead;
-            const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
-            defer slot_tracker_lg.unlock();
-            break :status .fromHash(
-                if (slot_tracker.slots.get(epoch_slots_frozen_slot)) |slot_info|
-                    slot_info.state.hash.readCopy()
-                else
-                    null,
-            );
+            if (progress.isDead(epoch_slots_frozen_slot) orelse false) {
+                break :status .dead;
+            }
+            break :status .fromHash(hash: {
+                const slot_info =
+                    slot_tracker.slots.get(epoch_slots_frozen_slot) orelse
+                    break :hash null;
+                break :hash slot_info.state.hash.readCopy();
+            });
         };
 
         const epoch_slots_frozen_state: EpochSlotsFrozenState = .fromState(
@@ -440,18 +432,14 @@ fn processDuplicateConfirmedSlots(
     duplicate_confirmed_slots_receiver: *sig.sync.Channel(ThresholdConfirmedSlot),
     ledger: *sig.ledger.LedgerResultWriter,
     duplicate_confirmed_slots: *DuplicateConfirmedSlots,
-    slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
+    slot_tracker: *SlotTracker,
     progress: *const ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
     duplicate_slots_to_repair: *DuplicateSlotsToRepair,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
     purge_repair_slot_counter: *PurgeRepairSlotCounters,
 ) !void {
-    const root = root: {
-        const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
-        defer slot_tracker_lg.unlock();
-        break :root slot_tracker.root;
-    };
+    const root = slot_tracker.root;
     while (duplicate_confirmed_slots_receiver.tryReceive()) |new_duplicate_confirmed_slot| {
         const confirmed_slot, const duplicate_confirmed_hash = new_duplicate_confirmed_slot;
         if (confirmed_slot <= root) {
@@ -476,11 +464,8 @@ fn processDuplicateConfirmedSlots(
             .duplicate_confirmed_hash = duplicate_confirmed_hash,
             .slot_status = status: {
                 if (progress.isDead(confirmed_slot) orelse false) break :status .dead;
-                const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
-                defer slot_tracker_lg.unlock();
-                break :status .fromHash(
-                    slot_tracker.get(confirmed_slot).?.state.hash.readCopy(),
-                );
+                const slot_hash = slot_tracker.get(confirmed_slot).?.state.hash.readCopy();
+                break :status .fromHash(slot_hash);
             },
         };
         try check_slot_agrees_with_cluster.duplicateConfirmed(
@@ -503,6 +488,17 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
 
     const HashToVotesMap = std.AutoArrayHashMapUnmanaged(sig.core.Hash, VoteList);
     const VoteList = std.ArrayListUnmanaged(sig.core.Pubkey);
+
+    pub const empty: UnfrozenGossipVerifiedVoteHashes = .{ .votes_per_slot = .empty };
+
+    pub fn deinit(self: UnfrozenGossipVerifiedVoteHashes, allocator: std.mem.Allocator) void {
+        var votes_per_slot = self.votes_per_slot;
+        for (votes_per_slot.values()) |*htvm| {
+            for (htvm.values()) |*vl| vl.deinit(allocator);
+            htvm.deinit(allocator);
+        }
+        votes_per_slot.deinit(allocator);
+    }
 
     /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a newer vote for a frozen slot.
     pub fn addVote(
@@ -595,14 +591,10 @@ fn processGossipVerifiedVoteHashes(
 fn processPopularPrunedForks(
     logger: replay.service.Logger,
     popular_pruned_forks_receiver: *sig.sync.Channel(sig.core.Slot),
-    slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
+    slot_tracker: *SlotTracker,
     ancestor_hashes_replay_update_sender: *sig.sync.Channel(AncestorHashesReplayUpdate),
 ) !void {
-    const root = root: {
-        const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
-        defer slot_tracker_lg.unlock();
-        break :root slot_tracker.root;
-    };
+    const root = slot_tracker.root;
     while (popular_pruned_forks_receiver.tryReceive()) |new_popular_pruned_slot| {
         if (new_popular_pruned_slot <= root) {
             continue;
@@ -639,7 +631,7 @@ fn processDuplicateSlots(
     duplicate_slots_receiver: *sig.sync.Channel(sig.core.Slot),
     duplicate_slots_tracker: *DuplicateSlots,
     duplicate_confirmed_slots: *const DuplicateConfirmedSlots,
-    slot_tracker_rwmux: *sig.sync.RwMux(SlotTracker),
+    slot_tracker: *SlotTracker,
     progress: *const ProgressMap,
     fork_choice: *HeaviestSubtreeForkChoice,
 ) !void {
@@ -652,9 +644,6 @@ fn processDuplicateSlots(
     }
 
     const root_slot, const slots_hashes = blk: {
-        const slot_tracker, var slot_tracker_lg = slot_tracker_rwmux.readWithLock();
-        defer slot_tracker_lg.unlock();
-
         var slots_hashes: std.BoundedArray(?sig.core.Hash, MAX_BATCH_SIZE) = .{};
         for (new_duplicate_slots.constSlice()) |duplicate_slot| {
             slots_hashes.appendAssumeCapacity(hash: {

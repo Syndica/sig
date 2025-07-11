@@ -83,9 +83,9 @@ pub const Tower = struct {
         allocator: std.mem.Allocator,
         vote_account_pubkey: *const Pubkey,
         fork_root: Slot,
-        accounts_db: *AccountsDB,
+        accounts_db: sig.accounts_db.AccountReader,
     ) !void {
-        const vote_account = try accounts_db.getAccountLatest(vote_account_pubkey) orelse {
+        const vote_account = (accounts_db.getLatest(vote_account_pubkey.*) catch null) orelse {
             self.initializeRoot(fork_root);
             return;
         };

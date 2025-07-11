@@ -1068,8 +1068,8 @@ fn validator(
         try leader_schedule_cache.put(bank_fields.epoch, schedule);
     }
 
-    // ledger
-    var ledger_db = try sig.ledger.LedgerDB.open(
+    // blockstore
+    var ledger_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger.unscoped(),
         sig.VALIDATOR_DIR ++ "ledger",
@@ -1090,9 +1090,20 @@ fn validator(
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const ledger_reader = try allocator.create(LedgerReader);
+    const ledger_reader = try allocator.create(BlockstoreReader);
     defer allocator.destroy(ledger_reader);
-    ledger_reader.* = try LedgerReader.init(
+    ledger_reader.* = try BlockstoreReader.init(
+        allocator,
+        app_base.logger.unscoped(),
+        ledger_db,
+        app_base.metrics_registry,
+        lowest_cleanup_slot,
+        max_root,
+    );
+
+    const ledger_writer = try allocator.create(sig.ledger.LedgerResultWriter);
+    defer allocator.destroy(ledger_writer);
+    ledger_writer.* = try .init(
         allocator,
         app_base.logger.unscoped(),
         ledger_db,
@@ -1113,7 +1124,7 @@ fn validator(
     );
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
-        sig.ledger.cleanup_service.Logger.from(app_base.logger),
+        app_base.logger.unscoped(),
         ledger_reader,
         &ledger_db,
         lowest_cleanup_slot,
@@ -1193,6 +1204,12 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    const replay_senders: sig.replay.service.Senders = try .create(allocator);
+    defer replay_senders.destroy();
+
+    const replay_receivers: sig.replay.service.Receivers = try .create(allocator);
+    defer replay_receivers.destroy();
+
     const replay_thread = replay: {
         const epoch_stakes_map = &collapsed_manifest.bank_extra.versioned_epoch_stakes;
         const epoch_stakes = epoch_stakes_map.get(epoch) orelse
@@ -1219,16 +1236,25 @@ fn validator(
             .{sig.replay.service.ReplayDependencies{
                 .allocator = allocator,
                 .logger = app_base.logger.unscoped(),
-                .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
+                .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+                .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key), // TODO: is this fine, or do we need a separate identity for the vote account?
                 .exit = app_base.exit,
-                .ledger_reader = ledger_reader,
-                .ledger_result_writer = ledger_result_writer,
                 .account_store = loaded_snapshot.accounts_db.accountStore(),
+                .ledger = .{
+                    .db = ledger_db,
+                    .reader = ledger_reader,
+                    .writer = ledger_writer,
+                },
                 .epoch_schedule = bank_fields.epoch_schedule,
                 .slot_leaders = epoch_context_manager.slotLeaders(),
-                .root_slot = bank_fields.slot,
-                .root_slot_constants = root_slot_constants,
-                .root_slot_state = root_slot_state,
+                .root = .{
+                    .slot = bank_fields.slot,
+                    .constants = root_slot_constants,
+                    .state = root_slot_state,
+                },
+
+                .senders = replay_senders,
+                .receivers = replay_receivers,
                 .current_epoch = epoch,
                 .current_epoch_constants = try .fromBankFields(
                     bank_fields,

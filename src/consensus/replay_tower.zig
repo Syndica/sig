@@ -159,7 +159,7 @@ pub const ReplayTower = struct {
         node_pubkey: Pubkey,
         vote_account_pubkey: Pubkey,
         fork_root: Slot,
-        accounts_db: *AccountsDB,
+        accounts_db: sig.accounts_db.AccountReader,
     ) !ReplayTower {
         var tower = Tower.init(logger.unscoped());
         try tower.initializeLockoutsFromBank(
@@ -3745,7 +3745,7 @@ test "unconfirmed duplicate slots and lockouts for non heaviest fork" {
         Pubkey.ZEROES,
         Pubkey.ZEROES,
         root.slot,
-        &accountsdb,
+        accountsdb.accountReader(),
     );
     defer replay_tower.deinit(allocator);
 
