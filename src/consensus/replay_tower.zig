@@ -159,7 +159,7 @@ pub const ReplayTower = struct {
         };
     }
 
-    pub fn deinit(self: *ReplayTower, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ReplayTower, allocator: std.mem.Allocator) void {
         self.last_vote.deinit(allocator);
     }
 
