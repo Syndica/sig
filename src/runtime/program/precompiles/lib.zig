@@ -69,16 +69,18 @@ pub fn verifyPrecompilesComputeCost(
         n_ed25519_instruction_signatures *| ED25519_VERIFY_COST;
 }
 
+const TransactionError = sig.ledger.transaction_status.TransactionError;
+
 pub fn verifyPrecompiles(
     allocator: std.mem.Allocator,
     transaction: sig.core.Transaction,
-    feature_set: sig.core.FeatureSet,
-) (PrecompileProgramError || error{OutOfMemory})!void {
+    feature_set: *const sig.core.FeatureSet,
+) error{OutOfMemory}!?TransactionError {
     // could remove this alloc by passing in the transaction in directly, but maybe less clean
     var instruction_datas: ?[]const []const u8 = null;
     defer if (instruction_datas) |instr_datas| allocator.free(instr_datas);
 
-    for (transaction.msg.instructions) |instruction| {
+    for (transaction.msg.instructions, 0..) |instruction, index| {
         const program_id = transaction.msg.account_keys[instruction.program_index];
         for (PRECOMPILES) |precompile| {
             if (!precompile.program_id.equals(&program_id)) continue;
@@ -94,9 +96,16 @@ pub fn verifyPrecompiles(
                 break :blk buf;
             };
 
-            try precompile.function(instruction.data, datas);
+            precompile.function(instruction.data, datas) catch {
+                return .{
+                    // TODO: Map verify error to int for custom error
+                    .InstructionError = .{ @intCast(index), .{ .Custom = 0 } },
+                };
+            };
         }
     }
+
+    return null;
 }
 
 pub const PrecompileFn = fn (
@@ -121,55 +130,71 @@ pub const PrecompileProgramError = error{
 };
 
 test "verify ed25519" {
-    try verifyPrecompiles(
-        std.testing.allocator,
-        sig.core.Transaction.EMPTY,
-        sig.core.FeatureSet.EMPTY,
-    );
+    {
+        const actual = try verifyPrecompiles(
+            std.testing.allocator,
+            sig.core.Transaction.EMPTY,
+            &sig.core.FeatureSet.EMPTY,
+        );
+        try std.testing.expectEqual(null, actual);
+    }
 
-    const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
-        .msg = .{
-            .account_keys = &.{ed25519.ID},
-            .instructions = &[_]TransactionInstruction{
-                .{
-                    .program_index = 0,
-                    .account_indexes = &.{0},
-                    .data = "hello",
+    {
+        const bad_ed25519_tx = std.mem.zeroInit(sig.core.Transaction, .{
+            .msg = .{
+                .account_keys = &.{ed25519.ID},
+                .instructions = &[_]TransactionInstruction{
+                    .{
+                        .program_index = 0,
+                        .account_indexes = &.{0},
+                        .data = "hello",
+                    },
                 },
             },
-        },
-        .version = .legacy,
-    });
+            .version = .legacy,
+        });
+        const actual = try verifyPrecompiles(
+            std.testing.allocator,
+            bad_ed25519_tx,
+            &sig.runtime.FeatureSet.EMPTY,
+        );
+        try std.testing.expectEqual(
+            TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
+            actual,
+        );
+    }
 
-    try std.testing.expectError(
-        error.InvalidInstructionDataSize,
-        verifyPrecompiles(std.testing.allocator, bad_ed25519_tx, sig.core.FeatureSet.EMPTY),
-    );
+    {
+        const keypair = Ed25519.KeyPair.generate();
+        const ed25519_instruction = try ed25519.newInstruction(
+            std.testing.allocator,
+            keypair,
+            "hello!",
+        );
+        defer std.testing.allocator.free(ed25519_instruction.data);
 
-    const keypair = Ed25519.KeyPair.generate();
-    const ed25519_instruction = try ed25519.newInstruction(
-        std.testing.allocator,
-        keypair,
-        "hello!",
-    );
-    defer std.testing.allocator.free(ed25519_instruction.data);
-
-    const ed25519_tx: sig.core.Transaction = .{
-        .msg = .{
-            .account_keys = &.{ed25519.ID},
-            .instructions = &.{
-                .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
+        const ed25519_tx: sig.core.Transaction = .{
+            .msg = .{
+                .account_keys = &.{ed25519.ID},
+                .instructions = &.{
+                    .{ .program_index = 0, .account_indexes = &.{0}, .data = ed25519_instruction.data },
+                },
+                .signature_count = 1,
+                .readonly_signed_count = 1,
+                .readonly_unsigned_count = 0,
+                .recent_blockhash = sig.core.Hash.ZEROES,
             },
-            .signature_count = 1,
-            .readonly_signed_count = 1,
-            .readonly_unsigned_count = 0,
-            .recent_blockhash = sig.core.Hash.ZEROES,
-        },
-        .version = .legacy,
-        .signatures = &.{},
-    };
+            .version = .legacy,
+            .signatures = &.{},
+        };
 
-    try verifyPrecompiles(std.testing.allocator, ed25519_tx, sig.core.FeatureSet.EMPTY);
+        const actual = try verifyPrecompiles(
+            std.testing.allocator,
+            ed25519_tx,
+            &sig.core.FeatureSet.EMPTY,
+        );
+        try std.testing.expectEqual(null, actual);
+    }
 }
 
 test "verify cost" {
@@ -219,8 +244,13 @@ test "verify secp256k1" {
         .version = .legacy,
     });
 
-    try std.testing.expectError(
-        error.InvalidInstructionDataSize,
-        verifyPrecompiles(std.testing.allocator, bad_secp256k1_tx, sig.core.FeatureSet.EMPTY),
+    const actual = try verifyPrecompiles(
+        std.testing.allocator,
+        bad_secp256k1_tx,
+        &sig.core.FeatureSet.EMPTY,
+    );
+    try std.testing.expectEqual(
+        TransactionError{ .InstructionError = .{ 0, .{ .Custom = 0 } } },
+        actual,
     );
 }
