@@ -39,9 +39,7 @@ pub const EpochSchedule = extern struct {
     pub const ID = core.Pubkey.parseBase58String(
         "SysvarEpochSchedu1e111111111111111111111111",
     ) catch unreachable;
-
-    pub const STORAGE_SIZE: u64 = @sizeOf(EpochSchedule);
-
+    pub const STORAGE_SIZE: u64 = 33;
     pub const DEFAULT: EpochSchedule = .custom(.{
         .slots_per_epoch = DEFAULT_SLOTS_PER_EPOCH,
         .leader_schedule_slot_offset = DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET,

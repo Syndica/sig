@@ -13,7 +13,7 @@ const Pubkey = sig.core.Pubkey;
 pub const StakeHistory = struct {
     entries: *std.BoundedArray(Entry, MAX_ENTRIES),
 
-    pub const Entry = struct {
+    pub const Entry = extern struct {
         epoch: Epoch,
         stake: StakeState,
 
@@ -38,7 +38,7 @@ pub const StakeHistory = struct {
         }
     };
 
-    pub const StakeState = struct {
+    pub const StakeState = extern struct {
         /// Effective stake at this epoch
         effective: u64,
         /// Sum of portion of stakes not fully warmed up
