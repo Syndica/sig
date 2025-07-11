@@ -4478,7 +4478,7 @@ test "insert multiple accounts on same slot" {
         defer if (maybe_actual) |actual| actual.deinit(allocator);
 
         if (maybe_actual) |actual| {
-            try expectedAccountSharedDataEqualsAccount(allocator, expected, actual, false);
+            try expectedAccountSharedDataEqualsAccount(expected, actual, false);
         } else {
             std.debug.print("Account {} not found after insertion.\n", .{i});
             return error.AccountNotFound;
@@ -4506,34 +4506,25 @@ fn createRandomAccount(
 }
 
 fn expectedAccountSharedDataEqualsAccount(
-    allocator: std.mem.Allocator,
     expected: sig.runtime.AccountSharedData,
     account: Account,
     print_instead_of_expect: bool,
 ) !void {
-    const data_owned = try account.data.dupeAllocatedOwned(allocator);
-    defer data_owned.deinit(allocator);
-
-    const data = try allocator.dupe(u8, data_owned.owned_allocation);
-    defer allocator.free(data);
-
-    const actual: sig.runtime.AccountSharedData = .{
-        .lamports = account.lamports,
-        .data = data,
-        .owner = account.owner,
-        .executable = account.executable,
-        .rent_epoch = account.rent_epoch,
-    };
+    if (!builtin.is_test)
+        @compileError("expectedAccountSharedDataEqualsAccount is only for testing");
 
     if (print_instead_of_expect) {
         std.debug.print("expected: {any}\n", .{expected});
-        std.debug.print("actual:   {any}\n\n", .{actual});
+        std.debug.print("actual:   {any}\n\n", .{account});
     } else {
-        try std.testing.expectEqual(expected.lamports, actual.lamports);
-        try std.testing.expectEqualSlices(u8, expected.data, actual.data);
-        try std.testing.expectEqualSlices(u8, &expected.owner.data, &actual.owner.data);
-        try std.testing.expectEqual(expected.executable, actual.executable);
-        try std.testing.expectEqual(expected.rent_epoch, actual.rent_epoch);
+        // we know where this data came from (not from the disk), so we can take its slice directly
+        std.debug.assert(account.data == .owned_allocation);
+
+        try std.testing.expectEqual(expected.lamports, account.lamports);
+        try std.testing.expectEqualSlices(u8, expected.data, account.data.owned_allocation);
+        try std.testing.expectEqualSlices(u8, &expected.owner.data, &account.owner.data);
+        try std.testing.expectEqual(expected.executable, account.executable);
+        try std.testing.expectEqual(expected.rent_epoch, account.rent_epoch);
     }
 }
 
@@ -4571,7 +4562,7 @@ test "insert multiple accounts on multiple slots" {
         defer if (maybe_actual) |actual| actual.deinit(allocator);
 
         if (maybe_actual) |actual|
-            try expectedAccountSharedDataEqualsAccount(allocator, expected, actual, false)
+            try expectedAccountSharedDataEqualsAccount(expected, actual, false)
         else
             return error.AccountNotFound;
     }
@@ -4619,7 +4610,7 @@ test "insert account on multiple slots" {
             defer if (maybe_actual) |actual| actual.deinit(allocator);
 
             if (maybe_actual) |actual|
-                try expectedAccountSharedDataEqualsAccount(allocator, expected, actual, false)
+                try expectedAccountSharedDataEqualsAccount(expected, actual, false)
             else
                 return error.AccountNotFound;
         }
@@ -4678,7 +4669,7 @@ test "overwrite account in same slot" {
     defer if (maybe_actual) |actual| actual.deinit(allocator);
 
     if (maybe_actual) |actual|
-        try expectedAccountSharedDataEqualsAccount(allocator, second, actual, false)
+        try expectedAccountSharedDataEqualsAccount(second, actual, false)
     else
         return error.AccountNotFound;
 }
@@ -4743,7 +4734,6 @@ test "insert many duplicate individual accounts, get latest with ancestors" {
 
         if (maybe_actual) |actual| {
             try expectedAccountSharedDataEqualsAccount(
-                allocator,
                 expected.account,
                 actual,
                 false,
