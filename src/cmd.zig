@@ -1059,7 +1059,7 @@ fn validator(
     }
 
     // blockstore
-    var blockstore_db = try sig.ledger.BlockstoreDB.open(
+    var ledger_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger.unscoped(),
         sig.VALIDATOR_DIR ++ "blockstore",
@@ -1068,7 +1068,7 @@ fn validator(
         allocator,
         app_base.logger.unscoped(),
         app_base.metrics_registry,
-        blockstore_db,
+        ledger_db,
     );
 
     // cleanup service
@@ -1080,12 +1080,23 @@ fn validator(
     max_root.* = std.atomic.Value(sig.core.Slot).init(0);
     defer allocator.destroy(max_root);
 
-    const blockstore_reader = try allocator.create(BlockstoreReader);
-    defer allocator.destroy(blockstore_reader);
-    blockstore_reader.* = try BlockstoreReader.init(
+    const ledger_reader = try allocator.create(BlockstoreReader);
+    defer allocator.destroy(ledger_reader);
+    ledger_reader.* = try BlockstoreReader.init(
         allocator,
         app_base.logger.unscoped(),
-        blockstore_db,
+        ledger_db,
+        app_base.metrics_registry,
+        lowest_cleanup_slot,
+        max_root,
+    );
+
+    const ledger_writer = try allocator.create(sig.ledger.LedgerResultWriter);
+    defer allocator.destroy(ledger_writer);
+    ledger_writer.* = try .init(
+        allocator,
+        app_base.logger.unscoped(),
+        ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
@@ -1096,7 +1107,7 @@ fn validator(
     ledger_result_writer.* = try LedgerResultWriter.init(
         allocator,
         app_base.logger.unscoped(),
-        blockstore_db,
+        ledger_db,
         app_base.metrics_registry,
         lowest_cleanup_slot,
         max_root,
@@ -1104,8 +1115,8 @@ fn validator(
 
     var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         app_base.logger.unscoped(),
-        blockstore_reader,
-        &blockstore_db,
+        ledger_reader,
+        &ledger_db,
         lowest_cleanup_slot,
         cfg.max_shreds,
         app_base.exit,
@@ -1178,22 +1189,37 @@ fn validator(
     );
     defer shred_network_manager.deinit();
 
+    const replay_senders: sig.replay.service.Senders = try .create(allocator);
+    defer replay_senders.destroy();
+
+    const replay_receivers: sig.replay.service.Receivers = try .create(allocator);
+    defer replay_receivers.destroy();
+
     const replay_thread = try app_base.spawnService(
         "replay",
         sig.replay.service.run,
         .{sig.replay.service.ReplayDependencies{
             .allocator = allocator,
             .logger = app_base.logger.unscoped(),
-            .my_identity = .{ .data = app_base.my_keypair.public_key.bytes },
+            .my_identity = .fromPublicKey(&app_base.my_keypair.public_key),
+            .vote_identity = .fromPublicKey(&app_base.my_keypair.public_key), // TODO: is this fine, or do we need a separate identity for the vote account?
             .exit = app_base.exit,
-            .blockstore_reader = blockstore_reader,
-            .ledger_result_writer = ledger_result_writer,
+            .ledger = .{
+                .db = ledger_db,
+                .reader = ledger_reader,
+                .writer = ledger_writer,
+            },
             .accounts_db = &loaded_snapshot.accounts_db,
             .epoch_schedule = bank_fields.epoch_schedule,
             .slot_leaders = epoch_context_manager.slotLeaders(),
-            .root_slot = bank_fields.slot,
-            .root_slot_constants = .fromBankFields(bank_fields),
-            .root_slot_state = try .fromBankFields(allocator, bank_fields),
+            .root = .{
+                .slot = bank_fields.slot,
+                .constants = .fromBankFields(bank_fields),
+                .state = try .fromBankFields(allocator, bank_fields),
+            },
+
+            .senders = replay_senders,
+            .receivers = replay_receivers,
         }},
     );
 

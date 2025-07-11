@@ -4,18 +4,16 @@ const replay = @import("lib.zig");
 
 const core = sig.core;
 
-const Allocator = std.mem.Allocator;
+const Slot = core.Slot;
+const Pubkey = core.Pubkey;
 
 const ThreadPool = sig.sync.ThreadPool;
-
-const Pubkey = core.Pubkey;
-const Slot = core.Slot;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const BlockstoreReader = sig.ledger.BlockstoreReader;
 
-const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ProgressMap = sig.consensus.ProgressMap;
+const ForkProgress = sig.consensus.progress_map.ForkProgress;
 
 const ConfirmSlotFuture = replay.confirm_slot.ConfirmSlotFuture;
 const EpochTracker = replay.trackers.EpochTracker;
@@ -25,7 +23,7 @@ const confirmSlot = replay.confirm_slot.confirmSlot;
 
 /// State used for replaying and validating data from blockstore/accountsdb/svm
 pub const ReplayExecutionState = struct {
-    allocator: Allocator,
+    allocator: std.mem.Allocator,
     logger: sig.trace.ScopedLogger("replay-execution"),
     my_identity: Pubkey,
     vote_account: ?Pubkey,
@@ -34,39 +32,16 @@ pub const ReplayExecutionState = struct {
     blockstore_reader: *BlockstoreReader,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
-    progress_map: ProgressMap,
-
-    pub fn init(
-        allocator: Allocator,
-        logger: sig.trace.Logger,
-        my_identity: Pubkey,
-        thread_pool: *ThreadPool,
-        accounts_db: *AccountsDB,
-        blockstore_reader: *BlockstoreReader,
-        slot_tracker: *SlotTracker,
-        epochs: *EpochTracker,
-    ) Allocator.Error!ReplayExecutionState {
-        return .{
-            .allocator = allocator,
-            .logger = .from(logger),
-            .my_identity = my_identity,
-            .vote_account = null, // voting not currently supported
-            .accounts_db = accounts_db,
-            .thread_pool = thread_pool,
-            .blockstore_reader = blockstore_reader,
-            .slot_tracker = slot_tracker,
-            .epochs = epochs,
-            .progress_map = ProgressMap.INIT,
-        };
-    }
+    progress_map: *ProgressMap,
 };
 
 /// 1. Replays transactions from all the slots that need to be replayed.
 /// 2. Store the replay results into the relevant data structures.
 ///
 /// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
-pub fn replayActiveSlots(state: *ReplayExecutionState) !bool {
+pub fn replayActiveSlots(state: ReplayExecutionState) !bool {
     const active_slots = try state.slot_tracker.activeSlots(state.allocator);
+    defer state.allocator.free(active_slots);
     if (active_slots.len == 0) {
         return false;
     }
@@ -116,7 +91,7 @@ const ReplaySlotStatus = union(enum) {
     /// The slot is being confirmed, poll this to await the result.
     confirm: *ConfirmSlotFuture,
 
-    fn deinit(self: ReplaySlotStatus, allocator: Allocator) void {
+    fn deinit(self: ReplaySlotStatus, allocator: std.mem.Allocator) void {
         switch (self) {
             .confirm => |future| future.destroy(allocator),
             else => {},
@@ -135,7 +110,7 @@ const ReplaySlotStatus = union(enum) {
 /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2979)
 /// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
 /// - [confirm_slot](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1494)
-fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
+fn replaySlot(state: ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
     const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
         return .dead;
