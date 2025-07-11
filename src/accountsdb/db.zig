@@ -1213,9 +1213,9 @@ pub const AccountsDB = struct {
 
         const slot_references = slot_ref_map.get().get(slot) orelse return &.{};
 
-        const pubkey_hashes = try allocator.alloc(struct { Pubkey, Hash }, slot_references.items.len);
+        const pubkey_hashes = try allocator.alloc(struct { Pubkey, Hash }, slot_references.refs.items.len);
 
-        for (slot_references.items, pubkey_hashes) |account_ref, *pubkey_hash| {
+        for (slot_references.refs.items, pubkey_hashes) |account_ref, *pubkey_hash| {
             const account = try self.getAccountFromRef(&account_ref);
             pubkey_hash.* = .{ account_ref.pubkey, account.hash(&account_ref.pubkey) };
         }
@@ -4475,28 +4475,6 @@ test "read/write benchmark disk" {
         .accounts = .disk,
         .index = .disk,
     });
-}
-
-fn loadTestAccountsDbEmpty(
-    allocator: std.mem.Allocator,
-    use_disk: bool,
-    logger: Logger,
-    /// The directory into which the snapshots are unpacked, and
-    /// the `snapshots_dir` for the returned `AccountsDB`.
-    snapshot_dir: std.fs.Dir,
-) !AccountsDB {
-    var accounts_db = try AccountsDB.init(.{
-        .allocator = allocator,
-        .logger = logger,
-        .snapshot_dir = snapshot_dir,
-        .geyser_writer = null,
-        .gossip_view = null,
-        .index_allocation = if (use_disk) .disk else .ram,
-        .number_of_index_shards = 4,
-    });
-    errdefer accounts_db.deinit();
-
-    return accounts_db;
 }
 
 test "insert multiple accounts on same slot" {
