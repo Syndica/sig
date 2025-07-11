@@ -257,6 +257,7 @@ fn replaySlot(state: *ReplayExecutionState, slot: Slot) !ReplaySlotStatus {
         .accounts_db = state.accounts_db,
         .slot_state = slot_info.state,
         .status_cache = &state.status_cache,
+        .stakes_cache = &slot_info.state.stakes_cache,
     };
 
     const verify_ticks_params = replay.confirm_slot.VerifyTicksParams{

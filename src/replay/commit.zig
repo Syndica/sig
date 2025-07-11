@@ -31,6 +31,7 @@ pub const Committer = struct {
     accounts_db: *sig.accounts_db.AccountsDB,
     slot_state: *sig.core.SlotState,
     status_cache: *sig.core.StatusCache,
+    stakes_cache: *sig.core.StakesCache,
 
     pub fn commitTransactions(
         self: Committer,
@@ -39,8 +40,6 @@ pub const Committer = struct {
         transactions: []const ResolvedTransaction,
         tx_results: []const struct { Hash, ProcessedTransaction },
     ) !void {
-        // TODO: update stakes cache
-
         var rng = std.Random.DefaultPrng.init(slot + transactions.len);
 
         var accounts_to_store = std.AutoArrayHashMapUnmanaged(Pubkey, AccountSharedData).empty;
@@ -78,6 +77,8 @@ pub const Committer = struct {
         _ = self.slot_state.collected_rent.fetchAdd(rent_collected, .monotonic);
 
         for (accounts_to_store.keys(), accounts_to_store.values()) |pubkey, account| {
+            // TODO: look into null value here
+            try self.stakes_cache.checkAndStore(allocator, pubkey, account, null);
             try self.accounts_db.putAccount(slot, pubkey, account);
         }
     }
