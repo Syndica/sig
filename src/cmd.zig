@@ -1197,6 +1197,7 @@ fn validator(
     const epoch_stakes = epoch_stakes_map.get(epoch) orelse
         return error.EpochStakesMissingFromSnapshot;
 
+    // TODO: errdefers
     const replay_thread = try app_base.spawnService(
         "replay",
         sig.replay.service.run,
@@ -1218,6 +1219,7 @@ fn validator(
                 bank_fields,
                 try epoch_stakes.current.convert(allocator, .delegation),
             ),
+            .hard_forks = try bank_fields.hard_forks.clone(allocator),
         }},
     );
 

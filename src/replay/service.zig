@@ -50,6 +50,7 @@ pub const ReplayDependencies = struct {
     root_slot_state: sig.core.SlotState,
     current_epoch: sig.core.Epoch,
     current_epoch_constants: sig.core.EpochConstants,
+    hard_forks: sig.core.HardForks,
 };
 
 const ReplayState = struct {
@@ -59,6 +60,7 @@ const ReplayState = struct {
     slot_leaders: SlotLeaders,
     slot_tracker: *SlotTracker,
     epochs: *EpochTracker,
+    hard_forks: sig.core.HardForks, // TODO consider lifetime
     accounts_db: *AccountsDB,
     progress_map: *ProgressMap,
     blockstore_db: BlockstoreDB,
@@ -112,6 +114,7 @@ const ReplayState = struct {
             .slot_leaders = deps.slot_leaders,
             .slot_tracker = slot_tracker,
             .epochs = epoch_tracker,
+            .hard_forks = deps.hard_forks,
             .accounts_db = deps.accounts_db,
             .blockstore_db = deps.blockstore_reader.db,
             .progress_map = progress_map,
@@ -160,6 +163,7 @@ fn advanceReplay(state: *ReplayState) !void {
         state.slot_tracker,
         state.epochs,
         state.slot_leaders,
+        &state.hard_forks,
         state.progress_map,
     );
 
@@ -187,6 +191,7 @@ fn trackNewSlots(
     slot_tracker: *SlotTracker,
     epoch_tracker: *EpochTracker,
     slot_leaders: SlotLeaders,
+    hard_forks: *const sig.core.HardForks,
     /// needed for update_fork_propagated_threshold_from_votes
     _: *ProgressMap,
 ) !void {
@@ -213,6 +218,7 @@ fn trackNewSlots(
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
 
+            const epoch = epoch_tracker.schedule.getEpoch(slot);
             const epoch_info = epoch_tracker.getPtrForSlot(slot) orelse
                 return error.MissingEpoch;
 
@@ -232,12 +238,14 @@ fn trackNewSlots(
             var feature_set = try getActiveFeatures(allocator, accounts_db, slot, &ancestors);
             errdefer feature_set.deinit(allocator);
 
+            const parent_hash = parent_info.state.hash.readCopy().?;
+
             try slot_tracker.put(
                 allocator,
                 slot,
                 .{
                     .parent_slot = parent_slot,
-                    .parent_hash = parent_info.state.hash.readCopy().?,
+                    .parent_hash = parent_hash,
                     .block_height = parent_info.constants.block_height + 1,
                     .collector_id = leader,
                     .max_tick_height = (slot + 1) * epoch_info.ticks_per_slot,
@@ -252,9 +260,57 @@ fn trackNewSlots(
                 slot_state,
             );
 
+            const UpdateSysvarAccountDeps = replay.update_sysvar.UpdateSysvarAccountDeps;
+            const updateSlotHashes = replay.update_sysvar.updateSlotHashes;
+            const updateStakeHistory = replay.update_sysvar.updateStakeHistory;
+            const updateClock = replay.update_sysvar.updateClock;
+            const updateLastRestartSlot = replay.update_sysvar.updateLastRestartSlot;
+
+            const sysvar_deps = UpdateSysvarAccountDeps{
+                .accounts_db = accounts_db,
+                .capitalization = &slot_state.capitalization,
+                .ancestors = &ancestors,
+                .rent = &epoch_info.rent_collector.rent,
+                .slot = slot,
+            };
+
+            const parent_epoch = if (epoch == 0) null else epoch - 1; // TODO: verify this
+
+            try updateSlotHashes(allocator, parent_slot, parent_hash, sysvar_deps);
+            try updateStakeHistory(allocator, .{
+                .epoch = epoch,
+                .parent_epoch = parent_epoch, // TODO
+                .stakes_cache = &slot_state.stakes_cache,
+                .update_sysvar_deps = sysvar_deps,
+            });
+
+            const feature_set_struct = sig.runtime.FeatureSet{ .active = feature_set };
+            var epoch_stakes_map = sig.core.EpochStakesMap.empty;
+            try epoch_stakes_map.put(allocator, epoch, epoch_info.stakes); // TODO better approach
+            try updateClock(
+                allocator,
+                .{
+                    .feature_set = &feature_set_struct,
+                    .epoch_schedule = &epoch_tracker.schedule,
+                    .epoch_stakes_map = &epoch_stakes_map,
+                    .stakes_cache = &slot_state.stakes_cache,
+                    .epoch = epoch, // TODO: redundant with passing schedule and slot
+                    .parent_epoch = parent_epoch,
+                    .genesis_creation_time = undefined, // TODO
+                    .ns_per_slot = undefined, // TODO
+                    .update_sysvar_deps = sysvar_deps,
+                },
+            );
+            try updateLastRestartSlot(allocator, &feature_set_struct, hard_forks, sysvar_deps);
+
             // TODO: update_fork_propagated_threshold_from_votes
         }
     }
+}
+
+fn updateSysvarsForNewSlot() !void {
+
+    // TODO move above stuff here
 }
 
 // TODO: epoch boundary - handle feature activations
@@ -397,6 +453,7 @@ test trackNewSlots {
         &epoch_tracker,
         slot_leaders,
         undefined,
+        undefined,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -413,6 +470,7 @@ test trackNewSlots {
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
+        undefined,
         undefined,
     );
     try expectSlotTracker(
@@ -432,6 +490,7 @@ test trackNewSlots {
         &epoch_tracker,
         slot_leaders,
         undefined,
+        undefined,
     );
     try expectSlotTracker(
         &slot_tracker,
@@ -450,6 +509,7 @@ test trackNewSlots {
         &slot_tracker,
         &epoch_tracker,
         slot_leaders,
+        undefined,
         undefined,
     );
     try expectSlotTracker(
