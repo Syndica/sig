@@ -80,7 +80,7 @@ pub const BlockhashQueue = struct {
         hash: Hash,
         lamports_per_signature: u64,
     ) Allocator.Error!void {
-        std.debug.assert(self.last_hash_index == 0, "Genesis hash should be the first entry");
+        std.debug.assert(self.last_hash_index == 0);
         try self.hash_infos.put(allocator, hash, .{
             .index = 0,
             .timestamp = @intCast(std.time.milliTimestamp()),

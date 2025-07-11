@@ -10,8 +10,9 @@ const Epoch = sig.core.Epoch;
 const EpochSchedule = sig.core.EpochSchedule;
 const Pubkey = sig.core.Pubkey;
 const UnixTimestamp = sig.core.UnixTimestamp;
+const Rent = sig.runtime.sysvar.Rent;
 
-pub const Rent = sig.runtime.sysvar.Rent;
+const DEFAULT_TICKS_PER_SLOT = sig.core.time.DEFAULT_TICKS_PER_SLOT;
 
 pub const String = std.ArrayList(u8);
 
@@ -36,7 +37,20 @@ pub const PohConfig = struct {
     /// None enables "Low power mode", which makes the validator sleep
     /// for `target_tick_duration` instead of hashing
     hashes_per_tick: ?u64,
+
+    pub const DEFAULT = PohConfig{
+        .target_tick_duration = .{
+            .secs = 0,
+            .nanos = 6_250_000, // DEFAULT_SLEEP_MICROS
+        },
+        .target_tick_count = null,
+        .hashes_per_tick = null,
+    };
 };
+
+pub const DEFAULT_TARGET_LAMPORTS_PER_SIGNATURE: u64 = 10_000;
+pub const DEFAULT_TARGET_SIGNATURES_PER_SLOT: u64 = 20_000;
+pub const DEFAULT_BURN_PERCENT: u8 = 50;
 
 /// Analogous to [FeeRateGovernor](https://github.com/anza-xyz/agave/blob/ec9bd798492c3b15d62942f2d9b5923b99042350/sdk/program/src/fee_calculator.rs#L55)
 pub const FeeRateGovernor = struct {
@@ -63,11 +77,11 @@ pub const FeeRateGovernor = struct {
 
     pub const DEFAULT = FeeRateGovernor{
         .lamports_per_signature = 0,
-        .target_lamports_per_signature = 10_000,
-        .target_signatures_per_slot = 50 * 400,
+        .target_lamports_per_signature = DEFAULT_TARGET_LAMPORTS_PER_SIGNATURE,
+        .target_signatures_per_slot = DEFAULT_TARGET_SIGNATURES_PER_SLOT,
         .min_lamports_per_signature = 0,
         .max_lamports_per_signature = 0,
-        .burn_percent = 50,
+        .burn_percent = DEFAULT_BURN_PERCENT,
     };
 
     pub fn initDerived(
@@ -176,6 +190,15 @@ pub const Inflation = struct {
     /// DEPRECATED, this field is currently unused
     __unused: f64,
 
+    pub const DEFAULT = Inflation{
+        .initial = 0.08,
+        .terminal = 0.015,
+        .taper = 0.15,
+        .foundation = 0.05,
+        .foundation_term = 7.0,
+        .__unused = 0.0,
+    };
+
     pub fn initRandom(random: std.Random) Inflation {
         return .{
             .initial = random.float(f64),
@@ -200,6 +223,9 @@ pub const ClusterType = union(enum(u8)) {
         url: []const u8,
     },
 };
+
+// deprecated default that is no longer used
+pub const UNUSED_DEFAULT: u64 = 1024;
 
 /// Analogous to [GenesisConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L93)
 pub const GenesisConfig = struct {
@@ -228,6 +254,24 @@ pub const GenesisConfig = struct {
     epoch_schedule: EpochSchedule,
     /// network runlevel
     cluster_type: ClusterType,
+
+    pub fn default(allocator: std.mem.Allocator) GenesisConfig {
+        return .{
+            .creation_time = 0,
+            .accounts = .init(allocator),
+            .native_instruction_processors = .init(allocator),
+            .rewards_pools = .init(allocator),
+            .ticks_per_slot = DEFAULT_TICKS_PER_SLOT,
+            .unused = UNUSED_DEFAULT,
+            .poh_config = PohConfig.DEFAULT,
+            .__backwards_compat_with_v0_23 = 0,
+            .fee_rate_governor = FeeRateGovernor.DEFAULT,
+            .rent = Rent.DEFAULT,
+            .inflation = Inflation.DEFAULT,
+            .epoch_schedule = EpochSchedule.DEFAULT,
+            .cluster_type = ClusterType.Development,
+        };
+    }
 
     pub fn init(
         allocator: std.mem.Allocator,
